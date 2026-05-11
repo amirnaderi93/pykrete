@@ -1,4 +1,5 @@
 mod diagnostics;
+mod schema;
 mod walk;
 
 use std::env;
@@ -6,8 +7,10 @@ use std::fs;
 use std::process::ExitCode;
 
 use ruff_source_file::LineIndex;
+use ruff_text_size::Ranged;
 
 use crate::diagnostics::{Diagnostic, Severity};
+use crate::schema::discover_schemas;
 use crate::walk::discover_top_level_classes;
 
 fn main() -> ExitCode {
@@ -33,27 +36,25 @@ fn main() -> ExitCode {
         Ok(parsed) => {
             let module = parsed.syntax();
             let classes = discover_top_level_classes(module);
+            let schemas = discover_schemas(&classes);
             println!(
-                "{}: parsed OK — {} top-level statement(s), {} class(es) found",
+                "{}: parsed OK — {} top-level class(es), {} schema(s)",
                 path,
-                module.body.len(),
                 classes.len(),
+                schemas.len(),
             );
-            for class in &classes {
-                let lc = line_index.line_column(class.def.range.start(), &source);
-                let bases = class.base_names();
-                let suffix = if bases.is_empty() {
-                    String::new()
-                } else {
-                    format!("({})", bases.join(", "))
-                };
+            for schema in &schemas {
+                let lc = line_index.line_column(schema.class.def.range.start(), &source);
                 println!(
-                    "  {}:{}  class {}{}",
+                    "  {}:{}  schema {}",
                     lc.line.get(),
                     lc.column.get(),
-                    class.name(),
-                    suffix,
+                    schema.name(),
                 );
+                for field in schema.fields() {
+                    let ann_text = &source[field.annotation.range()];
+                    println!("          {}: {}", field.name, ann_text);
+                }
             }
             ExitCode::SUCCESS
         }

@@ -1,15 +1,19 @@
-# Probe file for class discovery. Doesn't represent final dathon syntax.
+# Probes class + schema discovery.
 
-class Orders:
+class Orders(Schema):
     place_code: int
     price: int
 
-class RawOrders(Object):
+class RawOrders(Schema):
     ProductCode: int
     UnitPrice: float
+    CreatedAt: datetime
 
-class Demand(SomeBase, OtherBase):
-    pass
+class NotASchema:
+    foo: int
+
+class WithMixin(Schema, Mixin):
+    field: int
 
 class WithGeneric(Generic[T]):
     pass

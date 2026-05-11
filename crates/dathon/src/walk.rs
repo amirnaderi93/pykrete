@@ -1,9 +1,10 @@
 //! AST walking helpers.
 //!
-//! For now we only walk for top-level class definitions. These will later be
-//! recognized as Schema declarations once we add the type system.
+//! Read-only traversals over the parsed `ModModule`. Today we only discover
+//! top-level class definitions; this will grow as we need to find more
+//! declaration shapes.
 
-use ruff_python_ast::{Expr, ModModule, Stmt, StmtClassDef};
+use ruff_python_ast::{ModModule, Stmt, StmtClassDef};
 
 #[derive(Debug)]
 pub struct DiscoveredClass<'ast> {
@@ -11,21 +12,19 @@ pub struct DiscoveredClass<'ast> {
 }
 
 impl<'ast> DiscoveredClass<'ast> {
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &'ast str {
         self.def.name.id.as_str()
     }
 
-    /// Best-effort textual rendering of base classes. Complex bases
-    /// (subscripts, attribute access, etc.) render as `?` for now.
-    pub fn base_names(&self) -> Vec<String> {
-        self.def
-            .bases()
-            .iter()
-            .map(|expr| match expr {
-                Expr::Name(name) => name.id.as_str().to_string(),
-                _ => "?".to_string(),
-            })
-            .collect()
+    /// True if any base of this class is exactly the bare name `name`.
+    /// Subscripts (`Foo[T]`) and attribute access (`mod.Foo`) are not matched —
+    /// we can broaden this later if/when import resolution lands.
+    pub fn has_base(&self, name: &str) -> bool {
+        self.def.bases().iter().any(|expr| {
+            expr.as_name_expr()
+                .map(|n| n.id.as_str() == name)
+                .unwrap_or(false)
+        })
     }
 }
 
