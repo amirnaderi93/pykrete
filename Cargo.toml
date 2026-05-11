@@ -1,0 +1,20 @@
+[workspace]
+members = ["crates/dathon"]
+resolver = "2"
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "TBD"
+
+[workspace.dependencies]
+# Shared/pinned dependencies will go here as we add crates.
+
+[profile.dev]
+# Faster dev builds at the cost of less optimization.
+opt-level = 0
+debug = "line-tables-only"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

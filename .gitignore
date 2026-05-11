@@ -1,0 +1,7 @@
+/target
+**/*.rs.bk
+.DS_Store
+Cargo.lock.bak
+
+# Local/dev-environment files — never commit
+.cargo/config.toml

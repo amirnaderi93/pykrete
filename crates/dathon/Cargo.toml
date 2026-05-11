@@ -1,0 +1,18 @@
+[package]
+name = "dathon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Static schema checker for PySpark — a strict superset of Python."
+
+[[bin]]
+name = "dathon"
+path = "src/main.rs"
+
+[dependencies]
+# Astral does not publish ruff's internal crates to crates.io.
+# The canonical way to depend on them is a pinned git reference.
+ruff_python_parser = { git = "https://github.com/astral-sh/ruff", tag = "0.15.12" }
+ruff_python_ast = { git = "https://github.com/astral-sh/ruff", tag = "0.15.12" }
+ruff_source_file = { git = "https://github.com/astral-sh/ruff", tag = "0.15.12" }
+ruff_text_size = { git = "https://github.com/astral-sh/ruff", tag = "0.15.12" }

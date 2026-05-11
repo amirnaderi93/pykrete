@@ -1,0 +1,15 @@
+# Probe file for class discovery. Doesn't represent final dathon syntax.
+
+class Orders:
+    place_code: int
+    price: int
+
+class RawOrders(Object):
+    ProductCode: int
+    UnitPrice: float
+
+class Demand(SomeBase, OtherBase):
+    pass
+
+class WithGeneric(Generic[T]):
+    pass
