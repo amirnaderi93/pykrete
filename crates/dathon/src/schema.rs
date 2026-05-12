@@ -155,6 +155,88 @@ impl<'a> SchemaView<'a> {
     }
 }
 
+/// Outcome of resolving a possibly-dotted column path against a schema.
+///
+/// `Resolved` means every segment matched. `Missing { field, on }` means
+/// `field` is the first segment that didn't match, and `on` is the schema
+/// we were searching when the resolution failed. The caller uses both to
+/// produce a diagnostic pointing at the right schema (e.g.
+/// `Column 'street' does not exist on schema 'Address'`, when the user
+/// wrote `col("address.street")` against a `User` where `address` is a
+/// nested `Address` but `Address` has no `street`).
+#[derive(Debug)]
+pub enum FieldPathResult<'a> {
+    Resolved,
+    Missing { field: &'a str, on: SchemaView<'a> },
+}
+
+/// Walk a possibly-dotted column path through (potentially nested) schemas.
+///
+/// For non-final segments, the field must exist and resolve to a nested
+/// `Schema` — we then recurse into that nested schema with the remaining
+/// path. The final segment is checked with `has_field` against whichever
+/// schema we ended up on.
+///
+/// Returns `Resolved` if every segment matched, or `Missing { … }` with
+/// the failed segment and the schema it was searched on, suitable for
+/// embedding directly in a diagnostic message.
+pub fn resolve_path<'a>(
+    view: &SchemaView<'a>,
+    path: &'a str,
+    schemas: &'a [Schema<'a>],
+) -> FieldPathResult<'a> {
+    // Fast path: no dots → ordinary has_field check.
+    if !path.contains('.') {
+        if view.has_field(path) {
+            return FieldPathResult::Resolved;
+        }
+        return FieldPathResult::Missing {
+            field: path,
+            on: view.clone(),
+        };
+    }
+
+    let segments: Vec<&str> = path.split('.').collect();
+    let last_idx = segments.len() - 1;
+    let mut current = view.clone();
+
+    for (i, segment) in segments.iter().enumerate() {
+        if i == last_idx {
+            if current.has_field(segment) {
+                return FieldPathResult::Resolved;
+            }
+            return FieldPathResult::Missing {
+                field: segment,
+                on: current,
+            };
+        }
+        // Non-final segment: must be a nested-schema field on a Declared view.
+        // Derived/Grouped views can't carry nested-struct field types (their
+        // fields are just names, not typed annotations).
+        let nested = match &current {
+            SchemaView::Declared(s) => {
+                s.fields()
+                    .iter()
+                    .find(|f| f.name == *segment)
+                    .and_then(|f| match f.resolve(schemas) {
+                        FieldResolution::ResolvedNested(nested) => Some(nested),
+                        _ => None,
+                    })
+            }
+            _ => None,
+        };
+        let Some(nested) = nested else {
+            return FieldPathResult::Missing {
+                field: segment,
+                on: current,
+            };
+        };
+        current = SchemaView::Declared(nested);
+    }
+    // Unreachable: the last-segment branch above always returns.
+    FieldPathResult::Resolved
+}
+
 // ---------------------------------------------------------------------------
 // Unit tests for SchemaView::Derived
 //
