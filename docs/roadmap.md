@@ -18,9 +18,24 @@ Multi-file analysis already works — pass multiple file paths to `dathon check`
 - Project root detection (`pyproject.toml`-aware), recursive directory walking, and incremental rechecking.
 - Duplicate-name detection / warnings across files.
 
-### LSP / VS Code extension
+### LSP — features beyond the skeleton
 
-Run dathon as a language server. Hover for inferred schemas, jump-to-definition for column references, diagnostics published into the editor's problem panel.
+Iteration 24 ships the LSP skeleton: diagnostics flow live as the user types (`textDocument/publishDiagnostics`). The features layered on after:
+
+- **Hover** (`textDocument/hover`) — show inferred schema at the cursor.
+- **Document symbols** (`textDocument/documentSymbol`) — outline view of Schemas + typed functions.
+- **Go-to-definition** (`textDocument/definition`) — jump from `DataFrame[X]` / `col("X")` / nested struct references to their declarations.
+- **Completion** (`textDocument/completion`) — column-name auto-complete inside `col("…")` / `df.…`, schema-name suggestions inside `DataFrame[…]`.
+- **Code actions / quick fixes** — "Did you mean 'price'?" Levenshtein suggestions on `D0030`.
+- **Find references**, **rename**, **semantic tokens** as further iterations.
+
+### VS Code extension
+
+A small TypeScript wrapper that launches `dathon-lsp` and routes `.dpy` files to it. Distributable as a `.vsix`; eventually published to the marketplace.
+
+### Editor-agnostic LSP docs
+
+Setup snippets for Neovim, Helix, Zed, Emacs to plug `dathon-lsp` into their LSP clients.
 
 ## Generic-inference extensions
 
