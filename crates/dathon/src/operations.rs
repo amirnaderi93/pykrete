@@ -343,11 +343,11 @@ fn analyze_method_call<'a>(
     // aggregation). Dispatch it ahead of the column-method shape lookup so
     // a Grouped receiver doesn't fall through.
     if method == "agg" {
-        return Some(handle_agg(call, &receiver, source, line_index, diagnostics));
+        return Some(handle_agg(call, &receiver, ctx, source, line_index, diagnostics));
     }
 
     if let Some(shape) = column_method_shape(method) {
-        check_column_method_args(call, &receiver, &shape, source, line_index, diagnostics);
+        check_column_method_args(call, &receiver, &shape, ctx, source, line_index, diagnostics);
         return apply_column_method(method, &receiver, call);
     }
     if let Some(kind) = two_df_method(method) {
@@ -366,6 +366,7 @@ fn analyze_method_call<'a>(
 fn handle_agg<'a>(
     call: &'a ExprCall,
     receiver: &SchemaView<'a>,
+    _ctx: &BodyContext<'a>,
     source: &str,
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
@@ -378,7 +379,7 @@ fn handle_agg<'a>(
     let mut refs: Vec<(&str, TextRange)> = Vec::new();
     let mut outputs: Vec<&'a str> = Vec::new();
     for arg in &call.arguments.args {
-        collect_col_refs(arg, &mut refs);
+        collect_col_refs(arg, _ctx, &mut refs);
         if let Some(name) = select_output_name(arg) {
             outputs.push(name);
         }
@@ -412,10 +413,11 @@ fn handle_agg<'a>(
 // Column-method checking + result inference
 // ---------------------------------------------------------------------------
 
-fn check_column_method_args(
-    call: &ExprCall,
+fn check_column_method_args<'a>(
+    call: &'a ExprCall,
     schema: &SchemaView<'_>,
     shape: &ColumnMethodShape,
+    ctx: &BodyContext<'a>,
     source: &str,
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
@@ -423,7 +425,7 @@ fn check_column_method_args(
     let mut refs: Vec<(&str, TextRange)> = Vec::new();
     for (i, arg) in call.arguments.args.iter().enumerate() {
         let role = role_at(shape, i);
-        collect_arg_column_refs(arg, role, &mut refs);
+        collect_arg_column_refs(arg, role, ctx, &mut refs);
     }
     for (col_name, col_range) in refs {
         if !schema.has_field(col_name) {
@@ -569,6 +571,7 @@ fn column_name_arg<'a>(arg: &'a Expr) -> Option<&'a str> {
 fn collect_arg_column_refs<'a>(
     arg: &'a Expr,
     role: ArgRole,
+    ctx: &BodyContext<'a>,
     out: &mut Vec<(&'a str, TextRange)>,
 ) {
     match role {
@@ -583,14 +586,14 @@ fn collect_arg_column_refs<'a>(
                     if let Some(s) = elt.as_string_literal_expr() {
                         out.push((s.value.to_str(), s.range()));
                     } else {
-                        collect_col_refs(elt, out);
+                        collect_col_refs(elt, ctx, out);
                     }
                 }
                 return;
             }
-            collect_col_refs(arg, out);
+            collect_col_refs(arg, ctx, out);
         }
-        ArgRole::Expression => collect_col_refs(arg, out),
+        ArgRole::Expression => collect_col_refs(arg, ctx, out),
     }
 }
 
@@ -846,10 +849,31 @@ const COLUMN_REF_FUNCTIONS: &[&str] = &[
     "collect_set",
 ];
 
-fn collect_col_refs<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, TextRange)>) {
+fn collect_col_refs<'a>(
+    expr: &'a Expr,
+    ctx: &BodyContext<'a>,
+    out: &mut Vec<(&'a str, TextRange)>,
+) {
     if let Some(found) = col_reference(expr) {
         out.push(found);
         return;
+    }
+    // `df.X` attribute access — recognized as a column reference to `X`
+    // when `df` is a Name bound to a DataFrame in the current scope. We
+    // ignore which `df` is referenced (Spark would have ambiguity issues
+    // for non-joined references; that's runtime's problem). The column
+    // name `X` is checked against the receiver's schema.
+    //
+    // Importantly, this filters out things like `F.add_months(...)` —
+    // `F` is not in `ctx`, so the attribute is left for the default walker
+    // to descend into, and `add_months` is not collected.
+    if let Some(attr) = expr.as_attribute_expr() {
+        if let Some(name) = attr.value.as_name_expr() {
+            if ctx.lookup(name.id.as_str()).is_some() {
+                out.push((attr.attr.id.as_str(), attr.attr.range));
+                return;
+            }
+        }
     }
     // Recognize `F.sum("x")` and similar — for the listed function names,
     // every string-literal positional arg is a column reference. Non-string
@@ -866,11 +890,11 @@ fn collect_col_refs<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, TextRange)>) {
                     if let Some(s) = arg.as_string_literal_expr() {
                         out.push((s.value.to_str(), s.range()));
                     } else {
-                        collect_col_refs(arg, out);
+                        collect_col_refs(arg, ctx, out);
                     }
                 }
                 for kw in &call.arguments.keywords {
-                    collect_col_refs(&kw.value, out);
+                    collect_col_refs(&kw.value, ctx, out);
                 }
                 return;
             }
@@ -878,51 +902,51 @@ fn collect_col_refs<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, TextRange)>) {
     }
     match expr {
         Expr::Call(c) => {
-            collect_col_refs(&c.func, out);
+            collect_col_refs(&c.func, ctx, out);
             for arg in &c.arguments.args {
-                collect_col_refs(arg, out);
+                collect_col_refs(arg, ctx, out);
             }
             for kw in &c.arguments.keywords {
-                collect_col_refs(&kw.value, out);
+                collect_col_refs(&kw.value, ctx, out);
             }
         }
-        Expr::Attribute(a) => collect_col_refs(&a.value, out),
+        Expr::Attribute(a) => collect_col_refs(&a.value, ctx, out),
         Expr::Subscript(s) => {
-            collect_col_refs(&s.value, out);
-            collect_col_refs(&s.slice, out);
+            collect_col_refs(&s.value, ctx, out);
+            collect_col_refs(&s.slice, ctx, out);
         }
         Expr::BinOp(b) => {
-            collect_col_refs(&b.left, out);
-            collect_col_refs(&b.right, out);
+            collect_col_refs(&b.left, ctx, out);
+            collect_col_refs(&b.right, ctx, out);
         }
-        Expr::UnaryOp(u) => collect_col_refs(&u.operand, out),
+        Expr::UnaryOp(u) => collect_col_refs(&u.operand, ctx, out),
         Expr::Compare(c) => {
-            collect_col_refs(&c.left, out);
+            collect_col_refs(&c.left, ctx, out);
             for cmp in &c.comparators {
-                collect_col_refs(cmp, out);
+                collect_col_refs(cmp, ctx, out);
             }
         }
         Expr::BoolOp(b) => {
             for v in &b.values {
-                collect_col_refs(v, out);
+                collect_col_refs(v, ctx, out);
             }
         }
         Expr::If(if_exp) => {
-            collect_col_refs(&if_exp.test, out);
-            collect_col_refs(&if_exp.body, out);
-            collect_col_refs(&if_exp.orelse, out);
+            collect_col_refs(&if_exp.test, ctx, out);
+            collect_col_refs(&if_exp.body, ctx, out);
+            collect_col_refs(&if_exp.orelse, ctx, out);
         }
         Expr::Tuple(t) => {
             for e in &t.elts {
-                collect_col_refs(e, out);
+                collect_col_refs(e, ctx, out);
             }
         }
         Expr::List(l) => {
             for e in &l.elts {
-                collect_col_refs(e, out);
+                collect_col_refs(e, ctx, out);
             }
         }
-        Expr::Starred(s) => collect_col_refs(&s.value, out),
+        Expr::Starred(s) => collect_col_refs(&s.value, ctx, out),
         _ => {}
     }
 }

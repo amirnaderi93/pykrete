@@ -106,6 +106,12 @@ Recursion is what enables chained calls: for `raw.filter(...).select("madeup")`,
 
 Column reference discovery is a small recursive walker (`collect_col_refs`) that descends through `Call`, `Attribute`, `Subscript`, `BinOp`, `BoolOp`, `Compare`, `If`-expression, `Tuple`/`List`, and `Starred` — enough to find columns inside expressions like `(col("a") + col("b")).cast("int").alias("c")`. Scopes that bind new names (lambdas, comprehensions) are deliberately not entered.
 
+Three column-reference shapes are recognized:
+
+- `col("X")` — function-call form. Detected by name; the string-literal first arg is the column name.
+- Bare string literal `"X"` — only treated as a column name in column-name contexts (top-level args of `select` / `drop` / `dropDuplicates` / `groupBy`, the rename-target arg of `withColumnRenamed`, list elements unpacked from `dropDuplicates(["a", "b"])`).
+- `df.X` — attribute access on a Name. Only treated as a column reference when `df` is bound to a DataFrame in the current `BodyContext` (function parameter or local). This is the discriminator that filters out `F.add_months(...)`, `datetime.now()`, etc., where the receiver is a module / type, not a DataFrame. The column name `X` is checked against the *receiver's* schema — which `df` is named is ignored, mirroring Spark's "any column in scope" semantics after a join.
+
 The body walk is currently shallow (top-level statements only, direct calls on params only). Each new operation (`withColumn`, `withColumnRenamed`, `join`, …) and each new shape (chained calls, local-variable receivers, attribute-access columns) lands as an additive change here.
 
 ### `main`
