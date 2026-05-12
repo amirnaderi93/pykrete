@@ -35,6 +35,7 @@ use ruff_text_size::{Ranged, TextRange};
 
 use crate::dataframe::{self, DataFrameAnnotation, SlotLabel, TypedSlot};
 use crate::diagnostics::{Diagnostic, Severity};
+use crate::registry::Registry;
 use crate::schema::{Schema, SchemaView};
 use crate::walk::DiscoveredFunction;
 
@@ -108,20 +109,36 @@ fn role_at(shape: &ColumnMethodShape, index: usize) -> ArgRole {
 // ---------------------------------------------------------------------------
 
 pub struct BodyContext<'a> {
-    bindings: HashMap<&'a str, SchemaView<'a>>,
+    df_bindings: HashMap<&'a str, SchemaView<'a>>,
+    /// Function-parameter / local names that are class **instances** (not
+    /// DataFrames). Maps `name` → class name (e.g. `"dal"` → `"DataAccessLayer"`).
+    instance_bindings: HashMap<&'a str, &'a str>,
     schemas: &'a [Schema<'a>],
+    registry: &'a Registry<'a>,
 }
 
 impl<'a> BodyContext<'a> {
-    pub fn new(schemas: &'a [Schema<'a>]) -> Self {
+    pub fn new(schemas: &'a [Schema<'a>], registry: &'a Registry<'a>) -> Self {
         Self {
-            bindings: HashMap::new(),
+            df_bindings: HashMap::new(),
+            instance_bindings: HashMap::new(),
             schemas,
+            registry,
         }
     }
 
-    pub fn from_slots(slots: &[TypedSlot<'a>], schemas: &'a [Schema<'a>]) -> Self {
-        let mut ctx = Self::new(schemas);
+    /// Build a body context for `func`, drawing on:
+    /// - typed DataFrame slots (parameters annotated `DataFrame[X]`),
+    /// - other typed parameters whose annotation is a known class name
+    ///   (e.g. `dal: DataAccessLayer`).
+    pub fn from_function(
+        func: &'a DiscoveredFunction<'a>,
+        slots: &[TypedSlot<'a>],
+        schemas: &'a [Schema<'a>],
+        registry: &'a Registry<'a>,
+    ) -> Self {
+        let mut ctx = Self::new(schemas, registry);
+
         for slot in slots {
             let SlotLabel::Param(name) = slot.label else {
                 continue;
@@ -130,23 +147,73 @@ impl<'a> BodyContext<'a> {
                 continue;
             };
             if let Some(schema) = ctx.find_schema(schema_name) {
-                ctx.bind(name, SchemaView::Declared(schema));
+                ctx.bind_df(name, SchemaView::Declared(schema));
             }
         }
+
+        // Non-DataFrame typed params — `dal: DataAccessLayer` etc. Look at
+        // every positional parameter; if its annotation is a bare name and
+        // that name is a known class in the registry, bind the parameter
+        // name as an instance of that class.
+        for pwd in func
+            .def
+            .parameters
+            .posonlyargs
+            .iter()
+            .chain(&func.def.parameters.args)
+            .chain(&func.def.parameters.kwonlyargs)
+        {
+            let p = &pwd.parameter;
+            let Some(ann) = p.annotation.as_deref() else {
+                continue;
+            };
+            let Some(name_expr) = ann.as_name_expr() else {
+                continue;
+            };
+            let class_name = name_expr.id.as_str();
+            if registry.find_class(class_name).is_some() {
+                ctx.instance_bindings.insert(p.name.id.as_str(), class_name);
+            }
+        }
+
         ctx
     }
 
-    pub fn bind(&mut self, name: &'a str, view: SchemaView<'a>) {
-        self.bindings.insert(name, view);
+    pub fn bind_df(&mut self, name: &'a str, view: SchemaView<'a>) {
+        self.df_bindings.insert(name, view);
     }
 
+    /// Resolve a name in the body's scope as a DataFrame value, if possible.
+    ///
+    /// Three sources are consulted, in order:
+    /// 1. local DataFrame bindings (function params + `x = …` assignments),
+    /// 2. top-level annotated constants (`X: GenericClass[Schema]`), where
+    ///    the constant carries the named schema regardless of the outer
+    ///    generic class.
     pub fn lookup(&self, name: &str) -> Option<SchemaView<'a>> {
-        self.bindings.get(name).cloned()
+        if let Some(view) = self.df_bindings.get(name).cloned() {
+            return Some(view);
+        }
+        if let Some(constant) = self.registry.find_constant(name) {
+            if let Some(schema) = self.find_schema(constant.schema_name) {
+                return Some(SchemaView::Declared(schema));
+            }
+        }
+        None
     }
 
-    /// Look up a `Schema` declaration by its class name.
+    /// Resolve a name as a *class instance* (not a DataFrame). Used to
+    /// route method calls through the class registry.
+    pub fn lookup_instance(&self, name: &str) -> Option<&'a str> {
+        self.instance_bindings.get(name).copied()
+    }
+
     pub fn find_schema(&self, name: &str) -> Option<&'a Schema<'a>> {
         self.schemas.iter().find(|s| s.name() == name)
+    }
+
+    pub fn registry(&self) -> &'a Registry<'a> {
+        self.registry
     }
 }
 
@@ -169,7 +236,7 @@ pub fn check_function_body<'a>(
                 if let Some(schema) = schema {
                     for target in &a.targets {
                         if let Some(name) = target.as_name_expr() {
-                            ctx.bind(name.id.as_str(), schema.clone());
+                            ctx.bind_df(name.id.as_str(), schema.clone());
                         }
                     }
                 }
@@ -230,7 +297,7 @@ fn handle_ann_assign<'a>(
     match dataframe::recognize(&ann.annotation) {
         Some(DataFrameAnnotation::Typed(schema_name)) => {
             if let Some(schema) = ctx.find_schema(schema_name) {
-                ctx.bind(target_name, SchemaView::Declared(schema));
+                ctx.bind_df(target_name, SchemaView::Declared(schema));
             } else {
                 diagnostics.push(Diagnostic::at(
                     Severity::Error,
@@ -336,16 +403,25 @@ fn analyze_method_call<'a>(
 ) -> Option<SchemaView<'a>> {
     let attr = call.func.as_attribute_expr()?;
     let method = attr.attr.id.as_str();
+
+    // Class-instance receiver: `dal.read(...)` where `dal` is bound as an
+    // instance of a known class. Look the method up on the class and do
+    // generic substitution. We try this BEFORE the DataFrame-receiver
+    // path because the same name can't be both — instance bindings and
+    // DataFrame bindings live in disjoint maps.
+    if let Some(class_name) = attr
+        .value
+        .as_name_expr()
+        .and_then(|n| ctx.lookup_instance(n.id.as_str()))
+    {
+        return handle_class_method_call(class_name, method, call, ctx, source, line_index, diagnostics);
+    }
+
     let receiver = analyze_expr(&attr.value, ctx, source, line_index, diagnostics)?;
 
-    // `.agg(...)` is the bridge from GroupedData back to a DataFrame. It's
-    // also valid on a regular DataFrame (treated as a single-group
-    // aggregation). Dispatch it ahead of the column-method shape lookup so
-    // a Grouped receiver doesn't fall through.
     if method == "agg" {
         return Some(handle_agg(call, &receiver, ctx, source, line_index, diagnostics));
     }
-
     if let Some(shape) = column_method_shape(method) {
         check_column_method_args(call, &receiver, &shape, ctx, source, line_index, diagnostics);
         return apply_column_method(method, &receiver, call);
@@ -354,6 +430,98 @@ fn analyze_method_call<'a>(
         return handle_two_df_method(kind, call, &receiver, ctx, source, line_index, diagnostics);
     }
     None
+}
+
+/// Resolve a method call on a class instance — `dal.read(...)`.
+///
+/// Looks up the method on the receiver's class, and if the method is
+/// generic, binds the type parameter from one of the arguments and
+/// substitutes through the return annotation.
+///
+/// Scope cuts in v0.1:
+/// - Only `def m[T](self, x: Generic[T]) -> Generic[T]`-shaped methods are
+///   inferable. The return annotation must be `Generic[T]` where `T` is
+///   one of the method's type parameters; the parameter annotation must
+///   match the same shape against an argument whose schema we can resolve.
+/// - Non-generic methods, or generic methods we can't pattern-match
+///   against this shape, return `None`.
+fn handle_class_method_call<'a>(
+    class_name: &'a str,
+    method_name: &str,
+    call: &'a ExprCall,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<SchemaView<'a>> {
+    let class_info = ctx.registry().find_class(class_name)?;
+    let method = class_info.methods.get(method_name)?;
+
+    // No type params → nothing to substitute. We don't infer non-generic
+    // method results yet (would require fully resolving the static return
+    // annotation, which v0.1 only does for DataFrame[Schema] forms — and
+    // we already cover that path via DataFrame-receiver methods).
+    if method.type_params.is_empty() {
+        return None;
+    }
+
+    // Try each method parameter (skipping self) to bind one of the
+    // method's type variables from the corresponding argument's schema.
+    // Even a single binding is enough for the simple v0.1 shape.
+    let mut subst: HashMap<&str, &Schema<'a>> = HashMap::new();
+    for (i, mp) in method.params.iter().skip(1).enumerate() {
+        let Some(arg) = call.arguments.args.get(i) else {
+            continue;
+        };
+        let Some(pann) = mp.annotation else {
+            continue;
+        };
+        if let Some(tv) = extract_type_var_from_subscript(pann, &method.type_params) {
+            if let Some(schema) = arg_schema(arg, ctx, source, line_index, diagnostics) {
+                subst.insert(tv, schema);
+            }
+        }
+    }
+
+    // Substitute through the return annotation. Expecting
+    // `GenericClass[T]` where T was bound above.
+    let return_ann = method.return_annotation?;
+    let tv = extract_type_var_from_subscript(return_ann, &method.type_params)?;
+    let schema = subst.get(tv)?;
+    Some(SchemaView::Declared(schema))
+}
+
+/// Match `GenericClass[T]` where `T` is one of the supplied type variable
+/// names. Returns `T` if matched.
+fn extract_type_var_from_subscript<'a>(
+    expr: &'a Expr,
+    type_params: &[&'a str],
+) -> Option<&'a str> {
+    let sub = expr.as_subscript_expr()?;
+    let inner = sub.slice.as_name_expr()?.id.as_str();
+    if type_params.contains(&inner) {
+        Some(inner)
+    } else {
+        None
+    }
+}
+
+/// What schema does a given call-argument carry?
+///
+/// For Name expressions, consult the body context (which already falls back
+/// through top-level constants). For more complex expressions, recursively
+/// analyze them as expressions and pull the schema out of a Declared view.
+fn arg_schema<'a>(
+    arg: &'a Expr,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<&'a Schema<'a>> {
+    match analyze_expr(arg, ctx, source, line_index, diagnostics) {
+        Some(SchemaView::Declared(s)) => Some(s),
+        _ => None,
+    }
 }
 
 /// Handle `.agg(...)` on either a `Grouped` or a regular DataFrame receiver.

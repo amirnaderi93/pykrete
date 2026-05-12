@@ -63,6 +63,16 @@ For nested struct fields, the field name still appears at the top level (`User.h
 
 The atom layer of dathon's type system. Today: one enum, `ColumnType`, with the v0.1 vocabulary (`int`, `long`, `double`, `string`, `bool`, `date`, `timestamp`). `from_name` parses user-written source forms; `as_str` / `Display` produce the canonical printable name. Mapping to Spark types (`IntegerType`, etc.) lives here when we get to the transpiler.
 
+### `registry`
+
+File-level registries of discovered classes and top-level typed constants — built once per check, before body analysis begins.
+
+`ClassInfo` records every top-level class (Schema-derived or otherwise), its PEP 695 generic type parameters (`class Foo[T]`), and each of its method declarations. `MethodInfo` captures the method's name, type parameters (`def m[T]`), positional parameter annotations, and return-type annotation.
+
+`ConstantInfo` records top-level annotated assignments of the simple shape `NAME: GenericClass[Schema] = …`. The outer generic class name is decorative (we treat any such constant as "carries the named schema") — the schema name resolves against the schema list to bind the constant as a `SchemaView::Declared` value during body analysis.
+
+This module is read-only data; the substitution logic that uses it lives in `operations`.
+
 ### `dataframe`
 
 Recognizes DataFrame-typed annotations on function signatures. `recognize` classifies an annotation expression as `Untyped` (bare `DataFrame`), `Typed("Foo")` (`DataFrame[Foo]` with a bare-name schema), or `NonBareName` (`DataFrame[list[str]]`, etc.). `typed_slots` walks a function's parameters and return type and returns a list of every DataFrame-touching slot.
@@ -73,9 +83,16 @@ Recognizes DataFrame-typed annotations on function signatures. `recognize` class
 
 PySpark DataFrame operation checking inside function bodies, with **result-schema inference** so chained calls and local variable bindings carry their schemas forward.
 
-`BodyContext` holds a name → `SchemaView` map. It starts populated from typed function parameters; assignments grow it as the walker discovers `x = <DataFrame expression>`. **Annotated assignments** (`x: DataFrame[Schema] = …`) bind too — and they're authoritative: the annotation wins even if the RHS is something dathon can't track. This is the bridge for external sources like `dal.read(...)` and `spark.read.csv(...)` — the function call itself is opaque to dathon, but the annotation re-enters the typed world.
+`BodyContext` holds two name-resolution maps:
 
-`BodyContext` also carries a reference to the file's `Schema` list (`find_schema`), so annotations encountered inside the body can be resolved to declared schemas the same way function-parameter annotations are.
+- `df_bindings: name → SchemaView` — DataFrame-typed function parameters, results of `x = <DataFrame expression>` assignments, and `x: DataFrame[Schema] = …` annotated assignments.
+- `instance_bindings: name → class_name` — function parameters typed with a non-Schema class (`dal: DataAccessLayer`). These route method calls through the class registry instead of treating the receiver as a DataFrame.
+
+`BodyContext::lookup(name)` consults the DataFrame bindings first, then **falls back to the constants registry**: a `NAME: GenericClass[Schema]` top-level constant resolves to a `SchemaView::Declared(Schema)` value just like a parameter does, so `dal.read(RAW_ORDERS)` can find `RAW_ORDERS`'s schema even though the constant is declared at module scope, not in the function's params.
+
+**Annotated assignments** (`x: DataFrame[Schema] = …`) are authoritative: the annotation wins even if the RHS is something dathon can't track. This is the simple bridge for external sources when generic inference isn't available.
+
+**Generic-method dispatch** (`handle_class_method_call`): when the receiver of a method call is a class instance, dathon looks the method up in the registry. If the method has type parameters and the parameter / return annotations match the simple shape `GenericClass[T] -> GenericClass[T]`, dathon binds `T` from the argument's schema and substitutes through the return. The result is a `SchemaView::Declared(Schema)` value that participates in the same chain analysis as everything else — so `dal.read(RAW_ORDERS).select(col("missing"))` correctly fires `D0030` against `RawOrders`.
 
 `analyze_expr` is the recursive heart. Given an expression, it returns a `SchemaView` when the expression evaluates to a DataFrame and `None` otherwise. While walking, every recognized method call's arguments are checked against the receiver's schema (emitting `D0030`/`D0040`) and the operation's result schema is computed and returned.
 

@@ -24,6 +24,7 @@
 pub mod dataframe;
 pub mod diagnostics;
 pub mod operations;
+pub mod registry;
 pub mod schema;
 pub mod types;
 pub mod walk;
@@ -36,6 +37,7 @@ use ruff_text_size::Ranged;
 use crate::dataframe::{DataFrameAnnotation, SlotLabel, TypedSlot, typed_slots};
 use crate::diagnostics::{Diagnostic, Severity};
 use crate::operations::{BodyContext, check_function_body};
+use crate::registry::Registry;
 use crate::schema::{FieldResolution, Schema, discover_schemas};
 use crate::types::COLUMN_TYPE_NAMES;
 use crate::walk::{
@@ -105,6 +107,7 @@ pub fn check(_path: &str, source: &str) -> CheckResult {
     let classes = discover_top_level_classes(module);
     let schemas = discover_schemas(&classes);
     let functions = discover_top_level_functions(module);
+    let registry = Registry::build(module);
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     let mut body = String::new();
 
@@ -129,7 +132,7 @@ pub fn check(_path: &str, source: &str) -> CheckResult {
             &mut diagnostics,
         );
         let declared_return = declared_return_schema(slots, &schemas);
-        let mut ctx = BodyContext::from_slots(slots, &schemas);
+        let mut ctx = BodyContext::from_function(func, slots, &schemas, &registry);
         check_function_body(
             func,
             declared_return,
