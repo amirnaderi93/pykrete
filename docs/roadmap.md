@@ -10,14 +10,13 @@ Items the v0.1 spec defers, in the order we'll likely tackle them after the v0.1
 
 `col("address.street")` should resolve through nested schemas. Today the dotted string is treated as a single flat field name, so it always fails `D0030` even when the path is valid. Fix: walk the segments — for non-final segments, look the field up, assert its type is a nested `Schema`, recurse with the remainder.
 
-### Multi-file support
+### Real import-statement support
 
-Cross-file `import` resolution. Today every analysis is single-file. Real codebases span dozens of files with schemas imported from a shared module. Need:
+Multi-file analysis already works — pass multiple file paths to `dathon check` and all top-level declarations pool into one resolution scope. What's still missing:
 
-- Project root detection.
-- Import resolution that follows the same Python rules as the runtime.
-- Schema lookups that cross file boundaries.
-- Incremental rechecking when one file changes.
+- Parsing `import` / `from X import Y` statements and respecting Python's per-file scoping rules.
+- Project root detection (`pyproject.toml`-aware), recursive directory walking, and incremental rechecking.
+- Duplicate-name detection / warnings across files.
 
 ### LSP / VS Code extension
 

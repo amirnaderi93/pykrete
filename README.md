@@ -28,7 +28,10 @@ PySpark. The author's production PySpark codebase is the real-world testing yard
 ## Usage
 
 ```bash
-dathon check examples/schemas.dpy          # static analysis, diagnostics to stderr
+dathon check examples/schemas.dpy          # single file
+dathon check schemas.dpy pipeline.dpy      # multi-file; cross-file Schema visibility
+dathon check src/*.dpy                     # shell glob
+
 dathon transpile examples/schemas.dpy      # emit runnable Python to stdout
 dathon transpile examples/schemas.dpy > out.py
 ```
