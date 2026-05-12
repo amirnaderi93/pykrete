@@ -33,7 +33,7 @@ use ruff_python_ast::{Expr, ExprCall, Stmt};
 use ruff_source_file::LineIndex;
 use ruff_text_size::{Ranged, TextRange};
 
-use crate::dataframe::{DataFrameAnnotation, SlotLabel, TypedSlot};
+use crate::dataframe::{self, DataFrameAnnotation, SlotLabel, TypedSlot};
 use crate::diagnostics::{Diagnostic, Severity};
 use crate::schema::{Schema, SchemaView};
 use crate::walk::DiscoveredFunction;
@@ -109,17 +109,19 @@ fn role_at(shape: &ColumnMethodShape, index: usize) -> ArgRole {
 
 pub struct BodyContext<'a> {
     bindings: HashMap<&'a str, SchemaView<'a>>,
+    schemas: &'a [Schema<'a>],
 }
 
 impl<'a> BodyContext<'a> {
-    pub fn new() -> Self {
+    pub fn new(schemas: &'a [Schema<'a>]) -> Self {
         Self {
             bindings: HashMap::new(),
+            schemas,
         }
     }
 
     pub fn from_slots(slots: &[TypedSlot<'a>], schemas: &'a [Schema<'a>]) -> Self {
-        let mut ctx = Self::new();
+        let mut ctx = Self::new(schemas);
         for slot in slots {
             let SlotLabel::Param(name) = slot.label else {
                 continue;
@@ -127,7 +129,7 @@ impl<'a> BodyContext<'a> {
             let DataFrameAnnotation::Typed(schema_name) = slot.kind else {
                 continue;
             };
-            if let Some(schema) = schemas.iter().find(|s| s.name() == schema_name) {
+            if let Some(schema) = ctx.find_schema(schema_name) {
                 ctx.bind(name, SchemaView::Declared(schema));
             }
         }
@@ -140,6 +142,11 @@ impl<'a> BodyContext<'a> {
 
     pub fn lookup(&self, name: &str) -> Option<SchemaView<'a>> {
         self.bindings.get(name).cloned()
+    }
+
+    /// Look up a `Schema` declaration by its class name.
+    pub fn find_schema(&self, name: &str) -> Option<&'a Schema<'a>> {
+        self.schemas.iter().find(|s| s.name() == name)
     }
 }
 
@@ -167,6 +174,9 @@ pub fn check_function_body<'a>(
                     }
                 }
             }
+            Stmt::AnnAssign(ann) => {
+                handle_ann_assign(ann, ctx, source, line_index, diagnostics);
+            }
             Stmt::Return(r) => {
                 let Some(value) = r.value.as_deref() else {
                     continue;
@@ -187,6 +197,73 @@ pub fn check_function_body<'a>(
                 analyze_expr(&e.value, ctx, source, line_index, diagnostics);
             }
             _ => {}
+        }
+    }
+}
+
+/// Handle `name: DataFrame[Schema] = …` (and the no-value form).
+///
+/// The annotation is authoritative: if it names a known Schema, `name` is
+/// bound to it in the body context, regardless of what (if anything) the
+/// RHS does. This is the bridge to external sources — `dal.read(...)` and
+/// similar calls return something dathon can't track, but with the
+/// annotation in place the user re-enters the typed world.
+///
+/// The RHS, if present, is still analyzed for its own diagnostics.
+fn handle_ann_assign<'a>(
+    ann: &'a ruff_python_ast::StmtAnnAssign,
+    ctx: &mut BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    // Analyze the RHS for its own diagnostics. Result is discarded — the
+    // annotation wins.
+    if let Some(value) = ann.value.as_deref() {
+        analyze_expr(value, ctx, source, line_index, diagnostics);
+    }
+
+    let Some(target_name) = ann.target.as_name_expr().map(|n| n.id.as_str()) else {
+        return;
+    };
+
+    match dataframe::recognize(&ann.annotation) {
+        Some(DataFrameAnnotation::Typed(schema_name)) => {
+            if let Some(schema) = ctx.find_schema(schema_name) {
+                ctx.bind(target_name, SchemaView::Declared(schema));
+            } else {
+                diagnostics.push(Diagnostic::at(
+                    Severity::Error,
+                    "D0020",
+                    format!(
+                        "Unknown schema '{schema_name}' referenced in DataFrame[…]. \
+                         Declare it as a class extending Schema.",
+                    ),
+                    ann.annotation.range().start(),
+                    source,
+                    line_index,
+                ));
+            }
+        }
+        Some(DataFrameAnnotation::NonBareName) => {
+            let raw_text = &source[ann.annotation.range()];
+            diagnostics.push(Diagnostic::at(
+                Severity::Error,
+                "D0021",
+                format!(
+                    "DataFrame schema must be a bare name; got '{raw_text}'. \
+                     Subscripted/complex schema expressions are not supported in v0.1.",
+                ),
+                ann.annotation.range().start(),
+                source,
+                line_index,
+            ));
+        }
+        Some(DataFrameAnnotation::Untyped) => {
+            // Bare `DataFrame` — no schema to bind. Nothing to do.
+        }
+        None => {
+            // Annotation is not DataFrame-shaped at all. Not our concern.
         }
     }
 }

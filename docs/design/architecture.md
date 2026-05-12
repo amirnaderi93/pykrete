@@ -66,7 +66,9 @@ Recognizes DataFrame-typed annotations on function signatures. `recognize` class
 
 PySpark DataFrame operation checking inside function bodies, with **result-schema inference** so chained calls and local variable bindings carry their schemas forward.
 
-`BodyContext` holds a name → `SchemaView` map. It starts populated from typed function parameters; assignments grow it as the walker discovers `x = <DataFrame expression>`.
+`BodyContext` holds a name → `SchemaView` map. It starts populated from typed function parameters; assignments grow it as the walker discovers `x = <DataFrame expression>`. **Annotated assignments** (`x: DataFrame[Schema] = …`) bind too — and they're authoritative: the annotation wins even if the RHS is something dathon can't track. This is the bridge for external sources like `dal.read(...)` and `spark.read.csv(...)` — the function call itself is opaque to dathon, but the annotation re-enters the typed world.
+
+`BodyContext` also carries a reference to the file's `Schema` list (`find_schema`), so annotations encountered inside the body can be resolved to declared schemas the same way function-parameter annotations are.
 
 `analyze_expr` is the recursive heart. Given an expression, it returns a `SchemaView` when the expression evaluates to a DataFrame and `None` otherwise. While walking, every recognized method call's arguments are checked against the receiver's schema (emitting `D0030`/`D0040`) and the operation's result schema is computed and returned.
 
