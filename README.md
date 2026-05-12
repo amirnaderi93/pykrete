@@ -25,6 +25,14 @@ A strict superset of Python that adds static schema checking for dataframes. Ins
 
 PySpark. The author's production PySpark codebase is the real-world testing yardstick for v0.1.
 
+## Usage
+
+```bash
+dathon check examples/schemas.dpy          # static analysis, diagnostics to stderr
+dathon transpile examples/schemas.dpy      # emit runnable Python to stdout
+dathon transpile examples/schemas.dpy > out.py
+```
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow — feature branches, Conventional Commits, CI, and the MR-based merge process.

@@ -26,8 +26,11 @@ pub mod diagnostics;
 pub mod operations;
 pub mod registry;
 pub mod schema;
+pub mod transpiler;
 pub mod types;
 pub mod walk;
+
+pub use transpiler::transpile;
 
 use std::fmt::Write as _;
 

@@ -10,10 +10,6 @@ Items the v0.1 spec defers, in the order we'll likely tackle them after the v0.1
 
 `col("address.street")` should resolve through nested schemas. Today the dotted string is treated as a single flat field name, so it always fails `D0030` even when the path is valid. Fix: walk the segments — for non-final segments, look the field up, assert its type is a nested `Schema`, recurse with the remainder.
 
-### The transpiler
-
-`.dpy` → `.py` emit. Today dathon's analysis runs directly on `.dpy` files, but there's no actual transpilation step. Since `.dpy` is a strict superset of Python (no new syntax), the transpiler is mostly an identity transform that strips out dathon-only metadata (e.g., `Schema` base classes and `DataFrame[X]` annotations need to survive as runtime types or be erased to comments — design decision pending).
-
 ### Multi-file support
 
 Cross-file `import` resolution. Today every analysis is single-file. Real codebases span dozens of files with schemas imported from a shared module. Need:
