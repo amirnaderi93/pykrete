@@ -68,7 +68,7 @@ fn column_method_shape(method: &str) -> Option<ColumnMethodShape> {
         "select" | "drop" | "dropDuplicates" | "groupBy" => {
             Some(ColumnMethodShape::AllColumnName)
         }
-        "filter" | "where" => Some(ColumnMethodShape::AllExpression),
+        "filter" | "where" | "dropna" => Some(ColumnMethodShape::AllExpression),
         "withColumn" => Some(ColumnMethodShape::Positional(&[
             ArgRole::NewName,
             ArgRole::Expression,
@@ -457,7 +457,7 @@ fn apply_column_method<'a>(
             }
             Some(SchemaView::Derived(fields))
         }
-        "filter" | "where" | "dropDuplicates" => Some(recv.clone()),
+        "filter" | "where" | "dropDuplicates" | "dropna" => Some(recv.clone()),
         "drop" => {
             let drop_set: HashSet<&str> = call
                 .arguments

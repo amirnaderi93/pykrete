@@ -238,3 +238,15 @@ fn withColumnRenamed_does_not_flag_its_new_name() {
     ));
     assert_does_not_have_code(&result, "D0030");
 }
+
+// ===========================================================================
+// dropna — schema-preserving, like dropDuplicates
+// ===========================================================================
+
+#[test]
+fn dropna_is_schema_preserving_and_lets_downstream_use_the_same_columns() {
+    let result = check(&with_orders(
+        r#"return raw.dropna().select(col("place_code"), col("price"))"#,
+    ));
+    assert_does_not_have_code(&result, "D0030");
+}
