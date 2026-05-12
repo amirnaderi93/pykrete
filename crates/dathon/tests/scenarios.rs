@@ -1,4 +1,7 @@
 //! End-to-end realistic scenarios that exercise multiple features at once.
+
+#![allow(non_snake_case)] // PySpark / dathon names (DataFrame, unionByName) appear in test names.
+
 //!
 //! Each test is a small, plausible-looking PySpark module written in dathon
 //! syntax. The intent is to verify that features compose correctly — not to

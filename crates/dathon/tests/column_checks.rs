@@ -1,4 +1,7 @@
 //! Body-level column reference checks across every supported operation.
+
+#![allow(non_snake_case)] // PySpark method names (groupBy, withColumn, etc.) leak into test names.
+
 //!
 //! Exercises `D0030` — column doesn't exist on the receiver's schema —
 //! across `select`, `filter` / `where`, `drop`, `dropDuplicates`,

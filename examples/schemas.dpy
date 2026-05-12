@@ -107,6 +107,26 @@ def union_plain_different(a: DataFrame[Orders], b: DataFrame[RawOrders]) -> Data
     return a.union(b)
 
 
+def join_on_valid_key(left: DataFrame[Orders], right: DataFrame[Orders]) -> DataFrame:
+    return left.join(right, on="place_code")
+
+
+def join_with_missing_key(left: DataFrame[Orders], right: DataFrame[RawOrders]) -> DataFrame:
+    return left.join(right, on="place_code")
+
+
+def join_then_select_combined_columns(left: DataFrame[Orders], right: DataFrame[Orders]) -> DataFrame:
+    return left.join(right, on="place_code").select(col("price"))
+
+
+def join_then_select_unknown(left: DataFrame[Orders], right: DataFrame[Orders]) -> DataFrame:
+    return left.join(right, on="place_code").select(col("madeup"))
+
+
+def cross_join_combines_both(a: DataFrame[Orders], b: DataFrame[Orders]) -> DataFrame:
+    return a.crossJoin(b)
+
+
 def chained_typo(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.filter(col("price") > 0).select(col("madeup"))
 

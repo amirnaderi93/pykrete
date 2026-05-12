@@ -1,4 +1,7 @@
 //! Parsing, schema discovery, and field-type resolution.
+
+#![allow(non_snake_case)] // Type names (Schema, DataFrame) appear in test names.
+
 //!
 //! Exercises diagnostics:
 //! - `D0001` — Python parse error.

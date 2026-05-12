@@ -1,4 +1,7 @@
 //! Function signature recognition — the `DataFrame[X]` shape.
+
+#![allow(non_snake_case)] // Type names (DataFrame, Schema) appear in test names.
+
 //!
 //! Exercises diagnostics:
 //! - `D0020` — `DataFrame[X]` references a schema we don't know about.

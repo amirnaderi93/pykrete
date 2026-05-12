@@ -80,9 +80,12 @@ Recursion is what enables chained calls: for `raw.filter(...).select("madeup")`,
   - **Positional** — `withColumn` (`[NewName, Expression]`), `withColumnRenamed` (`[ColumnName, NewName]`). Each argument position has its own role; extra args reuse the last role.
   Three roles (`ColumnName`, `Expression`, `NewName`) are combined into shapes via `column_method_shape` / `role_at`. Mismatched columns against the receiver schema emit `D0030`.
 
-- **Two-DataFrame calls** — `union`, `unionByName`. The first argument is analyzed (recursively) to obtain its schema; the two schemas' field-name sets must match. Differences emit `D0040` with the missing columns listed on each side.
+- **Two-DataFrame calls** — `union`, `unionByName`, `join`, `crossJoin`. The first argument is analyzed (recursively) to obtain its schema. The check depends on the method:
+  - `union`/`unionByName` — the two schemas' field-name sets must match (`D0040`).
+  - `join` — the `on=` argument is parsed: a string literal or list of string literals lists the join keys, anything else is treated as a complex on-expression and not checked. Named keys must exist on both sides (`D0060`).
+  - `crossJoin` — no on-clause; nothing to check beyond the receivers themselves.
 
-**Result-schema inference** (`apply_column_method` / `apply_two_df_method`):
+**Result-schema inference** (`apply_column_method` / two-DataFrame methods):
 
 - `select(args)` → `Derived` schema whose fields are the output names of each arg (`alias("X")` wins; otherwise bare string literal, bare `col("X")`, or `.cast(...)` of those). Aliasless complex expressions silently drop.
 - `filter`, `where`, `dropDuplicates` → schema-preserving (receiver's schema).
@@ -90,6 +93,8 @@ Recursion is what enables chained calls: for `raw.filter(...).select("madeup")`,
 - `withColumn("new", expr)` → receiver fields plus `"new"` (if not already present).
 - `withColumnRenamed("old", "new")` → receiver fields with `"old"` replaced by `"new"`.
 - `union` / `unionByName` → receiver's schema (assumes the names match — if not, `D0040` already flagged it).
+- `join(other, on=…)` → keys appear once (left's value); non-key fields from both sides concatenated, with shared non-key names silently kept once (left wins). For a complex on-expression: same concatenation, no key dedup.
+- `crossJoin(other)` → concatenation of left + right fields, shared names kept once.
 - `groupBy(...)` → `None` (returns a `GroupedData`, not a DataFrame; subsequent `.agg(...)` calls aren't yet tracked).
 
 **Return-type validation**: when a function declares `-> DataFrame[X]`, every `return <value>` has its inferred schema compared against `X`'s field set. Mismatches emit `D0050` listing what's missing in the body and what's extra.

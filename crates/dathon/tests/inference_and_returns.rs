@@ -1,5 +1,8 @@
 //! Result-schema inference, local variable bindings, chained-call receivers,
 //! `union` / `unionByName` checks, and return-type validation.
+
+#![allow(non_snake_case)] // PySpark method names (unionByName) leak into test names.
+
 //!
 //! Exercises diagnostics:
 //! - `D0030` — used here in cases where the receiver's schema is *inferred*
