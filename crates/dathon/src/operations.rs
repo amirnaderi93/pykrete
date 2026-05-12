@@ -66,9 +66,7 @@ enum TwoDfMethod {
 
 fn column_method_shape(method: &str) -> Option<ColumnMethodShape> {
     match method {
-        "select" | "drop" | "dropDuplicates" | "groupBy" => {
-            Some(ColumnMethodShape::AllColumnName)
-        }
+        "select" | "drop" | "dropDuplicates" | "groupBy" => Some(ColumnMethodShape::AllColumnName),
         "filter" | "where" | "dropna" => Some(ColumnMethodShape::AllExpression),
         "withColumn" => Some(ColumnMethodShape::Positional(&[
             ArgRole::NewName,
@@ -348,14 +346,8 @@ fn check_return_type(
     if declared_names == actual_names {
         return;
     }
-    let mut only_declared: Vec<&str> = declared_names
-        .difference(&actual_names)
-        .copied()
-        .collect();
-    let mut only_actual: Vec<&str> = actual_names
-        .difference(&declared_names)
-        .copied()
-        .collect();
+    let mut only_declared: Vec<&str> = declared_names.difference(&actual_names).copied().collect();
+    let mut only_actual: Vec<&str> = actual_names.difference(&declared_names).copied().collect();
     only_declared.sort();
     only_actual.sort();
 
@@ -414,16 +406,39 @@ fn analyze_method_call<'a>(
         .as_name_expr()
         .and_then(|n| ctx.lookup_instance(n.id.as_str()))
     {
-        return handle_class_method_call(class_name, method, call, ctx, source, line_index, diagnostics);
+        return handle_class_method_call(
+            class_name,
+            method,
+            call,
+            ctx,
+            source,
+            line_index,
+            diagnostics,
+        );
     }
 
     let receiver = analyze_expr(&attr.value, ctx, source, line_index, diagnostics)?;
 
     if method == "agg" {
-        return Some(handle_agg(call, &receiver, ctx, source, line_index, diagnostics));
+        return Some(handle_agg(
+            call,
+            &receiver,
+            ctx,
+            source,
+            line_index,
+            diagnostics,
+        ));
     }
     if let Some(shape) = column_method_shape(method) {
-        check_column_method_args(call, &receiver, &shape, ctx, source, line_index, diagnostics);
+        check_column_method_args(
+            call,
+            &receiver,
+            &shape,
+            ctx,
+            source,
+            line_index,
+            diagnostics,
+        );
         return apply_column_method(method, &receiver, call);
     }
     if let Some(kind) = two_df_method(method) {
@@ -493,10 +508,7 @@ fn handle_class_method_call<'a>(
 
 /// Match `GenericClass[T]` where `T` is one of the supplied type variable
 /// names. Returns `T` if matched.
-fn extract_type_var_from_subscript<'a>(
-    expr: &'a Expr,
-    type_params: &[&'a str],
-) -> Option<&'a str> {
+fn extract_type_var_from_subscript<'a>(expr: &'a Expr, type_params: &[&'a str]) -> Option<&'a str> {
     let sub = expr.as_subscript_expr()?;
     let inner = sub.slice.as_name_expr()?.id.as_str();
     if type_params.contains(&inner) {
@@ -798,14 +810,7 @@ fn handle_two_df_method<'a>(
 
     match kind {
         TwoDfMethod::Union | TwoDfMethod::UnionByName => {
-            check_union_schemas(
-                left,
-                &right,
-                arg.range(),
-                source,
-                line_index,
-                diagnostics,
-            );
+            check_union_schemas(left, &right, arg.range(), source, line_index, diagnostics);
             Some(left.clone())
         }
         TwoDfMethod::Join => {

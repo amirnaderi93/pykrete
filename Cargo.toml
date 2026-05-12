@@ -5,7 +5,8 @@ resolver = "2"
 [workspace.package]
 version = "0.0.1"
 edition = "2024"
-license = "TBD"
+license = "MIT"
+repository = "https://gitlab.com/amir.naderi93/dathon"
 
 [workspace.dependencies]
 # Shared/pinned dependencies will go here as we add crates.

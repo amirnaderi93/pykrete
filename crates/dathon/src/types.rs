@@ -114,7 +114,15 @@ mod tests {
         // The constant embedded in user-facing error messages. Keep it in
         // sync with from_name. If you add a new type, update this and the
         // constant.
-        for name in ["int", "long", "double", "string", "bool", "date", "timestamp"] {
+        for name in [
+            "int",
+            "long",
+            "double",
+            "string",
+            "bool",
+            "date",
+            "timestamp",
+        ] {
             assert!(
                 COLUMN_TYPE_NAMES.contains(name),
                 "COLUMN_TYPE_NAMES should list '{name}'",
@@ -122,4 +130,3 @@ mod tests {
         }
     }
 }
-

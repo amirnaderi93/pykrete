@@ -69,7 +69,8 @@ def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
 
 #[test]
 fn join_with_list_of_keys_is_clean_when_all_keys_exist_on_both_sides() {
-    let result = check(r#"
+    let result = check(
+        r#"
 class A(Schema):
     k1: int
     k2: int
@@ -82,7 +83,8 @@ class B(Schema):
 
 def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
     return a.join(b, on=["k1", "k2"])
-"#);
+"#,
+    );
     assert_does_not_have_code(&result, "D0060");
 }
 
@@ -92,7 +94,8 @@ def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
 
 #[test]
 fn d0060_fires_when_join_key_is_missing_from_left_side() {
-    let result = check(r#"
+    let result = check(
+        r#"
 class A(Schema):
     a: int
 
@@ -102,7 +105,8 @@ class B(Schema):
 
 def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
     return a.join(b, on="k")
-"#);
+"#,
+    );
     assert_has_code(&result, "D0060");
     assert_message_contains(&result, "D0060", "k");
     assert_message_contains(&result, "D0060", "left");
@@ -110,7 +114,8 @@ def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
 
 #[test]
 fn d0060_fires_when_join_key_is_missing_from_right_side() {
-    let result = check(r#"
+    let result = check(
+        r#"
 class A(Schema):
     k: int
     a: int
@@ -120,7 +125,8 @@ class B(Schema):
 
 def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
     return a.join(b, on="k")
-"#);
+"#,
+    );
     assert_has_code(&result, "D0060");
     assert_message_contains(&result, "D0060", "right");
 }
@@ -128,7 +134,8 @@ def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
 #[test]
 fn d0060_fires_for_each_missing_key_in_a_list() {
     // k2 missing from B → one D0060.
-    let result = check(r#"
+    let result = check(
+        r#"
 class A(Schema):
     k1: int
     k2: int
@@ -138,7 +145,8 @@ class B(Schema):
 
 def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
     return a.join(b, on=["k1", "k2"])
-"#);
+"#,
+    );
     assert_count(&result, "D0060", 1);
     assert_message_contains(&result, "D0060", "k2");
 }
@@ -194,7 +202,8 @@ def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
 
 #[test]
 fn crossJoin_result_schema_concatenates_both_sides_without_a_key_check() {
-    let result = check(r#"
+    let result = check(
+        r#"
 class A(Schema):
     a1: int
     a2: int
@@ -205,14 +214,16 @@ class B(Schema):
 
 def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
     return a.crossJoin(b).select(col("a1"), col("a2"), col("b1"), col("b2"))
-"#);
+"#,
+    );
     assert_does_not_have_code(&result, "D0060");
     assert_does_not_have_code(&result, "D0030");
 }
 
 #[test]
 fn crossJoin_result_excludes_columns_present_in_neither_side() {
-    let result = check(r#"
+    let result = check(
+        r#"
 class A(Schema):
     a1: int
 
@@ -221,7 +232,8 @@ class B(Schema):
 
 def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
     return a.crossJoin(b).select(col("c1"))
-"#);
+"#,
+    );
     assert_has_code(&result, "D0030");
 }
 
@@ -229,7 +241,8 @@ def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
 fn join_result_schema_feeds_into_return_type_validation() {
     // The declared return is Joined [k, a, b]; after the join, the
     // inferred result is also [k, a, b]. They match — no D0050.
-    let result = check(r#"
+    let result = check(
+        r#"
 class A(Schema):
     k: int
     a: int
@@ -245,14 +258,16 @@ class Joined(Schema):
 
 def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame[Joined]:
     return a.join(b, on="k")
-"#);
+"#,
+    );
     assert_does_not_have_code(&result, "D0050");
 }
 
 #[test]
 fn join_result_schema_feeds_into_return_type_mismatch_when_wrong() {
     // Declared return only has [k, a]; actual result has [k, a, b].
-    let result = check(r#"
+    let result = check(
+        r#"
 class A(Schema):
     k: int
     a: int
@@ -267,7 +282,8 @@ class Wrong(Schema):
 
 def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame[Wrong]:
     return a.join(b, on="k")
-"#);
+"#,
+    );
     assert_has_code(&result, "D0050");
     assert_message_contains(&result, "D0050", "b");
 }

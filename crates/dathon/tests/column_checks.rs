@@ -34,7 +34,13 @@ def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
 fn indent(s: &str, n: usize) -> String {
     let pad = " ".repeat(n);
     s.lines()
-        .map(|l| if l.is_empty() { String::new() } else { format!("{pad}{l}") })
+        .map(|l| {
+            if l.is_empty() {
+                String::new()
+            } else {
+                format!("{pad}{l}")
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -45,7 +51,9 @@ fn indent(s: &str, n: usize) -> String {
 
 #[test]
 fn select_with_known_columns_is_clean() {
-    let result = check(&with_orders(r#"return raw.select(col("place_code"), col("price"))"#));
+    let result = check(&with_orders(
+        r#"return raw.select(col("place_code"), col("price"))"#,
+    ));
     assert_does_not_have_code(&result, "D0030");
 }
 
@@ -65,7 +73,9 @@ fn select_accepts_bare_string_column_names() {
 
 #[test]
 fn d0030_fires_on_bare_string_with_a_typo() {
-    let result = check(&with_orders(r#"return raw.select("place_code", "no_such")"#));
+    let result = check(&with_orders(
+        r#"return raw.select("place_code", "no_such")"#,
+    ));
     assert_has_code(&result, "D0030");
     assert_message_contains(&result, "D0030", "no_such");
 }
@@ -73,7 +83,9 @@ fn d0030_fires_on_bare_string_with_a_typo() {
 #[test]
 fn select_with_alias_does_not_flag_the_alias_target() {
     // The "pc" is the OUTPUT name, not a column we're reading from raw.
-    let result = check(&with_orders(r#"return raw.select(col("place_code").alias("pc"))"#));
+    let result = check(&with_orders(
+        r#"return raw.select(col("place_code").alias("pc"))"#,
+    ));
     assert_does_not_have_code(&result, "D0030");
 }
 
@@ -120,7 +132,9 @@ fn filter_string_literals_are_values_not_columns() {
     // "confirmed" is a value being compared against, not a column reference.
     // It must NOT trigger D0030 even though "confirmed" isn't a column of
     // Orders.
-    let result = check(&with_orders(r#"return raw.filter(col("place_code") == "confirmed")"#));
+    let result = check(&with_orders(
+        r#"return raw.filter(col("place_code") == "confirmed")"#,
+    ));
     assert_does_not_have_code(&result, "D0030");
 }
 
@@ -151,7 +165,9 @@ fn d0030_fires_when_drop_references_an_unknown_column() {
 
 #[test]
 fn drop_accepts_col_references_in_addition_to_bare_strings() {
-    let result = check(&with_orders(r#"return raw.drop(col("place_code"), "price")"#));
+    let result = check(&with_orders(
+        r#"return raw.drop(col("place_code"), "price")"#,
+    ));
     assert_does_not_have_code(&result, "D0030");
 }
 
@@ -180,7 +196,9 @@ fn groupBy_with_known_columns_is_clean() {
 
 #[test]
 fn d0030_fires_when_groupBy_references_an_unknown_column() {
-    let result = check(&with_orders(r#"raw.groupBy("place_code", col("invented"))"#));
+    let result = check(&with_orders(
+        r#"raw.groupBy("place_code", col("invented"))"#,
+    ));
     assert_has_code(&result, "D0030");
     assert_message_contains(&result, "D0030", "invented");
 }

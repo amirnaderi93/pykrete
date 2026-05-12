@@ -1,8 +1,11 @@
 # dathon
 
+[![pipeline status](https://gitlab.com/amir.naderi93/dathon/badges/main/pipeline.svg)](https://gitlab.com/amir.naderi93/dathon/-/commits/main)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A strict superset of Python that adds static schema checking for dataframes. Inspired by TypeScript's relationship to JavaScript.
 
-**Status:** pre-implementation. Designing v0.1.
+**Status:** v0.1 in progress.
 
 ## What it does
 
@@ -22,6 +25,12 @@ A strict superset of Python that adds static schema checking for dataframes. Ins
 
 PySpark. The author's production PySpark codebase is the real-world testing yardstick for v0.1.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow — feature branches, Conventional Commits, CI, and the MR-based merge process.
+
+The [roadmap](docs/roadmap.md) lays out what's planned after v0.1.
+
 ## License
 
-TBD.
+MIT. See [LICENSE](LICENSE).

@@ -40,9 +40,7 @@ use crate::operations::{BodyContext, check_function_body};
 use crate::registry::Registry;
 use crate::schema::{FieldResolution, Schema, discover_schemas};
 use crate::types::COLUMN_TYPE_NAMES;
-use crate::walk::{
-    DiscoveredFunction, discover_top_level_classes, discover_top_level_functions,
-};
+use crate::walk::{DiscoveredFunction, discover_top_level_classes, discover_top_level_functions};
 
 /// Outcome of running the checker on a single source file.
 ///
@@ -112,7 +110,14 @@ pub fn check(_path: &str, source: &str) -> CheckResult {
     let mut body = String::new();
 
     for schema in &schemas {
-        render_schema(schema, &schemas, source, &line_index, &mut body, &mut diagnostics);
+        render_schema(
+            schema,
+            &schemas,
+            source,
+            &line_index,
+            &mut body,
+            &mut diagnostics,
+        );
     }
 
     let typed_functions: Vec<_> = functions
@@ -191,22 +196,14 @@ fn render_schema<'a>(
                 writeln!(out, "          {}: {}", field.name, ct).unwrap();
             }
             FieldResolution::ResolvedNested(nested) => {
-                writeln!(
-                    out,
-                    "          {}: {} (nested)",
-                    field.name,
-                    nested.name()
-                )
-                .unwrap();
+                writeln!(out, "          {}: {} (nested)", field.name, nested.name()).unwrap();
             }
             FieldResolution::UnknownType { name } => {
                 writeln!(out, "          {}: {}  (unresolved)", field.name, raw_text).unwrap();
                 diagnostics.push(Diagnostic::at(
                     Severity::Error,
                     "D0010",
-                    format!(
-                        "Unknown column type '{name}'. Expected one of: {COLUMN_TYPE_NAMES}.",
-                    ),
+                    format!("Unknown column type '{name}'. Expected one of: {COLUMN_TYPE_NAMES}.",),
                     ann_range.start(),
                     source,
                     line_index,

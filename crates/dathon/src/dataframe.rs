@@ -28,9 +28,7 @@ pub enum DataFrameAnnotation<'ast> {
 /// a `DataFrame` or `DataFrame[…]` annotation at all.
 pub fn recognize<'ast>(expr: &'ast Expr) -> Option<DataFrameAnnotation<'ast>> {
     match expr {
-        Expr::Name(name) if name.id.as_str() == "DataFrame" => {
-            Some(DataFrameAnnotation::Untyped)
-        }
+        Expr::Name(name) if name.id.as_str() == "DataFrame" => Some(DataFrameAnnotation::Untyped),
         Expr::Subscript(sub) => {
             let base = sub.value.as_name_expr()?;
             if base.id.as_str() != "DataFrame" {
@@ -70,10 +68,16 @@ pub fn typed_slots<'ast>(func: &'ast DiscoveredFunction<'ast>) -> Vec<TypedSlot<
     let mut slots = Vec::new();
 
     let params = &*func.def.parameters;
-    let positional = params.posonlyargs.iter().chain(&params.args).chain(&params.kwonlyargs);
+    let positional = params
+        .posonlyargs
+        .iter()
+        .chain(&params.args)
+        .chain(&params.kwonlyargs);
     for pwd in positional {
         let param = &pwd.parameter;
-        let Some(ann) = param.annotation.as_deref() else { continue };
+        let Some(ann) = param.annotation.as_deref() else {
+            continue;
+        };
         if let Some(kind) = recognize(ann) {
             slots.push(TypedSlot {
                 label: SlotLabel::Param(param.name.id.as_str()),
