@@ -5,3 +5,4 @@ Cargo.lock.bak
 
 # Local/dev-environment files — never commit
 .cargo/config.toml
+.claude/settings.local.json
