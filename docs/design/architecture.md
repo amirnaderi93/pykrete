@@ -168,6 +168,20 @@ Architecturally the LSP server is a thin shell around the existing `dathon` libr
 
 Iteration 24 ships only diagnostics. The features layered on later (hover, document symbols, go-to-definition, completion, code actions, rename) each become a separate request handler on the same server loop.
 
+### `dathon::hover` (iteration 25)
+
+Position-aware hover lookup. Given `(line, column)`, `dathon::hover` parses the source, locates the AST node at that offset, and returns a markdown blob describing the symbol — or `None` if there isn't one. The LSP server routes `textDocument/hover` requests through it.
+
+Three positions are supported in v0.1:
+
+1. **Schema class declaration** (`class Orders(Schema):`) — fields with `ColumnType`s.
+2. **Typed function declaration** — full signature with `DataFrame[Schema]` annotations.
+3. **Schema reference** in an annotation we recognize: the `X` in `DataFrame[X]` on a function signature, or a bare-name annotation in a Schema field (`address: Address`).
+
+The function returns `Option<HoverInfo>` with a `markdown: String` field. Position arithmetic uses `ruff_source_file::LineIndex` to convert `(line, column)` to a `TextSize` offset; range checks use `TextRange::contains_inclusive`.
+
+Hover for column references (`col("foo")`), local-variable inferred schemas, and `df.X` attribute access is deferred to follow-up iterations.
+
 ## Multi-file analysis
 
 `check_project(files)` is the library entry point for analyzing multiple files together. The model in v0.1 is deliberately simple:
