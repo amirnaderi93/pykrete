@@ -155,6 +155,19 @@ Schema base classes (the user's `class Foo(Schema):` declarations) still need th
 
 CLI entry point. Dispatches `dathon <check|transpile>` to the matching library entry point. The `check` subcommand accepts one or more file paths; multiple paths are analyzed as a single project with cross-file Schema visibility.
 
+## `dathon-lsp` crate
+
+Separate workspace member at [`crates/dathon-lsp/`](../../crates/dathon-lsp/). Speaks the Language Server Protocol over stdio so any LSP-compatible editor can plug into dathon's analysis.
+
+Architecturally the LSP server is a thin shell around the existing `dathon` library:
+
+- **Server loop**: `lsp-server` crate (rust-analyzer's lightweight sync framework — no async runtime needed for our workload). One thread, one message at a time.
+- **Document sync**: `TextDocumentSyncKind::FULL` for v0.1. The client sends the entire new buffer on every `didChange`; the server replaces its in-memory copy. Incremental sync is a follow-up.
+- **Diagnostics flow**: `didOpen` / `didChange` run `dathon::check` on the new buffer and push the resulting diagnostics to the editor via `textDocument/publishDiagnostics`. `didClose` clears them by pushing an empty list.
+- **Diagnostic conversion** (`to_lsp_diagnostic`): translates dathon's 1-indexed `(line, column)` to LSP's 0-indexed `Position`, emits a zero-width range (the editor extends the underline to the word boundary), and maps severities and codes one-to-one.
+
+Iteration 24 ships only diagnostics. The features layered on later (hover, document symbols, go-to-definition, completion, code actions, rename) each become a separate request handler on the same server loop.
+
 ## Multi-file analysis
 
 `check_project(files)` is the library entry point for analyzing multiple files together. The model in v0.1 is deliberately simple:

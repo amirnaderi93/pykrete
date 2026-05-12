@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/dathon"]
+members = ["crates/dathon", "crates/dathon-lsp"]
 resolver = "2"
 
 [workspace.package]

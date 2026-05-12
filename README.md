@@ -27,6 +27,8 @@ PySpark. The author's production PySpark codebase is the real-world testing yard
 
 ## Usage
 
+### Static checker
+
 ```bash
 dathon check examples/schemas.dpy          # single file
 dathon check schemas.dpy pipeline.dpy      # multi-file; cross-file Schema visibility
@@ -35,6 +37,18 @@ dathon check src/*.dpy                     # shell glob
 dathon transpile examples/schemas.dpy      # emit runnable Python to stdout
 dathon transpile examples/schemas.dpy > out.py
 ```
+
+### Editor integration (LSP)
+
+`dathon-lsp` is a Language Server Protocol server. It speaks LSP over stdio
+and pushes live diagnostics to any LSP-compatible editor as you type.
+Iteration 24 ships the skeleton (diagnostics only); hover, document symbols,
+and go-to-definition land in subsequent iterations.
+
+For now, hook it up manually via your editor's LSP config — point the
+client at the `dathon-lsp` binary (after `cargo build --release`, the path
+is `target/release/dathon-lsp`). A VS Code extension wrapping this is on
+the roadmap.
 
 ## Contributing
 

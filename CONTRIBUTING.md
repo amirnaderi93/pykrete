@@ -29,10 +29,20 @@ cargo run -- check examples/schemas.dpy
 ### Run the test suite
 
 ```bash
-cargo test
+cargo test            # all crates in the workspace
+cargo test -p dathon  # just the checker library + CLI
+cargo test -p dathon-lsp  # just the LSP server
 ```
 
 All tests should pass on a clean checkout. If any fail on your machine before you've made changes, that's a bug — please open an issue.
+
+### Run the LSP server (manual smoke)
+
+```bash
+cargo run -p dathon-lsp --bin dathon-lsp
+```
+
+stdin/stdout speak LSP JSON-RPC. For actual editor integration, see the README.
 
 ## Project layout
 
@@ -47,11 +57,17 @@ crates/dathon/
 │   ├── dataframe.rs      # DataFrame[Schema] annotation recognition
 │   ├── walk.rs           # Top-level AST walks (classes, functions)
 │   ├── registry.rs       # Class + constant registries (for generics)
+│   ├── transpiler.rs     # .dpy → .py emit
 │   └── operations.rs     # Body analysis, result-schema inference,
 │                         #   chain tracking, return-type checks
 └── tests/
     ├── common/mod.rs     # Shared test helpers
     └── *.rs              # Integration tests — one file per feature area
+
+crates/dathon-lsp/
+├── src/
+│   ├── main.rs           # LSP binary — thin shell over the library
+│   └── lib.rs            # Server loop + diagnostic conversion
 
 docs/                     # Spec + architecture + design notes
 examples/                 # Sample `.dpy` files
