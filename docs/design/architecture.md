@@ -138,9 +138,22 @@ Three column-reference shapes are recognized:
 
 The body walk is currently shallow (top-level statements only, direct calls on params only). Each new operation (`withColumn`, `withColumnRenamed`, `join`, …) and each new shape (chained calls, local-variable receivers, attribute-access columns) lands as an additive change here.
 
+### `transpiler`
+
+`.dpy` → `.py` emit, exposed via `dathon::transpile(source)`. Because `.dpy` is a strict superset of Python (deliberately — see the v0.1 spec), the transpiler is mostly an identity transform. The one transformation it does perform is prepending `from __future__ import annotations` to the source, which defers evaluation of all type annotations to strings.
+
+That single change matters for two reasons:
+
+1. dathon's atomic type names — `string`, `double`, `timestamp`, `date`, `long`, `bool` — aren't Python builtins. Without deferred annotations, `x: timestamp` would raise `NameError` at runtime.
+2. `DataFrame[X]`, `DataSource[X]`, and other `Generic[Schema]` annotation shapes use `__class_getitem__` semantics that some real classes (e.g. PySpark's `DataFrame`) don't implement. Without deferred annotations, evaluating them raises `TypeError`.
+
+Both vanish with the future import. No AST walking, no source reshaping; just one prepended line.
+
+Schema base classes (the user's `class Foo(Schema):` declarations) still need the name `Schema` bound to *something* at runtime. The transpiler doesn't inject this — that's a runtime concern. Users either import a real `Schema` from a future `dathon` Python package or define a no-op base class.
+
 ### `main`
 
-CLI entry point. Parses args (manually for now; a real arg parser comes once we have more than `check`), reads the source file, drives parse → walk → schema → print.
+CLI entry point. Dispatches `dathon <check|transpile> <file.dpy>` to the matching library entry point.
 
 ## External dependencies
 
