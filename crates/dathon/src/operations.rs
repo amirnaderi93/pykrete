@@ -1,23 +1,26 @@
 //! PySpark DataFrame operations — checking calls inside function bodies.
 //!
-//! Two flavors of recognized method:
+//! Each recognized method has a "shape" that determines how its arguments are
+//! interpreted:
 //!
-//! - **Column-name methods**: `select`, `drop`, `dropDuplicates`, `groupBy`.
-//!   Top-level string-literal arguments are treated as column names (and a
-//!   `dropDuplicates(["a", "b"])`-style list arg is unpacked). `col("X")`
-//!   references anywhere inside an arg are also collected.
-//! - **Expression methods**: `filter`, `where`. String literals are treated
-//!   as values; only `col("X")` references count as column refs.
+//! - **AllColumnName** — every arg interprets top-level string literals as
+//!   column names (and `[…]` list literals as lists of column names).
+//!   Methods: `select`, `drop`, `dropDuplicates`, `groupBy`.
+//! - **AllExpression** — every arg is a boolean/value expression. String
+//!   literals are values; only `col("X")` references count as column refs.
+//!   Methods: `filter`, `where`.
+//! - **Positional** — each argument position has its own role.
+//!   Methods: `withColumn` (NewName, Expression), `withColumnRenamed`
+//!   (ColumnName, NewName).
 //!
-//! Every collected column name is checked against the receiver's schema.
-//! Mismatches emit `D0030`.
+//! Every collected column name is checked against the receiver's schema;
+//! mismatches emit `D0030`. `col("X")` references inside any expression
+//! arg are also collected recursively regardless of shape.
 //!
 //! Scope cuts in v0.1:
 //! - Only direct calls on parameters typed `DataFrame[S]`. No tracking of
 //!   local variable bindings.
 //! - Only top-level statements in the body. Nested blocks ignored.
-//! - `withColumn` / `withColumnRenamed` not handled yet (different arg shape
-//!   from the two flavors above).
 //! - `df.X` attribute access for columns not handled yet.
 //! - Calls on chained results (`df.filter(...).select(...)`) only check the
 //!   outermost direct-on-param call.
@@ -33,8 +36,52 @@ use crate::diagnostics::{Diagnostic, Severity};
 use crate::schema::Schema;
 use crate::walk::DiscoveredFunction;
 
-const COLUMN_NAME_METHODS: &[&str] = &["select", "drop", "dropDuplicates", "groupBy"];
-const EXPRESSION_METHODS: &[&str] = &["filter", "where"];
+#[derive(Debug, Clone, Copy)]
+enum ArgRole {
+    /// Top-level string lit (or list of string lits) is a column name to
+    /// check; col() refs collected recursively.
+    ColumnName,
+    /// String literals are values; only col() refs count as column refs.
+    Expression,
+    /// New column name being introduced — don't check anything.
+    NewName,
+}
+
+enum MethodShape {
+    AllColumnName,
+    AllExpression,
+    /// Each position has its own role. Extra args beyond the slice length
+    /// use the last role. Empty slice means no args are checked.
+    Positional(&'static [ArgRole]),
+}
+
+fn method_shape(method: &str) -> Option<MethodShape> {
+    match method {
+        "select" | "drop" | "dropDuplicates" | "groupBy" => Some(MethodShape::AllColumnName),
+        "filter" | "where" => Some(MethodShape::AllExpression),
+        "withColumn" => Some(MethodShape::Positional(&[
+            ArgRole::NewName,
+            ArgRole::Expression,
+        ])),
+        "withColumnRenamed" => Some(MethodShape::Positional(&[
+            ArgRole::ColumnName,
+            ArgRole::NewName,
+        ])),
+        _ => None,
+    }
+}
+
+fn role_at(shape: &MethodShape, index: usize) -> ArgRole {
+    match shape {
+        MethodShape::AllColumnName => ArgRole::ColumnName,
+        MethodShape::AllExpression => ArgRole::Expression,
+        MethodShape::Positional(roles) => roles
+            .get(index)
+            .copied()
+            .or_else(|| roles.last().copied())
+            .unwrap_or(ArgRole::Expression),
+    }
+}
 
 /// Maps a function-parameter name to the Schema it's typed as.
 pub struct ParamScope<'a> {
@@ -101,11 +148,7 @@ fn check_column_method_call(
         return;
     };
     let method = attr.attr.id.as_str();
-    let strings_are_columns = if COLUMN_NAME_METHODS.contains(&method) {
-        true
-    } else if EXPRESSION_METHODS.contains(&method) {
-        false
-    } else {
+    let Some(shape) = method_shape(method) else {
         return;
     };
     let Some(receiver) = attr.value.as_name_expr() else {
@@ -116,8 +159,9 @@ fn check_column_method_call(
     };
 
     let mut refs: Vec<(&str, TextRange)> = Vec::new();
-    for arg in &call.arguments.args {
-        collect_arg_column_refs(arg, strings_are_columns, &mut refs);
+    for (i, arg) in call.arguments.args.iter().enumerate() {
+        let role = role_at(&shape, i);
+        collect_arg_column_refs(arg, role, &mut refs);
     }
     for (col_name, col_range) in refs {
         if !schema.has_field(col_name) {
@@ -136,34 +180,32 @@ fn check_column_method_call(
     }
 }
 
-/// Collect column references from a single argument expression.
-///
-/// `strings_are_columns` controls whether top-level string literals (and
-/// string literals inside a top-level list literal) are interpreted as
-/// column names. Either way, `col("X")` refs anywhere inside the expression
-/// are collected too.
 fn collect_arg_column_refs<'a>(
     arg: &'a Expr,
-    strings_are_columns: bool,
+    role: ArgRole,
     out: &mut Vec<(&'a str, TextRange)>,
 ) {
-    if strings_are_columns {
-        if let Some(s) = arg.as_string_literal_expr() {
-            out.push((s.value.to_str(), s.range()));
-            return;
-        }
-        if let Some(list) = arg.as_list_expr() {
-            for elt in &list.elts {
-                if let Some(s) = elt.as_string_literal_expr() {
-                    out.push((s.value.to_str(), s.range()));
-                } else {
-                    collect_col_refs(elt, out);
-                }
+    match role {
+        ArgRole::NewName => {}
+        ArgRole::ColumnName => {
+            if let Some(s) = arg.as_string_literal_expr() {
+                out.push((s.value.to_str(), s.range()));
+                return;
             }
-            return;
+            if let Some(list) = arg.as_list_expr() {
+                for elt in &list.elts {
+                    if let Some(s) = elt.as_string_literal_expr() {
+                        out.push((s.value.to_str(), s.range()));
+                    } else {
+                        collect_col_refs(elt, out);
+                    }
+                }
+                return;
+            }
+            collect_col_refs(arg, out);
         }
+        ArgRole::Expression => collect_col_refs(arg, out),
     }
-    collect_col_refs(arg, out);
 }
 
 /// Match `col("X")` and return ("X", range-of-the-string-literal).
@@ -179,10 +221,6 @@ fn col_reference(expr: &Expr) -> Option<(&str, TextRange)> {
 }
 
 /// Recursively collect every `col("X")` reference inside `expr`.
-///
-/// When we find a `col("X")` we record it and stop recursing into that
-/// subexpression. Scopes that bind new names (lambdas, comprehensions) are
-/// not entered.
 fn collect_col_refs<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, TextRange)>) {
     if let Some(found) = col_reference(expr) {
         out.push(found);

@@ -64,12 +64,13 @@ Recognizes DataFrame-typed annotations on function signatures. `recognize` class
 
 PySpark DataFrame operation checking, inside function bodies. Holds a `ParamScope` (parameter name → schema) built from the typed slots of a function, then walks the body looking for operations applied to those parameters.
 
-Methods are bucketed into two interpretation modes:
+Each recognized method has a *shape* that tells the dispatcher how to interpret each argument position. There are three shapes:
 
-- **Column-name methods** — `select`, `drop`, `dropDuplicates`, `groupBy`. Top-level string-literal args are treated as column names; list-of-string args (`dropDuplicates(["a", "b"])`) are unpacked. `col("X")` references anywhere inside an arg are also collected.
-- **Expression methods** — `filter`, `where`. String literals are values; only `col("X")` references count as column refs.
+- **AllColumnName** — `select`, `drop`, `dropDuplicates`, `groupBy`. Top-level string-literal args are treated as column names; list-of-string args are unpacked. `col("X")` references anywhere inside an arg are also collected.
+- **AllExpression** — `filter`, `where`. String literals are values; only `col("X")` references count as column refs.
+- **Positional** — `withColumn` (`[NewName, Expression]`), `withColumnRenamed` (`[ColumnName, NewName]`). Each argument position has its own role; extra args reuse the last role.
 
-Every collected column name is checked against the receiver's schema; mismatches emit `D0030`.
+The three roles (`ColumnName`, `Expression`, `NewName`) are combined into shapes via `method_shape`/`role_at`. Every collected column name is checked against the receiver's schema; mismatches emit `D0030`.
 
 Column reference discovery is a small recursive walker (`collect_col_refs`) that descends through `Call`, `Attribute`, `Subscript`, `BinOp`, `BoolOp`, `Compare`, `If`-expression, `Tuple`/`List`, and `Starred` — enough to find columns inside expressions like `(col("a") + col("b")).cast("int").alias("c")`. Scopes that bind new names (lambdas, comprehensions) are deliberately not entered.
 

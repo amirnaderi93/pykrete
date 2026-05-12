@@ -79,6 +79,22 @@ def group_by_mixed(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.groupBy("place_code", col("invented"))
 
 
+def with_column_valid(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.withColumn("price_log", col("price") * 2)
+
+
+def with_column_typo(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.withColumn("price_log", col("priec") * 2)
+
+
+def with_column_renamed_valid(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.withColumnRenamed("place_code", "code")
+
+
+def with_column_renamed_typo(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.withColumnRenamed("place_cdoe", "code")
+
+
 def bad_fn(x: DataFrame[NotAKnownSchema]) -> DataFrame[Orders]:
     return x
 
