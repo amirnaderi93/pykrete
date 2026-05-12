@@ -62,11 +62,18 @@ Recognizes DataFrame-typed annotations on function signatures. `recognize` class
 
 ### `operations`
 
-PySpark DataFrame operation checking, inside function bodies. Holds a `ParamScope` (parameter name → schema) built from the typed slots of a function, then walks the body looking for operations applied to those parameters. Currently recognized methods: `.select`, `.filter`, `.where`. For each, every `col("X")` reference found anywhere in any argument is checked against the receiver's schema and emits `D0030` if missing.
+PySpark DataFrame operation checking, inside function bodies. Holds a `ParamScope` (parameter name → schema) built from the typed slots of a function, then walks the body looking for operations applied to those parameters.
+
+Methods are bucketed into two interpretation modes:
+
+- **Column-name methods** — `select`, `drop`, `dropDuplicates`, `groupBy`. Top-level string-literal args are treated as column names; list-of-string args (`dropDuplicates(["a", "b"])`) are unpacked. `col("X")` references anywhere inside an arg are also collected.
+- **Expression methods** — `filter`, `where`. String literals are values; only `col("X")` references count as column refs.
+
+Every collected column name is checked against the receiver's schema; mismatches emit `D0030`.
 
 Column reference discovery is a small recursive walker (`collect_col_refs`) that descends through `Call`, `Attribute`, `Subscript`, `BinOp`, `BoolOp`, `Compare`, `If`-expression, `Tuple`/`List`, and `Starred` — enough to find columns inside expressions like `(col("a") + col("b")).cast("int").alias("c")`. Scopes that bind new names (lambdas, comprehensions) are deliberately not entered.
 
-The body walk is currently shallow (top-level statements only, direct calls on params only, `col("X")` literals only — no `df.X` attribute access yet, no bare-string column refs). Each new operation (`withColumn`, `join`, ...) and each new shape (chained calls, local-variable receivers, attribute-access columns) lands as an additive change here.
+The body walk is currently shallow (top-level statements only, direct calls on params only). Each new operation (`withColumn`, `withColumnRenamed`, `join`, …) and each new shape (chained calls, local-variable receivers, attribute-access columns) lands as an additive change here.
 
 ### `main`
 

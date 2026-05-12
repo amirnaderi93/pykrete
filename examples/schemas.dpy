@@ -1,4 +1,4 @@
-# Probes schema + field-type + DataFrame[Schema] + body-level select/filter/where checks.
+# Probes schema + field-type + DataFrame[Schema] + body-level operation checks.
 
 class Orders(Schema):
     place_code: int
@@ -36,6 +36,14 @@ def select_all_valid(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.select(col("place_code"), col("price"))
 
 
+def select_bare_strings(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.select("place_code", "price")
+
+
+def select_bare_string_typo(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.select("place_code", "no_such_col")
+
+
 def filter_with_typo(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.filter((col("price") > 0) & (col("nonexistent") < 100))
 
@@ -44,11 +52,31 @@ def where_with_typo(raw: DataFrame[RawOrders]) -> DataFrame[RawOrders]:
     return raw.where(col("UnitPrice").isNotNull() & (col("Bogus") > 0))
 
 
+def filter_string_value_is_not_a_column(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.filter(col("place_code") == "literal_value")
+
+
 def expression_with_aliases(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.select(
         col("place_code").alias("pc"),
         (col("price") * col("misspelled")).cast("int").alias("price_adj"),
     )
+
+
+def drop_bare_string(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.drop("price")
+
+
+def drop_typo(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.drop("price", "nope")
+
+
+def drop_duplicates_list(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.dropDuplicates(["place_code", "missing_key"])
+
+
+def group_by_mixed(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.groupBy("place_code", col("invented"))
 
 
 def bad_fn(x: DataFrame[NotAKnownSchema]) -> DataFrame[Orders]:

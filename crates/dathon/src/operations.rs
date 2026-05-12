@@ -1,19 +1,26 @@
 //! PySpark DataFrame operations — checking calls inside function bodies.
 //!
-//! Today we recognize three method calls on a `DataFrame[S]`-typed parameter:
-//!   - `.select(...)`
-//!   - `.filter(...)`
-//!   - `.where(...)`
+//! Two flavors of recognized method:
 //!
-//! For each, every `col("X")` literal *anywhere* in any argument expression
-//! is collected (recursively) and checked against the receiver's schema.
+//! - **Column-name methods**: `select`, `drop`, `dropDuplicates`, `groupBy`.
+//!   Top-level string-literal arguments are treated as column names (and a
+//!   `dropDuplicates(["a", "b"])`-style list arg is unpacked). `col("X")`
+//!   references anywhere inside an arg are also collected.
+//! - **Expression methods**: `filter`, `where`. String literals are treated
+//!   as values; only `col("X")` references count as column refs.
+//!
+//! Every collected column name is checked against the receiver's schema.
+//! Mismatches emit `D0030`.
 //!
 //! Scope cuts in v0.1:
-//! - Only direct calls on parameters. No tracking of local variable bindings.
-//! - Only top-level statements in the body (no nested blocks, ifs, loops).
-//! - Only `col("X")` literal column refs. No `df.X` attribute access yet,
-//!   no bare string column refs (`select("X")`), no keyword arguments.
-//! - Only the three methods above. Operations land iteration by iteration.
+//! - Only direct calls on parameters typed `DataFrame[S]`. No tracking of
+//!   local variable bindings.
+//! - Only top-level statements in the body. Nested blocks ignored.
+//! - `withColumn` / `withColumnRenamed` not handled yet (different arg shape
+//!   from the two flavors above).
+//! - `df.X` attribute access for columns not handled yet.
+//! - Calls on chained results (`df.filter(...).select(...)`) only check the
+//!   outermost direct-on-param call.
 
 use std::collections::HashMap;
 
@@ -26,7 +33,8 @@ use crate::diagnostics::{Diagnostic, Severity};
 use crate::schema::Schema;
 use crate::walk::DiscoveredFunction;
 
-const COLUMN_REF_METHODS: &[&str] = &["select", "filter", "where"];
+const COLUMN_NAME_METHODS: &[&str] = &["select", "drop", "dropDuplicates", "groupBy"];
+const EXPRESSION_METHODS: &[&str] = &["filter", "where"];
 
 /// Maps a function-parameter name to the Schema it's typed as.
 pub struct ParamScope<'a> {
@@ -55,9 +63,6 @@ impl<'a> ParamScope<'a> {
     }
 }
 
-/// Walk a function body, find direct `<param>.<method>(...)` calls for any
-/// method in `COLUMN_REF_METHODS`, and check every `col("X")` reference
-/// (anywhere in the argument expressions) against the parameter's schema.
 pub fn check_function_body(
     func: &DiscoveredFunction<'_>,
     scope: &ParamScope<'_>,
@@ -73,9 +78,6 @@ pub fn check_function_body(
     }
 }
 
-/// The single top-level expression of a statement, if any. Statements with no
-/// directly-attached expression (e.g. `if`, `for`, `pass`) return `None` —
-/// nested blocks will be handled in a later iteration.
 fn stmt_top_expr(stmt: &Stmt) -> Option<&Expr> {
     match stmt {
         Stmt::Return(r) => r.value.as_deref(),
@@ -99,9 +101,13 @@ fn check_column_method_call(
         return;
     };
     let method = attr.attr.id.as_str();
-    if !COLUMN_REF_METHODS.contains(&method) {
+    let strings_are_columns = if COLUMN_NAME_METHODS.contains(&method) {
+        true
+    } else if EXPRESSION_METHODS.contains(&method) {
+        false
+    } else {
         return;
-    }
+    };
     let Some(receiver) = attr.value.as_name_expr() else {
         return;
     };
@@ -111,7 +117,7 @@ fn check_column_method_call(
 
     let mut refs: Vec<(&str, TextRange)> = Vec::new();
     for arg in &call.arguments.args {
-        collect_col_refs(arg, &mut refs);
+        collect_arg_column_refs(arg, strings_are_columns, &mut refs);
     }
     for (col_name, col_range) in refs {
         if !schema.has_field(col_name) {
@@ -130,6 +136,36 @@ fn check_column_method_call(
     }
 }
 
+/// Collect column references from a single argument expression.
+///
+/// `strings_are_columns` controls whether top-level string literals (and
+/// string literals inside a top-level list literal) are interpreted as
+/// column names. Either way, `col("X")` refs anywhere inside the expression
+/// are collected too.
+fn collect_arg_column_refs<'a>(
+    arg: &'a Expr,
+    strings_are_columns: bool,
+    out: &mut Vec<(&'a str, TextRange)>,
+) {
+    if strings_are_columns {
+        if let Some(s) = arg.as_string_literal_expr() {
+            out.push((s.value.to_str(), s.range()));
+            return;
+        }
+        if let Some(list) = arg.as_list_expr() {
+            for elt in &list.elts {
+                if let Some(s) = elt.as_string_literal_expr() {
+                    out.push((s.value.to_str(), s.range()));
+                } else {
+                    collect_col_refs(elt, out);
+                }
+            }
+            return;
+        }
+    }
+    collect_col_refs(arg, out);
+}
+
 /// Match `col("X")` and return ("X", range-of-the-string-literal).
 fn col_reference(expr: &Expr) -> Option<(&str, TextRange)> {
     let call = expr.as_call_expr()?;
@@ -145,11 +181,8 @@ fn col_reference(expr: &Expr) -> Option<(&str, TextRange)> {
 /// Recursively collect every `col("X")` reference inside `expr`.
 ///
 /// When we find a `col("X")` we record it and stop recursing into that
-/// subexpression — its own children are the string literal we already
-/// captured and don't contain further column references.
-///
-/// Scopes that bind new names (lambdas, comprehensions) are not recursed
-/// into; their referenced columns belong to a different evaluation context.
+/// subexpression. Scopes that bind new names (lambdas, comprehensions) are
+/// not entered.
 fn collect_col_refs<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, TextRange)>) {
     if let Some(found) = col_reference(expr) {
         out.push(found);
@@ -165,9 +198,7 @@ fn collect_col_refs<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, TextRange)>) {
                 collect_col_refs(&kw.value, out);
             }
         }
-        Expr::Attribute(a) => {
-            collect_col_refs(&a.value, out);
-        }
+        Expr::Attribute(a) => collect_col_refs(&a.value, out),
         Expr::Subscript(s) => {
             collect_col_refs(&s.value, out);
             collect_col_refs(&s.slice, out);
@@ -176,9 +207,7 @@ fn collect_col_refs<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, TextRange)>) {
             collect_col_refs(&b.left, out);
             collect_col_refs(&b.right, out);
         }
-        Expr::UnaryOp(u) => {
-            collect_col_refs(&u.operand, out);
-        }
+        Expr::UnaryOp(u) => collect_col_refs(&u.operand, out),
         Expr::Compare(c) => {
             collect_col_refs(&c.left, out);
             for cmp in &c.comparators {
@@ -205,11 +234,7 @@ fn collect_col_refs<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, TextRange)>) {
                 collect_col_refs(e, out);
             }
         }
-        Expr::Starred(s) => {
-            collect_col_refs(&s.value, out);
-        }
-        // Other variants either have no Expr children or introduce a new
-        // scope we should not naïvely descend into.
+        Expr::Starred(s) => collect_col_refs(&s.value, out),
         _ => {}
     }
 }
