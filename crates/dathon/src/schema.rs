@@ -73,6 +73,10 @@ impl<'ast> Schema<'ast> {
             })
             .collect()
     }
+
+    pub fn has_field(&self, name: &str) -> bool {
+        self.fields().iter().any(|f| f.name == name)
+    }
 }
 
 pub fn discover_schemas<'ast>(classes: &'ast [DiscoveredClass<'ast>]) -> Vec<Schema<'ast>> {

@@ -12,9 +12,12 @@ flowchart LR
     W --> S["schema<br/>Schema classes,<br/>field resolution"]
     W --> D["dataframe<br/>DataFrame[X] slot<br/>recognition"]
     S --> T["types<br/>ColumnType vocab"]
+    D --> O["operations<br/>body-level<br/>op checking"]
+    S --> O
     S --> M["main<br/>resolve, render,<br/>format diagnostics"]
     D --> M
     T --> M
+    O --> M
 ```
 
 Today the checker is a single linear pass: parse → discover classes → recognize schemas → print. No type checking, no inference, no transpiler — those come later. The pipeline will fan out (more walks, more analyzers) but the basic shape stays.
@@ -57,7 +60,11 @@ Recognizes DataFrame-typed annotations on function signatures. `recognize` class
 
 `DataFrame` is currently matched by literal name only — once import resolution lands, aliased imports (`from pyspark.sql import DataFrame as DF`) will be handled here.
 
-Operations on DataFrames (select, filter, join, …) will grow into this module in future iterations.
+### `operations`
+
+PySpark DataFrame operation checking, inside function bodies. Holds a `ParamScope` (parameter name → schema) built from the typed slots of a function, then walks the body looking for operations applied to those parameters. Currently only `<param>.select(col("X"), ...)` is recognized; each literal `col("X")` argument is checked against the receiver's schema and emits `D0030` if missing.
+
+The body walk is currently shallow (top-level statements only, direct calls on params only, `col("X")` literals only). Each new operation (`filter`, `withColumn`, `join`, ...) and each new shape (chained calls, local-variable receivers, attribute access for columns) lands as an additive change here.
 
 ### `main`
 

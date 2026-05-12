@@ -1,4 +1,4 @@
-# Probes schema + field-type + DataFrame[Schema] recognition.
+# Probes schema + field-type + DataFrame[Schema] + body-level select checks.
 
 class Orders(Schema):
     place_code: int
@@ -25,11 +25,15 @@ class BadSchema(Schema):
 
 
 def prepare_orders(raw: DataFrame[RawOrders]) -> DataFrame[Orders]:
-    return raw
+    return raw.select(col("ProductCode"), col("UnitPrice"), col("CreatedAt"))
 
 
-def join_them(left: DataFrame[Orders], right: DataFrame[RawOrders]) -> DataFrame[Orders]:
-    return left
+def select_with_typo(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.select(col("place_code"), col("priec"), col("totally_made_up"))
+
+
+def select_all_valid(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.select(col("place_code"), col("price"))
 
 
 def bad_fn(x: DataFrame[NotAKnownSchema]) -> DataFrame[Orders]:

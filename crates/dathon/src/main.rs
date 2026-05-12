@@ -1,5 +1,6 @@
 mod dataframe;
 mod diagnostics;
+mod operations;
 mod schema;
 mod types;
 mod walk;
@@ -14,6 +15,7 @@ use ruff_text_size::Ranged;
 
 use crate::dataframe::{DataFrameAnnotation, SlotLabel, typed_slots};
 use crate::diagnostics::{Diagnostic, Severity};
+use crate::operations::{ParamScope, check_function_body};
 use crate::schema::{FieldResolution, Schema, discover_schemas};
 use crate::types::COLUMN_TYPE_NAMES;
 use crate::walk::{discover_top_level_classes, discover_top_level_functions};
@@ -83,6 +85,8 @@ fn main() -> ExitCode {
             &mut body,
             &mut diagnostics,
         );
+        let scope = ParamScope::build(slots, &schemas);
+        check_function_body(func, &scope, &source, &line_index, &mut diagnostics);
     }
 
     println!(
