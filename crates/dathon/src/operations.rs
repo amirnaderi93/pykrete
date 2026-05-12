@@ -36,7 +36,7 @@ use ruff_text_size::{Ranged, TextRange};
 use crate::dataframe::{self, DataFrameAnnotation, SlotLabel, TypedSlot};
 use crate::diagnostics::{Diagnostic, Severity};
 use crate::registry::Registry;
-use crate::schema::{Schema, SchemaView};
+use crate::schema::{FieldPathResult, Schema, SchemaView, resolve_path};
 use crate::walk::DiscoveredFunction;
 
 // ---------------------------------------------------------------------------
@@ -208,6 +208,10 @@ impl<'a> BodyContext<'a> {
 
     pub fn find_schema(&self, name: &str) -> Option<&'a Schema<'a>> {
         self.schemas.iter().find(|s| s.name() == name)
+    }
+
+    pub fn schemas(&self) -> &'a [Schema<'a>] {
+        self.schemas
     }
 
     pub fn registry(&self) -> &'a Registry<'a> {
@@ -565,14 +569,13 @@ fn handle_agg<'a>(
         }
     }
     for (col_name, col_range) in refs {
-        if !underlying.has_field(col_name) {
+        if let FieldPathResult::Missing { field, on } =
+            resolve_path(underlying, col_name, _ctx.schemas())
+        {
             diagnostics.push(Diagnostic::at(
                 Severity::Error,
                 "D0030",
-                format!(
-                    "Column '{col_name}' does not exist on {}.",
-                    underlying.display_name(),
-                ),
+                format!("Column '{field}' does not exist on {}.", on.display_name()),
                 col_range.start(),
                 source,
                 line_index,
@@ -608,14 +611,13 @@ fn check_column_method_args<'a>(
         collect_arg_column_refs(arg, role, ctx, &mut refs);
     }
     for (col_name, col_range) in refs {
-        if !schema.has_field(col_name) {
+        if let FieldPathResult::Missing { field, on } =
+            resolve_path(schema, col_name, ctx.schemas())
+        {
             diagnostics.push(Diagnostic::at(
                 Severity::Error,
                 "D0030",
-                format!(
-                    "Column '{col_name}' does not exist on {}.",
-                    schema.display_name(),
-                ),
+                format!("Column '{field}' does not exist on {}.", on.display_name()),
                 col_range.start(),
                 source,
                 line_index,
