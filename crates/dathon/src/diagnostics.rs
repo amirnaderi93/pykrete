@@ -14,7 +14,7 @@ pub enum Severity {
 }
 
 impl Severity {
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Severity::Error => "error",
             Severity::Warning => "warning",
@@ -60,5 +60,10 @@ impl Diagnostic {
             self.code,
             self.message,
         )
+    }
+
+    /// Convenience accessor used by test helpers.
+    pub fn severity_label(&self) -> &'static str {
+        self.severity.label()
     }
 }

@@ -124,3 +124,65 @@ impl<'a> SchemaView<'a> {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Unit tests for SchemaView::Derived
+//
+// SchemaView::Declared needs a parsed Schema (which needs AST data), so it's
+// only exercised in integration tests. The Derived variant is pure-data and
+// easy to test directly here.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derived_schema_has_field_returns_true_for_known_columns() {
+        let view = SchemaView::Derived(vec!["a", "b", "c"]);
+        assert!(view.has_field("a"));
+        assert!(view.has_field("b"));
+        assert!(view.has_field("c"));
+    }
+
+    #[test]
+    fn derived_schema_has_field_returns_false_for_unknown_columns() {
+        let view = SchemaView::Derived(vec!["a", "b"]);
+        assert!(!view.has_field("c"));
+        assert!(!view.has_field(""));
+    }
+
+    #[test]
+    fn derived_schema_has_field_is_case_sensitive() {
+        // Column names are matched exactly. Spark itself defaults to
+        // case-insensitive matching, but dathon is stricter; this keeps
+        // typos like 'PRICE' vs 'price' detectable.
+        let view = SchemaView::Derived(vec!["price"]);
+        assert!(view.has_field("price"));
+        assert!(!view.has_field("Price"));
+        assert!(!view.has_field("PRICE"));
+    }
+
+    #[test]
+    fn derived_schema_field_names_preserves_order() {
+        // Column order matters for `union` (vs `unionByName`); preserve the
+        // insertion order from the operation that produced this schema.
+        let view = SchemaView::Derived(vec!["x", "y", "z"]);
+        assert_eq!(view.field_names(), vec!["x", "y", "z"]);
+    }
+
+    #[test]
+    fn derived_display_name_lists_fields_in_brackets() {
+        // The format embedded in D0030 / D0040 messages when the schema
+        // doesn't have a user-facing name.
+        let view = SchemaView::Derived(vec!["a", "b"]);
+        assert_eq!(view.display_name(), "inferred schema [a, b]");
+    }
+
+    #[test]
+    fn derived_display_name_handles_empty_field_list() {
+        // Can happen after `select` with all aliasless complex expressions.
+        let view = SchemaView::Derived(vec![]);
+        assert_eq!(view.display_name(), "inferred schema []");
+    }
+}
