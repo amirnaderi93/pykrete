@@ -26,20 +26,38 @@ pub struct SchemaField<'ast> {
 /// CLI / driver layer.
 #[derive(Debug)]
 pub enum FieldResolution<'ast> {
+    /// An atomic column type from the v0.1 vocabulary.
     Resolved(ColumnType),
+    /// A nested struct — the field's type is another declared `Schema`
+    /// class in this file. The Spark representation is `StructType`.
+    ResolvedNested(&'ast Schema<'ast>),
+    /// A bare-name annotation that's neither in the atomic vocabulary
+    /// nor a known declared Schema class.
     UnknownType { name: &'ast str },
+    /// The annotation isn't a bare name at all (subscript, attribute
+    /// access, binary op, …).
     NotABareName,
 }
 
 impl<'ast> SchemaField<'ast> {
-    pub fn resolve(&self) -> FieldResolution<'ast> {
+    /// Resolve the field's annotation against the atomic-type vocabulary
+    /// and the set of declared Schema classes.
+    ///
+    /// The `schemas` parameter is the list of every Schema discovered in
+    /// the same source file; nested struct references look the field's
+    /// annotation name up there.
+    pub fn resolve(&self, schemas: &'ast [Schema<'ast>]) -> FieldResolution<'ast> {
         match self.annotation {
-            Expr::Name(name) => match ColumnType::from_name(name.id.as_str()) {
-                Some(ct) => FieldResolution::Resolved(ct),
-                None => FieldResolution::UnknownType {
-                    name: name.id.as_str(),
-                },
-            },
+            Expr::Name(name) => {
+                let id = name.id.as_str();
+                if let Some(ct) = ColumnType::from_name(id) {
+                    return FieldResolution::Resolved(ct);
+                }
+                if let Some(schema) = schemas.iter().find(|s| s.name() == id) {
+                    return FieldResolution::ResolvedNested(schema);
+                }
+                FieldResolution::UnknownType { name: id }
+            }
             _ => FieldResolution::NotABareName,
         }
     }

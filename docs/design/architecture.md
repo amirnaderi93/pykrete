@@ -48,9 +48,16 @@ Read-only AST walks. Today only `discover_top_level_classes`. Will grow to find 
 
 ### `schema`
 
-Recognizes which discovered classes are dathon schemas (bases include `Schema`) and exposes their field annotations as `(name, &Expr)` pairs. Field resolution lives here too: `SchemaField::resolve()` returns a `FieldResolution` enum (resolved column type, unknown type name, or non-bare-name) that the driver maps to diagnostics.
+Recognizes which discovered classes are dathon schemas (bases include `Schema`) and exposes their field annotations as `(name, &Expr)` pairs. Field resolution lives here too: `SchemaField::resolve(schemas)` returns a `FieldResolution` enum with four variants:
 
-This module also owns `SchemaView`, the unified view used by body analysis. A `SchemaView` is either `Declared(&Schema)` (a user-defined Schema class) or `Derived(Vec<&str>)` (a schema inferred from operating on another). All field-existence and field-set comparisons (`has_field`, `field_names`, `display_name`) work identically against both — letting `D0030`, `D0040`, and `D0050` reason about schemas regardless of where they came from.
+- `Resolved(ColumnType)` — atomic type from the v0.1 vocabulary.
+- `ResolvedNested(&Schema)` — the field's type is another declared Schema class. Models PySpark's `StructType`. Resolution order: atomic first, then a Schema lookup against the discovered list.
+- `UnknownType { name }` — bare name that's neither atomic nor a Schema.
+- `NotABareName` — subscript, attribute access, or other complex expression.
+
+This module also owns `SchemaView`, the unified view used by body analysis. A `SchemaView` is either `Declared(&Schema)` (a user-defined Schema class), `Derived(Vec<&str>)` (a schema inferred from operating on another), or `Grouped { keys, underlying }` (a post-`groupBy` intermediate). All field-existence and field-set comparisons (`has_field`, `field_names`, `display_name`) work identically across them — letting `D0030`, `D0040`, and `D0050` reason about schemas regardless of where they came from.
+
+For nested struct fields, the field name still appears at the top level (`User.has_field("address")` is true even when `address`'s type is the nested `Address` schema). Dotted column access (`col("address.street")`) is not yet supported in v0.1 — it would require path-traversal through nested schemas.
 
 ### `types`
 

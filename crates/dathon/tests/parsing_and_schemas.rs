@@ -181,3 +181,92 @@ class Orders(Schema):
     assert_count(&result, "D0010", 1);
     assert_count(&result, "D0011", 1);
 }
+
+// ===========================================================================
+// Nested struct fields — `name: AnotherSchemaClass`
+// ===========================================================================
+
+#[test]
+fn class_field_typed_with_another_Schema_class_is_resolved_as_nested() {
+    // `address: Address` — Address is another Schema declared in the same
+    // file. The field resolves to a nested struct; no diagnostic.
+    let result = check(r#"
+class Address(Schema):
+    street: string
+    city: string
+
+class User(Schema):
+    name: string
+    address: Address
+"#);
+    assert_no_diagnostics(&result);
+    assert_eq!(result.schema_count, 2);
+}
+
+#[test]
+fn nested_schema_can_appear_before_or_after_its_referencer() {
+    // Forward reference works too — schemas are resolved as a set, not
+    // in declaration order.
+    let result = check(r#"
+class User(Schema):
+    name: string
+    address: Address
+
+class Address(Schema):
+    street: string
+"#);
+    assert_no_diagnostics(&result);
+}
+
+#[test]
+fn d0010_fires_when_nested_class_does_not_extend_Schema() {
+    // `Foo` is a plain class with field annotations; without `Schema` as a
+    // base it's not discovered as a dathon schema, so the `nested: Foo`
+    // reference falls through to D0010 just like any unknown type name.
+    let result = check(r#"
+class Foo:
+    x: int
+
+class Bar(Schema):
+    nested: Foo
+"#);
+    assert_has_code(&result, "D0010");
+    assert_message_contains(&result, "D0010", "Foo");
+}
+
+#[test]
+fn deeply_nested_schemas_resolve_independently() {
+    // Three layers of nesting — each level's resolution is independent;
+    // dathon doesn't need to walk through the chain.
+    let result = check(r#"
+class Inner(Schema):
+    leaf: int
+
+class Middle(Schema):
+    inner: Inner
+
+class Outer(Schema):
+    middle: Middle
+    label: string
+"#);
+    assert_no_diagnostics(&result);
+    assert_eq!(result.schema_count, 3);
+}
+
+#[test]
+fn nested_schema_field_in_a_function_typed_with_outer_schema_is_recognized() {
+    // The outer schema's `address` field (typed as nested Address) exists
+    // as a top-level field by name. A select on it doesn't fire D0030.
+    let result = check(r#"
+class Address(Schema):
+    street: string
+
+class User(Schema):
+    name: string
+    address: Address
+
+def f(u: DataFrame[User]) -> DataFrame:
+    return u.select(col("name"), col("address"))
+"#);
+    assert_does_not_have_code(&result, "D0030");
+}

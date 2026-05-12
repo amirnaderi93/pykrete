@@ -1,0 +1,43 @@
+# Nested-struct schemas: a Schema field whose type is another Schema class.
+# Models PySpark's StructType columns.
+#
+# What dathon does today (iteration 20):
+#   - Recognizes `address: Address` as a nested struct field, where
+#     Address is another Schema declared in the same file.
+#   - Resolution order: atomic type first (int/string/…), then Schema
+#     class, then `D0010` for unknown names.
+#   - The nested field exists by NAME as a top-level field of its outer
+#     schema — `user.has_field("address")` is true.
+#
+# What dathon does NOT yet do (separate iteration if/when needed):
+#   - Dotted column access like `col("address.street")` — that's a path
+#     traversal through nested structs. For now, dotted strings are
+#     treated as flat names and won't resolve.
+
+class Address(Schema):
+    street: string
+    city: string
+
+
+class GeoPoint(Schema):
+    lat: double
+    lon: double
+
+
+# Three-deep nesting works the same way — each level resolves
+# independently.
+class Place(Schema):
+    name: string
+    address: Address
+    coordinates: GeoPoint
+
+
+class User(Schema):
+    user_id: int
+    name: string
+    home: Place
+
+
+def keep_top_level_columns(users: DataFrame[User]) -> DataFrame:
+    # Selecting nested-struct columns by their top-level name is supported.
+    return users.select(col("user_id"), col("name"), col("home"))

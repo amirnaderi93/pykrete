@@ -109,7 +109,7 @@ pub fn check(_path: &str, source: &str) -> CheckResult {
     let mut body = String::new();
 
     for schema in &schemas {
-        render_schema(schema, source, &line_index, &mut body, &mut diagnostics);
+        render_schema(schema, &schemas, source, &line_index, &mut body, &mut diagnostics);
     }
 
     let typed_functions: Vec<_> = functions
@@ -163,8 +163,9 @@ fn declared_return_schema<'a>(
     None
 }
 
-fn render_schema(
-    schema: &Schema<'_>,
+fn render_schema<'a>(
+    schema: &'a Schema<'a>,
+    schemas: &'a [Schema<'a>],
     source: &str,
     line_index: &LineIndex,
     out: &mut String,
@@ -182,9 +183,18 @@ fn render_schema(
     for field in schema.fields() {
         let ann_range = field.annotation.range();
         let raw_text = &source[ann_range];
-        match field.resolve() {
+        match field.resolve(schemas) {
             FieldResolution::Resolved(ct) => {
                 writeln!(out, "          {}: {}", field.name, ct).unwrap();
+            }
+            FieldResolution::ResolvedNested(nested) => {
+                writeln!(
+                    out,
+                    "          {}: {} (nested)",
+                    field.name,
+                    nested.name()
+                )
+                .unwrap();
             }
             FieldResolution::UnknownType { name } => {
                 writeln!(out, "          {}: {}  (unresolved)", field.name, raw_text).unwrap();
