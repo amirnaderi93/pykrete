@@ -1,4 +1,4 @@
-# Probes schema + field-type + DataFrame[Schema] + body-level select checks.
+# Probes schema + field-type + DataFrame[Schema] + body-level select/filter/where checks.
 
 class Orders(Schema):
     place_code: int
@@ -34,6 +34,21 @@ def select_with_typo(raw: DataFrame[Orders]) -> DataFrame[Orders]:
 
 def select_all_valid(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.select(col("place_code"), col("price"))
+
+
+def filter_with_typo(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.filter((col("price") > 0) & (col("nonexistent") < 100))
+
+
+def where_with_typo(raw: DataFrame[RawOrders]) -> DataFrame[RawOrders]:
+    return raw.where(col("UnitPrice").isNotNull() & (col("Bogus") > 0))
+
+
+def expression_with_aliases(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.select(
+        col("place_code").alias("pc"),
+        (col("price") * col("misspelled")).cast("int").alias("price_adj"),
+    )
 
 
 def bad_fn(x: DataFrame[NotAKnownSchema]) -> DataFrame[Orders]:
