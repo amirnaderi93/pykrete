@@ -23,6 +23,7 @@
 
 pub mod dataframe;
 pub mod diagnostics;
+pub mod hover;
 pub mod operations;
 pub mod registry;
 pub mod schema;
@@ -30,6 +31,7 @@ pub mod transpiler;
 pub mod types;
 pub mod walk;
 
+pub use hover::{HoverInfo, hover};
 pub use transpiler::transpile;
 
 use std::collections::HashMap;

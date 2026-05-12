@@ -18,13 +18,13 @@ Multi-file analysis already works — pass multiple file paths to `dathon check`
 - Project root detection (`pyproject.toml`-aware), recursive directory walking, and incremental rechecking.
 - Duplicate-name detection / warnings across files.
 
-### LSP — features beyond the skeleton
+### LSP — features beyond skeleton + hover
 
-Iteration 24 ships the LSP skeleton: diagnostics flow live as the user types (`textDocument/publishDiagnostics`). The features layered on after:
+Iterations 24–25 shipped the LSP skeleton (live diagnostics via `textDocument/publishDiagnostics`) and basic hover (Schema declarations, typed function declarations, Schema references in annotations). The features layered on after:
 
-- **Hover** (`textDocument/hover`) — show inferred schema at the cursor.
 - **Document symbols** (`textDocument/documentSymbol`) — outline view of Schemas + typed functions.
 - **Go-to-definition** (`textDocument/definition`) — jump from `DataFrame[X]` / `col("X")` / nested struct references to their declarations.
+- **Hover for column refs / local variables** — extend hover to `col("foo")` references (show the column's `ColumnType`) and to `x = raw.select(...)` local-variable bindings (show the inferred schema).
 - **Completion** (`textDocument/completion`) — column-name auto-complete inside `col("…")` / `df.…`, schema-name suggestions inside `DataFrame[…]`.
 - **Code actions / quick fixes** — "Did you mean 'price'?" Levenshtein suggestions on `D0030`.
 - **Find references**, **rename**, **semantic tokens** as further iterations.

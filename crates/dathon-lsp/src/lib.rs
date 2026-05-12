@@ -19,10 +19,11 @@
 use std::collections::HashMap;
 use std::error::Error;
 
-use lsp_server::{Connection, Message, Notification};
+use lsp_server::{Connection, ErrorCode, Message, Notification, Request, Response, ResponseError};
 use lsp_types::{
     Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, NumberOrString, Position, PublishDiagnosticsParams, Range,
+    DidOpenTextDocumentParams, Hover, HoverContents, HoverParams, HoverProviderCapability,
+    MarkupContent, MarkupKind, NumberOrString, Position, PublishDiagnosticsParams, Range,
     ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
 };
 
@@ -31,6 +32,7 @@ pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     let server_capabilities = serde_json::to_value(ServerCapabilities {
         text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
+        hover_provider: Some(HoverProviderCapability::Simple(true)),
         ..Default::default()
     })?;
     connection.initialize(server_capabilities)?;
@@ -51,8 +53,7 @@ fn main_loop(connection: Connection) -> Result<(), Box<dyn Error + Sync + Send>>
                 if connection.handle_shutdown(&req)? {
                     return Ok(());
                 }
-                // No other request handlers in the skeleton iteration.
-                // Hover / definition / symbols land in subsequent iterations.
+                handle_request(&connection, &docs, req)?;
             }
             Message::Notification(notif) => {
                 handle_notification(&connection, &mut docs, notif)?;
@@ -64,6 +65,60 @@ fn main_loop(connection: Connection) -> Result<(), Box<dyn Error + Sync + Send>>
         }
     }
     Ok(())
+}
+
+fn handle_request(
+    connection: &Connection,
+    docs: &HashMap<Url, String>,
+    req: Request,
+) -> Result<(), Box<dyn Error + Sync + Send>> {
+    match req.method.as_str() {
+        "textDocument/hover" => {
+            let params: HoverParams = serde_json::from_value(req.params)?;
+            let response_value = handle_hover(docs, params);
+            connection.sender.send(Message::Response(Response {
+                id: req.id,
+                result: Some(serde_json::to_value(response_value)?),
+                error: None,
+            }))?;
+        }
+        // Unknown methods get a MethodNotFound error so the client can
+        // distinguish "the server is broken" from "the server doesn't
+        // support this feature yet".
+        _ => {
+            connection.sender.send(Message::Response(Response {
+                id: req.id,
+                result: None,
+                error: Some(ResponseError {
+                    code: ErrorCode::MethodNotFound as i32,
+                    message: format!("dathon-lsp doesn't yet handle '{}'", req.method),
+                    data: None,
+                }),
+            }))?;
+        }
+    }
+    Ok(())
+}
+
+/// Handle a `textDocument/hover` request by routing through
+/// `dathon::hover`. Returns `None` if no symbol is at the cursor —
+/// LSP's contract is that the response body in that case is `null`,
+/// which our `serde_json::to_value(None::<Hover>)` produces.
+pub fn handle_hover(docs: &HashMap<Url, String>, params: HoverParams) -> Option<Hover> {
+    let uri = &params.text_document_position_params.text_document.uri;
+    let pos = params.text_document_position_params.position;
+    let text = docs.get(uri)?;
+    // LSP positions are 0-indexed; dathon's hover entry point is 1-indexed.
+    let line = (pos.line as usize).checked_add(1)?;
+    let column = (pos.character as usize).checked_add(1)?;
+    let info = dathon::hover(text, line, column)?;
+    Some(Hover {
+        contents: HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: info.markdown,
+        }),
+        range: None,
+    })
 }
 
 fn handle_notification(
@@ -261,5 +316,71 @@ mod tests {
         let d = dathon_diag_at(1, 1, "D0030", msg);
         let lsp = to_lsp_diagnostic(&d);
         assert_eq!(lsp.message, msg);
+    }
+
+    // -----------------------------------------------------------------------
+    // hover handler
+    // -----------------------------------------------------------------------
+
+    use lsp_types::{
+        HoverContents, PartialResultParams, TextDocumentIdentifier, TextDocumentPositionParams,
+        WorkDoneProgressParams,
+    };
+
+    fn hover_params_at(uri: &Url, line: u32, character: u32) -> HoverParams {
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position: Position { line, character },
+            },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+        }
+    }
+
+    #[test]
+    fn handle_hover_returns_none_when_uri_not_open() {
+        // The server only knows about documents the client has told it
+        // about via didOpen. Asking for hover on an unknown URI must
+        // return None (which serializes to null per the LSP contract).
+        let docs: HashMap<Url, String> = HashMap::new();
+        let uri = Url::parse("file:///nonexistent.dpy").unwrap();
+        let result = handle_hover(&docs, hover_params_at(&uri, 0, 0));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn handle_hover_returns_markdown_hover_for_a_schema_class_name() {
+        // didOpen sets the doc text; hover on the Schema class name
+        // returns a Hover with markdown content listing the fields.
+        let mut docs: HashMap<Url, String> = HashMap::new();
+        let uri = Url::parse("file:///t.dpy").unwrap();
+        let src = "class Orders(Schema):\n    place_code: int\n    price: int\n";
+        docs.insert(uri.clone(), src.to_string());
+
+        // LSP position is 0-indexed: line 0, character 6 lands inside
+        // "Orders" on the first line.
+        let result = handle_hover(&docs, hover_params_at(&uri, 0, 6)).expect("hover");
+        match result.contents {
+            HoverContents::Markup(m) => {
+                assert!(m.value.contains("Orders"));
+                assert!(m.value.contains("place_code"));
+            }
+            _ => panic!("expected MarkupContent"),
+        }
+    }
+
+    #[test]
+    fn handle_hover_translates_lsp_0_indexed_to_dathon_1_indexed() {
+        // The fixture starts with a blank line so the schema is on
+        // line 1 (0-indexed). If position translation is wrong, hover
+        // would miss the symbol and return None.
+        let mut docs: HashMap<Url, String> = HashMap::new();
+        let uri = Url::parse("file:///t.dpy").unwrap();
+        let src = "\nclass Orders(Schema):\n    x: int\n";
+        docs.insert(uri.clone(), src.to_string());
+
+        // Line 1 (0-indexed), character 6 → "Orders".
+        let result = handle_hover(&docs, hover_params_at(&uri, 1, 6));
+        assert!(result.is_some());
     }
 }
