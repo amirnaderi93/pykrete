@@ -1,65 +1,75 @@
-//! PySpark DataFrame operations — checking calls inside function bodies.
+//! PySpark DataFrame operations — checking calls inside function bodies, with
+//! result-schema inference.
 //!
-//! Two families of method-call checks today:
+//! ## Recursive expression analysis
 //!
-//! - **Column-method calls** — methods that take column references or
-//!   expressions: `select`, `filter`, `where`, `drop`, `dropDuplicates`,
-//!   `groupBy`, `withColumn`, `withColumnRenamed`. Each has a *shape*
-//!   (`AllColumnName`, `AllExpression`, `Positional([ArgRole])`) that
-//!   determines how each argument position is interpreted.
-//!   Mismatches against the receiver's schema emit `D0030`.
+//! [`analyze_expr`] walks an expression that *might* evaluate to a DataFrame.
+//! It returns a [`SchemaView`] when it can determine the value's schema, and
+//! `None` otherwise. Along the way, every recognized method call has its
+//! arguments checked against the receiver's schema and emits diagnostics
+//! when something is wrong.
 //!
-//! - **Two-DataFrame calls** — methods whose first argument is another
-//!   `DataFrame`: `unionByName`, `union`. The other DataFrame must also be a
-//!   typed parameter; the two schemas must have the same set of field
-//!   names. Mismatches emit `D0040`.
+//! The recursion is what enables chained-call support — for
+//! `raw.filter(col("a") > 0).select("madeup")`, `analyze_expr` on the outer
+//! `select` first analyzes its receiver (the `filter` call), which in turn
+//! analyzes *its* receiver (`raw`). Each level reports diagnostics and
+//! returns its result schema.
 //!
-//! Scope cuts in v0.1:
-//! - Only direct calls on parameters typed `DataFrame[S]`. No tracking of
-//!   local variable bindings, and no support for chained call receivers.
-//! - Only top-level statements in the body. Nested blocks ignored.
-//! - `df.X` attribute access for columns not handled yet.
-//! - `join`, `crossJoin` not handled yet (rich on-key surface — separate
-//!   iteration).
-//! - `union`/`unionByName` currently check the *name set* only. Column-order
-//!   strictness for plain `union` will land separately.
+//! ## Bindings
+//!
+//! [`BodyContext`] is a name → schema map. It starts populated from typed
+//! function parameters, and grows as assignments produce new schemas. This
+//! turns `x = raw.select("a"); x.select("b")` into a checkable chain.
+//!
+//! ## Return-type validation
+//!
+//! For each `return <value>` statement, the value's inferred schema is
+//! compared to the function's declared return schema (`-> DataFrame[X]`).
+//! Mismatches emit `D0050`.
+//!
+//! ## Scope cuts in v0.1
+//!
+//! - Only top-level body statements. Nested blocks (`if`, `for`, etc.) are
+//!   not walked.
+//! - Only `Name`-target assignments produce bindings. Tuple destructure and
+//!   subscript assignment targets are skipped.
+//! - `groupBy(...)` returns a Spark `GroupedData`, not a DataFrame; result
+//!   tracking yields `None` (subsequent `.agg(...)` calls aren't checked).
+//! - `join` / `crossJoin` not handled yet.
+//! - `df.X` attribute access not yet recognized for column references.
+//! - Aliasless complex expressions in `select` (e.g. `col("a") + col("b")`
+//!   with no `.alias(...)`) silently drop from the derived result schema.
 
 use std::collections::{HashMap, HashSet};
 
-use ruff_python_ast::{Expr, Stmt};
+use ruff_python_ast::{Expr, ExprCall, Stmt};
 use ruff_source_file::LineIndex;
 use ruff_text_size::{Ranged, TextRange};
 
 use crate::dataframe::{DataFrameAnnotation, SlotLabel, TypedSlot};
 use crate::diagnostics::{Diagnostic, Severity};
-use crate::schema::Schema;
+use crate::schema::{Schema, SchemaView};
 use crate::walk::DiscoveredFunction;
 
 // ---------------------------------------------------------------------------
-// Shapes
+// Method shapes
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy)]
 enum ArgRole {
-    /// Top-level string lit (or list of string lits) is a column name to
-    /// check; col() refs collected recursively.
     ColumnName,
-    /// String literals are values; only col() refs count as column refs.
     Expression,
-    /// New column name being introduced — don't check anything.
     NewName,
 }
 
 enum ColumnMethodShape {
     AllColumnName,
     AllExpression,
-    /// Each position has its own role. Extra args reuse the last role.
     Positional(&'static [ArgRole]),
 }
 
 #[derive(Debug, Clone, Copy)]
 enum TwoDfMethod {
-    /// Name-set match required. `union` will become stricter (order) later.
     Union,
     UnionByName,
 }
@@ -103,17 +113,22 @@ fn role_at(shape: &ColumnMethodShape, index: usize) -> ArgRole {
 }
 
 // ---------------------------------------------------------------------------
-// Scope
+// BodyContext — parameter and local-variable bindings
 // ---------------------------------------------------------------------------
 
-/// Maps a function-parameter name to the Schema it's typed as.
-pub struct ParamScope<'a> {
-    bindings: HashMap<&'a str, &'a Schema<'a>>,
+pub struct BodyContext<'a> {
+    bindings: HashMap<&'a str, SchemaView<'a>>,
 }
 
-impl<'a> ParamScope<'a> {
-    pub fn build(slots: &[TypedSlot<'a>], schemas: &'a [Schema<'a>]) -> Self {
-        let mut bindings = HashMap::new();
+impl<'a> BodyContext<'a> {
+    pub fn new() -> Self {
+        Self {
+            bindings: HashMap::new(),
+        }
+    }
+
+    pub fn from_slots(slots: &[TypedSlot<'a>], schemas: &'a [Schema<'a>]) -> Self {
+        let mut ctx = Self::new();
         for slot in slots {
             let SlotLabel::Param(name) = slot.label else {
                 continue;
@@ -122,94 +137,157 @@ impl<'a> ParamScope<'a> {
                 continue;
             };
             if let Some(schema) = schemas.iter().find(|s| s.name() == schema_name) {
-                bindings.insert(name, schema);
+                ctx.bind(name, SchemaView::Declared(schema));
             }
         }
-        Self { bindings }
+        ctx
     }
 
-    pub fn lookup(&self, name: &str) -> Option<&'a Schema<'a>> {
-        self.bindings.get(name).copied()
+    pub fn bind(&mut self, name: &'a str, view: SchemaView<'a>) {
+        self.bindings.insert(name, view);
     }
 
-    fn lookup_param_expr(&self, expr: &Expr) -> Option<&'a Schema<'a>> {
-        let name = expr.as_name_expr()?.id.as_str();
-        self.lookup(name)
+    pub fn lookup(&self, name: &str) -> Option<SchemaView<'a>> {
+        self.bindings.get(name).cloned()
     }
 }
 
 // ---------------------------------------------------------------------------
-// Body driver
+// Driver
 // ---------------------------------------------------------------------------
 
-pub fn check_function_body(
-    func: &DiscoveredFunction<'_>,
-    scope: &ParamScope<'_>,
+pub fn check_function_body<'a>(
+    func: &'a DiscoveredFunction<'a>,
+    declared_return: Option<&'a Schema<'a>>,
+    ctx: &mut BodyContext<'a>,
     source: &str,
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for stmt in &func.def.body {
-        let Some(expr) = stmt_top_expr(stmt) else {
-            continue;
-        };
-        dispatch_call(expr, scope, source, line_index, diagnostics);
+        match stmt {
+            Stmt::Assign(a) => {
+                let schema = analyze_expr(&a.value, ctx, source, line_index, diagnostics);
+                if let Some(schema) = schema {
+                    for target in &a.targets {
+                        if let Some(name) = target.as_name_expr() {
+                            ctx.bind(name.id.as_str(), schema.clone());
+                        }
+                    }
+                }
+            }
+            Stmt::Return(r) => {
+                let Some(value) = r.value.as_deref() else {
+                    continue;
+                };
+                let actual = analyze_expr(value, ctx, source, line_index, diagnostics);
+                if let (Some(declared), Some(actual)) = (declared_return, actual.as_ref()) {
+                    check_return_type(
+                        declared,
+                        actual,
+                        value.range(),
+                        source,
+                        line_index,
+                        diagnostics,
+                    );
+                }
+            }
+            Stmt::Expr(e) => {
+                analyze_expr(&e.value, ctx, source, line_index, diagnostics);
+            }
+            _ => {}
+        }
     }
 }
 
-fn stmt_top_expr(stmt: &Stmt) -> Option<&Expr> {
-    match stmt {
-        Stmt::Return(r) => r.value.as_deref(),
-        Stmt::Assign(a) => Some(&a.value),
-        Stmt::Expr(e) => Some(&e.value),
-        _ => None,
-    }
-}
-
-fn dispatch_call(
-    expr: &Expr,
-    scope: &ParamScope<'_>,
+fn check_return_type(
+    declared: &Schema<'_>,
+    actual: &SchemaView<'_>,
+    range: TextRange,
     source: &str,
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let Some(call) = expr.as_call_expr() else {
+    let declared_names: HashSet<&str> = declared.fields().iter().map(|f| f.name).collect();
+    let actual_names: HashSet<&str> = actual.field_names().into_iter().collect();
+    if declared_names == actual_names {
         return;
-    };
-    let Some(attr) = call.func.as_attribute_expr() else {
-        return;
-    };
-    let method = attr.attr.id.as_str();
-    let Some(receiver) = attr.value.as_name_expr() else {
-        return;
-    };
-    let Some(receiver_schema) = scope.lookup(receiver.id.as_str()) else {
-        return;
-    };
+    }
+    let mut only_declared: Vec<&str> = declared_names
+        .difference(&actual_names)
+        .copied()
+        .collect();
+    let mut only_actual: Vec<&str> = actual_names
+        .difference(&declared_names)
+        .copied()
+        .collect();
+    only_declared.sort();
+    only_actual.sort();
 
-    if let Some(shape) = column_method_shape(method) {
-        check_column_method(
-            call,
-            receiver_schema,
-            &shape,
-            source,
-            line_index,
-            diagnostics,
-        );
-        return;
-    }
-    if let Some(kind) = two_df_method(method) {
-        check_two_df_method(call, receiver_schema, kind, scope, source, line_index, diagnostics);
-    }
+    let message = format!(
+        "Return type mismatch with declared schema '{}'. \
+         Missing in body: [{}]; extra in body: [{}].",
+        declared.name(),
+        only_declared.join(", "),
+        only_actual.join(", "),
+    );
+    diagnostics.push(Diagnostic::at(
+        Severity::Error,
+        "D0050",
+        message,
+        range.start(),
+        source,
+        line_index,
+    ));
 }
 
 // ---------------------------------------------------------------------------
-// Column-method checking
+// analyze_expr — the recursive heart
 // ---------------------------------------------------------------------------
 
-fn check_column_method(
-    call: &ruff_python_ast::ExprCall,
-    schema: &Schema<'_>,
+fn analyze_expr<'a>(
+    expr: &'a Expr,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<SchemaView<'a>> {
+    match expr {
+        Expr::Name(n) => ctx.lookup(n.id.as_str()),
+        Expr::Call(call) => analyze_method_call(call, ctx, source, line_index, diagnostics),
+        _ => None,
+    }
+}
+
+fn analyze_method_call<'a>(
+    call: &'a ExprCall,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<SchemaView<'a>> {
+    let attr = call.func.as_attribute_expr()?;
+    let method = attr.attr.id.as_str();
+    let receiver = analyze_expr(&attr.value, ctx, source, line_index, diagnostics)?;
+
+    if let Some(shape) = column_method_shape(method) {
+        check_column_method_args(call, &receiver, &shape, source, line_index, diagnostics);
+        return apply_column_method(method, &receiver, call);
+    }
+    if let Some(_kind) = two_df_method(method) {
+        check_two_df_method(call, &receiver, ctx, source, line_index, diagnostics);
+        return apply_two_df_method(method, &receiver);
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// Column-method checking + result inference
+// ---------------------------------------------------------------------------
+
+fn check_column_method_args(
+    call: &ExprCall,
+    schema: &SchemaView<'_>,
     shape: &ColumnMethodShape,
     source: &str,
     line_index: &LineIndex,
@@ -226,8 +304,8 @@ fn check_column_method(
                 Severity::Error,
                 "D0030",
                 format!(
-                    "Column '{col_name}' does not exist on schema '{}'.",
-                    schema.name(),
+                    "Column '{col_name}' does not exist on {}.",
+                    schema.display_name(),
                 ),
                 col_range.start(),
                 source,
@@ -235,6 +313,124 @@ fn check_column_method(
             ));
         }
     }
+}
+
+fn apply_column_method<'a>(
+    method: &str,
+    recv: &SchemaView<'a>,
+    call: &'a ExprCall,
+) -> Option<SchemaView<'a>> {
+    match method {
+        "select" => {
+            let mut fields: Vec<&'a str> = Vec::new();
+            for arg in &call.arguments.args {
+                if let Some(name) = select_output_name(arg) {
+                    fields.push(name);
+                }
+                // Aliasless complex expressions silently drop in v0.1.
+            }
+            Some(SchemaView::Derived(fields))
+        }
+        "filter" | "where" | "dropDuplicates" => Some(recv.clone()),
+        "drop" => {
+            let drop_set: HashSet<&str> = call
+                .arguments
+                .args
+                .iter()
+                .filter_map(column_name_arg)
+                .collect();
+            let remaining: Vec<&'a str> = recv
+                .field_names()
+                .into_iter()
+                .filter(|n| !drop_set.contains(n))
+                .collect();
+            Some(SchemaView::Derived(remaining))
+        }
+        "withColumn" => {
+            let new_name = call
+                .arguments
+                .args
+                .first()
+                .and_then(|a| a.as_string_literal_expr())
+                .map(|s| s.value.to_str())?;
+            let mut fields: Vec<&'a str> = recv.field_names();
+            if !fields.contains(&new_name) {
+                fields.push(new_name);
+            }
+            Some(SchemaView::Derived(fields))
+        }
+        "withColumnRenamed" => {
+            let old = call
+                .arguments
+                .args
+                .first()
+                .and_then(|a| a.as_string_literal_expr())
+                .map(|s| s.value.to_str())?;
+            let new = call
+                .arguments
+                .args
+                .get(1)
+                .and_then(|a| a.as_string_literal_expr())
+                .map(|s| s.value.to_str())?;
+            let fields: Vec<&'a str> = recv
+                .field_names()
+                .into_iter()
+                .map(|n| if n == old { new } else { n })
+                .collect();
+            Some(SchemaView::Derived(fields))
+        }
+        // groupBy returns a GroupedData, not a DataFrame.
+        "groupBy" => None,
+        _ => None,
+    }
+}
+
+/// The output column name produced by a single `select` argument, if we can
+/// determine it statically.
+fn select_output_name<'a>(arg: &'a Expr) -> Option<&'a str> {
+    // 1. <expr>.alias("name") at the outermost level.
+    if let Some(call) = arg.as_call_expr() {
+        if let Some(attr) = call.func.as_attribute_expr() {
+            if attr.attr.id.as_str() == "alias" {
+                if let Some(lit) = call
+                    .arguments
+                    .args
+                    .first()
+                    .and_then(|a| a.as_string_literal_expr())
+                {
+                    return Some(lit.value.to_str());
+                }
+            }
+        }
+    }
+    // 2. Bare string literal.
+    if let Some(s) = arg.as_string_literal_expr() {
+        return Some(s.value.to_str());
+    }
+    // 3. Bare col("X").
+    if let Some((name, _)) = col_reference(arg) {
+        return Some(name);
+    }
+    // 4. .cast(...) wrapping something with a known output name.
+    if let Some(call) = arg.as_call_expr() {
+        if let Some(attr) = call.func.as_attribute_expr() {
+            if attr.attr.id.as_str() == "cast" {
+                return select_output_name(&attr.value);
+            }
+        }
+    }
+    None
+}
+
+/// Match a column-name argument: bare string literal or `col("X")`.
+fn column_name_arg<'a>(arg: &'a Expr) -> Option<&'a str> {
+    if let Some(s) = arg.as_string_literal_expr() {
+        return Some(s.value.to_str());
+    }
+    if let Some((name, _)) = col_reference(arg) {
+        return Some(name);
+    }
+    None
 }
 
 fn collect_arg_column_refs<'a>(
@@ -266,14 +462,13 @@ fn collect_arg_column_refs<'a>(
 }
 
 // ---------------------------------------------------------------------------
-// Two-DataFrame checking
+// Two-DataFrame checking + result inference
 // ---------------------------------------------------------------------------
 
 fn check_two_df_method(
-    call: &ruff_python_ast::ExprCall,
-    left: &Schema<'_>,
-    _kind: TwoDfMethod,
-    scope: &ParamScope<'_>,
+    call: &ExprCall,
+    left: &SchemaView<'_>,
+    ctx: &BodyContext<'_>,
     source: &str,
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
@@ -281,14 +476,12 @@ fn check_two_df_method(
     let Some(arg) = call.arguments.args.first() else {
         return;
     };
-    let Some(right) = scope.lookup_param_expr(arg) else {
-        // For now, only direct param-to-param. Local-variable / chained
-        // receivers will be handled when binding propagation lands.
+    let Some(right) = analyze_expr(arg, ctx, source, line_index, diagnostics) else {
         return;
     };
 
-    let left_names: HashSet<&str> = left.fields().iter().map(|f| f.name).collect();
-    let right_names: HashSet<&str> = right.fields().iter().map(|f| f.name).collect();
+    let left_names: HashSet<&str> = left.field_names().into_iter().collect();
+    let right_names: HashSet<&str> = right.field_names().into_iter().collect();
     if left_names == right_names {
         return;
     }
@@ -299,13 +492,13 @@ fn check_two_df_method(
     only_right.sort();
 
     let message = format!(
-        "unionByName between '{}' and '{}': schemas differ. \
-         Missing in '{}': [{}]; missing in '{}': [{}].",
-        left.name(),
-        right.name(),
-        right.name(),
+        "unionByName between {} and {}: schemas differ. \
+         Missing in {}: [{}]; missing in {}: [{}].",
+        left.display_name(),
+        right.display_name(),
+        right.display_name(),
         only_left.join(", "),
-        left.name(),
+        left.display_name(),
         only_right.join(", "),
     );
 
@@ -319,11 +512,20 @@ fn check_two_df_method(
     ));
 }
 
+fn apply_two_df_method<'a>(
+    method: &str,
+    recv: &SchemaView<'a>,
+) -> Option<SchemaView<'a>> {
+    match method {
+        "union" | "unionByName" => Some(recv.clone()),
+        _ => None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // col() reference discovery
 // ---------------------------------------------------------------------------
 
-/// Match `col("X")` and return ("X", range-of-the-string-literal).
 fn col_reference(expr: &Expr) -> Option<(&str, TextRange)> {
     let call = expr.as_call_expr()?;
     let func = call.func.as_name_expr()?;
@@ -335,7 +537,6 @@ fn col_reference(expr: &Expr) -> Option<(&str, TextRange)> {
     Some((lit.value.to_str(), lit.range()))
 }
 
-/// Recursively collect every `col("X")` reference inside `expr`.
 fn collect_col_refs<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, TextRange)>) {
     if let Some(found) = col_reference(expr) {
         out.push(found);

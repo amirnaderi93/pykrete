@@ -13,9 +13,9 @@ use std::process::ExitCode;
 use ruff_source_file::LineIndex;
 use ruff_text_size::Ranged;
 
-use crate::dataframe::{DataFrameAnnotation, SlotLabel, typed_slots};
+use crate::dataframe::{DataFrameAnnotation, SlotLabel, TypedSlot, typed_slots};
 use crate::diagnostics::{Diagnostic, Severity};
-use crate::operations::{ParamScope, check_function_body};
+use crate::operations::{BodyContext, check_function_body};
 use crate::schema::{FieldResolution, Schema, discover_schemas};
 use crate::types::COLUMN_TYPE_NAMES;
 use crate::walk::{discover_top_level_classes, discover_top_level_functions};
@@ -85,8 +85,16 @@ fn main() -> ExitCode {
             &mut body,
             &mut diagnostics,
         );
-        let scope = ParamScope::build(slots, &schemas);
-        check_function_body(func, &scope, &source, &line_index, &mut diagnostics);
+        let declared_return = declared_return_schema(slots, &schemas);
+        let mut ctx = BodyContext::from_slots(slots, &schemas);
+        check_function_body(
+            func,
+            declared_return,
+            &mut ctx,
+            &source,
+            &line_index,
+            &mut diagnostics,
+        );
     }
 
     println!(
@@ -110,6 +118,20 @@ fn main() -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+fn declared_return_schema<'a>(
+    slots: &[TypedSlot<'a>],
+    schemas: &'a [Schema<'a>],
+) -> Option<&'a Schema<'a>> {
+    for slot in slots {
+        if matches!(slot.label, SlotLabel::Return) {
+            if let DataFrameAnnotation::Typed(name) = slot.kind {
+                return schemas.iter().find(|s| s.name() == name);
+            }
+        }
+    }
+    None
 }
 
 fn render_schema(

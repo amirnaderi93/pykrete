@@ -82,3 +82,45 @@ impl<'ast> Schema<'ast> {
 pub fn discover_schemas<'ast>(classes: &'ast [DiscoveredClass<'ast>]) -> Vec<Schema<'ast>> {
     classes.iter().filter_map(Schema::from_class).collect()
 }
+
+// ---------------------------------------------------------------------------
+// SchemaView — unified view over declared and derived schemas
+// ---------------------------------------------------------------------------
+
+/// Either a user-declared `Schema` class, or a schema *inferred* from the
+/// result of an operation chain (e.g. `raw.select("a", "b")` produces a
+/// Derived schema with fields `["a", "b"]`).
+///
+/// All field-existence and field-set comparisons go through this view, so
+/// checks (`D0030`, `D0040`, `D0050`) work identically against declared and
+/// derived schemas.
+#[derive(Debug, Clone)]
+pub enum SchemaView<'a> {
+    Declared(&'a Schema<'a>),
+    Derived(Vec<&'a str>),
+}
+
+impl<'a> SchemaView<'a> {
+    pub fn has_field(&self, name: &str) -> bool {
+        match self {
+            Self::Declared(s) => s.has_field(name),
+            Self::Derived(fields) => fields.iter().any(|f| *f == name),
+        }
+    }
+
+    pub fn field_names(&self) -> Vec<&'a str> {
+        match self {
+            Self::Declared(s) => s.fields().iter().map(|f| f.name).collect(),
+            Self::Derived(fields) => fields.clone(),
+        }
+    }
+
+    /// Human-readable phrase to embed in diagnostics — `schema 'Orders'` for
+    /// declared, `inferred schema [a, b]` for derived.
+    pub fn display_name(&self) -> String {
+        match self {
+            Self::Declared(s) => format!("schema '{}'", s.name()),
+            Self::Derived(fields) => format!("inferred schema [{}]", fields.join(", ")),
+        }
+    }
+}

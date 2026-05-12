@@ -9,10 +9,10 @@ flowchart LR
     A[".dpy source"] --> B["ruff_python_parser"]
     B --> C["Python AST<br/>(ModModule)"]
     C --> W["walk<br/>top-level classes<br/>+ top-level functions"]
-    W --> S["schema<br/>Schema classes,<br/>field resolution"]
+    W --> S["schema<br/>Schema classes,<br/>field resolution,<br/>SchemaView"]
     W --> D["dataframe<br/>DataFrame[X] slot<br/>recognition"]
     S --> T["types<br/>ColumnType vocab"]
-    D --> O["operations<br/>body-level<br/>op checking"]
+    D --> O["operations<br/>body analysis,<br/>result-schema inference,<br/>return-type check"]
     S --> O
     S --> M["main<br/>resolve, render,<br/>format diagnostics"]
     D --> M
@@ -50,6 +50,8 @@ Read-only AST walks. Today only `discover_top_level_classes`. Will grow to find 
 
 Recognizes which discovered classes are dathon schemas (bases include `Schema`) and exposes their field annotations as `(name, &Expr)` pairs. Field resolution lives here too: `SchemaField::resolve()` returns a `FieldResolution` enum (resolved column type, unknown type name, or non-bare-name) that the driver maps to diagnostics.
 
+This module also owns `SchemaView`, the unified view used by body analysis. A `SchemaView` is either `Declared(&Schema)` (a user-defined Schema class) or `Derived(Vec<&str>)` (a schema inferred from operating on another). All field-existence and field-set comparisons (`has_field`, `field_names`, `display_name`) work identically against both — letting `D0030`, `D0040`, and `D0050` reason about schemas regardless of where they came from.
+
 ### `types`
 
 The atom layer of dathon's type system. Today: one enum, `ColumnType`, with the v0.1 vocabulary (`int`, `long`, `double`, `string`, `bool`, `date`, `timestamp`). `from_name` parses user-written source forms; `as_str` / `Display` produce the canonical printable name. Mapping to Spark types (`IntegerType`, etc.) lives here when we get to the transpiler.
@@ -62,21 +64,35 @@ Recognizes DataFrame-typed annotations on function signatures. `recognize` class
 
 ### `operations`
 
-PySpark DataFrame operation checking, inside function bodies. Holds a `ParamScope` (parameter name → schema) built from the typed slots of a function, then walks the body looking for operations applied to those parameters.
+PySpark DataFrame operation checking inside function bodies, with **result-schema inference** so chained calls and local variable bindings carry their schemas forward.
 
-Two families of checks today:
+`BodyContext` holds a name → `SchemaView` map. It starts populated from typed function parameters; assignments grow it as the walker discovers `x = <DataFrame expression>`.
 
-**Column-method calls** — methods whose argument shape consists of column references / expressions. Each has one of three shapes:
+`analyze_expr` is the recursive heart. Given an expression, it returns a `SchemaView` when the expression evaluates to a DataFrame and `None` otherwise. While walking, every recognized method call's arguments are checked against the receiver's schema (emitting `D0030`/`D0040`) and the operation's result schema is computed and returned.
 
-- **AllColumnName** — `select`, `drop`, `dropDuplicates`, `groupBy`. Top-level string-literal args are treated as column names; list-of-string args are unpacked. `col("X")` references anywhere inside an arg are also collected.
-- **AllExpression** — `filter`, `where`. String literals are values; only `col("X")` references count as column refs.
-- **Positional** — `withColumn` (`[NewName, Expression]`), `withColumnRenamed` (`[ColumnName, NewName]`). Each argument position has its own role; extra args reuse the last role.
+Recursion is what enables chained calls: for `raw.filter(...).select("madeup")`, the outer `select` first analyzes its receiver (the `filter` call), which in turn analyzes *its* receiver (`raw`). Each level reports its own diagnostics and returns its result schema.
 
-The three roles (`ColumnName`, `Expression`, `NewName`) are combined into shapes via `column_method_shape` / `role_at`. Every collected column name is checked against the receiver's schema; mismatches emit `D0030`.
+**Recognized methods today** (two families):
 
-**Two-DataFrame calls** — `union`, `unionByName`. The first argument must be another typed-DataFrame parameter (looked up via `ParamScope::lookup_param_expr`). The two schemas' field-name sets must match; differences emit `D0040` with the missing columns listed on each side.
+- **Column-method calls** — methods whose argument shape consists of column references / expressions. Each has one of three shapes:
+  - **AllColumnName** — `select`, `drop`, `dropDuplicates`, `groupBy`. Top-level string-literal args are treated as column names; list-of-string args are unpacked.
+  - **AllExpression** — `filter`, `where`. String literals are values; only `col("X")` references count as column refs.
+  - **Positional** — `withColumn` (`[NewName, Expression]`), `withColumnRenamed` (`[ColumnName, NewName]`). Each argument position has its own role; extra args reuse the last role.
+  Three roles (`ColumnName`, `Expression`, `NewName`) are combined into shapes via `column_method_shape` / `role_at`. Mismatched columns against the receiver schema emit `D0030`.
 
-Both flavors only fire when the receiver is a direct function parameter typed `DataFrame[S]`. Local-variable receivers and chained-call receivers will become possible once binding propagation lands.
+- **Two-DataFrame calls** — `union`, `unionByName`. The first argument is analyzed (recursively) to obtain its schema; the two schemas' field-name sets must match. Differences emit `D0040` with the missing columns listed on each side.
+
+**Result-schema inference** (`apply_column_method` / `apply_two_df_method`):
+
+- `select(args)` → `Derived` schema whose fields are the output names of each arg (`alias("X")` wins; otherwise bare string literal, bare `col("X")`, or `.cast(...)` of those). Aliasless complex expressions silently drop.
+- `filter`, `where`, `dropDuplicates` → schema-preserving (receiver's schema).
+- `drop(...)` → receiver fields minus the dropped names.
+- `withColumn("new", expr)` → receiver fields plus `"new"` (if not already present).
+- `withColumnRenamed("old", "new")` → receiver fields with `"old"` replaced by `"new"`.
+- `union` / `unionByName` → receiver's schema (assumes the names match — if not, `D0040` already flagged it).
+- `groupBy(...)` → `None` (returns a `GroupedData`, not a DataFrame; subsequent `.agg(...)` calls aren't yet tracked).
+
+**Return-type validation**: when a function declares `-> DataFrame[X]`, every `return <value>` has its inferred schema compared against `X`'s field set. Mismatches emit `D0050` listing what's missing in the body and what's extra.
 
 Column reference discovery is a small recursive walker (`collect_col_refs`) that descends through `Call`, `Attribute`, `Subscript`, `BinOp`, `BoolOp`, `Compare`, `If`-expression, `Tuple`/`List`, and `Starred` — enough to find columns inside expressions like `(col("a") + col("b")).cast("int").alias("c")`. Scopes that bind new names (lambdas, comprehensions) are deliberately not entered.
 

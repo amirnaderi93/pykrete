@@ -107,6 +107,36 @@ def union_plain_different(a: DataFrame[Orders], b: DataFrame[RawOrders]) -> Data
     return a.union(b)
 
 
+def chained_typo(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.filter(col("price") > 0).select(col("madeup"))
+
+
+def chained_clean(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.filter(col("price") > 0).select(col("place_code"), col("price"))
+
+
+def local_binding_typo(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    filtered = raw.filter(col("price") > 0)
+    return filtered.select(col("place_code"), col("ghost"))
+
+
+def local_then_partial(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    partial = raw.select(col("place_code"))
+    return partial.select(col("price"))
+
+
+def return_partial(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.select(col("place_code"))
+
+
+def return_extra(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.withColumn("bonus", col("price") * 2)
+
+
+def return_clean(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.select(col("place_code"), col("price"))
+
+
 def bad_fn(x: DataFrame[NotAKnownSchema]) -> DataFrame[Orders]:
     return x
 
