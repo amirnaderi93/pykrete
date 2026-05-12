@@ -153,7 +153,19 @@ Schema base classes (the user's `class Foo(Schema):` declarations) still need th
 
 ### `main`
 
-CLI entry point. Dispatches `dathon <check|transpile> <file.dpy>` to the matching library entry point.
+CLI entry point. Dispatches `dathon <check|transpile>` to the matching library entry point. The `check` subcommand accepts one or more file paths; multiple paths are analyzed as a single project with cross-file Schema visibility.
+
+## Multi-file analysis
+
+`check_project(files)` is the library entry point for analyzing multiple files together. The model in v0.1 is deliberately simple:
+
+1. Parse every supplied file. Parse failures are reported per-file as `D0001`.
+2. Pool every top-level Schema, class, and annotated constant from every successfully-parsed file into a single combined view.
+3. Analyze each file individually against that combined view — column references, generic-method substitution, and return-type checks all resolve cross-file.
+
+On duplicate top-level names across files, **last-write wins** in the combined registry. v0.1 doesn't warn about duplicates yet.
+
+Notably **not** in v0.1: parsing `import` / `from … import …` statements. There's no per-file scoping — every declaration in any file is visible everywhere. Real Python import semantics is a follow-up iteration; this minimum model already covers the common "shared schemas module + per-pipeline files" pattern.
 
 ## External dependencies
 
