@@ -64,13 +64,19 @@ Recognizes DataFrame-typed annotations on function signatures. `recognize` class
 
 PySpark DataFrame operation checking, inside function bodies. Holds a `ParamScope` (parameter name → schema) built from the typed slots of a function, then walks the body looking for operations applied to those parameters.
 
-Each recognized method has a *shape* that tells the dispatcher how to interpret each argument position. There are three shapes:
+Two families of checks today:
+
+**Column-method calls** — methods whose argument shape consists of column references / expressions. Each has one of three shapes:
 
 - **AllColumnName** — `select`, `drop`, `dropDuplicates`, `groupBy`. Top-level string-literal args are treated as column names; list-of-string args are unpacked. `col("X")` references anywhere inside an arg are also collected.
 - **AllExpression** — `filter`, `where`. String literals are values; only `col("X")` references count as column refs.
 - **Positional** — `withColumn` (`[NewName, Expression]`), `withColumnRenamed` (`[ColumnName, NewName]`). Each argument position has its own role; extra args reuse the last role.
 
-The three roles (`ColumnName`, `Expression`, `NewName`) are combined into shapes via `method_shape`/`role_at`. Every collected column name is checked against the receiver's schema; mismatches emit `D0030`.
+The three roles (`ColumnName`, `Expression`, `NewName`) are combined into shapes via `column_method_shape` / `role_at`. Every collected column name is checked against the receiver's schema; mismatches emit `D0030`.
+
+**Two-DataFrame calls** — `union`, `unionByName`. The first argument must be another typed-DataFrame parameter (looked up via `ParamScope::lookup_param_expr`). The two schemas' field-name sets must match; differences emit `D0040` with the missing columns listed on each side.
+
+Both flavors only fire when the receiver is a direct function parameter typed `DataFrame[S]`. Local-variable receivers and chained-call receivers will become possible once binding propagation lands.
 
 Column reference discovery is a small recursive walker (`collect_col_refs`) that descends through `Call`, `Attribute`, `Subscript`, `BinOp`, `BoolOp`, `Compare`, `If`-expression, `Tuple`/`List`, and `Starred` — enough to find columns inside expressions like `(col("a") + col("b")).cast("int").alias("c")`. Scopes that bind new names (lambdas, comprehensions) are deliberately not entered.
 

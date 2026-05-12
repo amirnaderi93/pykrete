@@ -1,31 +1,30 @@
 //! PySpark DataFrame operations — checking calls inside function bodies.
 //!
-//! Each recognized method has a "shape" that determines how its arguments are
-//! interpreted:
+//! Two families of method-call checks today:
 //!
-//! - **AllColumnName** — every arg interprets top-level string literals as
-//!   column names (and `[…]` list literals as lists of column names).
-//!   Methods: `select`, `drop`, `dropDuplicates`, `groupBy`.
-//! - **AllExpression** — every arg is a boolean/value expression. String
-//!   literals are values; only `col("X")` references count as column refs.
-//!   Methods: `filter`, `where`.
-//! - **Positional** — each argument position has its own role.
-//!   Methods: `withColumn` (NewName, Expression), `withColumnRenamed`
-//!   (ColumnName, NewName).
+//! - **Column-method calls** — methods that take column references or
+//!   expressions: `select`, `filter`, `where`, `drop`, `dropDuplicates`,
+//!   `groupBy`, `withColumn`, `withColumnRenamed`. Each has a *shape*
+//!   (`AllColumnName`, `AllExpression`, `Positional([ArgRole])`) that
+//!   determines how each argument position is interpreted.
+//!   Mismatches against the receiver's schema emit `D0030`.
 //!
-//! Every collected column name is checked against the receiver's schema;
-//! mismatches emit `D0030`. `col("X")` references inside any expression
-//! arg are also collected recursively regardless of shape.
+//! - **Two-DataFrame calls** — methods whose first argument is another
+//!   `DataFrame`: `unionByName`, `union`. The other DataFrame must also be a
+//!   typed parameter; the two schemas must have the same set of field
+//!   names. Mismatches emit `D0040`.
 //!
 //! Scope cuts in v0.1:
 //! - Only direct calls on parameters typed `DataFrame[S]`. No tracking of
-//!   local variable bindings.
+//!   local variable bindings, and no support for chained call receivers.
 //! - Only top-level statements in the body. Nested blocks ignored.
 //! - `df.X` attribute access for columns not handled yet.
-//! - Calls on chained results (`df.filter(...).select(...)`) only check the
-//!   outermost direct-on-param call.
+//! - `join`, `crossJoin` not handled yet (rich on-key surface — separate
+//!   iteration).
+//! - `union`/`unionByName` currently check the *name set* only. Column-order
+//!   strictness for plain `union` will land separately.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ruff_python_ast::{Expr, Stmt};
 use ruff_source_file::LineIndex;
@@ -35,6 +34,10 @@ use crate::dataframe::{DataFrameAnnotation, SlotLabel, TypedSlot};
 use crate::diagnostics::{Diagnostic, Severity};
 use crate::schema::Schema;
 use crate::walk::DiscoveredFunction;
+
+// ---------------------------------------------------------------------------
+// Shapes
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy)]
 enum ArgRole {
@@ -47,23 +50,31 @@ enum ArgRole {
     NewName,
 }
 
-enum MethodShape {
+enum ColumnMethodShape {
     AllColumnName,
     AllExpression,
-    /// Each position has its own role. Extra args beyond the slice length
-    /// use the last role. Empty slice means no args are checked.
+    /// Each position has its own role. Extra args reuse the last role.
     Positional(&'static [ArgRole]),
 }
 
-fn method_shape(method: &str) -> Option<MethodShape> {
+#[derive(Debug, Clone, Copy)]
+enum TwoDfMethod {
+    /// Name-set match required. `union` will become stricter (order) later.
+    Union,
+    UnionByName,
+}
+
+fn column_method_shape(method: &str) -> Option<ColumnMethodShape> {
     match method {
-        "select" | "drop" | "dropDuplicates" | "groupBy" => Some(MethodShape::AllColumnName),
-        "filter" | "where" => Some(MethodShape::AllExpression),
-        "withColumn" => Some(MethodShape::Positional(&[
+        "select" | "drop" | "dropDuplicates" | "groupBy" => {
+            Some(ColumnMethodShape::AllColumnName)
+        }
+        "filter" | "where" => Some(ColumnMethodShape::AllExpression),
+        "withColumn" => Some(ColumnMethodShape::Positional(&[
             ArgRole::NewName,
             ArgRole::Expression,
         ])),
-        "withColumnRenamed" => Some(MethodShape::Positional(&[
+        "withColumnRenamed" => Some(ColumnMethodShape::Positional(&[
             ArgRole::ColumnName,
             ArgRole::NewName,
         ])),
@@ -71,17 +82,29 @@ fn method_shape(method: &str) -> Option<MethodShape> {
     }
 }
 
-fn role_at(shape: &MethodShape, index: usize) -> ArgRole {
+fn two_df_method(method: &str) -> Option<TwoDfMethod> {
+    match method {
+        "union" => Some(TwoDfMethod::Union),
+        "unionByName" => Some(TwoDfMethod::UnionByName),
+        _ => None,
+    }
+}
+
+fn role_at(shape: &ColumnMethodShape, index: usize) -> ArgRole {
     match shape {
-        MethodShape::AllColumnName => ArgRole::ColumnName,
-        MethodShape::AllExpression => ArgRole::Expression,
-        MethodShape::Positional(roles) => roles
+        ColumnMethodShape::AllColumnName => ArgRole::ColumnName,
+        ColumnMethodShape::AllExpression => ArgRole::Expression,
+        ColumnMethodShape::Positional(roles) => roles
             .get(index)
             .copied()
             .or_else(|| roles.last().copied())
             .unwrap_or(ArgRole::Expression),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Scope
+// ---------------------------------------------------------------------------
 
 /// Maps a function-parameter name to the Schema it's typed as.
 pub struct ParamScope<'a> {
@@ -108,7 +131,16 @@ impl<'a> ParamScope<'a> {
     pub fn lookup(&self, name: &str) -> Option<&'a Schema<'a>> {
         self.bindings.get(name).copied()
     }
+
+    fn lookup_param_expr(&self, expr: &Expr) -> Option<&'a Schema<'a>> {
+        let name = expr.as_name_expr()?.id.as_str();
+        self.lookup(name)
+    }
 }
+
+// ---------------------------------------------------------------------------
+// Body driver
+// ---------------------------------------------------------------------------
 
 pub fn check_function_body(
     func: &DiscoveredFunction<'_>,
@@ -121,7 +153,7 @@ pub fn check_function_body(
         let Some(expr) = stmt_top_expr(stmt) else {
             continue;
         };
-        check_column_method_call(expr, scope, source, line_index, diagnostics);
+        dispatch_call(expr, scope, source, line_index, diagnostics);
     }
 }
 
@@ -134,7 +166,7 @@ fn stmt_top_expr(stmt: &Stmt) -> Option<&Expr> {
     }
 }
 
-fn check_column_method_call(
+fn dispatch_call(
     expr: &Expr,
     scope: &ParamScope<'_>,
     source: &str,
@@ -148,19 +180,44 @@ fn check_column_method_call(
         return;
     };
     let method = attr.attr.id.as_str();
-    let Some(shape) = method_shape(method) else {
-        return;
-    };
     let Some(receiver) = attr.value.as_name_expr() else {
         return;
     };
-    let Some(schema) = scope.lookup(receiver.id.as_str()) else {
+    let Some(receiver_schema) = scope.lookup(receiver.id.as_str()) else {
         return;
     };
 
+    if let Some(shape) = column_method_shape(method) {
+        check_column_method(
+            call,
+            receiver_schema,
+            &shape,
+            source,
+            line_index,
+            diagnostics,
+        );
+        return;
+    }
+    if let Some(kind) = two_df_method(method) {
+        check_two_df_method(call, receiver_schema, kind, scope, source, line_index, diagnostics);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Column-method checking
+// ---------------------------------------------------------------------------
+
+fn check_column_method(
+    call: &ruff_python_ast::ExprCall,
+    schema: &Schema<'_>,
+    shape: &ColumnMethodShape,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     let mut refs: Vec<(&str, TextRange)> = Vec::new();
     for (i, arg) in call.arguments.args.iter().enumerate() {
-        let role = role_at(&shape, i);
+        let role = role_at(shape, i);
         collect_arg_column_refs(arg, role, &mut refs);
     }
     for (col_name, col_range) in refs {
@@ -207,6 +264,64 @@ fn collect_arg_column_refs<'a>(
         ArgRole::Expression => collect_col_refs(arg, out),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Two-DataFrame checking
+// ---------------------------------------------------------------------------
+
+fn check_two_df_method(
+    call: &ruff_python_ast::ExprCall,
+    left: &Schema<'_>,
+    _kind: TwoDfMethod,
+    scope: &ParamScope<'_>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(arg) = call.arguments.args.first() else {
+        return;
+    };
+    let Some(right) = scope.lookup_param_expr(arg) else {
+        // For now, only direct param-to-param. Local-variable / chained
+        // receivers will be handled when binding propagation lands.
+        return;
+    };
+
+    let left_names: HashSet<&str> = left.fields().iter().map(|f| f.name).collect();
+    let right_names: HashSet<&str> = right.fields().iter().map(|f| f.name).collect();
+    if left_names == right_names {
+        return;
+    }
+
+    let mut only_left: Vec<&str> = left_names.difference(&right_names).copied().collect();
+    let mut only_right: Vec<&str> = right_names.difference(&left_names).copied().collect();
+    only_left.sort();
+    only_right.sort();
+
+    let message = format!(
+        "unionByName between '{}' and '{}': schemas differ. \
+         Missing in '{}': [{}]; missing in '{}': [{}].",
+        left.name(),
+        right.name(),
+        right.name(),
+        only_left.join(", "),
+        left.name(),
+        only_right.join(", "),
+    );
+
+    diagnostics.push(Diagnostic::at(
+        Severity::Error,
+        "D0040",
+        message,
+        arg.range().start(),
+        source,
+        line_index,
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// col() reference discovery
+// ---------------------------------------------------------------------------
 
 /// Match `col("X")` and return ("X", range-of-the-string-literal).
 fn col_reference(expr: &Expr) -> Option<(&str, TextRange)> {

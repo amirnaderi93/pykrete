@@ -95,6 +95,18 @@ def with_column_renamed_typo(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.withColumnRenamed("place_cdoe", "code")
 
 
+def union_same_schema(a: DataFrame[Orders], b: DataFrame[Orders]) -> DataFrame[Orders]:
+    return a.unionByName(b)
+
+
+def union_different_schema(a: DataFrame[Orders], b: DataFrame[RawOrders]) -> DataFrame[Orders]:
+    return a.unionByName(b)
+
+
+def union_plain_different(a: DataFrame[Orders], b: DataFrame[RawOrders]) -> DataFrame[Orders]:
+    return a.union(b)
+
+
 def bad_fn(x: DataFrame[NotAKnownSchema]) -> DataFrame[Orders]:
     return x
 
