@@ -97,7 +97,10 @@ Recursion is what enables chained calls: for `raw.filter(...).select("madeup")`,
 - `union` / `unionByName` → receiver's schema (assumes the names match — if not, `D0040` already flagged it).
 - `join(other, on=…)` → keys appear once (left's value); non-key fields from both sides concatenated, with shared non-key names silently kept once (left wins). For a complex on-expression: same concatenation, no key dedup.
 - `crossJoin(other)` → concatenation of left + right fields, shared names kept once.
-- `groupBy(...)` → `None` (returns a `GroupedData`, not a DataFrame; subsequent `.agg(...)` calls aren't yet tracked).
+- `groupBy(keys)` → `SchemaView::Grouped { keys, underlying }`. Not a DataFrame; only valid follow-up is `.agg(...)`. Other methods on a `Grouped` receiver collect `D0030` noise (their column references never match because `has_field` returns false on `Grouped`), which is acceptable in v0.1 since those calls are invalid in PySpark anyway.
+- `.agg(args)` → `SchemaView::Derived` with [keys ∪ aliased aggregates]. Each arg's column references (both `col("X")` and string-arg form `F.sum("x")`) are checked against the underlying (pre-groupBy) schema. `.agg(...)` is also valid on a regular DataFrame; in that case there are no keys and the result is just the aliased aggregates.
+
+**Aggregate function recognition**: `collect_col_refs` recognizes a small list of known PySpark aggregate names (`sum`, `avg`, `count`, `median`, `max_by`, `collect_list`, …) and treats their string-literal positional arguments as column references — so `F.sum("price")` resolves to a column ref to `"price"`. The list is conservative: only functions where every string arg is a column name are included (`lit` is excluded since `lit("x")` is a value, not a column).
 
 **Return-type validation**: when a function declares `-> DataFrame[X]`, every `return <value>` has its inferred schema compared against `X`'s field set. Mismatches emit `D0050` listing what's missing in the body and what's extra.
 

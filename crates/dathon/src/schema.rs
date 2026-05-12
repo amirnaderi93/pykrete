@@ -88,16 +88,20 @@ pub fn discover_schemas<'ast>(classes: &'ast [DiscoveredClass<'ast>]) -> Vec<Sch
 // ---------------------------------------------------------------------------
 
 /// Either a user-declared `Schema` class, or a schema *inferred* from the
-/// result of an operation chain (e.g. `raw.select("a", "b")` produces a
-/// Derived schema with fields `["a", "b"]`).
+/// result of an operation chain.
 ///
-/// All field-existence and field-set comparisons go through this view, so
-/// checks (`D0030`, `D0040`, `D0050`) work identically against declared and
-/// derived schemas.
+/// `Grouped` is a third state: it's not a DataFrame, but the intermediate
+/// value produced by `.groupBy(...)`. It carries the group keys plus the
+/// underlying schema, so a subsequent `.agg(...)` can resolve its column
+/// references against the original input.
 #[derive(Debug, Clone)]
 pub enum SchemaView<'a> {
     Declared(&'a Schema<'a>),
     Derived(Vec<&'a str>),
+    Grouped {
+        keys: Vec<&'a str>,
+        underlying: Box<SchemaView<'a>>,
+    },
 }
 
 impl<'a> SchemaView<'a> {
@@ -105,6 +109,11 @@ impl<'a> SchemaView<'a> {
         match self {
             Self::Declared(s) => s.has_field(name),
             Self::Derived(fields) => fields.iter().any(|f| *f == name),
+            // GroupedData isn't field-queryable directly. Operations apart
+            // from .agg (filter, select, etc.) on a Grouped receiver will
+            // collect col-ref diagnostics — that's fine since those calls
+            // are invalid in PySpark anyway.
+            Self::Grouped { .. } => false,
         }
     }
 
@@ -112,15 +121,18 @@ impl<'a> SchemaView<'a> {
         match self {
             Self::Declared(s) => s.fields().iter().map(|f| f.name).collect(),
             Self::Derived(fields) => fields.clone(),
+            Self::Grouped { keys, .. } => keys.clone(),
         }
     }
 
-    /// Human-readable phrase to embed in diagnostics — `schema 'Orders'` for
-    /// declared, `inferred schema [a, b]` for derived.
+    /// Human-readable phrase to embed in diagnostics.
     pub fn display_name(&self) -> String {
         match self {
             Self::Declared(s) => format!("schema '{}'", s.name()),
             Self::Derived(fields) => format!("inferred schema [{}]", fields.join(", ")),
+            Self::Grouped { keys, .. } => {
+                format!("grouped data with keys [{}]", keys.join(", "))
+            }
         }
     }
 }
@@ -184,5 +196,40 @@ mod tests {
         // Can happen after `select` with all aliasless complex expressions.
         let view = SchemaView::Derived(vec![]);
         assert_eq!(view.display_name(), "inferred schema []");
+    }
+
+    #[test]
+    fn grouped_schema_has_field_returns_false_for_all_names() {
+        // GroupedData isn't field-queryable; only .agg(...) produces a real
+        // DataFrame. has_field uniformly returns false so accidental
+        // non-agg operations on a Grouped receiver get caught.
+        let underlying = SchemaView::Derived(vec!["k", "a", "b"]);
+        let grouped = SchemaView::Grouped {
+            keys: vec!["k"],
+            underlying: Box::new(underlying),
+        };
+        assert!(!grouped.has_field("k"));
+        assert!(!grouped.has_field("a"));
+    }
+
+    #[test]
+    fn grouped_field_names_returns_just_the_keys() {
+        // Used by the agg result-inference path: keys ∪ aliased aggregates.
+        let underlying = SchemaView::Derived(vec!["k1", "k2", "v"]);
+        let grouped = SchemaView::Grouped {
+            keys: vec!["k1", "k2"],
+            underlying: Box::new(underlying),
+        };
+        assert_eq!(grouped.field_names(), vec!["k1", "k2"]);
+    }
+
+    #[test]
+    fn grouped_display_name_describes_the_keys() {
+        let underlying = SchemaView::Derived(vec!["k", "v"]);
+        let grouped = SchemaView::Grouped {
+            keys: vec!["k"],
+            underlying: Box::new(underlying),
+        };
+        assert_eq!(grouped.display_name(), "grouped data with keys [k]");
     }
 }

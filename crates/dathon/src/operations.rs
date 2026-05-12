@@ -338,6 +338,14 @@ fn analyze_method_call<'a>(
     let method = attr.attr.id.as_str();
     let receiver = analyze_expr(&attr.value, ctx, source, line_index, diagnostics)?;
 
+    // `.agg(...)` is the bridge from GroupedData back to a DataFrame. It's
+    // also valid on a regular DataFrame (treated as a single-group
+    // aggregation). Dispatch it ahead of the column-method shape lookup so
+    // a Grouped receiver doesn't fall through.
+    if method == "agg" {
+        return Some(handle_agg(call, &receiver, source, line_index, diagnostics));
+    }
+
     if let Some(shape) = column_method_shape(method) {
         check_column_method_args(call, &receiver, &shape, source, line_index, diagnostics);
         return apply_column_method(method, &receiver, call);
@@ -346,6 +354,58 @@ fn analyze_method_call<'a>(
         return handle_two_df_method(kind, call, &receiver, ctx, source, line_index, diagnostics);
     }
     None
+}
+
+/// Handle `.agg(...)` on either a `Grouped` or a regular DataFrame receiver.
+///
+/// Each argument expression's column references (both `col("x")` and the
+/// string-arg form `F.sum("x")` for known aggregate function names) are
+/// checked against the underlying schema. The output schema is the group
+/// keys (if any) plus each argument's output name (from `.alias("name")`
+/// or a bare column ref).
+fn handle_agg<'a>(
+    call: &'a ExprCall,
+    receiver: &SchemaView<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> SchemaView<'a> {
+    let (keys, underlying): (Vec<&'a str>, &SchemaView<'a>) = match receiver {
+        SchemaView::Grouped { keys, underlying } => (keys.clone(), underlying.as_ref()),
+        other => (Vec::new(), other),
+    };
+
+    let mut refs: Vec<(&str, TextRange)> = Vec::new();
+    let mut outputs: Vec<&'a str> = Vec::new();
+    for arg in &call.arguments.args {
+        collect_col_refs(arg, &mut refs);
+        if let Some(name) = select_output_name(arg) {
+            outputs.push(name);
+        }
+    }
+    for (col_name, col_range) in refs {
+        if !underlying.has_field(col_name) {
+            diagnostics.push(Diagnostic::at(
+                Severity::Error,
+                "D0030",
+                format!(
+                    "Column '{col_name}' does not exist on {}.",
+                    underlying.display_name(),
+                ),
+                col_range.start(),
+                source,
+                line_index,
+            ));
+        }
+    }
+
+    let mut fields: Vec<&'a str> = keys;
+    for name in outputs {
+        if !fields.contains(&name) {
+            fields.push(name);
+        }
+    }
+    SchemaView::Derived(fields)
 }
 
 // ---------------------------------------------------------------------------
@@ -445,8 +505,22 @@ fn apply_column_method<'a>(
                 .collect();
             Some(SchemaView::Derived(fields))
         }
-        // groupBy returns a GroupedData, not a DataFrame.
-        "groupBy" => None,
+        "groupBy" => {
+            // groupBy doesn't return a DataFrame; it returns a GroupedData
+            // that captures the group keys and remembers the input schema.
+            // The follow-up .agg(...) call uses that to check its column
+            // references and produce the final DataFrame schema.
+            let mut keys: Vec<&'a str> = Vec::new();
+            for arg in &call.arguments.args {
+                if let Some(name) = column_name_arg(arg) {
+                    keys.push(name);
+                }
+            }
+            Some(SchemaView::Grouped {
+                keys,
+                underlying: Box::new(recv.clone()),
+            })
+        }
         _ => None,
     }
 }
@@ -744,10 +818,63 @@ fn col_reference(expr: &Expr) -> Option<(&str, TextRange)> {
     Some((lit.value.to_str(), lit.range()))
 }
 
+/// PySpark aggregate / column-y functions that take string-literal arguments
+/// as column names (in addition to `col(...)` expressions). Used so that
+/// `F.sum("price")` is recognized as a column reference to `"price"`.
+///
+/// Conservatively scoped to functions where ALL positional string-lit args
+/// are column names. Functions like `F.lit("foo")` (value, not column) are
+/// excluded.
+const COLUMN_REF_FUNCTIONS: &[&str] = &[
+    "sum",
+    "avg",
+    "mean",
+    "max",
+    "min",
+    "count",
+    "countDistinct",
+    "median",
+    "percentile_approx",
+    "var_pop",
+    "var_samp",
+    "stddev",
+    "first",
+    "last",
+    "max_by",
+    "min_by",
+    "collect_list",
+    "collect_set",
+];
+
 fn collect_col_refs<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, TextRange)>) {
     if let Some(found) = col_reference(expr) {
         out.push(found);
         return;
+    }
+    // Recognize `F.sum("x")` and similar — for the listed function names,
+    // every string-literal positional arg is a column reference. Non-string
+    // args are walked normally.
+    if let Some(call) = expr.as_call_expr() {
+        let func_name = match call.func.as_ref() {
+            Expr::Name(n) => Some(n.id.as_str()),
+            Expr::Attribute(a) => Some(a.attr.id.as_str()),
+            _ => None,
+        };
+        if let Some(name) = func_name {
+            if COLUMN_REF_FUNCTIONS.contains(&name) {
+                for arg in &call.arguments.args {
+                    if let Some(s) = arg.as_string_literal_expr() {
+                        out.push((s.value.to_str(), s.range()));
+                    } else {
+                        collect_col_refs(arg, out);
+                    }
+                }
+                for kw in &call.arguments.keywords {
+                    collect_col_refs(&kw.value, out);
+                }
+                return;
+            }
+        }
     }
     match expr {
         Expr::Call(c) => {
