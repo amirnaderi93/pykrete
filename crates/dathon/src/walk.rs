@@ -1,10 +1,11 @@
 //! AST walking helpers.
 //!
-//! Read-only traversals over the parsed `ModModule`. Today we only discover
-//! top-level class definitions; this will grow as we need to find more
-//! declaration shapes.
+//! Read-only traversals over the parsed `ModModule`. Today we discover
+//! top-level class definitions and top-level function definitions. Will
+//! grow as we need to find more declaration shapes (imports, DataSource
+//! constants, etc.).
 
-use ruff_python_ast::{ModModule, Stmt, StmtClassDef};
+use ruff_python_ast::{ModModule, Stmt, StmtClassDef, StmtFunctionDef};
 
 #[derive(Debug)]
 pub struct DiscoveredClass<'ast> {
@@ -28,12 +29,34 @@ impl<'ast> DiscoveredClass<'ast> {
     }
 }
 
+#[derive(Debug)]
+pub struct DiscoveredFunction<'ast> {
+    pub def: &'ast StmtFunctionDef,
+}
+
+impl<'ast> DiscoveredFunction<'ast> {
+    pub fn name(&self) -> &'ast str {
+        self.def.name.id.as_str()
+    }
+}
+
 pub fn discover_top_level_classes(module: &ModModule) -> Vec<DiscoveredClass<'_>> {
     module
         .body
         .iter()
         .filter_map(|stmt| match stmt {
             Stmt::ClassDef(def) => Some(DiscoveredClass { def }),
+            _ => None,
+        })
+        .collect()
+}
+
+pub fn discover_top_level_functions(module: &ModModule) -> Vec<DiscoveredFunction<'_>> {
+    module
+        .body
+        .iter()
+        .filter_map(|stmt| match stmt {
+            Stmt::FunctionDef(def) => Some(DiscoveredFunction { def }),
             _ => None,
         })
         .collect()

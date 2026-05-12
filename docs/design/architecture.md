@@ -8,10 +8,13 @@ A snapshot of how dathon's checker is organized today. Will grow as the codebase
 flowchart LR
     A[".dpy source"] --> B["ruff_python_parser"]
     B --> C["Python AST<br/>(ModModule)"]
-    C --> D["walk<br/>find top-level classes"]
-    D --> E["schema<br/>recognize Schema classes,<br/>extract fields"]
-    E --> F["types<br/>resolve field annotations<br/>to ColumnType"]
-    F --> G["main<br/>print summary +<br/>format diagnostics"]
+    C --> W["walk<br/>top-level classes<br/>+ top-level functions"]
+    W --> S["schema<br/>Schema classes,<br/>field resolution"]
+    W --> D["dataframe<br/>DataFrame[X] slot<br/>recognition"]
+    S --> T["types<br/>ColumnType vocab"]
+    S --> M["main<br/>resolve, render,<br/>format diagnostics"]
+    D --> M
+    T --> M
 ```
 
 Today the checker is a single linear pass: parse → discover classes → recognize schemas → print. No type checking, no inference, no transpiler — those come later. The pipeline will fan out (more walks, more analyzers) but the basic shape stays.
@@ -47,6 +50,14 @@ Recognizes which discovered classes are dathon schemas (bases include `Schema`) 
 ### `types`
 
 The atom layer of dathon's type system. Today: one enum, `ColumnType`, with the v0.1 vocabulary (`int`, `long`, `double`, `string`, `bool`, `date`, `timestamp`). `from_name` parses user-written source forms; `as_str` / `Display` produce the canonical printable name. Mapping to Spark types (`IntegerType`, etc.) lives here when we get to the transpiler.
+
+### `dataframe`
+
+Recognizes DataFrame-typed annotations on function signatures. `recognize` classifies an annotation expression as `Untyped` (bare `DataFrame`), `Typed("Foo")` (`DataFrame[Foo]` with a bare-name schema), or `NonBareName` (`DataFrame[list[str]]`, etc.). `typed_slots` walks a function's parameters and return type and returns a list of every DataFrame-touching slot.
+
+`DataFrame` is currently matched by literal name only — once import resolution lands, aliased imports (`from pyspark.sql import DataFrame as DF`) will be handled here.
+
+Operations on DataFrames (select, filter, join, …) will grow into this module in future iterations.
 
 ### `main`
 

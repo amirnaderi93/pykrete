@@ -1,4 +1,4 @@
-# Probes class + schema discovery + field-type resolution.
+# Probes schema + field-type + DataFrame[Schema] recognition.
 
 class Orders(Schema):
     place_code: int
@@ -22,3 +22,23 @@ class BadSchema(Schema):
     valid_field: int
     unknown_field: WeirdType
     subscripted: list[str]
+
+
+def prepare_orders(raw: DataFrame[RawOrders]) -> DataFrame[Orders]:
+    return raw
+
+
+def join_them(left: DataFrame[Orders], right: DataFrame[RawOrders]) -> DataFrame[Orders]:
+    return left
+
+
+def bad_fn(x: DataFrame[NotAKnownSchema]) -> DataFrame[Orders]:
+    return x
+
+
+def weird_fn(y: DataFrame[list[str]]) -> DataFrame:
+    return y
+
+
+def no_df_annotations(z: int) -> int:
+    return z

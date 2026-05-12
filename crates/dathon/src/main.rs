@@ -1,19 +1,22 @@
+mod dataframe;
 mod diagnostics;
 mod schema;
 mod types;
 mod walk;
 
 use std::env;
+use std::fmt::Write as _;
 use std::fs;
 use std::process::ExitCode;
 
 use ruff_source_file::LineIndex;
 use ruff_text_size::Ranged;
 
+use crate::dataframe::{DataFrameAnnotation, SlotLabel, typed_slots};
 use crate::diagnostics::{Diagnostic, Severity};
-use crate::schema::{FieldResolution, discover_schemas};
+use crate::schema::{FieldResolution, Schema, discover_schemas};
 use crate::types::COLUMN_TYPE_NAMES;
-use crate::walk::discover_top_level_classes;
+use crate::walk::{discover_top_level_classes, discover_top_level_functions};
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
@@ -53,64 +56,46 @@ fn main() -> ExitCode {
     let module = parsed.syntax();
     let classes = discover_top_level_classes(module);
     let schemas = discover_schemas(&classes);
+    let functions = discover_top_level_functions(module);
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
 
+    // Body is rendered into a buffer so the summary can be printed first, with
+    // counts (including diagnostic count) computed before any output happens.
+    let mut body = String::new();
+
     for schema in &schemas {
-        let lc = line_index.line_column(schema.class.def.range.start(), &source);
-        println!(
-            "  {}:{}  schema {}",
-            lc.line.get(),
-            lc.column.get(),
-            schema.name(),
-        );
-        for field in schema.fields() {
-            let ann_range = field.annotation.range();
-            let raw_text = &source[ann_range];
-            match field.resolve() {
-                FieldResolution::Resolved(ct) => {
-                    println!("          {}: {}", field.name, ct);
-                }
-                FieldResolution::UnknownType { name } => {
-                    println!("          {}: {}  (unresolved)", field.name, raw_text);
-                    diagnostics.push(Diagnostic::at(
-                        Severity::Error,
-                        "D0010",
-                        format!(
-                            "Unknown column type '{name}'. Expected one of: {COLUMN_TYPE_NAMES}.",
-                        ),
-                        ann_range.start(),
-                        &source,
-                        &line_index,
-                    ));
-                }
-                FieldResolution::NotABareName => {
-                    println!("          {}: {}  (unresolved)", field.name, raw_text);
-                    diagnostics.push(Diagnostic::at(
-                        Severity::Error,
-                        "D0011",
-                        format!(
-                            "Column type '{raw_text}' is not a bare name. \
-                             Subscripted/complex column types are not yet \
-                             supported in v0.1. Use one of: {COLUMN_TYPE_NAMES}.",
-                        ),
-                        ann_range.start(),
-                        &source,
-                        &line_index,
-                    ));
-                }
-            }
-        }
+        render_schema(schema, &source, &line_index, &mut body, &mut diagnostics);
     }
 
-    // Summary header — printed AFTER schema bodies so it can include diagnostic count.
-    // Top-of-output would be nicer; we'll fix output ordering when the pipeline grows.
+    let typed_functions: Vec<_> = functions
+        .iter()
+        .map(|f| (f, typed_slots(f)))
+        .filter(|(_, slots)| !slots.is_empty())
+        .collect();
+
+    for (func, slots) in &typed_functions {
+        render_function(
+            func,
+            slots,
+            &schemas,
+            &source,
+            &line_index,
+            &mut body,
+            &mut diagnostics,
+        );
+    }
+
     println!(
-        "\n{}: parsed OK — {} top-level class(es), {} schema(s), {} issue(s)",
+        "{}: parsed OK — {} schema(s), {} typed function(s), {} issue(s)",
         path,
-        classes.len(),
         schemas.len(),
+        typed_functions.len(),
         diagnostics.len(),
     );
+    if !body.is_empty() {
+        println!();
+        print!("{body}");
+    }
 
     if !diagnostics.is_empty() {
         eprintln!();
@@ -121,4 +106,119 @@ fn main() -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+fn render_schema(
+    schema: &Schema<'_>,
+    source: &str,
+    line_index: &LineIndex,
+    out: &mut String,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let lc = line_index.line_column(schema.class.def.range.start(), source);
+    writeln!(
+        out,
+        "  {}:{}  schema {}",
+        lc.line.get(),
+        lc.column.get(),
+        schema.name(),
+    )
+    .unwrap();
+    for field in schema.fields() {
+        let ann_range = field.annotation.range();
+        let raw_text = &source[ann_range];
+        match field.resolve() {
+            FieldResolution::Resolved(ct) => {
+                writeln!(out, "          {}: {}", field.name, ct).unwrap();
+            }
+            FieldResolution::UnknownType { name } => {
+                writeln!(out, "          {}: {}  (unresolved)", field.name, raw_text).unwrap();
+                diagnostics.push(Diagnostic::at(
+                    Severity::Error,
+                    "D0010",
+                    format!(
+                        "Unknown column type '{name}'. Expected one of: {COLUMN_TYPE_NAMES}.",
+                    ),
+                    ann_range.start(),
+                    source,
+                    line_index,
+                ));
+            }
+            FieldResolution::NotABareName => {
+                writeln!(out, "          {}: {}  (unresolved)", field.name, raw_text).unwrap();
+                diagnostics.push(Diagnostic::at(
+                    Severity::Error,
+                    "D0011",
+                    format!(
+                        "Column type '{raw_text}' is not a bare name. \
+                         Subscripted/complex column types are not yet \
+                         supported in v0.1. Use one of: {COLUMN_TYPE_NAMES}.",
+                    ),
+                    ann_range.start(),
+                    source,
+                    line_index,
+                ));
+            }
+        }
+    }
+}
+
+fn render_function(
+    func: &crate::walk::DiscoveredFunction<'_>,
+    slots: &[crate::dataframe::TypedSlot<'_>],
+    schemas: &[Schema<'_>],
+    source: &str,
+    line_index: &LineIndex,
+    out: &mut String,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let lc = line_index.line_column(func.def.range.start(), source);
+    writeln!(out, "  {}:{}  fn {}", lc.line.get(), lc.column.get(), func.name()).unwrap();
+
+    for slot in slots {
+        let ann_range = slot.annotation.range();
+        let raw_text = &source[ann_range];
+        let prefix = match slot.label {
+            SlotLabel::Param(name) => format!("          {name}: "),
+            SlotLabel::Return => "          -> ".to_string(),
+        };
+
+        match slot.kind {
+            DataFrameAnnotation::Typed(name) => {
+                if schemas.iter().any(|s| s.name() == name) {
+                    writeln!(out, "{prefix}DataFrame[{name}]").unwrap();
+                } else {
+                    writeln!(out, "{prefix}{raw_text}  (unresolved)").unwrap();
+                    diagnostics.push(Diagnostic::at(
+                        Severity::Error,
+                        "D0020",
+                        format!(
+                            "Unknown schema '{name}' referenced in DataFrame[…]. \
+                             Declare it as a class extending Schema.",
+                        ),
+                        ann_range.start(),
+                        source,
+                        line_index,
+                    ));
+                }
+            }
+            DataFrameAnnotation::Untyped => {
+                writeln!(out, "{prefix}DataFrame  (untyped)").unwrap();
+            }
+            DataFrameAnnotation::NonBareName => {
+                writeln!(out, "{prefix}{raw_text}  (unresolved)").unwrap();
+                diagnostics.push(Diagnostic::at(
+                    Severity::Error,
+                    "D0021",
+                    format!(
+                        "DataFrame schema must be a bare name; got '{raw_text}'. \
+                         Subscripted/complex schema expressions are not supported in v0.1.",
+                    ),
+                    ann_range.start(),
+                    source,
+                    line_index,
+                ));
+            }
+        }
+    }
 }
