@@ -1,4 +1,4 @@
-# Probes class + schema discovery.
+# Probes class + schema discovery + field-type resolution.
 
 class Orders(Schema):
     place_code: int
@@ -6,8 +6,8 @@ class Orders(Schema):
 
 class RawOrders(Schema):
     ProductCode: int
-    UnitPrice: float
-    CreatedAt: datetime
+    UnitPrice: double
+    CreatedAt: timestamp
 
 class NotASchema:
     foo: int
@@ -17,3 +17,8 @@ class WithMixin(Schema, Mixin):
 
 class WithGeneric(Generic[T]):
     pass
+
+class BadSchema(Schema):
+    valid_field: int
+    unknown_field: WeirdType
+    subscripted: list[str]

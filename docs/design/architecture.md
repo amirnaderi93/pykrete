@@ -10,7 +10,8 @@ flowchart LR
     B --> C["Python AST<br/>(ModModule)"]
     C --> D["walk<br/>find top-level classes"]
     D --> E["schema<br/>recognize Schema classes,<br/>extract fields"]
-    E --> F["main<br/>print summary +<br/>format diagnostics"]
+    E --> F["types<br/>resolve field annotations<br/>to ColumnType"]
+    F --> G["main<br/>print summary +<br/>format diagnostics"]
 ```
 
 Today the checker is a single linear pass: parse → discover classes → recognize schemas → print. No type checking, no inference, no transpiler — those come later. The pipeline will fan out (more walks, more analyzers) but the basic shape stays.
@@ -41,7 +42,11 @@ Read-only AST walks. Today only `discover_top_level_classes`. Will grow to find 
 
 ### `schema`
 
-Recognizes which discovered classes are dathon schemas (bases include `Schema`) and exposes their field annotations as `(name, &Expr)` pairs. The field's *type* is currently left as an unresolved AST expression — resolving annotations to concrete column types is a later pass.
+Recognizes which discovered classes are dathon schemas (bases include `Schema`) and exposes their field annotations as `(name, &Expr)` pairs. Field resolution lives here too: `SchemaField::resolve()` returns a `FieldResolution` enum (resolved column type, unknown type name, or non-bare-name) that the driver maps to diagnostics.
+
+### `types`
+
+The atom layer of dathon's type system. Today: one enum, `ColumnType`, with the v0.1 vocabulary (`int`, `long`, `double`, `string`, `bool`, `date`, `timestamp`). `from_name` parses user-written source forms; `as_str` / `Display` produce the canonical printable name. Mapping to Spark types (`IntegerType`, etc.) lives here when we get to the transpiler.
 
 ### `main`
 
