@@ -593,7 +593,42 @@ fn analyze_method_call<'a>(
     if let Some(kind) = two_df_method(method) {
         return handle_two_df_method(kind, call, &receiver, ctx, source, line_index, diagnostics);
     }
+    // PySpark has a handful of methods that don't alter the receiver's
+    // schema — caching hints, partitioning hints, materialization
+    // points. Treat them as pass-throughs so a chain like
+    // `raw.persist().filter(col("x"))` keeps tracking the schema
+    // instead of dying at `.persist()`.
+    if is_pass_through_method(method) {
+        return Some(receiver);
+    }
     None
+}
+
+/// Methods that return a DataFrame with the same schema as the
+/// receiver. Real PySpark code uses these all the time for caching,
+/// partitioning, and materialization hints; before this iteration
+/// each one quietly broke schema tracking the moment it appeared in a
+/// chain.
+fn is_pass_through_method(method: &str) -> bool {
+    matches!(
+        method,
+        "persist"
+            | "cache"
+            | "unpersist"
+            | "checkpoint"
+            | "localCheckpoint"
+            | "coalesce"
+            | "repartition"
+            | "repartitionByRange"
+            | "hint"
+            | "sortWithinPartitions"
+            | "orderBy"
+            | "sort"
+            | "limit"
+            | "distinct"
+            | "sample"
+            | "alias"
+    )
 }
 
 /// Resolve a method call on a class instance — `dal.read(...)`.
