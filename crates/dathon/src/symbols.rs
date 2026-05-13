@@ -242,28 +242,51 @@ pub fn definition(source: &str, line: usize, column: usize) -> Option<Span> {
     let parsed = ruff_python_parser::parse_module(source).ok()?;
     let module = parsed.syntax();
     let line_index = LineIndex::from_source_text(source);
-    let offset = offset_from_line_column(&line_index, source, line, column)?;
-
     let classes = discover_top_level_classes(module);
     let schemas = discover_schemas(&classes);
+    let registry = Registry::build(module);
+    definition_with_scope(
+        module,
+        source,
+        &line_index,
+        line,
+        column,
+        &schemas,
+        &registry,
+    )
+}
+
+/// Project-aware go-to-definition: takes the focus file's parsed
+/// module plus pre-resolved visible schemas + registry. Used by the
+/// LSP layer so cross-file `DataFrame[X]` references jump to the
+/// class declaration even when `X` lives in a sibling file.
+pub(crate) fn definition_with_scope<'a>(
+    module: &'a ruff_python_ast::ModModule,
+    source: &str,
+    line_index: &LineIndex,
+    line: usize,
+    column: usize,
+    schemas: &[Schema<'a>],
+    registry: &Registry<'a>,
+) -> Option<Span> {
+    let offset = offset_from_line_column(line_index, source, line, column)?;
     let functions = discover_top_level_functions(module);
 
-    if let Some(target) = definition_on_schema_declaration(offset, &schemas) {
-        return Some(span_from_range(target, source, &line_index));
+    if let Some(target) = definition_on_schema_declaration(offset, schemas) {
+        return Some(span_from_range(target, source, line_index));
     }
     if let Some(target) =
-        definition_on_schema_reference_in_function_signature(offset, &functions, &schemas)
+        definition_on_schema_reference_in_function_signature(offset, &functions, schemas)
     {
-        return Some(span_from_range(target, source, &line_index));
+        return Some(span_from_range(target, source, line_index));
     }
-    if let Some(target) = definition_on_schema_reference_in_schema_field(offset, &schemas) {
-        return Some(span_from_range(target, source, &line_index));
+    if let Some(target) = definition_on_schema_reference_in_schema_field(offset, schemas) {
+        return Some(span_from_range(target, source, line_index));
     }
-    let registry = Registry::build(module);
     let traces =
-        crate::collect_module_column_refs(&functions, source, &line_index, &schemas, &registry);
+        crate::collect_module_column_refs(&functions, source, line_index, schemas, registry);
     if let Some(target) = definition_on_column_ref(offset, &traces) {
-        return Some(span_from_range(target, source, &line_index));
+        return Some(span_from_range(target, source, line_index));
     }
     None
 }

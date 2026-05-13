@@ -58,38 +58,60 @@ pub fn hover(source: &str, line: usize, column: usize) -> Option<HoverInfo> {
     let parsed = ruff_python_parser::parse_module(source).ok()?;
     let module = parsed.syntax();
     let line_index = LineIndex::from_source_text(source);
-    let offset = offset_from_line_column(&line_index, source, line, column)?;
 
     let classes = discover_top_level_classes(module);
     let schemas = discover_schemas(&classes);
+    let registry = Registry::build(module);
+    hover_with_scope(
+        module,
+        source,
+        &line_index,
+        line,
+        column,
+        &schemas,
+        &registry,
+    )
+}
+
+/// Project-aware hover: takes the focus file's parsed module plus a
+/// pre-resolved `visible_schemas` + `registry` that may include
+/// declarations from sibling files (via `from … import …` clauses).
+/// Used by the LSP layer so cross-file Schema references resolve in
+/// hover popups the same way they do in diagnostics.
+pub(crate) fn hover_with_scope<'a>(
+    module: &'a ruff_python_ast::ModModule,
+    source: &str,
+    line_index: &LineIndex,
+    line: usize,
+    column: usize,
+    schemas: &[Schema<'a>],
+    registry: &crate::registry::Registry<'a>,
+) -> Option<HoverInfo> {
+    let offset = offset_from_line_column(line_index, source, line, column)?;
     let functions = discover_top_level_functions(module);
 
-    if let Some(info) = hover_on_schema_declaration(offset, &schemas) {
+    if let Some(info) = hover_on_schema_declaration(offset, schemas) {
         return Some(info);
     }
-    if let Some(info) = hover_on_typed_function_declaration(offset, &functions, &schemas) {
+    if let Some(info) = hover_on_typed_function_declaration(offset, &functions, schemas) {
         return Some(info);
     }
-    if let Some(info) =
-        hover_on_schema_reference_in_function_signature(offset, &functions, &schemas)
+    if let Some(info) = hover_on_schema_reference_in_function_signature(offset, &functions, schemas)
     {
         return Some(info);
     }
-    if let Some(info) = hover_on_schema_reference_in_schema_field(offset, &schemas) {
+    if let Some(info) = hover_on_schema_reference_in_schema_field(offset, schemas) {
         return Some(info);
     }
-    // Body-context-aware cases: cursor on a `col("foo")` literal, an
-    // `x = raw.select(...)` assignment target, or a use of `x`
-    // elsewhere in the body. Building the registry + running body
-    // analysis is the expensive path, so we do it once at the end
-    // after the cheap AST-lookup cases above have all failed.
-    let registry = Registry::build(module);
+    // Body-context-aware cases: col() literal, `x = raw.select(...)`
+    // assignment target, or a use of `x` elsewhere in the body. Build
+    // the body traces once and feed both consumers.
     let (col_traces, local_bindings) =
-        crate::collect_module_traces(&functions, source, &line_index, &schemas, &registry);
-    if let Some(info) = hover_on_column_ref(offset, &col_traces, &schemas) {
+        crate::collect_module_traces(&functions, source, line_index, schemas, registry);
+    if let Some(info) = hover_on_column_ref(offset, &col_traces, schemas) {
         return Some(info);
     }
-    if let Some(info) = hover_on_local_binding(offset, &local_bindings, &functions, &schemas) {
+    if let Some(info) = hover_on_local_binding(offset, &local_bindings, &functions, schemas) {
         return Some(info);
     }
     None
