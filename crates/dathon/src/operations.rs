@@ -1194,14 +1194,29 @@ fn col_reference(expr: &Expr) -> Option<(&str, TextRange)> {
     Some((lit.value.to_str(), lit.range()))
 }
 
-/// PySpark aggregate / column-y functions that take string-literal arguments
-/// as column names (in addition to `col(...)` expressions). Used so that
-/// `F.sum("price")` is recognized as a column reference to `"price"`.
+/// PySpark functions where every positional **string-literal** argument
+/// is a column name (mixed args with int literals or column expressions
+/// are fine — those don't match the string-literal arm). Used so that
+/// `F.sum("price")`, `F.add_months("checkin", 1)`, `F.lower("city")`,
+/// `F.coalesce("a", "b")`, etc. are recognized as column references and
+/// checked against the surrounding schema.
 ///
-/// Conservatively scoped to functions where ALL positional string-lit args
-/// are column names. Functions like `F.lit("foo")` (value, not column) are
-/// excluded.
+/// Iteration 37 widened this from the aggregate-only list to cover the
+/// rest of the column-y subset of `pyspark.sql.functions`. The rule
+/// for adding a function: every position where a string literal is
+/// LEGAL must mean "column name." Functions that take a value-shaped
+/// string literal in any position are deliberately omitted to avoid
+/// false positives:
+///
+/// - `lit("default")`, `expr("a > 1")` — string is a value / SQL.
+/// - `date_format(col, "yyyy-MM-dd")` — second string is a format.
+/// - `regexp_replace`, `regexp_extract`, `split`, `to_date`,
+///   `to_timestamp`, `from_utc_timestamp`, `from_unixtime`,
+///   `unix_timestamp`, `date_trunc`, `trunc`, `next_day`, `lpad`,
+///   `rpad`, `translate`, `locate`, `instr`, `concat_ws`, `format_string`,
+///   `substring_index`, `cast`, `when` — mixed.
 const COLUMN_REF_FUNCTIONS: &[&str] = &[
+    // Aggregation — single column or all-column args.
     "sum",
     "avg",
     "mean",
@@ -1209,17 +1224,157 @@ const COLUMN_REF_FUNCTIONS: &[&str] = &[
     "min",
     "count",
     "countDistinct",
+    "approx_count_distinct",
     "median",
+    "percentile",
     "percentile_approx",
     "var_pop",
     "var_samp",
+    "variance",
     "stddev",
+    "stddev_pop",
+    "stddev_samp",
     "first",
+    "first_value",
     "last",
+    "last_value",
     "max_by",
     "min_by",
     "collect_list",
     "collect_set",
+    "skewness",
+    "kurtosis",
+    "corr",
+    "covar_pop",
+    "covar_samp",
+    "grouping",
+    // Window
+    "row_number",
+    "rank",
+    "dense_rank",
+    "percent_rank",
+    "cume_dist",
+    "ntile",
+    "lag",
+    "lead",
+    "nth_value",
+    // Date / time — single-column extractors and arithmetic helpers
+    // where any non-column arg is an int (not a string).
+    "year",
+    "month",
+    "day",
+    "dayofmonth",
+    "dayofweek",
+    "dayofyear",
+    "hour",
+    "minute",
+    "second",
+    "weekofyear",
+    "quarter",
+    "last_day",
+    "date_add",
+    "date_sub",
+    "add_months",
+    "months_between",
+    "datediff",
+    // String — single-column or all-column-arg helpers
+    "length",
+    "char_length",
+    "character_length",
+    "lower",
+    "upper",
+    "initcap",
+    "trim",
+    "ltrim",
+    "rtrim",
+    "reverse",
+    "ascii",
+    "soundex",
+    "base64",
+    "unbase64",
+    "concat",
+    // Math — single-column or column + int helpers
+    "abs",
+    "ceil",
+    "ceiling",
+    "floor",
+    "round",
+    "bround",
+    "sqrt",
+    "exp",
+    "ln",
+    "log",
+    "log2",
+    "log10",
+    "log1p",
+    "expm1",
+    "pow",
+    "power",
+    "signum",
+    "sin",
+    "cos",
+    "tan",
+    "asin",
+    "acos",
+    "atan",
+    "atan2",
+    "sinh",
+    "cosh",
+    "tanh",
+    "asinh",
+    "acosh",
+    "atanh",
+    "degrees",
+    "radians",
+    "factorial",
+    "hypot",
+    "negative",
+    "positive",
+    // Null handling — every string arg is a column name.
+    "isnan",
+    "isnull",
+    "coalesce",
+    "nanvl",
+    "nullif",
+    "ifnull",
+    "nvl",
+    "nvl2",
+    "least",
+    "greatest",
+    // Hash / misc column-y — every string is a column.
+    "hash",
+    "md5",
+    "sha1",
+    "sha2",
+    "crc32",
+    "monotonically_increasing_id",
+    "spark_partition_id",
+    "input_file_name",
+    "asc",
+    "asc_nulls_first",
+    "asc_nulls_last",
+    "desc",
+    "desc_nulls_first",
+    "desc_nulls_last",
+    "col",
+    "column",
+    "size",
+    "sort_array",
+    "array",
+    "array_distinct",
+    "array_except",
+    "array_intersect",
+    "array_union",
+    "array_max",
+    "array_min",
+    "array_sort",
+    "explode",
+    "explode_outer",
+    "posexplode",
+    "posexplode_outer",
+    "map_keys",
+    "map_values",
+    "map_entries",
 ];
 
 fn collect_col_refs<'a>(
