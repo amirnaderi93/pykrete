@@ -15,7 +15,7 @@ fn function_typed_with_known_schema_is_counted_as_a_typed_function() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
+    place_code: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     pass
@@ -110,10 +110,10 @@ fn multiple_typed_parameters_are_all_recognized() {
     let result = check(
         r#"
 class A(Schema):
-    x: int
+    x: "int"
 
 class B(Schema):
-    y: int
+    y: "int"
 
 def join_them(left: DataFrame[A], right: DataFrame[B]) -> DataFrame[A]:
     pass

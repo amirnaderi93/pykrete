@@ -21,8 +21,8 @@ fn with_orders(body: &str) -> String {
     format!(
         r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
 {body}

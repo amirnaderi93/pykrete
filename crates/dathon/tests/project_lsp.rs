@@ -30,8 +30,8 @@ fn hover_on_imported_schema_reference_resolves_across_files() {
             "/proj/schemas.dpy",
             r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 "#,
         ),
         (
@@ -62,10 +62,10 @@ fn completion_inside_dataframe_subscript_lists_imported_schemas() {
             "/proj/schemas.dpy",
             r#"
 class Orders(Schema):
-    x: int
+    x: "int"
 
 class Returns(Schema):
-    y: int
+    y: "int"
 "#,
         ),
         (
@@ -95,7 +95,7 @@ fn goto_definition_on_imported_schema_returns_span_in_focus_file() {
             "/proj/schemas.dpy",
             r#"
 class Orders(Schema):
-    x: int
+    x: "int"
 "#,
         ),
         (

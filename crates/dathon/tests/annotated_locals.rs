@@ -30,8 +30,8 @@ fn annotated_local_binds_to_the_declared_schema_even_when_RHS_is_opaque() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f() -> DataFrame[Orders]:
     raw: DataFrame[Orders] = external_source()
@@ -47,8 +47,8 @@ fn annotated_local_propagates_to_downstream_chained_operations() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f() -> DataFrame[Orders]:
     raw: DataFrame[Orders] = some_loader()
@@ -65,7 +65,7 @@ fn annotated_local_without_an_RHS_still_binds_the_schema() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
+    place_code: "int"
 
 def f() -> DataFrame:
     raw: DataFrame[Orders]
@@ -121,8 +121,8 @@ fn annotation_does_not_double_check_when_RHS_is_also_a_typed_expression() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(other: DataFrame[Orders]) -> DataFrame:
     raw: DataFrame[Orders] = other.select(col("place_code"))
@@ -139,7 +139,7 @@ fn annotation_with_a_non_DataFrame_type_is_silently_ignored() {
     let result = check(
         r#"
 class Orders(Schema):
-    x: int
+    x: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     threshold: int = 42
@@ -156,7 +156,7 @@ fn body_diagnostics_on_RHS_still_fire_even_when_annotation_is_present() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
+    place_code: "int"
 
 def f(other: DataFrame[Orders]) -> DataFrame:
     raw: DataFrame[Orders] = other.select(col("ghost"))

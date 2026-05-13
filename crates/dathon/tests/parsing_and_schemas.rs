@@ -47,7 +47,7 @@ fn class_extending_Schema_is_recognized_as_a_schema() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
+    place_code: "int"
 "#,
     );
     assert_eq!(result.schema_count, 1);
@@ -60,7 +60,7 @@ fn class_without_Schema_base_is_not_recognized_even_with_annotations() {
     let result = check(
         r#"
 class Orders:
-    place_code: int
+    place_code: "int"
 "#,
     );
     assert_eq!(result.schema_count, 0);
@@ -72,7 +72,7 @@ fn class_with_Schema_and_additional_mixin_is_still_a_schema() {
     let result = check(
         r#"
 class Orders(Schema, Mixin):
-    x: int
+    x: "int"
 "#,
     );
     assert_eq!(result.schema_count, 1);
@@ -85,7 +85,7 @@ fn class_with_subscripted_base_is_not_treated_as_a_schema() {
     let result = check(
         r#"
 class Orders(Generic[T]):
-    x: int
+    x: "int"
 "#,
     );
     assert_eq!(result.schema_count, 0);
@@ -96,13 +96,13 @@ fn multiple_schemas_in_one_file_are_all_recognized() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
+    place_code: "int"
 
 class RawOrders(Schema):
-    ProductCode: int
+    ProductCode: "int"
 
 class NotMe:
-    x: int
+    x: "int"
 "#,
     );
     assert_eq!(result.schema_count, 2);
@@ -118,13 +118,13 @@ fn all_v0_1_atomic_types_resolve_without_diagnostics() {
     let result = check(
         r#"
 class All(Schema):
-    a: int
-    b: long
-    c: double
-    d: string
-    e: bool
-    f: date
-    g: timestamp
+    a: "int"
+    b: "long"
+    c: "double"
+    d: "string"
+    e: "bool"
+    f: "date"
+    g: "timestamp"
 "#,
     );
     assert_count(&result, "D0010", 0);
@@ -163,10 +163,10 @@ fn d0010_fires_once_per_offending_field() {
     let result = check(
         r#"
 class Orders(Schema):
-    a: int
+    a: "int"
     b: WeirdType
     c: AlsoWeird
-    d: long
+    d: "long"
 "#,
     );
     // Two bad fields, two D0010s. The good ones (a, d) are silent.
@@ -215,11 +215,11 @@ fn class_field_typed_with_another_Schema_class_is_resolved_as_nested() {
     let result = check(
         r#"
 class Address(Schema):
-    street: string
-    city: string
+    street: "string"
+    city: "string"
 
 class User(Schema):
-    name: string
+    name: "string"
     address: Address
 "#,
     );
@@ -234,11 +234,11 @@ fn nested_schema_can_appear_before_or_after_its_referencer() {
     let result = check(
         r#"
 class User(Schema):
-    name: string
+    name: "string"
     address: Address
 
 class Address(Schema):
-    street: string
+    street: "string"
 "#,
     );
     assert_no_diagnostics(&result);
@@ -252,7 +252,7 @@ fn d0010_fires_when_nested_class_does_not_extend_Schema() {
     let result = check(
         r#"
 class Foo:
-    x: int
+    x: "int"
 
 class Bar(Schema):
     nested: Foo
@@ -269,14 +269,14 @@ fn deeply_nested_schemas_resolve_independently() {
     let result = check(
         r#"
 class Inner(Schema):
-    leaf: int
+    leaf: "int"
 
 class Middle(Schema):
     inner: Inner
 
 class Outer(Schema):
     middle: Middle
-    label: string
+    label: "string"
 "#,
     );
     assert_no_diagnostics(&result);
@@ -290,10 +290,10 @@ fn nested_schema_field_in_a_function_typed_with_outer_schema_is_recognized() {
     let result = check(
         r#"
 class Address(Schema):
-    street: string
+    street: "string"
 
 class User(Schema):
-    name: string
+    name: "string"
     address: Address
 
 def f(u: DataFrame[User]) -> DataFrame:

@@ -30,7 +30,7 @@ fn from_relative_import_makes_a_schema_visible() {
             "schemas.dpy",
             r#"
 class Orders(Schema):
-    x: int
+    x: "int"
 "#,
         ),
         (
@@ -61,7 +61,7 @@ fn import_as_alias_renames_a_schema_in_the_importing_file() {
             "schemas.dpy",
             r#"
 class Orders(Schema):
-    x: int
+    x: "int"
 "#,
         ),
         (
@@ -98,7 +98,7 @@ fn referencing_a_schema_without_importing_it_now_fires_D0020() {
             "schemas.dpy",
             r#"
 class Orders(Schema):
-    x: int
+    x: "int"
 "#,
         ),
         (
@@ -119,7 +119,7 @@ fn importing_a_name_that_does_not_exist_in_the_target_module_fires_D0071() {
             "schemas.dpy",
             r#"
 class Orders(Schema):
-    x: int
+    x: "int"
 "#,
         ),
         (

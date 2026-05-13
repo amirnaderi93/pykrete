@@ -53,11 +53,27 @@ impl<'ast> SchemaField<'ast> {
     /// annotation name up there.
     pub fn resolve(&self, schemas: &'ast [Schema<'ast>]) -> FieldResolution<'ast> {
         match self.annotation {
+            // String-literal annotation: `EventDate: "timestamp"`. The
+            // dathon column-type vocabulary lives in these strings —
+            // this is the canonical form for atomic column types as of
+            // iteration 41. Plays cleanly with Pylance (a string is a
+            // forward-reference annotation that, paired with the
+            // bundled-typeshed in iteration 42, resolves globally).
+            Expr::StringLiteral(s) => {
+                let name = s.value.to_str();
+                if let Some(ct) = ColumnType::from_name(name) {
+                    FieldResolution::Resolved(ct)
+                } else {
+                    FieldResolution::UnknownType { name }
+                }
+            }
+            // Bare-name annotation: `address: Address`. Used only for
+            // nested-struct references — the name must resolve to a
+            // declared Schema in the current scope. Atomic column-type
+            // names are NOT recognized here anymore; they live in the
+            // string-literal arm above.
             Expr::Name(name) => {
                 let id = name.id.as_str();
-                if let Some(ct) = ColumnType::from_name(id) {
-                    return FieldResolution::Resolved(ct);
-                }
                 if let Some(schema) = schemas.iter().find(|s| s.name() == id) {
                     return FieldResolution::ResolvedNested(schema);
                 }

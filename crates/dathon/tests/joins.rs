@@ -18,12 +18,12 @@ use common::*;
 // Two schemas with one shared field name, used by most tests below.
 const TWO_SCHEMAS: &str = r#"
 class A(Schema):
-    k: int
-    a: int
+    k: "int"
+    a: "int"
 
 class B(Schema):
-    k: int
-    b: int
+    k: "int"
+    b: "int"
 "#;
 
 // ===========================================================================
@@ -72,14 +72,14 @@ fn join_with_list_of_keys_is_clean_when_all_keys_exist_on_both_sides() {
     let result = check(
         r#"
 class A(Schema):
-    k1: int
-    k2: int
-    a: int
+    k1: "int"
+    k2: "int"
+    a: "int"
 
 class B(Schema):
-    k1: int
-    k2: int
-    b: int
+    k1: "int"
+    k2: "int"
+    b: "int"
 
 def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
     return a.join(b, on=["k1", "k2"])
@@ -97,11 +97,11 @@ fn d0060_fires_when_join_key_is_missing_from_left_side() {
     let result = check(
         r#"
 class A(Schema):
-    a: int
+    a: "int"
 
 class B(Schema):
-    k: int
-    b: int
+    k: "int"
+    b: "int"
 
 def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
     return a.join(b, on="k")
@@ -117,11 +117,11 @@ fn d0060_fires_when_join_key_is_missing_from_right_side() {
     let result = check(
         r#"
 class A(Schema):
-    k: int
-    a: int
+    k: "int"
+    a: "int"
 
 class B(Schema):
-    b: int
+    b: "int"
 
 def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
     return a.join(b, on="k")
@@ -137,11 +137,11 @@ fn d0060_fires_for_each_missing_key_in_a_list() {
     let result = check(
         r#"
 class A(Schema):
-    k1: int
-    k2: int
+    k1: "int"
+    k2: "int"
 
 class B(Schema):
-    k1: int
+    k1: "int"
 
 def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
     return a.join(b, on=["k1", "k2"])
@@ -205,12 +205,12 @@ fn crossJoin_result_schema_concatenates_both_sides_without_a_key_check() {
     let result = check(
         r#"
 class A(Schema):
-    a1: int
-    a2: int
+    a1: "int"
+    a2: "int"
 
 class B(Schema):
-    b1: int
-    b2: int
+    b1: "int"
+    b2: "int"
 
 def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
     return a.crossJoin(b).select(col("a1"), col("a2"), col("b1"), col("b2"))
@@ -225,10 +225,10 @@ fn crossJoin_result_excludes_columns_present_in_neither_side() {
     let result = check(
         r#"
 class A(Schema):
-    a1: int
+    a1: "int"
 
 class B(Schema):
-    b1: int
+    b1: "int"
 
 def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
     return a.crossJoin(b).select(col("c1"))
@@ -244,17 +244,17 @@ fn join_result_schema_feeds_into_return_type_validation() {
     let result = check(
         r#"
 class A(Schema):
-    k: int
-    a: int
+    k: "int"
+    a: "int"
 
 class B(Schema):
-    k: int
-    b: int
+    k: "int"
+    b: "int"
 
 class Joined(Schema):
-    k: int
-    a: int
-    b: int
+    k: "int"
+    a: "int"
+    b: "int"
 
 def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame[Joined]:
     return a.join(b, on="k")
@@ -269,16 +269,16 @@ fn join_result_schema_feeds_into_return_type_mismatch_when_wrong() {
     let result = check(
         r#"
 class A(Schema):
-    k: int
-    a: int
+    k: "int"
+    a: "int"
 
 class B(Schema):
-    k: int
-    b: int
+    k: "int"
+    b: "int"
 
 class Wrong(Schema):
-    k: int
-    a: int
+    k: "int"
+    a: "int"
 
 def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame[Wrong]:
     return a.join(b, on="k")

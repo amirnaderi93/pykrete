@@ -31,8 +31,8 @@ fn group_by_then_agg_with_col_ref_is_clean() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame:
     return raw.groupBy("place_code").agg(F.sum(col("price")).alias("total"))
@@ -48,8 +48,8 @@ fn group_by_then_agg_with_string_arg_is_clean() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame:
     return raw.groupBy("place_code").agg(F.sum("price").alias("total"))
@@ -64,8 +64,8 @@ fn d0030_fires_when_agg_arg_references_an_unknown_column() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame:
     return raw.groupBy("place_code").agg(F.sum("priec").alias("total"))
@@ -82,7 +82,7 @@ fn d0030_fires_when_group_key_references_an_unknown_column() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
+    place_code: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame:
     return raw.groupBy("not_a_column").agg(F.count("place_code").alias("n"))
@@ -104,8 +104,8 @@ fn agg_result_schema_is_keys_plus_aliased_aggregates() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame:
     grouped = raw.groupBy("place_code").agg(
@@ -123,8 +123,8 @@ fn agg_result_excludes_columns_that_were_not_aggregated_or_grouped() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame:
     grouped = raw.groupBy("place_code").agg(F.sum("price").alias("total"))
@@ -142,9 +142,9 @@ fn agg_with_multiple_keys_produces_keys_in_order() {
     let result = check(
         r#"
 class Orders(Schema):
-    city: string
-    place_code: int
-    price: int
+    city: "string"
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame:
     return raw.groupBy("city", "place_code").agg(
@@ -162,8 +162,8 @@ fn agg_on_a_non_grouped_DataFrame_produces_just_the_aliases() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame:
     return raw.agg(F.sum("price").alias("total")).select(col("total"))
@@ -181,12 +181,12 @@ fn agg_result_matches_declared_return_schema() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 class Summary(Schema):
-    place_code: int
-    total: int
+    place_code: "int"
+    total: "int"
 
 def summarize(raw: DataFrame[Orders]) -> DataFrame[Summary]:
     return raw.groupBy("place_code").agg(F.sum("price").alias("total"))
@@ -202,12 +202,12 @@ fn d0050_fires_when_agg_result_mismatches_declared_return_schema() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 class Summary(Schema):
-    place_code: int
-    total: int
+    place_code: "int"
+    total: "int"
 
 def summarize(raw: DataFrame[Orders]) -> DataFrame[Summary]:
     return raw.groupBy("place_code").agg(F.sum("price").alias("wrong_name"))
@@ -228,8 +228,8 @@ fn filter_after_groupBy_agg_runs_against_the_agg_result_schema() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame:
     return raw.groupBy("place_code").agg(
@@ -245,8 +245,8 @@ fn filter_after_groupBy_agg_catches_typo_against_the_agg_result_schema() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame:
     return raw.groupBy("place_code").agg(
