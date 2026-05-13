@@ -4,7 +4,7 @@
 //! Format mirrors TypeScript: `path:line:col - {severity} {code}: {message}`.
 
 use ruff_source_file::LineIndex;
-use ruff_text_size::TextSize;
+use ruff_text_size::{TextRange, TextSize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
@@ -29,9 +29,14 @@ pub struct Diagnostic {
     pub message: String,
     pub line: usize,
     pub column: usize,
+    pub end_line: usize,
+    pub end_column: usize,
 }
 
 impl Diagnostic {
+    /// Build a diagnostic anchored at a single source offset. End position
+    /// equals start — produces a zero-width range. Prefer `at_range` when
+    /// the offending token's extent is known.
     pub fn at(
         severity: Severity,
         code: &'static str,
@@ -40,13 +45,37 @@ impl Diagnostic {
         source: &str,
         line_index: &LineIndex,
     ) -> Self {
-        let lc = line_index.line_column(offset, source);
+        Self::at_range(
+            severity,
+            code,
+            message,
+            TextRange::empty(offset),
+            source,
+            line_index,
+        )
+    }
+
+    /// Build a diagnostic that spans the given source range. The CLI still
+    /// prints only the start position, but LSP clients use the end to
+    /// underline the entire offending token.
+    pub fn at_range(
+        severity: Severity,
+        code: &'static str,
+        message: impl Into<String>,
+        range: TextRange,
+        source: &str,
+        line_index: &LineIndex,
+    ) -> Self {
+        let start = line_index.line_column(range.start(), source);
+        let end = line_index.line_column(range.end(), source);
         Self {
             severity,
             code,
             message: message.into(),
-            line: lc.line.get(),
-            column: lc.column.get(),
+            line: start.line.get(),
+            column: start.column.get(),
+            end_line: end.line.get(),
+            end_column: end.column.get(),
         }
     }
 

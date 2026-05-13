@@ -210,17 +210,18 @@ fn uri_to_path(uri: &Url) -> String {
 }
 
 /// Translate dathon's diagnostic format into LSP's. dathon's positions are
-/// 1-indexed; LSP is 0-indexed. The diagnostic carries only a start point;
-/// we emit a zero-width range and let the editor extend it to the word at
-/// the position.
+/// 1-indexed; LSP is 0-indexed. The diagnostic carries a start and end
+/// position so editors can underline the entire offending token.
 pub fn to_lsp_diagnostic(d: &dathon::diagnostics::Diagnostic) -> Diagnostic {
-    let line = d.line.saturating_sub(1) as u32;
-    let character = d.column.saturating_sub(1) as u32;
-    let position = Position { line, character };
-    let range = Range {
-        start: position,
-        end: position,
+    let start = Position {
+        line: d.line.saturating_sub(1) as u32,
+        character: d.column.saturating_sub(1) as u32,
     };
+    let end = Position {
+        line: d.end_line.saturating_sub(1) as u32,
+        character: d.end_column.saturating_sub(1) as u32,
+    };
+    let range = Range { start, end };
     Diagnostic {
         range,
         severity: Some(match d.severity {
@@ -247,9 +248,9 @@ mod tests {
     /// constructor (which would require pulling in `ruff_source_file` just
     /// for the LineIndex). The conversion code under test only reads
     /// these fields anyway.
-    fn dathon_diag_at(
-        line: usize,
-        column: usize,
+    fn dathon_diag(
+        start: (usize, usize),
+        end: (usize, usize),
         code: &'static str,
         msg: &str,
     ) -> DathonDiagnostic {
@@ -257,33 +258,37 @@ mod tests {
             severity: Severity::Error,
             code,
             message: msg.to_string(),
-            line,
-            column,
+            line: start.0,
+            column: start.1,
+            end_line: end.0,
+            end_column: end.1,
         }
     }
 
     #[test]
     fn dathon_line_column_become_zero_indexed_lsp_position() {
         // dathon: line=3, column=5 (1-indexed) → LSP: line=2, character=4
-        let d = dathon_diag_at(3, 5, "D0001", "test");
+        let d = dathon_diag((3, 5), (3, 10), "D0001", "test");
         let lsp = to_lsp_diagnostic(&d);
         assert_eq!(lsp.range.start.line, 2);
         assert_eq!(lsp.range.start.character, 4);
     }
 
     #[test]
-    fn lsp_diagnostic_range_is_zero_width_at_the_start_position() {
-        // dathon only carries a start position. The editor extends the
-        // underline to the word boundary on its end, so a zero-width range
-        // is the right thing to send.
-        let d = dathon_diag_at(1, 1, "D0001", "test");
+    fn lsp_diagnostic_range_spans_to_end_position() {
+        // A diagnostic that covers `"BadColumn"` (10 chars including quotes)
+        // should produce a range whose end is offset by the token length.
+        let d = dathon_diag((2, 5), (2, 15), "D0030", "test");
         let lsp = to_lsp_diagnostic(&d);
-        assert_eq!(lsp.range.start, lsp.range.end);
+        assert_eq!(lsp.range.start.line, 1);
+        assert_eq!(lsp.range.start.character, 4);
+        assert_eq!(lsp.range.end.line, 1);
+        assert_eq!(lsp.range.end.character, 14);
     }
 
     #[test]
     fn dathon_error_severity_maps_to_lsp_error() {
-        let d = dathon_diag_at(1, 1, "D0001", "test");
+        let d = dathon_diag((1, 1), (1, 1), "D0001", "test");
         let lsp = to_lsp_diagnostic(&d);
         assert_eq!(lsp.severity, Some(DiagnosticSeverity::ERROR));
     }
@@ -293,9 +298,9 @@ mod tests {
         // The code shows up alongside the diagnostic in the editor's UI;
         // it must be the exact dathon code string (D0030, etc.) so users
         // can grep the docs for it.
-        let d = dathon_diag_at(
-            1,
-            1,
+        let d = dathon_diag(
+            (1, 1),
+            (1, 1),
             "D0030",
             "Column 'X' does not exist on schema 'Orders'.",
         );
@@ -305,7 +310,7 @@ mod tests {
 
     #[test]
     fn lsp_diagnostic_source_is_dathon() {
-        let d = dathon_diag_at(1, 1, "D0001", "test");
+        let d = dathon_diag((1, 1), (1, 1), "D0001", "test");
         let lsp = to_lsp_diagnostic(&d);
         assert_eq!(lsp.source.as_deref(), Some("dathon"));
     }
@@ -313,7 +318,7 @@ mod tests {
     #[test]
     fn dathon_message_is_preserved_verbatim() {
         let msg = "Column 'priec' does not exist on schema 'Orders'.";
-        let d = dathon_diag_at(1, 1, "D0030", msg);
+        let d = dathon_diag((1, 1), (1, 1), "D0030", msg);
         let lsp = to_lsp_diagnostic(&d);
         assert_eq!(lsp.message, msg);
     }

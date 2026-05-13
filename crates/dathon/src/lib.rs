@@ -173,11 +173,11 @@ pub fn check_project(files: &[(String, String)]) -> ProjectCheckResult {
                 &combined_registry,
             ),
             Err(err) => {
-                let d = Diagnostic::at(
+                let d = Diagnostic::at_range(
                     Severity::Error,
                     "D0001",
                     err.error.to_string(),
-                    err.location.start(),
+                    err.location,
                     source,
                     &line_index,
                 );
@@ -328,18 +328,18 @@ fn render_schema<'a>(
             }
             FieldResolution::UnknownType { name } => {
                 writeln!(out, "          {}: {}  (unresolved)", field.name, raw_text).unwrap();
-                diagnostics.push(Diagnostic::at(
+                diagnostics.push(Diagnostic::at_range(
                     Severity::Error,
                     "D0010",
                     format!("Unknown column type '{name}'. Expected one of: {COLUMN_TYPE_NAMES}.",),
-                    ann_range.start(),
+                    ann_range,
                     source,
                     line_index,
                 ));
             }
             FieldResolution::NotABareName => {
                 writeln!(out, "          {}: {}  (unresolved)", field.name, raw_text).unwrap();
-                diagnostics.push(Diagnostic::at(
+                diagnostics.push(Diagnostic::at_range(
                     Severity::Error,
                     "D0011",
                     format!(
@@ -347,7 +347,7 @@ fn render_schema<'a>(
                          Subscripted/complex column types are not yet \
                          supported in v0.1. Use one of: {COLUMN_TYPE_NAMES}.",
                     ),
-                    ann_range.start(),
+                    ann_range,
                     source,
                     line_index,
                 ));
@@ -389,14 +389,14 @@ fn render_function(
                     writeln!(out, "{prefix}DataFrame[{name}]").unwrap();
                 } else {
                     writeln!(out, "{prefix}{raw_text}  (unresolved)").unwrap();
-                    diagnostics.push(Diagnostic::at(
+                    diagnostics.push(Diagnostic::at_range(
                         Severity::Error,
                         "D0020",
                         format!(
                             "Unknown schema '{name}' referenced in DataFrame[…]. \
                              Declare it as a class extending Schema.",
                         ),
-                        ann_range.start(),
+                        ann_range,
                         source,
                         line_index,
                     ));
@@ -407,14 +407,14 @@ fn render_function(
             }
             DataFrameAnnotation::NonBareName => {
                 writeln!(out, "{prefix}{raw_text}  (unresolved)").unwrap();
-                diagnostics.push(Diagnostic::at(
+                diagnostics.push(Diagnostic::at_range(
                     Severity::Error,
                     "D0021",
                     format!(
                         "DataFrame schema must be a bare name; got '{raw_text}'. \
                          Subscripted/complex schema expressions are not supported in v0.1.",
                     ),
-                    ann_range.start(),
+                    ann_range,
                     source,
                     line_index,
                 ));
