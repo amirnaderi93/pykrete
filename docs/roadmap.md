@@ -88,14 +88,11 @@ These are larger structural moves, not iterations. They shape what dathon become
 
 ### Full Python LSP feature parity
 
-Because `.dpy` is a strict superset of Python, the LSP should offer **everything a regular Python LSP does** — syntax highlighting, completions on standard library symbols, references, go-to-definition for non-dataframe code, formatting, etc. dathon-specific checks (`DataFrame[X]`, `col(...)`, `Schema` classes) sit on top of that base. Today, opening a `.dpy` in VS Code gives dathon's dataframe diagnostics but nothing for regular Python — that's a worse experience than just writing `.py`.
+Because `.dpy` is a strict superset of Python, the LSP should offer **everything a regular Python LSP does** — syntax highlighting, completions on standard library symbols, references, go-to-definition for non-dataframe code, formatting, etc. dathon-specific checks (`DataFrame[X]`, `col(...)`, `Schema` classes) sit on top of that base.
 
-Direction: don't reimplement a Python LSP. Piggyback on an existing one (Pylance, basedpyright, pyright, ruff-lsp). The VS Code extension can either:
+**Iteration 39 shipped phase 1 — co-activation.** The VS Code extension now activates on `onLanguage:python` plus the dathon language, and dathon-lsp's document selector accepts both `dathon` and `python` files matching `**/*.dpy`. Adding `"files.associations": {"*.dpy": "python"}` to the user's `settings.json` makes `.dpy` files run through a Python LSP (basedpyright recommended) alongside dathon-lsp — full Python feature parity at the cost of installing a second extension. See [`editors/vscode/README.md`](../editors/vscode/README.md) for the setup.
 
-- **Co-activation**: require users to install a Python extension alongside dathon, route `.dpy` files through both, let the Python extension handle general features while dathon-lsp handles dataframe-specific ones. Cheap.
-- **Multiplex inside dathon-lsp**: embed/proxy an existing Python LSP behind dathon's stdio interface and merge responses. "Right" but probably overkill for the size of this project.
-
-Co-activation is the v0.1.x target; multiplexing is a follow-up if friction shows up.
+**Phase 2 — multiplex inside dathon-lsp.** Eventually we'd embed/proxy an existing Python LSP behind dathon's stdio interface and merge responses, so users only install one extension. Deferred until friction shows up — co-activation is good enough for now.
 
 ### Multi-dataframe support (pandas, polars, …)
 

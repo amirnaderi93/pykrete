@@ -26,7 +26,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const clientOptions: LanguageClientOptions = {
-    documentSelector: [{ scheme: "file", language: "dathon" }],
+    // Two selectors so dathon-lsp activates in both modes:
+    //
+    //   1. Default — VS Code identifies `.dpy` as the `dathon` language
+    //      (declared by this extension's `contributes.languages`).
+    //   2. Co-activation — the user has `"files.associations": {"*.dpy":
+    //      "python"}` in settings, so VS Code identifies `.dpy` as
+    //      `python` and a Python LSP (Pylance / basedpyright /
+    //      pyright / ruff-lsp) handles general Python features
+    //      (highlighting, std-lib completion, formatting, references)
+    //      alongside dathon's dataframe-specific checks.
+    documentSelector: [
+      { scheme: "file", language: "dathon" },
+      { scheme: "file", language: "python", pattern: "**/*.dpy" },
+    ],
   };
 
   client = new LanguageClient(
