@@ -1,12 +1,14 @@
 //! Multi-file project analysis. Cross-file `Schema` visibility — when one
 //! file declares `class Orders(Schema)` and another file's function uses
-//! `DataFrame[Orders]`, dathon should resolve the reference.
+//! `DataFrame[Orders]`, the second file must `from .schemas import Orders`
+//! to make the reference resolve.
 //!
-//! The minimal v0.1 model: all top-level declarations from every supplied
-//! file go into a single resolution scope. No `import` statement parsing,
-//! no Python-style per-file scoping rules. Real codebases that span many
-//! files just pass them all on the CLI (or `dathon check src/**/*.dpy`
-//! via shell glob).
+//! Iteration 31 moved from a pooled-everything model to strict per-file
+//! scoping: only schemas the file imports (or declares itself) are visible.
+//! Missing imports surface as `D0020` ("Unknown schema 'X' …") just like in
+//! the single-file case. The import-parsing path itself emits `D0070`
+//! (module / file not found) and `D0071` (name not exported by module) for
+//! malformed clauses.
 
 #![allow(non_snake_case)]
 
@@ -51,10 +53,9 @@ def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
 
 #[test]
 fn function_in_file_b_can_reference_a_schema_declared_in_file_a() {
-    // schemas.dpy declares Orders. pipeline.dpy uses DataFrame[Orders] in
-    // a function signature. With multi-file support, Orders is visible to
-    // pipeline.dpy and the function's typed signature resolves cleanly —
-    // no D0020 ("unknown schema referenced in DataFrame[…]").
+    // schemas.dpy declares Orders. pipeline.dpy imports it and uses
+    // DataFrame[Orders] in a function signature. The cross-file
+    // reference resolves cleanly — no D0020.
     let results = check_project_pairs(&[
         (
             "schemas.dpy",
@@ -67,6 +68,8 @@ class Orders(Schema):
         (
             "pipeline.dpy",
             r#"
+from .schemas import Orders
+
 def prepare(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.select(col("place_code"), col("price"))
 "#,
@@ -77,7 +80,7 @@ def prepare(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     assert_eq!(results[0].schema_count, 1);
     assert!(results[0].diagnostics.is_empty());
 
-    // pipeline.dpy: typed function recognized; the cross-file Orders
+    // pipeline.dpy: typed function recognized; the imported Orders
     // reference resolves; select args check cleanly against Orders.
     assert_eq!(results[1].typed_function_count, 1);
     assert!(
@@ -107,6 +110,8 @@ class Orders(Schema):
         (
             "pipeline.dpy",
             r#"
+from .schemas import Orders
+
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.select(col("priec"))
 "#,
@@ -164,6 +169,8 @@ class Orders(Schema):
         (
             "pipeline.dpy",
             r#"
+from .schemas import Orders
+
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.select(col("place_code"))
 "#,
@@ -184,9 +191,9 @@ def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
 
 #[test]
 fn nested_schema_can_reference_a_schema_declared_in_another_file() {
-    // Address lives in schemas.dpy; User (in users.dpy) has an `address:
-    // Address` field. The cross-file Schema lookup makes the nested
-    // resolution succeed and dotted access works through it.
+    // Address lives in schemas.dpy; users.dpy imports it and declares
+    // `User` with an `address: Address` field. Dotted access through
+    // the cross-file nested resolution should still work.
     let results = check_project_pairs(&[
         (
             "schemas.dpy",
@@ -199,6 +206,8 @@ class Address(Schema):
         (
             "users.dpy",
             r#"
+from .schemas import Address
+
 class User(Schema):
     name: string
     address: Address

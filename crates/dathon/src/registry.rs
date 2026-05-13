@@ -37,7 +37,7 @@ use ruff_text_size::TextRange;
 /// substitution: the method's own type parameters (PEP 695 `def m[T]`),
 /// each positional parameter's name and annotation, and the return-type
 /// annotation.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MethodInfo<'a> {
     pub name: &'a str,
     pub type_params: Vec<&'a str>,
@@ -46,7 +46,7 @@ pub struct MethodInfo<'a> {
     pub range: TextRange,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MethodParam<'a> {
     pub name: &'a str,
     pub annotation: Option<&'a Expr>,
@@ -54,7 +54,7 @@ pub struct MethodParam<'a> {
 
 /// Any top-level class definition. Schema-derived classes are also
 /// represented here, alongside non-Schema classes like `DataAccessLayer`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ClassInfo<'a> {
     pub name: &'a str,
     pub type_params: Vec<&'a str>,
@@ -66,7 +66,7 @@ pub struct ClassInfo<'a> {
 ///
 /// Only the simple shape `name: GenericClass[SchemaName] = …` is captured —
 /// other forms (no subscript, non-bare inner name) are skipped.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ConstantInfo<'a> {
     pub name: &'a str,
     /// The outer generic class name as written, e.g. `"DataSource"`.
@@ -76,7 +76,7 @@ pub struct ConstantInfo<'a> {
     pub range: TextRange,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Registry<'a> {
     pub classes: HashMap<&'a str, ClassInfo<'a>>,
     pub constants: HashMap<&'a str, ConstantInfo<'a>>,

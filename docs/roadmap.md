@@ -8,11 +8,12 @@ Items the v0.1 spec defers, in the order we'll likely tackle them after the v0.1
 
 ### Real import-statement support
 
-Multi-file analysis already works — pass multiple file paths to `dathon check` and all top-level declarations pool into one resolution scope. What's still missing:
+Iteration 31 shipped strict per-file scoping driven by `from X import Y [as Z]` clauses (relative `from .X import Y`, absolute `from pkg.X import Y`, and `as` aliases). Project root is detected via `pyproject.toml` (longest-common-ancestor fallback). `dathon check` accepts directory paths and walks them recursively for `.dpy` files. Missing imports surface as `D0020`; unresolved module paths as `D0070`; names not exported by a module as `D0071`. Still pending:
 
-- Parsing `import` / `from X import Y` statements and respecting Python's per-file scoping rules.
-- Project root detection (`pyproject.toml`-aware), recursive directory walking, and incremental rechecking.
+- `import X` and qualified access (`X.Y`) — currently parsed but `X.Y` references don't resolve.
+- Wildcard imports (`from X import *`) — parsed but no-op; consider emitting a warning or expanding.
 - Duplicate-name detection / warnings across files.
+- Incremental rechecking — today every `dathon check` re-reads and reparses every file in the project.
 
 ### LSP — features beyond skeleton + hover
 
