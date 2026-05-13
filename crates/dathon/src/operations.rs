@@ -123,6 +123,12 @@ pub struct BodyContext<'a> {
     /// otherwise-immutable `&BodyContext` — keeps the inner functions
     /// from needing `&mut` signatures everywhere.
     column_refs: RefCell<Vec<ColumnRefTrace<'a>>>,
+    /// Local-variable DataFrame bindings discovered during body analysis.
+    /// Each entry records the assignment-target name range and the schema
+    /// the name ended up bound to. The LSP layer uses this to power
+    /// hover on the LHS of `x = raw.select(...)` and on uses of `x`
+    /// elsewhere in the function body, plus completion on `x.<cursor>`.
+    local_bindings: RefCell<Vec<LocalBindingTrace<'a>>>,
 }
 
 /// One `col("name")` (or string-arg) site captured during body analysis,
@@ -139,6 +145,19 @@ pub struct ColumnRefTrace<'a> {
     pub schema: SchemaView<'a>,
 }
 
+/// One local-variable DataFrame binding captured during body analysis.
+///
+/// `name_range` is the source range of the assignment target on the LHS
+/// (`x` in `x = raw.select(...)`); LSP hover anchors on this so the user
+/// gets a popup when their cursor is on the variable name. `schema` is
+/// what the value evaluates to at the assignment site.
+#[derive(Debug, Clone)]
+pub struct LocalBindingTrace<'a> {
+    pub name: &'a str,
+    pub name_range: TextRange,
+    pub schema: SchemaView<'a>,
+}
+
 impl<'a> BodyContext<'a> {
     pub fn new(schemas: &'a [Schema<'a>], registry: &'a Registry<'a>) -> Self {
         Self {
@@ -147,6 +166,7 @@ impl<'a> BodyContext<'a> {
             schemas,
             registry,
             column_refs: RefCell::new(Vec::new()),
+            local_bindings: RefCell::new(Vec::new()),
         }
     }
 
@@ -161,11 +181,32 @@ impl<'a> BodyContext<'a> {
         });
     }
 
+    /// Record a local DataFrame binding (`x = raw.select(...)`). Called
+    /// from `check_function_body` when an assignment's RHS resolves to
+    /// a known schema view.
+    pub fn record_local_binding(
+        &self,
+        name: &'a str,
+        name_range: TextRange,
+        schema: SchemaView<'a>,
+    ) {
+        self.local_bindings.borrow_mut().push(LocalBindingTrace {
+            name,
+            name_range,
+            schema,
+        });
+    }
+
     /// Drain all column references captured during analysis. Intended for
     /// the LSP entry points (hover, go-to-definition) that re-run analysis
     /// against a fresh context.
     pub fn take_column_refs(&self) -> Vec<ColumnRefTrace<'a>> {
         std::mem::take(&mut self.column_refs.borrow_mut())
+    }
+
+    /// Drain all local-binding traces captured during analysis.
+    pub fn take_local_bindings(&self) -> Vec<LocalBindingTrace<'a>> {
+        std::mem::take(&mut self.local_bindings.borrow_mut())
     }
 
     /// Build a body context for `func`, drawing on:
@@ -282,6 +323,7 @@ pub fn check_function_body<'a>(
                     for target in &a.targets {
                         if let Some(name) = target.as_name_expr() {
                             ctx.bind_df(name.id.as_str(), schema.clone());
+                            ctx.record_local_binding(name.id.as_str(), name.range, schema.clone());
                         }
                     }
                 }
@@ -335,14 +377,18 @@ fn handle_ann_assign<'a>(
         analyze_expr(value, ctx, source, line_index, diagnostics);
     }
 
-    let Some(target_name) = ann.target.as_name_expr().map(|n| n.id.as_str()) else {
+    let Some(target_expr) = ann.target.as_name_expr() else {
         return;
     };
+    let target_name = target_expr.id.as_str();
+    let target_range = target_expr.range;
 
     match dataframe::recognize(&ann.annotation) {
         Some(DataFrameAnnotation::Typed(schema_name)) => {
             if let Some(schema) = ctx.find_schema(schema_name) {
-                ctx.bind_df(target_name, SchemaView::Declared(schema));
+                let view = SchemaView::Declared(schema);
+                ctx.bind_df(target_name, view.clone());
+                ctx.record_local_binding(target_name, target_range, view);
             } else {
                 diagnostics.push(Diagnostic::at_range(
                     Severity::Error,

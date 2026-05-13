@@ -4,7 +4,7 @@
 //! markdown blob describing the symbol at that point. The LSP server
 //! wraps the markdown in a `textDocument/hover` response.
 //!
-//! v0.1 supports four positions:
+//! v0.1 supports five positions:
 //!
 //! 1. Cursor on a Schema class **declaration** (`class Orders(Schema):`)
 //!    — return the schema's fields with their `ColumnType`s.
@@ -18,10 +18,13 @@
 //!    — return the column's resolved type on the surrounding schema.
 //!    Requires running body analysis to know which schema each `col(…)`
 //!    refers to (handled lazily, only when cases 1–3 don't match).
+//! 5. Cursor on a **local-variable DataFrame binding** — either on the
+//!    LHS of an `x = raw.select(...)` (or `x: DataFrame[X] = …`) or on
+//!    a use of `x` elsewhere in the body. Returns the schema view the
+//!    binding ended up holding at its assignment site.
 //!
-//! Everything else returns `None` (the LSP server then sends no hover).
-//! Hover for local-variable bindings (`x = raw.select(...)`) and cross-file
-//! references is intentionally deferred to follow-up iterations.
+//! Cross-file references are intentionally deferred to follow-up
+//! iterations.
 
 use std::fmt::Write as _;
 
@@ -30,7 +33,7 @@ use ruff_source_file::{LineIndex, OneIndexed};
 use ruff_text_size::TextSize;
 
 use crate::dataframe::{DataFrameAnnotation, SlotLabel, TypedSlot, typed_slots};
-use crate::operations::ColumnRefTrace;
+use crate::operations::{ColumnRefTrace, LocalBindingTrace};
 use crate::registry::Registry;
 use crate::schema::{
     FieldPathResult, FieldResolution, Schema, SchemaView, discover_schemas, resolve_path,
@@ -75,14 +78,18 @@ pub fn hover(source: &str, line: usize, column: usize) -> Option<HoverInfo> {
     if let Some(info) = hover_on_schema_reference_in_schema_field(offset, &schemas) {
         return Some(info);
     }
-    // Body-context-aware case: cursor on a `col("foo")` string literal.
-    // Building the registry + running body analysis is the expensive
-    // path, so we do it last after the cheap AST-lookup cases above
-    // have all failed.
+    // Body-context-aware cases: cursor on a `col("foo")` literal, an
+    // `x = raw.select(...)` assignment target, or a use of `x`
+    // elsewhere in the body. Building the registry + running body
+    // analysis is the expensive path, so we do it once at the end
+    // after the cheap AST-lookup cases above have all failed.
     let registry = Registry::build(module);
-    let traces =
-        crate::collect_module_column_refs(&functions, source, &line_index, &schemas, &registry);
-    if let Some(info) = hover_on_column_ref(offset, &traces, &schemas) {
+    let (col_traces, local_bindings) =
+        crate::collect_module_traces(&functions, source, &line_index, &schemas, &registry);
+    if let Some(info) = hover_on_column_ref(offset, &col_traces, &schemas) {
+        return Some(info);
+    }
+    if let Some(info) = hover_on_local_binding(offset, &local_bindings, &functions, &schemas) {
         return Some(info);
     }
     None
@@ -209,6 +216,137 @@ fn render_column_ref_hover(trace: &ColumnRefTrace<'_>, schemas: &[Schema<'_>]) -
             // so we just show the field name.
             if let Some(label) = column_type_label(&trace.schema, trace.name, schemas) {
                 writeln!(md, "Type: {label}").unwrap();
+            }
+        }
+    }
+    HoverInfo { markdown: md }
+}
+
+// ---------------------------------------------------------------------------
+// Case 5: cursor on a local-variable DataFrame binding — on the
+// assignment's LHS (`x = raw.select(...)`) or on a use of `x` elsewhere
+// in the same function body.
+// ---------------------------------------------------------------------------
+
+fn hover_on_local_binding(
+    offset: TextSize,
+    bindings: &[LocalBindingTrace<'_>],
+    functions: &[DiscoveredFunction<'_>],
+    schemas: &[Schema<'_>],
+) -> Option<HoverInfo> {
+    // Cursor directly on the assignment-target name — most-specific match.
+    if let Some(binding) = bindings
+        .iter()
+        .find(|b| b.name_range.contains_inclusive(offset))
+    {
+        return Some(render_local_binding_hover(binding, schemas));
+    }
+
+    // Otherwise: cursor on a Name reference somewhere in a function body
+    // whose id matches a known binding. We walk the bodies looking for
+    // the smallest Name expression containing the cursor.
+    let name_ref = name_reference_at(offset, functions)?;
+    let binding = bindings.iter().find(|b| b.name == name_ref)?;
+    Some(render_local_binding_hover(binding, schemas))
+}
+
+/// Find the identifier of an `Expr::Name` whose source range contains
+/// `offset`, walking every function's body. Returns `None` if the cursor
+/// isn't on a name reference.
+fn name_reference_at<'a>(
+    offset: TextSize,
+    functions: &'a [DiscoveredFunction<'a>],
+) -> Option<&'a str> {
+    for func in functions {
+        for stmt in &func.def.body {
+            if let Some(name) = name_in_stmt(offset, stmt) {
+                return Some(name);
+            }
+        }
+    }
+    None
+}
+
+fn name_in_stmt<'a>(offset: TextSize, stmt: &'a ruff_python_ast::Stmt) -> Option<&'a str> {
+    use ruff_python_ast::Stmt;
+    match stmt {
+        Stmt::Expr(e) => name_in_expr(offset, &e.value),
+        Stmt::Return(r) => r.value.as_deref().and_then(|e| name_in_expr(offset, e)),
+        Stmt::Assign(a) => name_in_expr(offset, &a.value),
+        Stmt::AnnAssign(a) => a.value.as_deref().and_then(|e| name_in_expr(offset, e)),
+        _ => None,
+    }
+}
+
+fn name_in_expr<'a>(offset: TextSize, expr: &'a Expr) -> Option<&'a str> {
+    use ruff_text_size::Ranged;
+    if !expr.range().contains_inclusive(offset) {
+        return None;
+    }
+    match expr {
+        Expr::Name(n) => Some(n.id.as_str()),
+        Expr::Attribute(a) => name_in_expr(offset, &a.value),
+        Expr::Call(c) => {
+            if let Some(name) = name_in_expr(offset, &c.func) {
+                return Some(name);
+            }
+            for arg in &c.arguments.args {
+                if let Some(name) = name_in_expr(offset, arg) {
+                    return Some(name);
+                }
+            }
+            for kw in &c.arguments.keywords {
+                if let Some(name) = name_in_expr(offset, &kw.value) {
+                    return Some(name);
+                }
+            }
+            None
+        }
+        Expr::Subscript(s) => {
+            name_in_expr(offset, &s.value).or_else(|| name_in_expr(offset, &s.slice))
+        }
+        Expr::BinOp(b) => name_in_expr(offset, &b.left).or_else(|| name_in_expr(offset, &b.right)),
+        Expr::Compare(c) => {
+            if let Some(name) = name_in_expr(offset, &c.left) {
+                return Some(name);
+            }
+            for comp in &c.comparators {
+                if let Some(name) = name_in_expr(offset, comp) {
+                    return Some(name);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn render_local_binding_hover(
+    binding: &LocalBindingTrace<'_>,
+    schemas: &[Schema<'_>],
+) -> HoverInfo {
+    let mut md = String::new();
+    writeln!(md, "**local `{}`**", binding.name).unwrap();
+    writeln!(md).unwrap();
+    writeln!(md, "Bound to {}", binding.schema.display_name()).unwrap();
+    // For Declared views, also dump the field list so the user can see
+    // what's available without going to look up the schema.
+    if let SchemaView::Declared(schema) = &binding.schema {
+        let fields = schema.fields();
+        if !fields.is_empty() {
+            writeln!(md).unwrap();
+            writeln!(md, "Fields:").unwrap();
+            writeln!(md).unwrap();
+            for field in fields {
+                let label = match field.resolve(schemas) {
+                    FieldResolution::Resolved(ct) => format!("`{}`", ct.as_str()),
+                    FieldResolution::ResolvedNested(nested) => {
+                        format!("`{}` (nested)", nested.name())
+                    }
+                    FieldResolution::UnknownType { name } => format!("`{name}` (unresolved)"),
+                    FieldResolution::NotABareName => "_unresolved_".to_string(),
+                };
+                writeln!(md, "- `{}`: {}", field.name, label).unwrap();
             }
         }
     }

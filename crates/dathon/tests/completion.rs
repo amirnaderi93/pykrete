@@ -135,6 +135,52 @@ def f(raw: DataFrame[Orders]) -> int:
     assert_eq!(names, vec!["place_code", "price"]);
 }
 
+#[test]
+fn completions_after_local_binding_dot_resolves_through_the_assignment() {
+    // `x = raw.filter(...)` — typing `x.<cursor>` should suggest the
+    // Orders fields because filter preserves the receiver's schema.
+    let src = r#"
+class Orders(Schema):
+    place_code: int
+    price: int
+
+def f(raw: DataFrame[Orders]) -> int:
+    x = raw.filter(col("price") > 0)
+    return x.place_code
+"#;
+    let idx = src.find("x.place_code").unwrap() + "x.".len();
+    let prefix = &src[..idx];
+    let line = prefix.matches('\n').count() + 1;
+    let col = idx - prefix.rfind('\n').map(|p| p + 1).unwrap_or(0) + 1;
+    let items = completions(src, line, col);
+    let mut names = labels(&items);
+    names.sort();
+    assert_eq!(names, vec!["place_code", "price"]);
+}
+
+#[test]
+fn completions_after_annotated_local_binding_use_the_annotation_schema() {
+    // `x: DataFrame[Orders] = ...` — the annotation is authoritative,
+    // so completion on `x.` lists Orders' fields with column types.
+    let src = r#"
+class Orders(Schema):
+    place_code: int
+    price: int
+
+def f(raw: DataFrame[Orders]) -> int:
+    x: DataFrame[Orders] = raw.select(col("price"))
+    return x.place_code
+"#;
+    let idx = src.find("x.place_code").unwrap() + "x.".len();
+    let prefix = &src[..idx];
+    let line = prefix.matches('\n').count() + 1;
+    let col = idx - prefix.rfind('\n').map(|p| p + 1).unwrap_or(0) + 1;
+    let items = completions(src, line, col);
+    let mut names = labels(&items);
+    names.sort();
+    assert_eq!(names, vec!["place_code", "price"]);
+}
+
 // ===========================================================================
 // Negative space
 // ===========================================================================
