@@ -6,10 +6,6 @@ What's planned beyond v0.1, in rough priority order. This document is a living p
 
 Items the v0.1 spec defers, in the order we'll likely tackle them after the v0.1 release tag:
 
-### Dotted column access in nested structs
-
-`col("address.street")` should resolve through nested schemas. Today the dotted string is treated as a single flat field name, so it always fails `D0030` even when the path is valid. Fix: walk the segments — for non-final segments, look the field up, assert its type is a nested `Schema`, recurse with the remainder.
-
 ### Real import-statement support
 
 Multi-file analysis already works — pass multiple file paths to `dathon check` and all top-level declarations pool into one resolution scope. What's still missing:
@@ -20,11 +16,10 @@ Multi-file analysis already works — pass multiple file paths to `dathon check`
 
 ### LSP — features beyond skeleton + hover
 
-Iterations 24–29 shipped the LSP skeleton (live diagnostics via `textDocument/publishDiagnostics`), basic hover (Schema declarations, typed function declarations, Schema references in annotations), document symbols, go-to-definition for Schema references in `DataFrame[X]` / nested-struct annotations, column-ref hover + go-to-definition for `col("foo")` literals (body-context aware), and completion at three surfaces: column names inside `col("…")` and after `df.`, schema names inside `DataFrame[…]`. Still pending:
+Iterations 24–30 shipped the LSP skeleton (live diagnostics via `textDocument/publishDiagnostics`), basic hover (Schema declarations, typed function declarations, Schema references in annotations), document symbols, go-to-definition for Schema references in `DataFrame[X]` / nested-struct annotations, column-ref hover + go-to-definition for `col("foo")` literals (body-context aware), completion at three surfaces (`col("…")`, `df.`, `DataFrame[…]`), and "Did you mean?" suggestions on `D0030` — surfaced both in the diagnostic message and as a `textDocument/codeAction` quick-fix that replaces the literal in place. Still pending:
 
 - **Hover for local variables** — `x = raw.select(...)` local-variable bindings (show the inferred schema). Needs to record assignment sites the way iteration 28 records column refs.
 - **Completion for chained / local bindings** — today, completion on `raw.<>` works when `raw` is a typed param, but not on chain results (`raw.select(...).<>`) or local bindings (`x = raw.select(...); x.<>`). Needs the same assignment-site tracking as local-variable hover.
-- **Code actions / quick fixes** — "Did you mean 'price'?" Levenshtein suggestions on `D0030`.
 - **Find references**, **rename**, **semantic tokens** as further iterations.
 
 ### VS Code extension

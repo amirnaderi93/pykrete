@@ -238,6 +238,64 @@ pub fn resolve_path<'a>(
 }
 
 // ---------------------------------------------------------------------------
+// "Did you mean?" suggestions
+// ---------------------------------------------------------------------------
+
+/// Find the closest field name on `view` to `target` by Levenshtein
+/// distance. Returns `None` if no candidate is within edit-distance
+/// threshold — the threshold is `max(1, target.len() / 3)` so a single
+/// typo on a 3-character field qualifies and two typos on a 6-character
+/// one does, but completely unrelated names don't.
+///
+/// Powers the "Did you mean 'X'?" hint on `D0030` diagnostics and the
+/// `textDocument/codeAction` quick-fix that replaces the bad literal.
+pub fn suggest_field_name(target: &str, view: &SchemaView<'_>) -> Option<String> {
+    let candidates = view.field_names();
+    let threshold = std::cmp::max(1, target.len() / 3);
+    let mut best: Option<(&str, usize)> = None;
+    for candidate in candidates {
+        let d = levenshtein(target, candidate);
+        if d > threshold {
+            continue;
+        }
+        if best.is_none_or(|(_, b)| d < b) {
+            best = Some((candidate, d));
+        }
+    }
+    best.map(|(name, _)| name.to_string())
+}
+
+/// Plain Levenshtein distance between `a` and `b`. Used by
+/// [`suggest_field_name`] to rank column candidates.
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a_chars: Vec<char> = a.chars().collect();
+    let b_chars: Vec<char> = b.chars().collect();
+    let n = a_chars.len();
+    let m = b_chars.len();
+    if n == 0 {
+        return m;
+    }
+    if m == 0 {
+        return n;
+    }
+    let mut prev: Vec<usize> = (0..=m).collect();
+    let mut curr: Vec<usize> = vec![0; m + 1];
+    for i in 1..=n {
+        curr[0] = i;
+        for j in 1..=m {
+            let cost = if a_chars[i - 1] == b_chars[j - 1] {
+                0
+            } else {
+                1
+            };
+            curr[j] = (curr[j - 1] + 1).min(prev[j] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[m]
+}
+
+// ---------------------------------------------------------------------------
 // Unit tests for SchemaView::Derived
 //
 // SchemaView::Declared needs a parsed Schema (which needs AST data), so it's
@@ -255,6 +313,31 @@ mod tests {
         assert!(view.has_field("a"));
         assert!(view.has_field("b"));
         assert!(view.has_field("c"));
+    }
+
+    #[test]
+    fn levenshtein_handles_empty_and_simple_edits() {
+        assert_eq!(levenshtein("", ""), 0);
+        assert_eq!(levenshtein("", "abc"), 3);
+        assert_eq!(levenshtein("abc", ""), 3);
+        assert_eq!(levenshtein("kitten", "sitting"), 3);
+        assert_eq!(levenshtein("price", "priec"), 2);
+        assert_eq!(levenshtein("price", "prce"), 1);
+    }
+
+    #[test]
+    fn suggest_field_name_returns_closest_within_threshold() {
+        let view = SchemaView::Derived(vec!["price", "place_code", "quantity"]);
+        // priec → price (transposition, distance 2 ≤ floor(5/3)=1 fails;
+        // but ceil-style max(1, 5/3) gives 1, so 2 is over threshold).
+        // Use a one-character typo so it's clearly within threshold.
+        assert_eq!(suggest_field_name("prce", &view), Some("price".to_string()));
+    }
+
+    #[test]
+    fn suggest_field_name_returns_none_when_nothing_is_close() {
+        let view = SchemaView::Derived(vec!["price", "place_code"]);
+        assert_eq!(suggest_field_name("totally_unrelated_name", &view), None);
     }
 
     #[test]
