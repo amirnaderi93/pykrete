@@ -183,3 +183,63 @@ class Orders(Schema):
     let (line, col) = cursor_at(src, "int");
     assert!(hover(src, line, col).is_none());
 }
+
+// ===========================================================================
+// Case 4 — cursor on a `col("foo")` string literal in a function body
+// ===========================================================================
+
+#[test]
+fn hover_on_col_literal_returns_the_columns_type() {
+    let src = r#"
+class Orders(Schema):
+    place_code: int
+    price: int
+
+def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.select(col("price"))
+"#;
+    // Cursor inside the string literal `"price"`. cursor_at finds the
+    // opening quote; +1 puts us safely inside the literal.
+    let (line, col) = cursor_at(src, "\"price\"");
+    let info = hover(src, line, col + 1).expect("expected hover info");
+    assert!(info.markdown.contains("price"));
+    assert!(info.markdown.contains("Orders"));
+    assert!(
+        info.markdown.to_lowercase().contains("int"),
+        "expected the column's type in the hover, got {:?}",
+        info.markdown,
+    );
+}
+
+#[test]
+fn hover_on_col_literal_for_a_missing_column_says_so() {
+    let src = r#"
+class Orders(Schema):
+    price: int
+
+def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.select(col("priec"))
+"#;
+    let (line, col) = cursor_at(src, "\"priec\"");
+    let info = hover(src, line, col + 1).expect("expected hover info");
+    assert!(info.markdown.contains("priec"));
+    assert!(info.markdown.contains("does not exist"));
+}
+
+#[test]
+fn hover_on_col_literal_after_filter_resolves_against_the_input_schema() {
+    // .filter() preserves the schema, so col() args inside a chain of
+    // .filter() still resolve against the input.
+    let src = r#"
+class Orders(Schema):
+    price: int
+    place_code: int
+
+def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.filter(col("price") > 0).select(col("place_code"))
+"#;
+    let (line, col) = cursor_at(src, "\"place_code\"");
+    let info = hover(src, line, col + 1).expect("expected hover info");
+    assert!(info.markdown.contains("place_code"));
+    assert!(info.markdown.contains("Orders"));
+}

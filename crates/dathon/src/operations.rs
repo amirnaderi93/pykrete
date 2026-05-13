@@ -27,6 +27,7 @@
 //! compared to the function's declared return schema (`-> DataFrame[X]`).
 //! Mismatches emit `D0050`.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use ruff_python_ast::{Expr, ExprCall, Stmt};
@@ -113,6 +114,29 @@ pub struct BodyContext<'a> {
     instance_bindings: HashMap<&'a str, &'a str>,
     schemas: &'a [Schema<'a>],
     registry: &'a Registry<'a>,
+    /// Sites where `col("name")` (or the equivalent string-arg form) is
+    /// resolved against a known schema. Always populated during analysis;
+    /// the LSP layer drains this to power hover and go-to-definition for
+    /// column references. The diagnostic path simply ignores it.
+    ///
+    /// Held in a `RefCell` so the analysis pass can push to it through an
+    /// otherwise-immutable `&BodyContext` — keeps the inner functions
+    /// from needing `&mut` signatures everywhere.
+    column_refs: RefCell<Vec<ColumnRefTrace<'a>>>,
+}
+
+/// One `col("name")` (or string-arg) site captured during body analysis,
+/// with the schema that was active at the time the column was resolved.
+///
+/// The schema is what the user is *thinking against* at that site — i.e.
+/// the immediate receiver of the surrounding method call. For
+/// `raw.filter(col("a") > 0).select(col("b"))`, both `col("a")` and
+/// `col("b")` carry `raw`'s schema (filter preserves shape).
+#[derive(Debug, Clone)]
+pub struct ColumnRefTrace<'a> {
+    pub range: TextRange,
+    pub name: &'a str,
+    pub schema: SchemaView<'a>,
 }
 
 impl<'a> BodyContext<'a> {
@@ -122,7 +146,26 @@ impl<'a> BodyContext<'a> {
             instance_bindings: HashMap::new(),
             schemas,
             registry,
+            column_refs: RefCell::new(Vec::new()),
         }
+    }
+
+    /// Record a `col(...)`-style column reference and the schema it was
+    /// resolved against. Called from inside the analysis pass; the LSP
+    /// layer drains the collected refs with [`take_column_refs`].
+    pub fn record_column_ref(&self, range: TextRange, name: &'a str, schema: SchemaView<'a>) {
+        self.column_refs.borrow_mut().push(ColumnRefTrace {
+            range,
+            name,
+            schema,
+        });
+    }
+
+    /// Drain all column references captured during analysis. Intended for
+    /// the LSP entry points (hover, go-to-definition) that re-run analysis
+    /// against a fresh context.
+    pub fn take_column_refs(&self) -> Vec<ColumnRefTrace<'a>> {
+        std::mem::take(&mut self.column_refs.borrow_mut())
     }
 
     /// Build a body context for `func`, drawing on:
@@ -550,27 +593,28 @@ fn arg_schema<'a>(
 fn handle_agg<'a>(
     call: &'a ExprCall,
     receiver: &SchemaView<'a>,
-    _ctx: &BodyContext<'a>,
+    ctx: &BodyContext<'a>,
     source: &str,
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> SchemaView<'a> {
-    let (keys, underlying): (Vec<&'a str>, &SchemaView<'a>) = match receiver {
-        SchemaView::Grouped { keys, underlying } => (keys.clone(), underlying.as_ref()),
-        other => (Vec::new(), other),
+    let (keys, underlying): (Vec<&'a str>, SchemaView<'a>) = match receiver {
+        SchemaView::Grouped { keys, underlying } => (keys.clone(), (**underlying).clone()),
+        other => (Vec::new(), other.clone()),
     };
 
-    let mut refs: Vec<(&str, TextRange)> = Vec::new();
+    let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
     let mut outputs: Vec<&'a str> = Vec::new();
     for arg in &call.arguments.args {
-        collect_col_refs(arg, _ctx, &mut refs);
+        collect_col_refs(arg, ctx, &mut refs);
         if let Some(name) = select_output_name(arg) {
             outputs.push(name);
         }
     }
     for (col_name, col_range) in refs {
+        ctx.record_column_ref(col_range, col_name, underlying.clone());
         if let FieldPathResult::Missing { field, on } =
-            resolve_path(underlying, col_name, _ctx.schemas())
+            resolve_path(&underlying, col_name, ctx.schemas())
         {
             diagnostics.push(Diagnostic::at_range(
                 Severity::Error,
@@ -598,19 +642,20 @@ fn handle_agg<'a>(
 
 fn check_column_method_args<'a>(
     call: &'a ExprCall,
-    schema: &SchemaView<'_>,
+    schema: &SchemaView<'a>,
     shape: &ColumnMethodShape,
     ctx: &BodyContext<'a>,
     source: &str,
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let mut refs: Vec<(&str, TextRange)> = Vec::new();
+    let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
     for (i, arg) in call.arguments.args.iter().enumerate() {
         let role = role_at(shape, i);
         collect_arg_column_refs(arg, role, ctx, &mut refs);
     }
     for (col_name, col_range) in refs {
+        ctx.record_column_ref(col_range, col_name, schema.clone());
         if let FieldPathResult::Missing { field, on } =
             resolve_path(schema, col_name, ctx.schemas())
         {

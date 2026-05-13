@@ -20,10 +20,9 @@ Multi-file analysis already works — pass multiple file paths to `dathon check`
 
 ### LSP — features beyond skeleton + hover
 
-Iterations 24–26 shipped the LSP skeleton (live diagnostics via `textDocument/publishDiagnostics`), basic hover (Schema declarations, typed function declarations, Schema references in annotations), document symbols, and go-to-definition for Schema references in `DataFrame[X]` / nested-struct annotations. Still pending:
+Iterations 24–28 shipped the LSP skeleton (live diagnostics via `textDocument/publishDiagnostics`), basic hover (Schema declarations, typed function declarations, Schema references in annotations), document symbols, go-to-definition for Schema references in `DataFrame[X]` / nested-struct annotations, and column-ref hover + go-to-definition for `col("foo")` literals (body-context aware — the schema for each `col(...)` is determined by the immediate receiver of the surrounding method call). Still pending:
 
-- **Go-to-definition — `col("X")` references** — jump from a column literal to the field's annotation in the underlying schema. Needs body-context tracking to know which schema a given `col(…)` is being resolved against.
-- **Hover for column refs / local variables** — extend hover to `col("foo")` references (show the column's `ColumnType`) and to `x = raw.select(...)` local-variable bindings (show the inferred schema).
+- **Hover for local variables** — `x = raw.select(...)` local-variable bindings (show the inferred schema). Needs to record assignment sites the way iteration 28 records column refs.
 - **Completion** (`textDocument/completion`) — column-name auto-complete inside `col("…")` / `df.…`, schema-name suggestions inside `DataFrame[…]`.
 - **Code actions / quick fixes** — "Did you mean 'price'?" Levenshtein suggestions on `D0030`.
 - **Find references**, **rename**, **semantic tokens** as further iterations.

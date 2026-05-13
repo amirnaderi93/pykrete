@@ -23,7 +23,9 @@ use ruff_source_file::{LineIndex, OneIndexed};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use crate::dataframe::{DataFrameAnnotation, SlotLabel, TypedSlot, typed_slots};
-use crate::schema::{Schema, discover_schemas};
+use crate::operations::ColumnRefTrace;
+use crate::registry::Registry;
+use crate::schema::{Schema, SchemaView, discover_schemas};
 use crate::walk::{
     DiscoveredClass, DiscoveredFunction, discover_top_level_classes, discover_top_level_functions,
 };
@@ -223,16 +225,19 @@ fn render_annotation(kind: &DataFrameAnnotation<'_>) -> String {
 /// declaration. Both line and column are 1-indexed.
 ///
 /// Returns `None` if the cursor isn't on a recognized reference (or if
-/// the source fails to parse). v0.1 covers three cases:
+/// the source fails to parse). v0.1 covers four cases:
 ///
 /// 1. Cursor inside a `DataFrame[X]` subscript's `X` → jump to `class X`.
 /// 2. Cursor on a Schema field's bare-name annotation (nested struct,
 ///    e.g. the `Address` in `address: Address`) → jump to `class Address`.
 /// 3. Cursor on a Schema class declaration name → jump to itself (LSP
 ///    convention: declarations are their own definitions).
+/// 4. Cursor on a `col("foo")` string literal where `foo` exists on the
+///    surrounding schema → jump to the field's annotation in the Schema
+///    class. Requires running body analysis to know which schema each
+///    `col(...)` refers to.
 ///
-/// Cases for `col("foo")` references, function-call sites, and `df.foo`
-/// attribute access are deferred to follow-up iterations.
+/// Function-call sites and `df.foo` attribute access are deferred.
 pub fn definition(source: &str, line: usize, column: usize) -> Option<Span> {
     let parsed = ruff_python_parser::parse_module(source).ok()?;
     let module = parsed.syntax();
@@ -252,6 +257,12 @@ pub fn definition(source: &str, line: usize, column: usize) -> Option<Span> {
         return Some(span_from_range(target, source, &line_index));
     }
     if let Some(target) = definition_on_schema_reference_in_schema_field(offset, &schemas) {
+        return Some(span_from_range(target, source, &line_index));
+    }
+    let registry = Registry::build(module);
+    let traces =
+        crate::collect_module_column_refs(&functions, source, &line_index, &schemas, &registry);
+    if let Some(target) = definition_on_column_ref(offset, &traces) {
         return Some(span_from_range(target, source, &line_index));
     }
     None
@@ -309,6 +320,34 @@ fn definition_on_schema_reference_in_schema_field(
         }
     }
     None
+}
+
+/// Cursor on a `col("foo")` string literal whose schema and field both
+/// resolve → return the range of the field's `name: type` annotation in
+/// the Schema class body. Only `Declared` views point at a real source
+/// location; derived/grouped views drop AST provenance, so no jump.
+fn definition_on_column_ref(offset: TextSize, traces: &[ColumnRefTrace<'_>]) -> Option<TextRange> {
+    let trace = traces.iter().find(|t| t.range.contains_inclusive(offset))?;
+    let schema = match &trace.schema {
+        SchemaView::Declared(s) => *s,
+        _ => return None,
+    };
+    let field = schema.fields().into_iter().find(|f| f.name == trace.name)?;
+    // Return the range of the field's target name (`foo` in `foo: int`)
+    // by walking the class body for the matching AnnAssign. Falls back
+    // to the annotation range if anything looks off.
+    for stmt in &schema.class.def.body {
+        let Some(ann) = stmt.as_ann_assign_stmt() else {
+            continue;
+        };
+        let Some(target) = ann.target.as_name_expr() else {
+            continue;
+        };
+        if target.id.as_str() == field.name {
+            return Some(target.range);
+        }
+    }
+    Some(field.annotation.range())
 }
 
 // ---------------------------------------------------------------------------

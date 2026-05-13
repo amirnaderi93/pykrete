@@ -254,3 +254,56 @@ fn definition_on_unparseable_source_returns_none() {
     let src = "def broken(:\n";
     assert!(definition(src, 1, 1).is_none());
 }
+
+// ===========================================================================
+// definition — `col("foo")` references (body-context aware)
+// ===========================================================================
+
+#[test]
+fn definition_on_col_literal_jumps_to_field_name_in_schema_class() {
+    let src = r#"
+class Orders(Schema):
+    place_code: int
+    price: int
+
+def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.select(col("price"))
+"#;
+    // Cursor inside the string literal `"price"` (one past the opening
+    // quote). The definition should land on `price` in the class body.
+    let idx = src.find("col(\"price\")").unwrap() + "col(\"".len();
+    let prefix = &src[..idx];
+    let line = prefix.matches('\n').count() + 1;
+    let col = idx - prefix.rfind('\n').map(|p| p + 1).unwrap_or(0) + 1;
+
+    let span = definition(src, line, col).expect("expected a definition");
+
+    // The expected target: the `price` token in `price: int` inside the
+    // class body — the *first* occurrence of "price" (the field's
+    // target name).
+    let target_idx = src.find("price: int").unwrap();
+    let tprefix = &src[..target_idx];
+    let expected_line = tprefix.matches('\n').count() + 1;
+    let expected_col = target_idx - tprefix.rfind('\n').map(|p| p + 1).unwrap_or(0) + 1;
+    assert_eq!(
+        (span.start_line, span.start_column),
+        (expected_line, expected_col),
+        "definition should jump to the field's name token",
+    );
+}
+
+#[test]
+fn definition_on_col_literal_for_missing_column_returns_none() {
+    let src = r#"
+class Orders(Schema):
+    price: int
+
+def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.select(col("priec"))
+"#;
+    let idx = src.find("col(\"priec\")").unwrap() + "col(\"".len();
+    let prefix = &src[..idx];
+    let line = prefix.matches('\n').count() + 1;
+    let col = idx - prefix.rfind('\n').map(|p| p + 1).unwrap_or(0) + 1;
+    assert!(definition(src, line, col).is_none());
+}

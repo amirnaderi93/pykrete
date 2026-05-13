@@ -45,7 +45,7 @@ use ruff_text_size::Ranged;
 
 use crate::dataframe::{DataFrameAnnotation, SlotLabel, TypedSlot, typed_slots};
 use crate::diagnostics::{Diagnostic, Severity};
-use crate::operations::{BodyContext, check_function_body};
+use crate::operations::{BodyContext, ColumnRefTrace, check_function_body};
 use crate::registry::Registry;
 use crate::schema::{FieldResolution, Schema, discover_schemas};
 use crate::types::COLUMN_TYPE_NAMES;
@@ -299,6 +299,45 @@ fn declared_return_schema<'a>(
         }
     }
     None
+}
+
+/// Run body analysis on every typed function and return the captured
+/// column-reference traces. Diagnostics are discarded — this entry
+/// point exists for the LSP layer's hover / go-to-definition on
+/// `col("foo")` references.
+///
+/// `functions` must be the result of [`discover_top_level_functions`]
+/// on `module` — we take it as a parameter so the caller owns the Vec
+/// and the borrow-checker can see the traces' `&'a str` names borrow
+/// from the same scope as the function discovery, not from a Vec local
+/// to this helper.
+pub(crate) fn collect_module_column_refs<'a>(
+    functions: &'a [DiscoveredFunction<'a>],
+    source: &'a str,
+    line_index: &LineIndex,
+    schemas: &'a [Schema<'a>],
+    registry: &'a Registry<'a>,
+) -> Vec<ColumnRefTrace<'a>> {
+    let mut all = Vec::new();
+    for func in functions {
+        let slots = typed_slots(func);
+        if slots.is_empty() {
+            continue;
+        }
+        let mut ctx = BodyContext::from_function(func, &slots, schemas, registry);
+        let declared_return = declared_return_schema(&slots, schemas);
+        let mut throwaway: Vec<Diagnostic> = Vec::new();
+        check_function_body(
+            func,
+            declared_return,
+            &mut ctx,
+            source,
+            line_index,
+            &mut throwaway,
+        );
+        all.extend(ctx.take_column_refs());
+    }
+    all
 }
 
 fn render_schema<'a>(
