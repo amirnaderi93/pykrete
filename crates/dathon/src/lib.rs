@@ -50,7 +50,7 @@ use ruff_text_size::Ranged;
 use crate::dataframe::{DataFrameAnnotation, SlotLabel, TypedSlot, typed_slots};
 use crate::diagnostics::{Diagnostic, Severity};
 use crate::imports::{find_pyproject_root, longest_common_ancestor, parse_imports};
-use crate::operations::{BodyContext, ColumnRefTrace, check_function_body};
+use crate::operations::{BodyContext, ColumnRefTrace, LocalBindingTrace, check_function_body};
 use crate::registry::Registry;
 use crate::schema::{FieldResolution, Schema, discover_schemas};
 use crate::types::COLUMN_TYPE_NAMES;
@@ -450,7 +450,22 @@ pub(crate) fn collect_module_column_refs<'a>(
     schemas: &'a [Schema<'a>],
     registry: &'a Registry<'a>,
 ) -> Vec<ColumnRefTrace<'a>> {
-    let mut all = Vec::new();
+    collect_module_traces(functions, source, line_index, schemas, registry).0
+}
+
+/// Internal: run body analysis once and return both trace flavors. The
+/// LSP-facing helpers above wrap this so callers can pick the slice they
+/// need without re-running analysis twice. Crate-visible so the hover
+/// entry point can grab both lists in one pass.
+pub(crate) fn collect_module_traces<'a>(
+    functions: &'a [DiscoveredFunction<'a>],
+    source: &'a str,
+    line_index: &LineIndex,
+    schemas: &'a [Schema<'a>],
+    registry: &'a Registry<'a>,
+) -> (Vec<ColumnRefTrace<'a>>, Vec<LocalBindingTrace<'a>>) {
+    let mut col_refs = Vec::new();
+    let mut bindings = Vec::new();
     for func in functions {
         let slots = typed_slots(func);
         if slots.is_empty() {
@@ -467,9 +482,10 @@ pub(crate) fn collect_module_column_refs<'a>(
             line_index,
             &mut throwaway,
         );
-        all.extend(ctx.take_column_refs());
+        col_refs.extend(ctx.take_column_refs());
+        bindings.extend(ctx.take_local_bindings());
     }
-    all
+    (col_refs, bindings)
 }
 
 fn render_schema<'a>(

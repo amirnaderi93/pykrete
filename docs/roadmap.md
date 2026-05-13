@@ -17,10 +17,9 @@ Iteration 31 shipped strict per-file scoping driven by `from X import Y [as Z]` 
 
 ### LSP — features beyond skeleton + hover
 
-Iterations 24–30 shipped the LSP skeleton (live diagnostics via `textDocument/publishDiagnostics`), basic hover (Schema declarations, typed function declarations, Schema references in annotations), document symbols, go-to-definition for Schema references in `DataFrame[X]` / nested-struct annotations, column-ref hover + go-to-definition for `col("foo")` literals (body-context aware), completion at three surfaces (`col("…")`, `df.`, `DataFrame[…]`), and "Did you mean?" suggestions on `D0030` — surfaced both in the diagnostic message and as a `textDocument/codeAction` quick-fix that replaces the literal in place. Still pending:
+Iterations 24–32 shipped the LSP skeleton (live diagnostics via `textDocument/publishDiagnostics`), hover (Schema declarations, typed function declarations, Schema references in annotations, `col("foo")` literals, and `x = raw.select(...)` local-variable bindings on both their LHS and uses elsewhere), document symbols, go-to-definition for Schema references in `DataFrame[X]` / nested-struct annotations and for `col("foo")` literals, completion at three surfaces (`col("…")`, `df.` for typed params *and* local-variable bindings, `DataFrame[…]`), and "Did you mean?" suggestions on `D0030` — surfaced both in the diagnostic message and as a `textDocument/codeAction` quick-fix that replaces the literal in place. Still pending:
 
-- **Hover for local variables** — `x = raw.select(...)` local-variable bindings (show the inferred schema). Needs to record assignment sites the way iteration 28 records column refs.
-- **Completion for chained / local bindings** — today, completion on `raw.<>` works when `raw` is a typed param, but not on chain results (`raw.select(...).<>`) or local bindings (`x = raw.select(...); x.<>`). Needs the same assignment-site tracking as local-variable hover.
+- **Completion / hover on chain results** — `raw.select(...).<>` doesn't yet trigger column-name completion. Needs the same logic that backs `x.<>` for locals, but applied to the smallest enclosing call's result schema rather than a name lookup.
 - **Find references**, **rename**, **semantic tokens** as further iterations.
 
 ### VS Code extension

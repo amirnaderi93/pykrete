@@ -79,13 +79,19 @@ pub fn completions(source: &str, line: usize, column: usize) -> Vec<CompletionIt
         return schema_completions(&schemas);
     }
 
-    if let Some(items) =
-        column_completions_in_col_literal(offset, module, source, &line_index, &schemas, &functions)
-    {
+    // The two body-context surfaces share an expensive analysis pass —
+    // run it once and pull both trace flavors out.
+    let registry = Registry::build(module);
+    let (col_traces, local_bindings) =
+        crate::collect_module_traces(&functions, source, &line_index, &schemas, &registry);
+
+    if let Some(items) = column_completions_in_col_literal(offset, &col_traces, &schemas) {
         return items;
     }
 
-    if let Some(items) = column_completions_after_df_dot(offset, &functions, &schemas) {
+    if let Some(items) =
+        column_completions_after_df_dot(offset, &functions, &schemas, &local_bindings)
+    {
         return items;
     }
 
@@ -129,15 +135,9 @@ fn schema_completions(schemas: &[Schema<'_>]) -> Vec<CompletionItem> {
 
 fn column_completions_in_col_literal(
     offset: TextSize,
-    module: &ruff_python_ast::ModModule,
-    source: &str,
-    line_index: &LineIndex,
+    traces: &[crate::operations::ColumnRefTrace<'_>],
     schemas: &[Schema<'_>],
-    functions: &[DiscoveredFunction<'_>],
 ) -> Option<Vec<CompletionItem>> {
-    let registry = Registry::build(module);
-    let traces =
-        crate::collect_module_column_refs(functions, source, line_index, schemas, &registry);
     let trace = traces.iter().find(|t| t.range.contains_inclusive(offset))?;
     Some(fields_of(&trace.schema, schemas))
 }
@@ -150,19 +150,40 @@ fn column_completions_after_df_dot(
     offset: TextSize,
     functions: &[DiscoveredFunction<'_>],
     schemas: &[Schema<'_>],
+    local_bindings: &[crate::operations::LocalBindingTrace<'_>],
 ) -> Option<Vec<CompletionItem>> {
     // Walk every function looking for an Attribute(value=Name(name), attr)
     // where the cursor sits on `attr` (or in the gap between '.' and the
-    // identifier). If `name` resolves to a typed DataFrame param, suggest
-    // that schema's columns.
+    // identifier). The receiver name resolves through, in order:
+    //
+    // 1. Typed function parameters (`raw: DataFrame[X]`).
+    // 2. Local bindings produced by `x = raw.select(...)` and friends —
+    //    captured by body analysis. Picks the LATEST trace for that
+    //    name in the function, which is the right answer for the
+    //    common single-assignment case.
     for func in functions {
         let Some((df_name, _attr_range)) = find_attribute_access_at(offset, &func.def.body) else {
             continue;
         };
-        let schema = df_param_schema(func, df_name, schemas)?;
-        return Some(fields_of(&SchemaView::Declared(schema), schemas));
+        if let Some(schema) = df_param_schema(func, df_name, schemas) {
+            return Some(fields_of(&SchemaView::Declared(schema), schemas));
+        }
+        if let Some(view) = latest_binding_for(df_name, local_bindings) {
+            return Some(fields_of(view, schemas));
+        }
     }
     None
+}
+
+fn latest_binding_for<'a>(
+    name: &str,
+    bindings: &'a [crate::operations::LocalBindingTrace<'a>],
+) -> Option<&'a SchemaView<'a>> {
+    bindings
+        .iter()
+        .rev()
+        .find(|b| b.name == name)
+        .map(|b| &b.schema)
 }
 
 /// Walk a list of statements looking for an `Attribute(Name(df_name), attr)`

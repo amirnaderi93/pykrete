@@ -243,3 +243,78 @@ def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     assert!(info.markdown.contains("place_code"));
     assert!(info.markdown.contains("Orders"));
 }
+
+// ===========================================================================
+// Case 5 — cursor on a local-variable DataFrame binding
+// ===========================================================================
+
+#[test]
+fn hover_on_lhs_of_assignment_shows_the_inferred_schema() {
+    // `x = raw.select(...)` — hovering on the `x` should show what the
+    // value evaluates to (here, the inferred schema with fields `price`
+    // and `place_code` because raw is Orders and we select both fields).
+    let src = r#"
+class Orders(Schema):
+    price: int
+    place_code: int
+
+def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    x = raw.select(col("price"), col("place_code"))
+    return x
+"#;
+    let (line, col) = cursor_at(src, "x = raw");
+    let info = hover(src, line, col).expect("expected hover info");
+    assert!(info.markdown.contains("local"));
+    assert!(info.markdown.contains("x"));
+    // For Declared receivers carried through filter/where, we'd get the
+    // schema name. Here select produces a Derived view — the popup
+    // mentions the inferred fields instead.
+    assert!(
+        info.markdown.contains("price") || info.markdown.contains("place_code"),
+        "expected the popup to surface the schema's fields, got {:?}",
+        info.markdown,
+    );
+}
+
+#[test]
+fn hover_on_use_of_local_binding_resolves_through_the_assignment() {
+    // The cursor is on the `x` in `return x` — a use, not the
+    // declaration. Hover should still resolve through to the binding.
+    let src = r#"
+class Orders(Schema):
+    price: int
+
+def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    x = raw.filter(col("price") > 0)
+    return x
+"#;
+    let idx = src.rfind("return x").unwrap() + "return ".len();
+    let prefix = &src[..idx];
+    let line = prefix.matches('\n').count() + 1;
+    let col = idx - prefix.rfind('\n').map(|p| p + 1).unwrap_or(0) + 1;
+    let info = hover(src, line, col).expect("expected hover info");
+    assert!(info.markdown.contains("local"));
+    assert!(info.markdown.contains("x"));
+    // `.filter()` preserves the Declared receiver, so the popup mentions
+    // the Orders schema name.
+    assert!(info.markdown.contains("Orders"));
+}
+
+#[test]
+fn hover_on_local_binding_with_typed_annotation_shows_the_declared_schema() {
+    // `x: DataFrame[Orders] = ...` — the annotation is authoritative;
+    // hover should describe Orders' fields regardless of what the RHS
+    // evaluates to.
+    let src = r#"
+class Orders(Schema):
+    price: int
+
+def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    x: DataFrame[Orders] = raw.select(col("price"))
+    return x
+"#;
+    let (line, col) = cursor_at(src, "x: DataFrame");
+    let info = hover(src, line, col).expect("expected hover info");
+    assert!(info.markdown.contains("Orders"));
+    assert!(info.markdown.contains("price"));
+}
