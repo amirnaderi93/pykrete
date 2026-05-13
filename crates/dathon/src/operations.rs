@@ -301,14 +301,14 @@ fn handle_ann_assign<'a>(
             if let Some(schema) = ctx.find_schema(schema_name) {
                 ctx.bind_df(target_name, SchemaView::Declared(schema));
             } else {
-                diagnostics.push(Diagnostic::at(
+                diagnostics.push(Diagnostic::at_range(
                     Severity::Error,
                     "D0020",
                     format!(
                         "Unknown schema '{schema_name}' referenced in DataFrame[…]. \
                          Declare it as a class extending Schema.",
                     ),
-                    ann.annotation.range().start(),
+                    ann.annotation.range(),
                     source,
                     line_index,
                 ));
@@ -316,14 +316,14 @@ fn handle_ann_assign<'a>(
         }
         Some(DataFrameAnnotation::NonBareName) => {
             let raw_text = &source[ann.annotation.range()];
-            diagnostics.push(Diagnostic::at(
+            diagnostics.push(Diagnostic::at_range(
                 Severity::Error,
                 "D0021",
                 format!(
                     "DataFrame schema must be a bare name; got '{raw_text}'. \
                      Subscripted/complex schema expressions are not supported in v0.1.",
                 ),
-                ann.annotation.range().start(),
+                ann.annotation.range(),
                 source,
                 line_index,
             ));
@@ -362,11 +362,11 @@ fn check_return_type(
         only_declared.join(", "),
         only_actual.join(", "),
     );
-    diagnostics.push(Diagnostic::at(
+    diagnostics.push(Diagnostic::at_range(
         Severity::Error,
         "D0050",
         message,
-        range.start(),
+        range,
         source,
         line_index,
     ));
@@ -572,11 +572,11 @@ fn handle_agg<'a>(
         if let FieldPathResult::Missing { field, on } =
             resolve_path(underlying, col_name, _ctx.schemas())
         {
-            diagnostics.push(Diagnostic::at(
+            diagnostics.push(Diagnostic::at_range(
                 Severity::Error,
                 "D0030",
                 format!("Column '{field}' does not exist on {}.", on.display_name()),
-                col_range.start(),
+                col_range,
                 source,
                 line_index,
             ));
@@ -614,11 +614,11 @@ fn check_column_method_args<'a>(
         if let FieldPathResult::Missing { field, on } =
             resolve_path(schema, col_name, ctx.schemas())
         {
-            diagnostics.push(Diagnostic::at(
+            diagnostics.push(Diagnostic::at_range(
                 Severity::Error,
                 "D0030",
                 format!("Column '{field}' does not exist on {}.", on.display_name()),
-                col_range.start(),
+                col_range,
                 source,
                 line_index,
             ));
@@ -851,11 +851,11 @@ fn check_union_schemas(
         left.display_name(),
         only_right.join(", "),
     );
-    diagnostics.push(Diagnostic::at(
+    diagnostics.push(Diagnostic::at_range(
         Severity::Error,
         "D0040",
         message,
-        range.start(),
+        range,
         source,
         line_index,
     ));
@@ -907,27 +907,27 @@ fn check_join_keys(
     let JoinOn::Keys(keys) = on else { return };
     for (key, range) in keys {
         if !left.has_field(key) {
-            diagnostics.push(Diagnostic::at(
+            diagnostics.push(Diagnostic::at_range(
                 Severity::Error,
                 "D0060",
                 format!(
                     "Join key '{key}' does not exist on the left side ({}).",
                     left.display_name(),
                 ),
-                range.start(),
+                *range,
                 source,
                 line_index,
             ));
         }
         if !right.has_field(key) {
-            diagnostics.push(Diagnostic::at(
+            diagnostics.push(Diagnostic::at_range(
                 Severity::Error,
                 "D0060",
                 format!(
                     "Join key '{key}' does not exist on the right side ({}).",
                     right.display_name(),
                 ),
-                range.start(),
+                *range,
                 source,
                 line_index,
             ));
