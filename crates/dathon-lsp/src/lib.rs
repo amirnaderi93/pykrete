@@ -16,8 +16,11 @@
 //! - Diagnostics are zero-width at their start position; editors typically
 //!   extend the underline to the word at that position.
 
+pub mod project;
+
 use std::collections::HashMap;
 use std::error::Error;
+use std::path::PathBuf;
 
 use lsp_server::{Connection, ErrorCode, Message, Notification, Request, Response, ResponseError};
 use lsp_types::{
@@ -290,8 +293,8 @@ fn handle_notification(
             let params: DidOpenTextDocumentParams = serde_json::from_value(notif.params)?;
             let uri = params.text_document.uri.clone();
             let text = params.text_document.text;
-            docs.insert(uri.clone(), text.clone());
-            publish_diagnostics(connection, &uri, &text)?;
+            docs.insert(uri, text);
+            publish_project_diagnostics(connection, docs)?;
         }
         "textDocument/didChange" => {
             let params: DidChangeTextDocumentParams = serde_json::from_value(notif.params)?;
@@ -300,8 +303,8 @@ fn handle_notification(
             // field is the entire new buffer.
             if let Some(change) = params.content_changes.into_iter().next() {
                 let text = change.text;
-                docs.insert(uri.clone(), text.clone());
-                publish_diagnostics(connection, &uri, &text)?;
+                docs.insert(uri, text);
+                publish_project_diagnostics(connection, docs)?;
             }
         }
         "textDocument/didClose" => {
@@ -309,8 +312,11 @@ fn handle_notification(
             let uri = params.text_document.uri;
             docs.remove(&uri);
             // Clear any existing diagnostics for the closed file so the
-            // editor doesn't show stale errors.
+            // editor doesn't show stale errors, then re-publish project
+            // diagnostics for the rest — closing a file can change what
+            // other open files see (e.g. removing an import target).
             publish_empty_diagnostics(connection, &uri)?;
+            publish_project_diagnostics(connection, docs)?;
         }
         // didSave, willSave, etc. are ignored — diagnostics already update
         // on every didChange. `initialized` arrives once and is a no-op.
@@ -319,8 +325,56 @@ fn handle_notification(
     Ok(())
 }
 
-/// Run the checker and push diagnostics for one document.
-fn publish_diagnostics(
+/// Run the analyzer over the entire project — every `.dpy` file under
+/// the project root, with open documents' in-memory contents
+/// overriding disk — and push diagnostics for each currently-open
+/// document.
+///
+/// Falls back to single-file analysis for the open documents when no
+/// project root can be derived (e.g. `untitled://` buffers or open
+/// files outside any filesystem-rooted project).
+fn publish_project_diagnostics(
+    connection: &Connection,
+    docs: &HashMap<Url, String>,
+) -> Result<(), Box<dyn Error + Sync + Send>> {
+    let Some(snapshot) = project::build_project_snapshot(docs) else {
+        // Fall back: no usable project root. Check each open doc on
+        // its own so we still publish *something* — the user will
+        // see the same single-file behaviour we had before iteration 33.
+        for (uri, text) in docs {
+            publish_single_file_diagnostics(connection, uri, text)?;
+        }
+        return Ok(());
+    };
+
+    let result = dathon::check_project(&snapshot);
+    // Map each file in the project back to a Url for diagnostic
+    // delivery. Only publish for URIs that are actually open in the
+    // editor — closed files' diagnostics would be invisible.
+    let open_paths: HashMap<PathBuf, Url> = docs
+        .keys()
+        .filter_map(|uri| uri.to_file_path().ok().map(|p| (p, uri.clone())))
+        .collect();
+    for file in &result.files {
+        let path = PathBuf::from(&file.path);
+        let Some(uri) = open_paths.get(&path) else {
+            continue;
+        };
+        let diagnostics: Vec<Diagnostic> = file
+            .result
+            .diagnostics
+            .iter()
+            .map(to_lsp_diagnostic)
+            .collect();
+        send_diagnostics(connection, uri, diagnostics)?;
+    }
+    Ok(())
+}
+
+/// Single-file analysis fallback used when no project snapshot is
+/// available (untitled buffers, opens outside a filesystem-rooted
+/// project). Same behaviour the LSP had before iteration 33.
+fn publish_single_file_diagnostics(
     connection: &Connection,
     uri: &Url,
     text: &str,
