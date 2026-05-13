@@ -12,3 +12,6 @@ Cargo.lock.bak
 editors/*/node_modules/
 editors/*/out/
 editors/*/*.vsix
+
+# Claude Code scheduling lockfiles (per-session, not source-controlled)
+.claude/scheduled_tasks.lock
