@@ -21,6 +21,7 @@ use std::error::Error;
 
 use lsp_server::{Connection, ErrorCode, Message, Notification, Request, Response, ResponseError};
 use lsp_types::{
+    CompletionItem, CompletionItemKind, CompletionOptions, CompletionParams, CompletionResponse,
     Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
     GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
@@ -37,6 +38,13 @@ pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
         definition_provider: Some(OneOf::Left(true)),
+        completion_provider: Some(CompletionOptions {
+            // Editors invoke completion automatically after the user types
+            // one of these characters. `"` for `col("…")`, `.` for `df.…`,
+            // `[` for `DataFrame[…]`.
+            trigger_characters: Some(vec!["\"".to_string(), ".".to_string(), "[".to_string()]),
+            ..Default::default()
+        }),
         ..Default::default()
     })?;
     connection.initialize(server_capabilities)?;
@@ -98,6 +106,15 @@ fn handle_request(
         "textDocument/definition" => {
             let params: GotoDefinitionParams = serde_json::from_value(req.params)?;
             let response_value = handle_definition(docs, params);
+            connection.sender.send(Message::Response(Response {
+                id: req.id,
+                result: Some(serde_json::to_value(response_value)?),
+                error: None,
+            }))?;
+        }
+        "textDocument/completion" => {
+            let params: CompletionParams = serde_json::from_value(req.params)?;
+            let response_value = handle_completion(docs, params);
             connection.sender.send(Message::Response(Response {
                 id: req.id,
                 result: Some(serde_json::to_value(response_value)?),
@@ -179,6 +196,39 @@ pub fn handle_definition(
         range: span_to_range(span),
     };
     Some(GotoDefinitionResponse::Scalar(location))
+}
+
+/// Handle a `textDocument/completion` request by routing through
+/// `dathon::completions`. Three completion surfaces are recognized: the
+/// `X` in `DataFrame[X]`, the literal inside `col("…")`, and the attr
+/// after `df.`. Returns an empty list (encoded as `CompletionList`) when
+/// no completions apply at the cursor.
+pub fn handle_completion(
+    docs: &HashMap<Url, String>,
+    params: CompletionParams,
+) -> Option<CompletionResponse> {
+    let uri = &params.text_document_position.text_document.uri;
+    let pos = params.text_document_position.position;
+    let text = docs.get(uri)?;
+    let line = (pos.line as usize).checked_add(1)?;
+    let column = (pos.character as usize).checked_add(1)?;
+    let items: Vec<CompletionItem> = dathon::completions(text, line, column)
+        .into_iter()
+        .map(to_lsp_completion_item)
+        .collect();
+    Some(CompletionResponse::Array(items))
+}
+
+fn to_lsp_completion_item(item: dathon::CompletionItem) -> CompletionItem {
+    CompletionItem {
+        label: item.label,
+        detail: item.detail,
+        kind: Some(match item.kind {
+            dathon::CompletionItemKind::Class => CompletionItemKind::CLASS,
+            dathon::CompletionItemKind::Field => CompletionItemKind::FIELD,
+        }),
+        ..Default::default()
+    }
 }
 
 #[allow(deprecated)]
@@ -578,6 +628,61 @@ mod tests {
                 assert_eq!(loc.range.start.character, 6);
             }
             other => panic!("expected Scalar location, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // completion handler
+    // -----------------------------------------------------------------------
+
+    fn completion_params_at(uri: &Url, line: u32, character: u32) -> CompletionParams {
+        CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position: Position { line, character },
+            },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+            context: None,
+        }
+    }
+
+    #[test]
+    fn handle_completion_returns_none_when_uri_not_open() {
+        let docs: HashMap<Url, String> = HashMap::new();
+        let uri = Url::parse("file:///nonexistent.dpy").unwrap();
+        let result = handle_completion(&docs, completion_params_at(&uri, 0, 0));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn handle_completion_returns_schema_names_inside_dataframe_subscript() {
+        let mut docs: HashMap<Url, String> = HashMap::new();
+        let uri = Url::parse("file:///t.dpy").unwrap();
+        // Line 0: `class Orders(Schema):` (Orders at col 6)
+        // Line 1: field
+        // Line 2: blank
+        // Line 3: `class Returns(Schema):`
+        // Line 4: field
+        // Line 5: blank
+        // Line 6: `def f(raw: DataFrame[Orders]) -> ...` — cursor inside `Orders` slot.
+        let src = "class Orders(Schema):\n    x: int\n\nclass Returns(Schema):\n    y: int\n\ndef f(raw: DataFrame[Orders]) -> DataFrame[Orders]:\n    return raw\n";
+        docs.insert(uri.clone(), src.to_string());
+
+        // Cursor inside the `Orders` token of `DataFrame[Orders]` on line 6.
+        // `def f(raw: DataFrame[` is 21 characters, so character 22 lands
+        // on the first letter of `Orders`.
+        let result = handle_completion(&docs, completion_params_at(&uri, 6, 22)).expect("response");
+        match result {
+            CompletionResponse::Array(items) => {
+                let mut names: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+                names.sort();
+                assert_eq!(names, vec!["Orders", "Returns"]);
+                for item in &items {
+                    assert_eq!(item.kind, Some(CompletionItemKind::CLASS));
+                }
+            }
+            other => panic!("expected Array, got {other:?}"),
         }
     }
 }

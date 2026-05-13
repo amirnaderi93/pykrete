@@ -21,6 +21,7 @@
 //!    propagating bindings on `x = …` assignments, and validating the
 //!    `return` value against the declared return type.
 
+pub mod completion;
 pub mod dataframe;
 pub mod diagnostics;
 pub mod hover;
@@ -32,6 +33,7 @@ pub mod transpiler;
 pub mod types;
 pub mod walk;
 
+pub use completion::{CompletionItem, CompletionItemKind, completions};
 pub use hover::{HoverInfo, hover};
 pub use symbols::{DocumentSymbol, Span, SymbolKind, definition, document_symbols};
 pub use transpiler::transpile;
