@@ -160,11 +160,22 @@ fn handle_request(
 pub fn handle_hover(docs: &HashMap<Url, String>, params: HoverParams) -> Option<Hover> {
     let uri = &params.text_document_position_params.text_document.uri;
     let pos = params.text_document_position_params.position;
-    let text = docs.get(uri)?;
+    let _ = docs.get(uri)?; // ensure the URI is open
     // LSP positions are 0-indexed; dathon's hover entry point is 1-indexed.
     let line = (pos.line as usize).checked_add(1)?;
     let column = (pos.character as usize).checked_add(1)?;
-    let info = dathon::hover(text, line, column)?;
+    let info = match project::build_project_snapshot(docs) {
+        Some(snapshot) => {
+            let focus_path = uri.to_file_path().ok()?;
+            let focus_path_str = focus_path.to_string_lossy().to_string();
+            dathon::hover_in_project(&snapshot, &focus_path_str, line, column)?
+        }
+        None => {
+            // Single-file fallback for untitled / non-file URIs.
+            let text = docs.get(uri)?;
+            dathon::hover(text, line, column)?
+        }
+    };
     Some(Hover {
         contents: HoverContents::Markup(MarkupContent {
             kind: MarkupKind::Markdown,
@@ -201,10 +212,20 @@ pub fn handle_definition(
         .uri
         .clone();
     let pos = params.text_document_position_params.position;
-    let text = docs.get(&uri)?;
+    let _ = docs.get(&uri)?;
     let line = (pos.line as usize).checked_add(1)?;
     let column = (pos.character as usize).checked_add(1)?;
-    let span = dathon::definition(text, line, column)?;
+    let span = match project::build_project_snapshot(docs) {
+        Some(snapshot) => {
+            let focus_path = uri.to_file_path().ok()?;
+            let focus_path_str = focus_path.to_string_lossy().to_string();
+            dathon::definition_in_project(&snapshot, &focus_path_str, line, column)?
+        }
+        None => {
+            let text = docs.get(&uri)?;
+            dathon::definition(text, line, column)?
+        }
+    };
     let location = Location {
         uri,
         range: span_to_range(span),
@@ -223,13 +244,21 @@ pub fn handle_completion(
 ) -> Option<CompletionResponse> {
     let uri = &params.text_document_position.text_document.uri;
     let pos = params.text_document_position.position;
-    let text = docs.get(uri)?;
+    let _ = docs.get(uri)?;
     let line = (pos.line as usize).checked_add(1)?;
     let column = (pos.character as usize).checked_add(1)?;
-    let items: Vec<CompletionItem> = dathon::completions(text, line, column)
-        .into_iter()
-        .map(to_lsp_completion_item)
-        .collect();
+    let raw_items = match project::build_project_snapshot(docs) {
+        Some(snapshot) => {
+            let focus_path = uri.to_file_path().ok()?;
+            let focus_path_str = focus_path.to_string_lossy().to_string();
+            dathon::completions_in_project(&snapshot, &focus_path_str, line, column)
+        }
+        None => {
+            let text = docs.get(uri)?;
+            dathon::completions(text, line, column)
+        }
+    };
+    let items: Vec<CompletionItem> = raw_items.into_iter().map(to_lsp_completion_item).collect();
     Some(CompletionResponse::Array(items))
 }
 

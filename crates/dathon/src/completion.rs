@@ -63,34 +63,51 @@ pub fn completions(source: &str, line: usize, column: usize) -> Vec<CompletionIt
     };
     let module = parsed.syntax();
     let line_index = LineIndex::from_source_text(source);
-    let Some(offset) = offset_from_line_column(&line_index, source, line, column) else {
-        return Vec::new();
-    };
-
     let classes = discover_top_level_classes(module);
     let schemas = discover_schemas(&classes);
+    let registry = Registry::build(module);
+    completions_with_scope(
+        module,
+        source,
+        &line_index,
+        line,
+        column,
+        &schemas,
+        &registry,
+    )
+}
+
+/// Project-aware completion: same shape as `hover_with_scope`. The
+/// caller passes the focus file's parsed module plus pre-resolved
+/// visible schemas + registry so cross-file imports show up in
+/// `DataFrame[…]` and column-name suggestions.
+pub(crate) fn completions_with_scope<'a>(
+    module: &'a ruff_python_ast::ModModule,
+    source: &str,
+    line_index: &LineIndex,
+    line: usize,
+    column: usize,
+    schemas: &[Schema<'a>],
+    registry: &Registry<'a>,
+) -> Vec<CompletionItem> {
+    let Some(offset) = offset_from_line_column(line_index, source, line, column) else {
+        return Vec::new();
+    };
     let functions = discover_top_level_functions(module);
 
-    // Order: most-specific surface first. The DataFrame[…] check is
-    // cheapest, but its slice can sit inside a function signature, so
-    // we check it first so it wins over an outer df.attr / col() match
-    // that would otherwise be considered.
     if completes_dataframe_schema_slot(offset, &functions) {
-        return schema_completions(&schemas);
+        return schema_completions(schemas);
     }
 
-    // The two body-context surfaces share an expensive analysis pass —
-    // run it once and pull both trace flavors out.
-    let registry = Registry::build(module);
     let (col_traces, local_bindings) =
-        crate::collect_module_traces(&functions, source, &line_index, &schemas, &registry);
+        crate::collect_module_traces(&functions, source, line_index, schemas, registry);
 
-    if let Some(items) = column_completions_in_col_literal(offset, &col_traces, &schemas) {
+    if let Some(items) = column_completions_in_col_literal(offset, &col_traces, schemas) {
         return items;
     }
 
     if let Some(items) =
-        column_completions_after_df_dot(offset, &functions, &schemas, &local_bindings)
+        column_completions_after_df_dot(offset, &functions, schemas, &local_bindings)
     {
         return items;
     }
