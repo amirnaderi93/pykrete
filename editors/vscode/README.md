@@ -42,7 +42,25 @@ schema checks layered on top.
    }
    ```
 
-3. Open a `.dpy` file. Both servers run side-by-side:
+3. **Drop `python_stubs/dathon.py` into your project root** (or anywhere
+   on the Python module-search path). dathon's magic names — `Schema`,
+   `DataFrame`, `col`, `string`, `date`, `timestamp`, `double`, `long` —
+   aren't real Python identifiers; the stub provides Pylance-friendly
+   declarations for them so the type-checker doesn't flag every Schema
+   class as "undefined name." dathon itself ignores the import.
+
+4. **Add a one-line import at the top of every `.dpy` file**:
+
+   ```python
+   from dathon import Schema, DataFrame, col, string, date, timestamp, double
+   ```
+
+   (Cherry-pick names per file as needed.) Examples are in
+   [`examples/pipelines/`](../../examples/pipelines/) — the
+   schemas.dpy / dal.dpy / example_job.dpy fixtures all use the
+   pattern.
+
+5. Open a `.dpy` file. Both servers run side-by-side:
 
    - The Python LSP handles general Python features.
    - dathon-lsp handles `DataFrame[X]`, `col("…")`, Schema classes,
@@ -50,12 +68,17 @@ schema checks layered on top.
 
    VS Code merges their responses automatically.
 
-If you've configured your Python LSP with a strictness mode, mark
-`*.dpy` files as opt-out for the rules that don't fit (e.g.
-basedpyright's "reportUnknownArgumentType" complains about
-`def f(raw: DataFrame[X]):` because `X` is a Schema class, not a
-PEP-695 type parameter — add `"reportUnknownArgumentType": "none"` in
-the relevant config to silence it).
+If your Python LSP still complains about specific dathon idioms after
+the stub is in place, the most common knobs are:
+
+- **`from pyspark.sql.functions import col` shows red** — PySpark isn't
+  installed in the active Python interpreter. `pip install pyspark` in
+  the project's venv, or silence with `"reportMissingImports": "none"`
+  (basedpyright) for `.dpy` files.
+- **`DataFrame[X]` triggers "Unknown" warnings** — the stub's
+  `DataFrame` is a generic, so basedpyright's stricter rules like
+  `reportUnknownArgumentType` may complain. Add `"reportUnknownArgumentType": "none"`
+  in your project's basedpyright config to silence.
 
 ## Develop
 

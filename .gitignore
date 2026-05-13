@@ -15,3 +15,6 @@ editors/*/*.vsix
 
 # Claude Code scheduling lockfiles (per-session, not source-controlled)
 .claude/scheduled_tasks.lock
+
+# Per-user VS Code workspace settings (interpreter paths, etc.)
+.vscode/

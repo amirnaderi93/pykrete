@@ -92,6 +92,8 @@ Because `.dpy` is a strict superset of Python, the LSP should offer **everything
 
 **Iteration 39 shipped phase 1 — co-activation.** The VS Code extension now activates on `onLanguage:python` plus the dathon language, and dathon-lsp's document selector accepts both `dathon` and `python` files matching `**/*.dpy`. Adding `"files.associations": {"*.dpy": "python"}` to the user's `settings.json` makes `.dpy` files run through a Python LSP (basedpyright recommended) alongside dathon-lsp — full Python feature parity at the cost of installing a second extension. See [`editors/vscode/README.md`](../editors/vscode/README.md) for the setup.
 
+**Iteration 40 closed the two co-activation rough edges that first-contact surfaced:** (1) dathon was emitting `D0070` on external Python imports (`from pyspark.sql.functions import col`, `from datetime import datetime`); it now skips unresolvable imports silently and only fires `D0070` for malformed relative paths (too many leading dots). (2) Pylance was flagging every Schema class as "undefined name" because `Schema`, `string`, `date`, `timestamp`, `double`, `long`, `DataFrame`, `col` aren't real Python identifiers. [`python_stubs/dathon.py`](../python_stubs/dathon.py) ships a stub module the user drops in their project; a one-line `from dathon import Schema, …` at the top of each `.dpy` file makes Pylance happy, and dathon ignores the import.
+
 **Phase 2 — multiplex inside dathon-lsp.** Eventually we'd embed/proxy an existing Python LSP behind dathon's stdio interface and merge responses, so users only install one extension. Deferred until friction shows up — co-activation is good enough for now.
 
 ### Multi-dataframe support (pandas, polars, …)
