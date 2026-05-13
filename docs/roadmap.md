@@ -31,7 +31,7 @@ Iterations 24–25 shipped the LSP skeleton (live diagnostics via `textDocument/
 
 ### VS Code extension
 
-A small TypeScript wrapper that launches `dathon-lsp` and routes `.dpy` files to it. Distributable as a `.vsix`; eventually published to the marketplace.
+Shipped (iteration 27) — TypeScript wrapper at [editors/vscode/](../editors/vscode/) that launches `dathon-lsp` and routes `.dpy` files to it. Currently distributed as a local `.vsix` (`npx vsce package`); marketplace publishing is still pending.
 
 ### Editor-agnostic LSP docs
 
