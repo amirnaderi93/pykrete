@@ -31,6 +31,12 @@ pub struct Diagnostic {
     pub column: usize,
     pub end_line: usize,
     pub end_column: usize,
+    /// A suggested replacement for the offending token, when one is
+    /// available (e.g. for `D0030` we run a Levenshtein search over the
+    /// schema's field names and surface the closest match). The LSP
+    /// layer round-trips this so `textDocument/codeAction` can offer a
+    /// quick-fix that swaps the literal in place.
+    pub suggestion: Option<String>,
 }
 
 impl Diagnostic {
@@ -76,7 +82,15 @@ impl Diagnostic {
             column: start.column.get(),
             end_line: end.line.get(),
             end_column: end.column.get(),
+            suggestion: None,
         }
+    }
+
+    /// Attach a suggested replacement for the offending token. Used by
+    /// `D0030` to surface the closest matching column name as a quick-fix.
+    pub fn with_suggestion(mut self, suggestion: Option<String>) -> Self {
+        self.suggestion = suggestion;
+        self
     }
 
     pub fn format(&self, path: &str) -> String {

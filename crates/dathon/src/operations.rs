@@ -37,7 +37,7 @@ use ruff_text_size::{Ranged, TextRange};
 use crate::dataframe::{self, DataFrameAnnotation, SlotLabel, TypedSlot};
 use crate::diagnostics::{Diagnostic, Severity};
 use crate::registry::Registry;
-use crate::schema::{FieldPathResult, Schema, SchemaView, resolve_path};
+use crate::schema::{FieldPathResult, Schema, SchemaView, resolve_path, suggest_field_name};
 use crate::walk::DiscoveredFunction;
 
 // ---------------------------------------------------------------------------
@@ -616,14 +616,22 @@ fn handle_agg<'a>(
         if let FieldPathResult::Missing { field, on } =
             resolve_path(&underlying, col_name, ctx.schemas())
         {
-            diagnostics.push(Diagnostic::at_range(
-                Severity::Error,
-                "D0030",
-                format!("Column '{field}' does not exist on {}.", on.display_name()),
-                col_range,
-                source,
-                line_index,
-            ));
+            let suggestion = suggest_field_name(field, &on);
+            let mut message = format!("Column '{field}' does not exist on {}.", on.display_name());
+            if let Some(s) = &suggestion {
+                message.push_str(&format!(" Did you mean '{s}'?"));
+            }
+            diagnostics.push(
+                Diagnostic::at_range(
+                    Severity::Error,
+                    "D0030",
+                    message,
+                    col_range,
+                    source,
+                    line_index,
+                )
+                .with_suggestion(suggestion),
+            );
         }
     }
 
@@ -659,14 +667,22 @@ fn check_column_method_args<'a>(
         if let FieldPathResult::Missing { field, on } =
             resolve_path(schema, col_name, ctx.schemas())
         {
-            diagnostics.push(Diagnostic::at_range(
-                Severity::Error,
-                "D0030",
-                format!("Column '{field}' does not exist on {}.", on.display_name()),
-                col_range,
-                source,
-                line_index,
-            ));
+            let suggestion = suggest_field_name(field, &on);
+            let mut message = format!("Column '{field}' does not exist on {}.", on.display_name());
+            if let Some(s) = &suggestion {
+                message.push_str(&format!(" Did you mean '{s}'?"));
+            }
+            diagnostics.push(
+                Diagnostic::at_range(
+                    Severity::Error,
+                    "D0030",
+                    message,
+                    col_range,
+                    source,
+                    line_index,
+                )
+                .with_suggestion(suggestion),
+            );
         }
     }
 }

@@ -21,13 +21,14 @@ use std::error::Error;
 
 use lsp_server::{Connection, ErrorCode, Message, Notification, Request, Response, ResponseError};
 use lsp_types::{
+    CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, CodeActionResponse,
     CompletionItem, CompletionItemKind, CompletionOptions, CompletionParams, CompletionResponse,
     Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
     GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
     HoverProviderCapability, Location, MarkupContent, MarkupKind, NumberOrString, OneOf, Position,
     PublishDiagnosticsParams, Range, ServerCapabilities, SymbolKind, TextDocumentSyncCapability,
-    TextDocumentSyncKind, Url,
+    TextDocumentSyncKind, TextEdit, Url, WorkspaceEdit,
 };
 
 pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
@@ -45,6 +46,7 @@ pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
             trigger_characters: Some(vec!["\"".to_string(), ".".to_string(), "[".to_string()]),
             ..Default::default()
         }),
+        code_action_provider: Some(lsp_types::CodeActionProviderCapability::Simple(true)),
         ..Default::default()
     })?;
     connection.initialize(server_capabilities)?;
@@ -115,6 +117,15 @@ fn handle_request(
         "textDocument/completion" => {
             let params: CompletionParams = serde_json::from_value(req.params)?;
             let response_value = handle_completion(docs, params);
+            connection.sender.send(Message::Response(Response {
+                id: req.id,
+                result: Some(serde_json::to_value(response_value)?),
+                error: None,
+            }))?;
+        }
+        "textDocument/codeAction" => {
+            let params: CodeActionParams = serde_json::from_value(req.params)?;
+            let response_value = handle_code_action(params);
             connection.sender.send(Message::Response(Response {
                 id: req.id,
                 result: Some(serde_json::to_value(response_value)?),
@@ -370,6 +381,13 @@ pub fn to_lsp_diagnostic(d: &dathon::diagnostics::Diagnostic) -> Diagnostic {
         character: d.end_column.saturating_sub(1) as u32,
     };
     let range = Range { start, end };
+    // Round-trip the suggestion in the diagnostic's `data` field so
+    // `textDocument/codeAction` can read it back when the editor sends
+    // the diagnostic with the code-action request.
+    let data = d
+        .suggestion
+        .as_ref()
+        .map(|s| serde_json::json!({ "suggestion": s }));
     Diagnostic {
         range,
         severity: Some(match d.severity {
@@ -382,8 +400,55 @@ pub fn to_lsp_diagnostic(d: &dathon::diagnostics::Diagnostic) -> Diagnostic {
         message: d.message.clone(),
         related_information: None,
         tags: None,
-        data: None,
+        data,
     }
+}
+
+/// Handle a `textDocument/codeAction` request. For each `D0030` diagnostic
+/// the editor included in the params that carries a `suggestion` payload,
+/// emit a `QuickFix` action whose edit replaces the diagnostic's range
+/// with the suggested `"name"` literal.
+///
+/// Editors render this as a lightbulb on the underlined token; selecting
+/// the action swaps in the closest matching column name.
+pub fn handle_code_action(params: CodeActionParams) -> CodeActionResponse {
+    let uri = params.text_document.uri;
+    let mut actions: Vec<CodeActionOrCommand> = Vec::new();
+    for diag in params.context.diagnostics {
+        // Only D0030 carries a suggestion today.
+        let Some(NumberOrString::String(code)) = &diag.code else {
+            continue;
+        };
+        if code != "D0030" {
+            continue;
+        }
+        let Some(suggestion) = diag
+            .data
+            .as_ref()
+            .and_then(|d| d.get("suggestion"))
+            .and_then(|s| s.as_str())
+        else {
+            continue;
+        };
+        let edit = TextEdit {
+            range: diag.range,
+            new_text: format!("\"{suggestion}\""),
+        };
+        let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+        changes.insert(uri.clone(), vec![edit]);
+        actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+            title: format!("Replace with '{suggestion}'"),
+            kind: Some(CodeActionKind::QUICKFIX),
+            diagnostics: Some(vec![diag.clone()]),
+            edit: Some(WorkspaceEdit {
+                changes: Some(changes),
+                ..Default::default()
+            }),
+            is_preferred: Some(true),
+            ..Default::default()
+        }));
+    }
+    actions
 }
 
 #[cfg(test)]
@@ -410,6 +475,7 @@ mod tests {
             column: start.1,
             end_line: end.0,
             end_column: end.1,
+            suggestion: None,
         }
     }
 
@@ -653,6 +719,120 @@ mod tests {
         let uri = Url::parse("file:///nonexistent.dpy").unwrap();
         let result = handle_completion(&docs, completion_params_at(&uri, 0, 0));
         assert!(result.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // diagnostic ↔ suggestion round-trip
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn diagnostic_suggestion_is_serialized_into_lsp_data_field() {
+        let mut d = dathon_diag(
+            (2, 5),
+            (2, 15),
+            "D0030",
+            "Column 'prce' does not exist. Did you mean 'price'?",
+        );
+        d.suggestion = Some("price".to_string());
+        let lsp = to_lsp_diagnostic(&d);
+        let data = lsp.data.expect("expected data");
+        assert_eq!(data["suggestion"], serde_json::json!("price"));
+    }
+
+    // -----------------------------------------------------------------------
+    // codeAction handler
+    // -----------------------------------------------------------------------
+
+    use lsp_types::{CodeActionContext, CodeActionResponse as CARes};
+
+    fn lsp_diag_with_suggestion(
+        start: (u32, u32),
+        end: (u32, u32),
+        suggestion: &str,
+    ) -> Diagnostic {
+        Diagnostic {
+            range: Range {
+                start: Position {
+                    line: start.0,
+                    character: start.1,
+                },
+                end: Position {
+                    line: end.0,
+                    character: end.1,
+                },
+            },
+            severity: Some(DiagnosticSeverity::ERROR),
+            code: Some(NumberOrString::String("D0030".to_string())),
+            code_description: None,
+            source: Some("dathon".to_string()),
+            message: format!("Column does not exist. Did you mean '{suggestion}'?"),
+            related_information: None,
+            tags: None,
+            data: Some(serde_json::json!({ "suggestion": suggestion })),
+        }
+    }
+
+    fn code_action_params(uri: &Url, diagnostics: Vec<Diagnostic>) -> CodeActionParams {
+        CodeActionParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            range: Range {
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 0,
+                    character: 0,
+                },
+            },
+            context: CodeActionContext {
+                diagnostics,
+                only: None,
+                trigger_kind: None,
+            },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+        }
+    }
+
+    #[test]
+    fn code_action_offers_quickfix_replacement_for_d0030_with_suggestion() {
+        let uri = Url::parse("file:///t.dpy").unwrap();
+        let diag = lsp_diag_with_suggestion((1, 18), (1, 25), "price");
+        let params = code_action_params(&uri, vec![diag.clone()]);
+        let result: CARes = handle_code_action(params);
+        assert_eq!(result.len(), 1);
+        let CodeActionOrCommand::CodeAction(action) = &result[0] else {
+            panic!("expected CodeAction, got {:?}", result[0]);
+        };
+        assert_eq!(action.title, "Replace with 'price'");
+        assert_eq!(action.kind, Some(CodeActionKind::QUICKFIX));
+        let edit = action.edit.as_ref().expect("expected edit");
+        let changes = edit.changes.as_ref().expect("expected changes");
+        let edits = changes.get(&uri).expect("expected edits for uri");
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].new_text, "\"price\"");
+        assert_eq!(edits[0].range, diag.range);
+    }
+
+    #[test]
+    fn code_action_skips_d0030_diagnostic_without_suggestion_data() {
+        let uri = Url::parse("file:///t.dpy").unwrap();
+        let mut diag = lsp_diag_with_suggestion((1, 18), (1, 25), "price");
+        diag.data = None;
+        let params = code_action_params(&uri, vec![diag]);
+        let result = handle_code_action(params);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn code_action_skips_non_d0030_diagnostics() {
+        let uri = Url::parse("file:///t.dpy").unwrap();
+        let mut diag = lsp_diag_with_suggestion((1, 18), (1, 25), "price");
+        diag.code = Some(NumberOrString::String("D0020".to_string()));
+        let params = code_action_params(&uri, vec![diag]);
+        let result = handle_code_action(params);
+        assert!(result.is_empty());
     }
 
     #[test]

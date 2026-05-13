@@ -34,6 +34,7 @@ use crate::operations::ColumnRefTrace;
 use crate::registry::Registry;
 use crate::schema::{
     FieldPathResult, FieldResolution, Schema, SchemaView, discover_schemas, resolve_path,
+    suggest_field_name,
 };
 use crate::walk::{DiscoveredFunction, discover_top_level_classes, discover_top_level_functions};
 
@@ -197,6 +198,9 @@ fn render_column_ref_hover(trace: &ColumnRefTrace<'_>, schemas: &[Schema<'_>]) -
                 on.display_name(),
             )
             .unwrap();
+            if let Some(suggestion) = suggest_field_name(field, &on) {
+                writeln!(md, "Did you mean `{suggestion}`?").unwrap();
+            }
         }
         FieldPathResult::Resolved => {
             // resolve_path only confirms existence. For type info we have
