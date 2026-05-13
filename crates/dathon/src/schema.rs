@@ -13,6 +13,11 @@ use crate::walk::DiscoveredClass;
 #[derive(Debug)]
 pub struct Schema<'ast> {
     pub class: &'ast DiscoveredClass<'ast>,
+    /// Set when this schema was pulled in via `from X import Y as Z` —
+    /// the importing file should see it under the local name `Z`, even
+    /// though its actual class declaration is `class Y(Schema)`. `None`
+    /// for schemas declared locally (which use the class name verbatim).
+    pub alias: Option<&'ast str>,
 }
 
 #[derive(Debug)]
@@ -66,13 +71,22 @@ impl<'ast> SchemaField<'ast> {
 impl<'ast> Schema<'ast> {
     pub fn from_class(class: &'ast DiscoveredClass<'ast>) -> Option<Self> {
         if class.has_base("Schema") {
-            Some(Self { class })
+            Some(Self { class, alias: None })
         } else {
             None
         }
     }
 
+    /// The name this schema should resolve under in the current scope —
+    /// the alias if one is set, otherwise the class's declared name.
     pub fn name(&self) -> &'ast str {
+        self.alias.unwrap_or_else(|| self.class.name())
+    }
+
+    /// The class's declared name verbatim, ignoring any import alias.
+    /// Used for hover / go-to-definition where we want to show what the
+    /// schema is actually called in its source file.
+    pub fn declared_name(&self) -> &'ast str {
         self.class.name()
     }
 

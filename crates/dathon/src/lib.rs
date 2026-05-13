@@ -25,6 +25,7 @@ pub mod completion;
 pub mod dataframe;
 pub mod diagnostics;
 pub mod hover;
+pub mod imports;
 pub mod operations;
 pub mod registry;
 pub mod schema;
@@ -40,6 +41,7 @@ pub use transpiler::transpile;
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
+use std::path::PathBuf;
 
 use ruff_python_ast::ModModule;
 use ruff_source_file::LineIndex;
@@ -47,6 +49,7 @@ use ruff_text_size::Ranged;
 
 use crate::dataframe::{DataFrameAnnotation, SlotLabel, TypedSlot, typed_slots};
 use crate::diagnostics::{Diagnostic, Severity};
+use crate::imports::{find_pyproject_root, longest_common_ancestor, parse_imports};
 use crate::operations::{BodyContext, ColumnRefTrace, check_function_body};
 use crate::registry::Registry;
 use crate::schema::{FieldResolution, Schema, discover_schemas};
@@ -130,13 +133,18 @@ pub fn check(path: &str, source: &str) -> CheckResult {
 /// file is then analyzed against that pooled scope, and per-file
 /// diagnostics are returned in input order.
 ///
-/// Scope cuts in v0.1:
-/// - No `import` statement parsing — every declaration is visible
-///   everywhere, regardless of which file declared it.
-/// - No directory walking; the CLI shell does that itself if needed.
-/// - Duplicate top-level names across files: last one wins in the
-///   combined registry (last-declared overrides). We don't currently warn
-///   about duplicates.
+/// Scoping in v0.1:
+/// - Schemas / typed constants are visible inside a file only if (a) the
+///   file declared them itself, or (b) the file pulled them in with a
+///   `from X import Y` statement. Bare `import X` is parsed but doesn't
+///   make `X.Y` references resolve (qualified access is deferred).
+/// - The project root is the deepest `pyproject.toml`-bearing directory
+///   above the first input file; if none exists we fall back to the
+///   longest common ancestor of every input file. Absolute imports
+///   (`from pkg.X import Y`) are anchored at this root.
+/// - Directory walking happens at the CLI layer; this entry point still
+///   takes `(path, source)` pairs.
+/// - Duplicate top-level names across files: not currently diagnosed.
 pub fn check_project(files: &[(String, String)]) -> ProjectCheckResult {
     // Phase 1: parse every file. Successful parses produce a module; parse
     // failures produce a single D0001 for that file.
@@ -145,37 +153,154 @@ pub fn check_project(files: &[(String, String)]) -> ProjectCheckResult {
         .map(|(_, src)| ruff_python_parser::parse_module(src))
         .collect();
 
-    // Phase 2: collect every module reference for the successfully-parsed
-    // files. These are kept alive by `parsed` for the rest of the function.
-    let modules: Vec<&ModModule> = parsed
+    // Phase 2: build a lookup table: absolute `.dpy` path → file index.
+    // Used to resolve `from .X import Y` clauses to a sibling file.
+    let project_root = resolve_project_root(files);
+    let path_to_index: HashMap<PathBuf, usize> = files
         .iter()
-        .filter_map(|r| r.as_ref().ok().map(|p| p.syntax()))
+        .enumerate()
+        .map(|(i, (p, _))| (PathBuf::from(p), i))
         .collect();
 
-    // Phase 3: build the combined view across all parsed modules.
-    // - all_classes: every top-level class def from every file.
-    // - all_schemas: those of all_classes whose bases include `Schema`.
-    // - combined_registry: classes + constants from every file (last-wins
-    //   on name collisions).
-    let mut all_classes = Vec::new();
-    for module in &modules {
-        all_classes.extend(discover_top_level_classes(module));
+    // Phase 3: discover each file's local schemas/classes/registry.
+    // Keep them on the per-file struct so the per-file scope can borrow
+    // selectively from them.
+    struct FileBundle<'a> {
+        local_classes: Vec<crate::walk::DiscoveredClass<'a>>,
+        local_registry: Registry<'a>,
     }
-    let all_schemas = discover_schemas(&all_classes);
-    let combined_registry = build_combined_registry(&modules);
+    let mut bundles: Vec<Option<FileBundle<'_>>> = Vec::with_capacity(files.len());
+    for parse_result in &parsed {
+        match parse_result {
+            Ok(p) => {
+                let module = p.syntax();
+                let local_classes = discover_top_level_classes(module);
+                let local_registry = Registry::build(module);
+                bundles.push(Some(FileBundle {
+                    local_classes,
+                    local_registry,
+                }));
+            }
+            Err(_) => bundles.push(None),
+        }
+    }
+    let bundles_ref: Vec<Option<&FileBundle<'_>>> = bundles.iter().map(|b| b.as_ref()).collect();
 
-    // Phase 4: analyze each file against the combined view.
+    // Phase 4: analyze each file against the schemas it can actually see.
     let mut file_results = Vec::with_capacity(files.len());
     for (i, (path, source)) in files.iter().enumerate() {
         let line_index = LineIndex::from_source_text(source);
         let result = match &parsed[i] {
-            Ok(p) => analyze_module(
-                p.syntax(),
-                source,
-                &line_index,
-                &all_schemas,
-                &combined_registry,
-            ),
+            Ok(p) => {
+                let module = p.syntax();
+                let mut visible_schemas: Vec<Schema<'_>> = bundles_ref[i]
+                    .map(|b| discover_schemas(&b.local_classes))
+                    .unwrap_or_default();
+                let mut import_diagnostics: Vec<Diagnostic> = Vec::new();
+                let mut combined_registry = bundles_ref[i]
+                    .map(|b| b.local_registry.clone())
+                    .unwrap_or_else(|| Registry {
+                        classes: HashMap::new(),
+                        constants: HashMap::new(),
+                    });
+                let importing_path = PathBuf::from(path);
+                for imp in parse_imports(module) {
+                    let Some(target_path) = imp.module.resolve(&importing_path, &project_root)
+                    else {
+                        import_diagnostics.push(Diagnostic::at_range(
+                            Severity::Error,
+                            "D0070",
+                            format!(
+                                "Cannot resolve module path '{}' — too many leading dots.",
+                                format_module_path(&imp.module),
+                            ),
+                            imp.range,
+                            source,
+                            &line_index,
+                        ));
+                        continue;
+                    };
+                    let Some(&target_idx) = path_to_index.get(&target_path) else {
+                        import_diagnostics.push(Diagnostic::at_range(
+                            Severity::Error,
+                            "D0070",
+                            format!(
+                                "Imported module '{}' was not found in the project. \
+                                 Expected file: {}",
+                                format_module_path(&imp.module),
+                                target_path.display(),
+                            ),
+                            imp.range,
+                            source,
+                            &line_index,
+                        ));
+                        continue;
+                    };
+                    let Some(target_bundle) = bundles_ref[target_idx] else {
+                        // Target file failed to parse — already has its own
+                        // D0001; don't duplicate the noise here.
+                        continue;
+                    };
+                    let target_schemas = discover_schemas(&target_bundle.local_classes);
+                    let found_schema = target_schemas
+                        .iter()
+                        .find(|s| s.declared_name() == imp.source_name)
+                        .map(|s| {
+                            let alias = if imp.local_name == imp.source_name {
+                                None
+                            } else {
+                                Some(imp.local_name)
+                            };
+                            Schema {
+                                class: s.class,
+                                alias,
+                            }
+                        });
+                    let found_class = target_bundle.local_registry.classes.get(imp.source_name);
+                    let found_constant =
+                        target_bundle.local_registry.constants.get(imp.source_name);
+                    let mut imported_anything = false;
+                    if let Some(schema) = found_schema {
+                        visible_schemas.push(schema);
+                        imported_anything = true;
+                    }
+                    if let Some(class) = found_class {
+                        combined_registry
+                            .classes
+                            .insert(imp.local_name, class.clone());
+                        imported_anything = true;
+                    }
+                    if let Some(constant) = found_constant {
+                        combined_registry
+                            .constants
+                            .insert(imp.local_name, constant.clone());
+                        imported_anything = true;
+                    }
+                    if !imported_anything {
+                        import_diagnostics.push(Diagnostic::at_range(
+                            Severity::Error,
+                            "D0071",
+                            format!(
+                                "Name '{}' is not exported by module '{}'.",
+                                imp.source_name,
+                                format_module_path(&imp.module),
+                            ),
+                            imp.range,
+                            source,
+                            &line_index,
+                        ));
+                    }
+                }
+                let mut analysis = analyze_module(
+                    module,
+                    source,
+                    &line_index,
+                    &visible_schemas,
+                    &combined_registry,
+                );
+                analysis.diagnostics.splice(0..0, import_diagnostics);
+                analysis
+            }
             Err(err) => {
                 let d = Diagnostic::at_range(
                     Severity::Error,
@@ -205,20 +330,25 @@ pub fn check_project(files: &[(String, String)]) -> ProjectCheckResult {
     }
 }
 
-/// Build a combined `Registry` covering every supplied module. On
-/// duplicate names (same class or constant declared in two files),
-/// last-write wins.
-fn build_combined_registry<'a>(modules: &[&'a ModModule]) -> Registry<'a> {
-    let mut combined = Registry {
-        classes: HashMap::new(),
-        constants: HashMap::new(),
-    };
-    for module in modules {
-        let local = Registry::build(module);
-        combined.classes.extend(local.classes);
-        combined.constants.extend(local.constants);
+/// Pick the project root: deepest `pyproject.toml`-bearing dir above the
+/// first input file, falling back to the longest common ancestor of the
+/// inputs and then to the current dir.
+fn resolve_project_root(files: &[(String, String)]) -> PathBuf {
+    if let Some((first, _)) = files.first() {
+        if let Some(root) = find_pyproject_root(&PathBuf::from(first)) {
+            return root;
+        }
     }
-    combined
+    longest_common_ancestor(files.iter().map(|(p, _)| p)).unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn format_module_path(module: &crate::imports::ModulePath) -> String {
+    let dots = ".".repeat(module.level as usize);
+    if module.segments.is_empty() {
+        dots
+    } else {
+        format!("{dots}{}", module.segments.join("."))
+    }
 }
 
 /// Analyze one parsed module given the project-wide schema list and
