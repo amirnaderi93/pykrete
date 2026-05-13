@@ -22,9 +22,11 @@ use std::error::Error;
 use lsp_server::{Connection, ErrorCode, Message, Notification, Request, Response, ResponseError};
 use lsp_types::{
     Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, Hover, HoverContents, HoverParams, HoverProviderCapability,
-    MarkupContent, MarkupKind, NumberOrString, Position, PublishDiagnosticsParams, Range,
-    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
+    DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
+    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
+    HoverProviderCapability, Location, MarkupContent, MarkupKind, NumberOrString, OneOf, Position,
+    PublishDiagnosticsParams, Range, ServerCapabilities, SymbolKind, TextDocumentSyncCapability,
+    TextDocumentSyncKind, Url,
 };
 
 pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
@@ -33,6 +35,8 @@ pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
     let server_capabilities = serde_json::to_value(ServerCapabilities {
         text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
+        document_symbol_provider: Some(OneOf::Left(true)),
+        definition_provider: Some(OneOf::Left(true)),
         ..Default::default()
     })?;
     connection.initialize(server_capabilities)?;
@@ -82,6 +86,24 @@ fn handle_request(
                 error: None,
             }))?;
         }
+        "textDocument/documentSymbol" => {
+            let params: DocumentSymbolParams = serde_json::from_value(req.params)?;
+            let response_value = handle_document_symbol(docs, params);
+            connection.sender.send(Message::Response(Response {
+                id: req.id,
+                result: Some(serde_json::to_value(response_value)?),
+                error: None,
+            }))?;
+        }
+        "textDocument/definition" => {
+            let params: GotoDefinitionParams = serde_json::from_value(req.params)?;
+            let response_value = handle_definition(docs, params);
+            connection.sender.send(Message::Response(Response {
+                id: req.id,
+                result: Some(serde_json::to_value(response_value)?),
+                error: None,
+            }))?;
+        }
         // Unknown methods get a MethodNotFound error so the client can
         // distinguish "the server is broken" from "the server doesn't
         // support this feature yet".
@@ -119,6 +141,82 @@ pub fn handle_hover(docs: &HashMap<Url, String>, params: HoverParams) -> Option<
         }),
         range: None,
     })
+}
+
+/// Handle a `textDocument/documentSymbol` request by routing through
+/// `dathon::document_symbols`. Returns the document outline as a nested
+/// list of `DocumentSymbol`s — VS Code renders this in the breadcrumb
+/// bar and the file outline panel.
+pub fn handle_document_symbol(
+    docs: &HashMap<Url, String>,
+    params: DocumentSymbolParams,
+) -> Option<DocumentSymbolResponse> {
+    let text = docs.get(&params.text_document.uri)?;
+    let symbols = dathon::document_symbols(text);
+    let converted: Vec<DocumentSymbol> = symbols.iter().map(to_lsp_symbol).collect();
+    Some(DocumentSymbolResponse::Nested(converted))
+}
+
+/// Handle a `textDocument/definition` request by routing through
+/// `dathon::definition`. Returns the source range of the declaration
+/// that the cursor points at (single-file only in v0.1).
+pub fn handle_definition(
+    docs: &HashMap<Url, String>,
+    params: GotoDefinitionParams,
+) -> Option<GotoDefinitionResponse> {
+    let uri = params
+        .text_document_position_params
+        .text_document
+        .uri
+        .clone();
+    let pos = params.text_document_position_params.position;
+    let text = docs.get(&uri)?;
+    let line = (pos.line as usize).checked_add(1)?;
+    let column = (pos.character as usize).checked_add(1)?;
+    let span = dathon::definition(text, line, column)?;
+    let location = Location {
+        uri,
+        range: span_to_range(span),
+    };
+    Some(GotoDefinitionResponse::Scalar(location))
+}
+
+#[allow(deprecated)]
+fn to_lsp_symbol(s: &dathon::symbols::DocumentSymbol) -> DocumentSymbol {
+    DocumentSymbol {
+        name: s.name.clone(),
+        detail: s.detail.clone(),
+        kind: match s.kind {
+            dathon::SymbolKind::Class => SymbolKind::CLASS,
+            dathon::SymbolKind::Field => SymbolKind::FIELD,
+            dathon::SymbolKind::Function => SymbolKind::FUNCTION,
+        },
+        tags: None,
+        // `deprecated` is deprecated in the LSP spec itself but lsp_types
+        // still exposes it as a non-optional-ish field; `None` is the
+        // forward-compatible value.
+        deprecated: None,
+        range: span_to_range(s.range),
+        selection_range: span_to_range(s.selection_range),
+        children: if s.children.is_empty() {
+            None
+        } else {
+            Some(s.children.iter().map(to_lsp_symbol).collect())
+        },
+    }
+}
+
+fn span_to_range(span: dathon::Span) -> Range {
+    Range {
+        start: Position {
+            line: span.start_line.saturating_sub(1) as u32,
+            character: span.start_column.saturating_sub(1) as u32,
+        },
+        end: Position {
+            line: span.end_line.saturating_sub(1) as u32,
+            character: span.end_column.saturating_sub(1) as u32,
+        },
+    }
 }
 
 fn handle_notification(
@@ -387,5 +485,99 @@ mod tests {
         // Line 1 (0-indexed), character 6 → "Orders".
         let result = handle_hover(&docs, hover_params_at(&uri, 1, 6));
         assert!(result.is_some());
+    }
+
+    // -----------------------------------------------------------------------
+    // documentSymbol handler
+    // -----------------------------------------------------------------------
+
+    use lsp_types::{DocumentSymbolParams as DocSymParams, GotoDefinitionParams as DefParams};
+
+    fn doc_sym_params(uri: &Url) -> DocSymParams {
+        DocSymParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+        }
+    }
+
+    fn def_params_at(uri: &Url, line: u32, character: u32) -> DefParams {
+        DefParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position: Position { line, character },
+            },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+        }
+    }
+
+    #[test]
+    fn handle_document_symbol_returns_none_when_uri_not_open() {
+        let docs: HashMap<Url, String> = HashMap::new();
+        let uri = Url::parse("file:///nonexistent.dpy").unwrap();
+        let result = handle_document_symbol(&docs, doc_sym_params(&uri));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn handle_document_symbol_returns_nested_outline_with_schema_class_and_function() {
+        let mut docs: HashMap<Url, String> = HashMap::new();
+        let uri = Url::parse("file:///t.dpy").unwrap();
+        let src = "class Orders(Schema):\n    x: int\n\ndef f(raw: DataFrame[Orders]) -> DataFrame[Orders]:\n    return raw\n";
+        docs.insert(uri.clone(), src.to_string());
+
+        let result = handle_document_symbol(&docs, doc_sym_params(&uri)).expect("response");
+        match result {
+            DocumentSymbolResponse::Nested(syms) => {
+                assert_eq!(syms.len(), 2);
+                assert_eq!(syms[0].name, "Orders");
+                assert_eq!(syms[0].kind, SymbolKind::CLASS);
+                let children = syms[0].children.as_ref().expect("schema children");
+                assert_eq!(children.len(), 1);
+                assert_eq!(children[0].name, "x");
+                assert_eq!(children[0].kind, SymbolKind::FIELD);
+                assert_eq!(syms[1].name, "f");
+                assert_eq!(syms[1].kind, SymbolKind::FUNCTION);
+            }
+            other => panic!("expected Nested, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // definition handler
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn handle_definition_returns_none_when_uri_not_open() {
+        let docs: HashMap<Url, String> = HashMap::new();
+        let uri = Url::parse("file:///nonexistent.dpy").unwrap();
+        let result = handle_definition(&docs, def_params_at(&uri, 0, 0));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn handle_definition_resolves_DataFrame_inner_schema_to_class_decl() {
+        let mut docs: HashMap<Url, String> = HashMap::new();
+        let uri = Url::parse("file:///t.dpy").unwrap();
+        // Line 0: class header
+        // Line 1: field
+        // Line 2: blank
+        // Line 3: def header — Orders appears at column 21 (after "def f(raw: DataFrame[")
+        let src = "class Orders(Schema):\n    x: int\n\ndef f(raw: DataFrame[Orders]) -> DataFrame[Orders]:\n    return raw\n";
+        docs.insert(uri.clone(), src.to_string());
+
+        // Click on `Orders` inside `DataFrame[Orders]` on line 3.
+        let result = handle_definition(&docs, def_params_at(&uri, 3, 22)).expect("response");
+        match result {
+            GotoDefinitionResponse::Scalar(loc) => {
+                assert_eq!(loc.uri, uri);
+                // Should jump to the class declaration name on line 0 at
+                // character 6 ("class " is 6 chars).
+                assert_eq!(loc.range.start.line, 0);
+                assert_eq!(loc.range.start.character, 6);
+            }
+            other => panic!("expected Scalar location, got {other:?}"),
+        }
     }
 }
