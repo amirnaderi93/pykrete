@@ -265,6 +265,14 @@ impl<'a> BodyContext<'a> {
         self.df_bindings.insert(name, view);
     }
 
+    /// Bind a local name as an instance of `class_name`. Used to thread
+    /// class-method calls (`data_access.read(...)`) through the
+    /// generic-inference path when the receiver was assigned locally
+    /// rather than passed in as a typed parameter.
+    pub fn bind_instance(&mut self, name: &'a str, class_name: &'a str) {
+        self.instance_bindings.insert(name, class_name);
+    }
+
     /// Resolve a name in the body's scope as a DataFrame value, if possible.
     ///
     /// Three sources are consulted, in order:
@@ -324,6 +332,17 @@ pub fn check_function_body<'a>(
                         if let Some(name) = target.as_name_expr() {
                             ctx.bind_df(name.id.as_str(), schema.clone());
                             ctx.record_local_binding(name.id.as_str(), name.range, schema.clone());
+                        }
+                    }
+                } else if let Some(class_name) = class_instance_from_call(&a.value, ctx) {
+                    // RHS didn't resolve to a DataFrame, but it's a
+                    // `ClassName(...)` call whose target class lives in
+                    // the project's registry — bind the LHS as an
+                    // instance so downstream method calls route through
+                    // the generic-inference path.
+                    for target in &a.targets {
+                        if let Some(name) = target.as_name_expr() {
+                            ctx.bind_instance(name.id.as_str(), class_name);
                         }
                     }
                 }
@@ -421,8 +440,32 @@ fn handle_ann_assign<'a>(
             // Bare `DataFrame` — no schema to bind. Nothing to do.
         }
         None => {
-            // Annotation is not DataFrame-shaped at all. Not our concern.
+            // Annotation isn't a DataFrame shape. If it's a bare class
+            // name in the registry, bind the local as an instance of
+            // that class — same as the un-annotated `x = ClassName(...)`
+            // path but driven by the annotation rather than the RHS.
+            if let Some(name_expr) = ann.annotation.as_name_expr() {
+                let class_name = name_expr.id.as_str();
+                if ctx.registry().find_class(class_name).is_some() {
+                    ctx.bind_instance(target_name, class_name);
+                }
+            }
         }
+    }
+}
+
+/// Inspect a value expression and decide whether it's a constructor
+/// call for a class in the registry — `DataAccessLayer(spark)` style.
+/// Used by the assignment-statement handler to bind local class
+/// instances.
+fn class_instance_from_call<'a>(expr: &'a Expr, ctx: &BodyContext<'a>) -> Option<&'a str> {
+    let call = expr.as_call_expr()?;
+    let func_name = call.func.as_name_expr()?;
+    let class_name = func_name.id.as_str();
+    if ctx.registry().find_class(class_name).is_some() {
+        Some(class_name)
+    } else {
+        None
     }
 }
 
