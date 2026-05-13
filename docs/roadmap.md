@@ -20,10 +20,10 @@ Multi-file analysis already works — pass multiple file paths to `dathon check`
 
 ### LSP — features beyond skeleton + hover
 
-Iterations 24–28 shipped the LSP skeleton (live diagnostics via `textDocument/publishDiagnostics`), basic hover (Schema declarations, typed function declarations, Schema references in annotations), document symbols, go-to-definition for Schema references in `DataFrame[X]` / nested-struct annotations, and column-ref hover + go-to-definition for `col("foo")` literals (body-context aware — the schema for each `col(...)` is determined by the immediate receiver of the surrounding method call). Still pending:
+Iterations 24–29 shipped the LSP skeleton (live diagnostics via `textDocument/publishDiagnostics`), basic hover (Schema declarations, typed function declarations, Schema references in annotations), document symbols, go-to-definition for Schema references in `DataFrame[X]` / nested-struct annotations, column-ref hover + go-to-definition for `col("foo")` literals (body-context aware), and completion at three surfaces: column names inside `col("…")` and after `df.`, schema names inside `DataFrame[…]`. Still pending:
 
 - **Hover for local variables** — `x = raw.select(...)` local-variable bindings (show the inferred schema). Needs to record assignment sites the way iteration 28 records column refs.
-- **Completion** (`textDocument/completion`) — column-name auto-complete inside `col("…")` / `df.…`, schema-name suggestions inside `DataFrame[…]`.
+- **Completion for chained / local bindings** — today, completion on `raw.<>` works when `raw` is a typed param, but not on chain results (`raw.select(...).<>`) or local bindings (`x = raw.select(...); x.<>`). Needs the same assignment-site tracking as local-variable hover.
 - **Code actions / quick fixes** — "Did you mean 'price'?" Levenshtein suggestions on `D0030`.
 - **Find references**, **rename**, **semantic tokens** as further iterations.
 
