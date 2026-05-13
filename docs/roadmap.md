@@ -81,3 +81,32 @@ Methods that take a *type* as a value-level argument (e.g. `df.cast_to(RawOrders
 - **`dathon.json` config file** — strictness modes, file/dir excludes, per-rule severity overrides.
 - **`cargo install` packaging + Homebrew tap** — easier local install than `cargo run --`.
 - **Performance pass** — benchmark on large codebases; explore parallel file checks once multi-file support lands.
+
+## Beyond v0.1 — strategic direction
+
+These are larger structural moves, not iterations. They shape what dathon becomes once the v0.1 surface is solid.
+
+### Full Python LSP feature parity
+
+Because `.dpy` is a strict superset of Python, the LSP should offer **everything a regular Python LSP does** — syntax highlighting, completions on standard library symbols, references, go-to-definition for non-dataframe code, formatting, etc. dathon-specific checks (`DataFrame[X]`, `col(...)`, `Schema` classes) sit on top of that base. Today, opening a `.dpy` in VS Code gives dathon's dataframe diagnostics but nothing for regular Python — that's a worse experience than just writing `.py`.
+
+Direction: don't reimplement a Python LSP. Piggyback on an existing one (Pylance, basedpyright, pyright, ruff-lsp). The VS Code extension can either:
+
+- **Co-activation**: require users to install a Python extension alongside dathon, route `.dpy` files through both, let the Python extension handle general features while dathon-lsp handles dataframe-specific ones. Cheap.
+- **Multiplex inside dathon-lsp**: embed/proxy an existing Python LSP behind dathon's stdio interface and merge responses. "Right" but probably overkill for the size of this project.
+
+Co-activation is the v0.1.x target; multiplexing is a follow-up if friction shows up.
+
+### Multi-dataframe support (pandas, polars, …)
+
+PySpark is the v0.1 target, but every popular dataframe library has the same fundamental shape: a value carries a schema, methods narrow or widen that schema, column names must exist on the schema when referenced. Real data engineering work mixes Spark with pandas in the same job (the [example `example_job.py`](design-notes.md) does `.toPandas()` → process → `spark.createDataFrame()`); polars is rising fast. Schema checking is valuable for *every* dataframe library.
+
+Priority order: **PySpark → pandas → polars** → others (DuckDB, Dask, …) as they show up.
+
+The core type model — `DataFrame[Schema]`, `Schema` class, column reference checks, return-type validation — should generalize across libraries. The library-specific layer handles method dispatch:
+
+- Spark: `raw.select(col("x"))`, `raw.filter(col("a") > 0)`, `raw.groupBy(...).agg(...)`.
+- pandas: `raw[["x"]]`, `raw.loc[raw.a > 0]`, `raw.groupby(...).agg(...)`.
+- polars: `raw.select(pl.col("x"))`, `raw.filter(pl.col("a") > 0)`, `raw.group_by(...).agg(...)`.
+
+This argues for moving toward a plugin/dispatch model for method handling before too much PySpark-specific code accumulates in `operations.rs`. Probably the right time to do this is **before** pandas support lands, while the surface is still small.
