@@ -14,8 +14,8 @@ use common::check;
 fn close_typo_produces_did_you_mean_suggestion_and_carries_it_in_data() {
     let src = r#"
 class Orders(Schema):
-    price: int
-    place_code: int
+    price: "int"
+    place_code: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.select(col("prce"))
@@ -38,8 +38,8 @@ def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
 fn unrelated_name_does_not_produce_a_suggestion() {
     let src = r#"
 class Orders(Schema):
-    price: int
-    place_code: int
+    price: "int"
+    place_code: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.select(col("totally_unrelated_field_name"))
@@ -62,9 +62,9 @@ def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
 fn suggestion_picks_the_closest_match_among_several_fields() {
     let src = r#"
 class Orders(Schema):
-    place_code: int
-    plate_code: int
-    price: int
+    place_code: "int"
+    plate_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.select(col("plac_code"))

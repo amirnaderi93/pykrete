@@ -22,8 +22,8 @@ use common::check;
 fn persist_in_the_middle_of_a_chain_does_not_break_tracking() {
     let src = r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.persist().select(col("place_code"), col("price"))
@@ -47,8 +47,8 @@ fn typo_after_a_persist_now_fires_D0030() {
     // be invisible. Now it fires the same way it does on a bare chain.
     let src = r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.persist().select(col("priec"))
@@ -71,8 +71,8 @@ fn stacked_pass_through_methods_compose() {
     // together for a warmup. Schema tracking must survive every link.
     let src = r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.cache().repartition(8).orderBy("price").select(col("place_code"), col("price"))
@@ -96,8 +96,8 @@ fn return_type_check_still_fires_through_pass_throughs() {
     // mismatch should still fire.
     let src = r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.cache().select(col("place_code"))

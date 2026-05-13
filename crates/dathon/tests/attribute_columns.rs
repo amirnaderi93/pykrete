@@ -24,8 +24,8 @@ fn df_X_is_recognized_as_a_column_reference_in_select() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame:
     return raw.select(raw.place_code, raw.price)
@@ -39,7 +39,7 @@ fn d0030_fires_when_df_X_references_an_unknown_column() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
+    place_code: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame:
     return raw.select(raw.priec)
@@ -57,8 +57,8 @@ fn df_X_can_chain_alias_and_cast() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame:
     return raw.select(raw.price.cast("int").alias("p_int"))
@@ -72,8 +72,8 @@ fn df_X_with_typo_under_cast_alias_is_still_caught() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame:
     return raw.select(raw.misspelled.cast("int").alias("x"))
@@ -88,8 +88,8 @@ fn df_X_works_inside_filter_expressions() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame:
     return raw.filter((raw.price > 0) & (raw.place_code.isNotNull()))
@@ -103,7 +103,7 @@ fn df_X_typo_inside_filter_is_caught() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
+    place_code: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame:
     return raw.filter(raw.nonexistent > 0)
@@ -118,8 +118,8 @@ fn df_X_works_inside_withColumn_expression() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame:
     return raw.withColumn("doubled", raw.price * 2)
@@ -141,8 +141,8 @@ fn module_attribute_access_is_not_treated_as_a_column_ref() {
     let result = check(
         r#"
 class Orders(Schema):
-    price: int
-    log_date: timestamp
+    price: "int"
+    log_date: "timestamp"
 
 def f(raw: DataFrame[Orders]) -> DataFrame:
     return raw.filter(raw.log_date > F.add_months(lit(NOW), -1))
@@ -159,7 +159,7 @@ fn attribute_access_on_unrelated_name_is_not_collected() {
     let result = check(
         r#"
 class Orders(Schema):
-    price: int
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame:
     return raw.filter(raw.price > config.threshold)
@@ -179,12 +179,12 @@ fn df_X_works_with_multiple_typed_dataframes_in_scope() {
     let result = check(
         r#"
 class A(Schema):
-    k: int
-    a: int
+    k: "int"
+    a: "int"
 
 class B(Schema):
-    k: int
-    b: int
+    k: "int"
+    b: "int"
 
 def f(left: DataFrame[A], right: DataFrame[B]) -> DataFrame:
     return left.join(right, on="k").select(left.a, right.b)
@@ -200,12 +200,12 @@ fn df_X_typo_with_multiple_dataframes_is_caught_against_the_receivers_schema() {
     let result = check(
         r#"
 class A(Schema):
-    k: int
-    a: int
+    k: "int"
+    a: "int"
 
 class B(Schema):
-    k: int
-    b: int
+    k: "int"
+    b: "int"
 
 def f(left: DataFrame[A], right: DataFrame[B]) -> DataFrame:
     return left.join(right, on="k").select(left.zzz)

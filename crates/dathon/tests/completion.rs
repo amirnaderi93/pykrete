@@ -29,10 +29,10 @@ fn labels(items: &[dathon::CompletionItem]) -> Vec<&str> {
 fn completions_inside_dataframe_subscript_list_schema_classes() {
     let src = r#"
 class Orders(Schema):
-    x: int
+    x: "int"
 
 class Returns(Schema):
-    y: int
+    y: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw
@@ -64,8 +64,8 @@ def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
 fn completions_inside_col_literal_list_columns_of_the_active_schema() {
     let src = r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.select(col("place_code"))
@@ -86,8 +86,8 @@ def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
 fn completions_for_col_field_carry_the_column_type_in_detail() {
     let src = r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.select(col("place_code"))
@@ -118,8 +118,8 @@ def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
 fn completions_after_df_dot_list_columns_of_the_param_schema() {
     let src = r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> int:
     return raw.place_code
@@ -141,8 +141,8 @@ fn completions_after_local_binding_dot_resolves_through_the_assignment() {
     // Orders fields because filter preserves the receiver's schema.
     let src = r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> int:
     x = raw.filter(col("price") > 0)
@@ -164,8 +164,8 @@ fn completions_after_annotated_local_binding_use_the_annotation_schema() {
     // so completion on `x.` lists Orders' fields with column types.
     let src = r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> int:
     x: DataFrame[Orders] = raw.select(col("price"))
@@ -189,7 +189,7 @@ def f(raw: DataFrame[Orders]) -> int:
 fn completions_outside_recognized_surface_returns_empty() {
     let src = r#"
 class Orders(Schema):
-    x: int
+    x: "int"
 "#;
     // Cursor in whitespace before any declaration.
     assert!(completions(src, 1, 1).is_empty());

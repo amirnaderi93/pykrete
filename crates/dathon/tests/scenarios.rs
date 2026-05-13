@@ -18,14 +18,14 @@ fn a_clean_etl_pipeline_produces_no_diagnostics() {
     let result = check(
         r#"
 class RawOrders(Schema):
-    ProductCode: int
-    UnitPrice: double
-    CreatedAt: timestamp
+    ProductCode: "int"
+    UnitPrice: "double"
+    CreatedAt: "timestamp"
 
 class Orders(Schema):
-    place_code: int
-    price: int
-    log_date: timestamp
+    place_code: "int"
+    price: "int"
+    log_date: "timestamp"
 
 def prepare_orders(raw: DataFrame[RawOrders]) -> DataFrame[Orders]:
     return raw.select(
@@ -48,8 +48,8 @@ fn a_realistic_pipeline_with_an_intermediate_variable_catches_typo() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def prepare(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     filtered = raw.filter(col("price") > 0)
@@ -67,8 +67,8 @@ fn a_unionByName_between_two_prepare_functions_outputs() {
     let result = check(
         r#"
 class Common(Schema):
-    id: int
-    name: string
+    id: "int"
+    name: "string"
 
 def combine(a: DataFrame[Common], b: DataFrame[Common]) -> DataFrame[Common]:
     return a.unionByName(b)
@@ -85,12 +85,12 @@ fn a_file_with_multiple_issues_reports_all_of_them() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
     weird: WeirdType
 
 class RawOrders(Schema):
-    ProductCode: int
+    ProductCode: "int"
 
 def has_typo(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.select(col("place_code"), col("priec"))
@@ -116,8 +116,8 @@ fn a_long_chain_of_operations_propagates_schemas_correctly() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def pipeline(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return (

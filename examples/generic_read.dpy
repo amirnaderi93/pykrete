@@ -5,14 +5,14 @@
 # constant declaration through the generic read method into the consumer.
 
 class RawOrders(Schema):
-    ProductCode: int
-    UnitPrice: double
-    Status: string
+    ProductCode: "int"
+    UnitPrice: "double"
+    Status: "string"
 
 
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 
 # The generic source class. The schema parameter T flows from the

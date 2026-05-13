@@ -22,8 +22,8 @@ use common::check;
 fn x_eq_ClassName_call_lets_method_chains_keep_their_type() {
     let src = r#"
 class RawOrders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 class DataSource[T]:
     def __init__(self, path: string):
@@ -61,8 +61,8 @@ fn typo_after_local_dal_assignment_now_fires_D0030() {
     // → `read(...)` chain surfaces, where it used to slide silently.
     let src = r#"
 class RawOrders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 class DataSource[T]:
     def __init__(self, path: string):
@@ -100,7 +100,7 @@ fn annotated_local_instance_assignment_also_binds() {
     // an obvious constructor call.
     let src = r#"
 class RawOrders(Schema):
-    x: int
+    x: "int"
 
 class DataSource[T]:
     def __init__(self, path: string):

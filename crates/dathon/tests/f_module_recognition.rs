@@ -16,8 +16,8 @@ use common::check;
 fn F_add_months_string_arg_is_checked_as_column_name() {
     let src = r#"
 class Bookings(Schema):
-    checkin: date
-    place_code: int
+    checkin: "date"
+    place_code: "int"
 
 def f(raw: DataFrame[Bookings]) -> DataFrame[Bookings]:
     return raw.withColumn("checkin", F.add_months("chekin", 1))
@@ -38,7 +38,7 @@ def f(raw: DataFrame[Bookings]) -> DataFrame[Bookings]:
 fn F_lower_string_arg_is_checked_as_column_name() {
     let src = r#"
 class Bookings(Schema):
-    city: string
+    city: "string"
 
 def f(raw: DataFrame[Bookings]) -> DataFrame[Bookings]:
     return raw.withColumn("city", F.lower("cityy"))
@@ -61,8 +61,8 @@ fn F_round_string_arg_is_checked_as_column_name() {
     // default walker; the string arg is the column.
     let src = r#"
 class Orders(Schema):
-    price: double
-    place_code: int
+    price: "double"
+    place_code: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.withColumn("price", F.round("priec", 2))
@@ -83,8 +83,8 @@ def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
 fn F_coalesce_multiple_string_args_all_checked() {
     let src = r#"
 class Orders(Schema):
-    price: double
-    discount_price: double
+    price: "double"
+    discount_price: "double"
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.withColumn("price", F.coalesce("price", "discontu_price"))
@@ -107,7 +107,7 @@ fn F_col_recognized_alongside_bare_col() {
     // Iteration 37 puts `col` on the F-allowlist so both forms work.
     let src = r#"
 class Orders(Schema):
-    price: double
+    price: "double"
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.select(F.col("priec"))
@@ -132,7 +132,7 @@ fn F_lit_value_arg_is_NOT_treated_as_column() {
     // diagnostic.
     let src = r#"
 class Orders(Schema):
-    price: double
+    price: "double"
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.withColumn("price", F.lit("not_a_column"))
@@ -156,7 +156,7 @@ fn F_date_format_format_string_NOT_treated_as_column() {
     // misread the format as a column reference.
     let src = r#"
 class Bookings(Schema):
-    checkin: date
+    checkin: "date"
 
 def f(raw: DataFrame[Bookings]) -> DataFrame[Bookings]:
     return raw.withColumn("checkin_str", F.date_format("checkin", "yyyy-MM-dd"))

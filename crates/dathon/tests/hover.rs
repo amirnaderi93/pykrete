@@ -35,8 +35,8 @@ fn cursor_at(source: &str, needle: &str) -> (usize, usize) {
 fn hover_on_schema_class_name_returns_fields() {
     let src = r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 "#;
     let (line, col) = cursor_at(src, "Orders");
     let info = hover(src, line, col).expect("expected hover info");
@@ -51,10 +51,10 @@ class Orders(Schema):
 fn hover_on_schema_with_nested_field_marks_the_field_as_nested() {
     let src = r#"
 class Address(Schema):
-    street: string
+    street: "string"
 
 class User(Schema):
-    name: string
+    name: "string"
     address: Address
 "#;
     let (line, col) = cursor_at(src, "class User");
@@ -72,7 +72,7 @@ class User(Schema):
 fn hover_on_typed_function_name_returns_signature() {
     let src = r#"
 class Orders(Schema):
-    place_code: int
+    place_code: "int"
 
 def prepare_orders(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw
@@ -107,8 +107,8 @@ fn hover_on_DataFrame_inner_schema_returns_that_schemas_info() {
     // Hovering on it should show Orders' field list.
     let src = r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw
@@ -131,11 +131,11 @@ def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
 fn hover_on_nested_schema_field_type_returns_the_nested_schemas_info() {
     let src = r#"
 class Address(Schema):
-    street: string
-    city: string
+    street: "string"
+    city: "string"
 
 class User(Schema):
-    name: string
+    name: "string"
     address: Address
 "#;
     // The `Address` after "address: " is the bare-name annotation of
@@ -160,7 +160,7 @@ class User(Schema):
 fn hover_on_whitespace_returns_nothing() {
     let src = r#"
 class Orders(Schema):
-    x: int
+    x: "int"
 "#;
     // Position at column 1 on line 1 (the blank line at the start).
     assert!(hover(src, 1, 1).is_none());
@@ -178,7 +178,7 @@ fn hover_outside_of_a_recognized_position_returns_nothing() {
     // Cursor on a column annotation (`int`) — not yet a hover target.
     let src = r#"
 class Orders(Schema):
-    place_code: int
+    place_code: "int"
 "#;
     let (line, col) = cursor_at(src, "int");
     assert!(hover(src, line, col).is_none());
@@ -192,8 +192,8 @@ class Orders(Schema):
 fn hover_on_col_literal_returns_the_columns_type() {
     let src = r#"
 class Orders(Schema):
-    place_code: int
-    price: int
+    place_code: "int"
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.select(col("price"))
@@ -215,7 +215,7 @@ def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
 fn hover_on_col_literal_for_a_missing_column_says_so() {
     let src = r#"
 class Orders(Schema):
-    price: int
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.select(col("priec"))
@@ -232,8 +232,8 @@ fn hover_on_col_literal_after_filter_resolves_against_the_input_schema() {
     // .filter() still resolve against the input.
     let src = r#"
 class Orders(Schema):
-    price: int
-    place_code: int
+    price: "int"
+    place_code: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.filter(col("price") > 0).select(col("place_code"))
@@ -255,8 +255,8 @@ fn hover_on_lhs_of_assignment_shows_the_inferred_schema() {
     // and `place_code` because raw is Orders and we select both fields).
     let src = r#"
 class Orders(Schema):
-    price: int
-    place_code: int
+    price: "int"
+    place_code: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     x = raw.select(col("price"), col("place_code"))
@@ -282,7 +282,7 @@ fn hover_on_use_of_local_binding_resolves_through_the_assignment() {
     // declaration. Hover should still resolve through to the binding.
     let src = r#"
 class Orders(Schema):
-    price: int
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     x = raw.filter(col("price") > 0)
@@ -307,7 +307,7 @@ fn hover_on_local_binding_with_typed_annotation_shows_the_declared_schema() {
     // evaluates to.
     let src = r#"
 class Orders(Schema):
-    price: int
+    price: "int"
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     x: DataFrame[Orders] = raw.select(col("price"))

@@ -54,6 +54,19 @@ impl fmt::Display for ColumnType {
 /// `.dpy` file. Used inside error messages.
 pub const COLUMN_TYPE_NAMES: &str = "int, long, double, string, bool, date, timestamp";
 
+/// Same vocabulary as [`COLUMN_TYPE_NAMES`] but as a slice — fed to the
+/// completion engine when the cursor sits inside a `name: "<cursor>"`
+/// string-literal annotation in a Schema class body.
+pub const COLUMN_TYPE_NAMES_LIST: &[&str] = &[
+    "int",
+    "long",
+    "double",
+    "string",
+    "bool",
+    "date",
+    "timestamp",
+];
+
 // ---------------------------------------------------------------------------
 // Unit tests
 // ---------------------------------------------------------------------------

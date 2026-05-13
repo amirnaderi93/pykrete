@@ -18,3 +18,4 @@ editors/*/*.vsix
 
 # Per-user VS Code workspace settings (interpreter paths, etc.)
 .vscode/
+examples/dathon.py

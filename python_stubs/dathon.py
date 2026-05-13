@@ -1,66 +1,49 @@
 """Pylance / basedpyright companion stubs for dathon.
 
-dathon treats `Schema`, `DataFrame`, `col`, `string`, `date`, `timestamp`,
-`double`, `long` as magic names — they don't have to be imported for
-dathon's checker to recognize them. But your companion Python LSP
-(Pylance / basedpyright / pyright / ruff-lsp) doesn't know that, so it
-flags every Schema declaration and column-type annotation as an
-undefined name.
+Iteration 41 moved the column-type vocabulary into **string literals**
+(`EventDate: "timestamp"` instead of `EventDate: timestamp`), so the only
+dathon identifiers users still write are `Schema`, `DataFrame`, and
+`col`. This stub provides Pylance-friendly declarations for those.
 
-This module exists to make the Python LSP happy. Drop it anywhere on
-the Python module-search path (the project root usually works) and add
-to the top of every `.dpy` file::
+Drop this file anywhere on the Python module-search path (the project
+root usually works) and add at the top of each `.dpy` file::
 
-    from dathon import Schema, DataFrame, col, string, date, timestamp, double, long
+    from dathon import Schema, DataFrame, col
 
 dathon's analyzer silently ignores this import — module paths that
 don't resolve to a project `.dpy` file are treated as external Python
 imports and skipped. So you get full Python LSP type-checking AND
 dathon's dataframe checks, with no duplication.
 
-The runtime semantics here are deliberate placeholders. If you want
-the transpiled `.py` output to actually run (after `dathon transpile
-foo.dpy > foo.py`), you'll need to substitute these names with real
-PySpark imports — that's a separate workflow from the LSP/editor
-story.
+Iteration 42 will retire this file entirely — the VS Code extension
+will bundle a typeshed extension that makes these names globally
+available without any import, just like TypeScript's built-in `string`
+and `Promise`.
 """
 
 from __future__ import annotations
 
-from datetime import date as _date, datetime as _datetime
 from typing import Any, Generic, TypeVar
 
-__all__ = [
-    "Schema",
-    "DataFrame",
-    "col",
-    "string",
-    "date",
-    "timestamp",
-    "double",
-    "long",
-]
+__all__ = ["Schema", "DataFrame", "col"]
 
 
 class Schema:
     """Marker base class for dathon schema declarations.
 
     Subclasses describe a dataframe row's structure as annotated
-    attributes::
+    attributes whose annotations are **string literals naming a column
+    type**::
 
         class Orders(Schema):
-            place_code: int
-            price: double
+            place_code: "int"
+            price: "double"
+
+    dathon recognizes the strings as column-type names from the
+    vocabulary `int`, `long`, `double`, `string`, `bool`, `date`,
+    `timestamp`. Nested-struct fields keep using bare names —
+    `address: Address` — so the type-checker can still resolve them.
     """
-
-
-# Column type aliases. These map dathon's PySpark-flavoured vocabulary
-# onto Python types so Pylance accepts them as field annotations.
-string = str
-date = _date
-timestamp = _datetime
-double = float
-long = int
 
 
 _T = TypeVar("_T")
