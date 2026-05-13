@@ -1,0 +1,64 @@
+{
+  "name": "dathon-vscode",
+  "displayName": "Dathon",
+  "description": "Static schema checking for PySpark — diagnostics and hover for .dpy files.",
+  "version": "0.1.0",
+  "publisher": "dathon",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://gitlab.com/amir.naderi93/dathon"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onLanguage:dathon"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "dathon",
+        "aliases": ["Dathon", "dathon"],
+        "extensions": [".dpy"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "configuration": {
+      "title": "Dathon",
+      "properties": {
+        "dathon.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the dathon-lsp binary. If empty, the extension searches the workspace's target/release and target/debug directories, then falls back to 'dathon-lsp' on PATH."
+        },
+        "dathon.trace.server": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "Trace LSP communication between the editor and dathon-lsp."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.0",
+    "typescript": "^5.4.0"
+  }
+}
