@@ -316,19 +316,15 @@ impl<'a> ProjectContext<'a> {
                 continue;
             };
             let Some(&target_idx) = self.path_to_index.get(&target_path) else {
-                import_diagnostics.push(Diagnostic::at_range(
-                    Severity::Error,
-                    "D0070",
-                    format!(
-                        "Imported module '{}' was not found in the project. \
-                         Expected file: {}",
-                        format_module_path(&imp.module),
-                        target_path.display(),
-                    ),
-                    imp.range,
-                    source,
-                    line_index,
-                ));
+                // Module path doesn't match any `.dpy` file in the
+                // project — treat it as an external Python import
+                // (`from pyspark.sql.functions import col`, etc.) and
+                // skip silently. The imported names become opaque to
+                // dathon; downstream uses fall through to whatever
+                // built-in handling we have (e.g. `col(...)` is still
+                // recognized by `col_reference` regardless of where
+                // it came from). The companion Python LSP handles
+                // external-import validation, not dathon.
                 continue;
             };
             let Some(target_bundle) = bundles[target_idx].as_ref() else {

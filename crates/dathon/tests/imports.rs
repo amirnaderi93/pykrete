@@ -139,18 +139,50 @@ from .schemas import DoesNotExist
 }
 
 #[test]
-fn importing_from_a_module_that_is_not_in_the_project_fires_D0070() {
+fn importing_an_external_module_is_silent_in_dathon() {
+    // Iteration 40: imports whose target isn't a `.dpy` file in the
+    // project are external Python imports — `from pyspark.sql.functions
+    // import col`, `from datetime import datetime`, `from dathon import
+    // Schema` (the Pylance companion stub), etc. dathon doesn't try
+    // to validate them; that's the companion Python LSP's job. We just
+    // skip them so they don't flood the diagnostic stream.
     let results = check_pairs(&[(
         "pipeline.dpy",
         r#"
 from .nonexistent import Orders
+from pyspark.sql.functions import col
+from dathon import Schema
 "#,
     )]);
-    assert!(results[0].has_code("D0070"));
     assert!(
+        !results[0].has_code("D0070"),
+        "expected no D0070 from external imports; got {:?}",
         results[0]
-            .diagnostics_with_code("D0070")
+            .diagnostics
             .iter()
-            .any(|d| d.message.contains(".nonexistent")),
+            .map(|d| (&d.code, &d.message))
+            .collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn malformed_relative_import_with_too_many_dots_still_fires_D0070() {
+    // The other half of the D0070 surface: a path resolution failure
+    // (too many leading dots so the import walks above the project
+    // root) IS a real bug, and we keep emitting D0070 for it.
+    let results = check_pairs(&[(
+        "pkg/pipeline.dpy",
+        r#"
+from ......way_too_many_dots import X
+"#,
+    )]);
+    assert!(
+        results[0].has_code("D0070"),
+        "expected D0070 for over-deep relative import; got {:?}",
+        results[0]
+            .diagnostics
+            .iter()
+            .map(|d| &d.code)
+            .collect::<Vec<_>>(),
     );
 }
