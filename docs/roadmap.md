@@ -58,14 +58,14 @@ return builder.with_path("/x").read[T](RAW_ORDERS)
 
 Today: only direct method calls on a class-instance name are dispatched through the generic-inference path. A method call whose receiver is itself a call result (the `builder.with_path(...)` here) isn't treated as a class instance, so the outer `.read(...)` is skipped.
 
-### Class-level constants
+### Class-level constants — *shipped in iteration 35*
 
 ```python
 class DataSources:
     RAW_ORDERS: DataSource[RawOrders] = DataSource("/path")
 ```
 
-Today: only **module-level** annotated constants are tracked in the constants registry. Class-attribute constants (the more common pattern in the user's real codebase) aren't yet picked up. Need to walk class bodies for `AnnAssign` and qualify the names (`DataSources.RAW_ORDERS`).
+The registry now walks class bodies for `AnnAssign` and indexes the constants under `(class_name, const_name)` keys; `Attribute(Name("DataSources"), "RAW_ORDERS")` resolves the same way a bare module-level constant does. Cross-file imports also surface the class's constants in the importing file.
 
 ### Generic methods that aren't `[T] -> G[T]`-shaped
 

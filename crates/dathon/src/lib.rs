@@ -202,6 +202,7 @@ pub fn check_project(files: &[(String, String)]) -> ProjectCheckResult {
                     .unwrap_or_else(|| Registry {
                         classes: HashMap::new(),
                         constants: HashMap::new(),
+                        class_constants: HashMap::new(),
                     });
                 let importing_path = PathBuf::from(path);
                 for imp in parse_imports(module) {
@@ -268,6 +269,17 @@ pub fn check_project(files: &[(String, String)]) -> ProjectCheckResult {
                         combined_registry
                             .classes
                             .insert(imp.local_name, class.clone());
+                        // Also surface every class-qualified constant
+                        // declared inside the imported class — without
+                        // this, `DataSources.RAW_ORDERS` only
+                        // resolves in the file that declared the class.
+                        for ((cls, cname), info) in &target_bundle.local_registry.class_constants {
+                            if *cls == imp.source_name {
+                                combined_registry
+                                    .class_constants
+                                    .insert((imp.local_name, cname), info.clone());
+                            }
+                        }
                         imported_anything = true;
                     }
                     if let Some(constant) = found_constant {

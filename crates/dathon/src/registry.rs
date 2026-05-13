@@ -80,18 +80,36 @@ pub struct ConstantInfo<'a> {
 pub struct Registry<'a> {
     pub classes: HashMap<&'a str, ClassInfo<'a>>,
     pub constants: HashMap<&'a str, ConstantInfo<'a>>,
+    /// Class-qualified annotated assignments — `DataSources.RAW_ORDERS`
+    /// in the example pattern. Keyed by `(class_name, const_name)` so the
+    /// analyzer can resolve `Attribute(Name("DataSources"), "RAW_ORDERS")`
+    /// the same way it resolves a bare module-level constant.
+    pub class_constants: HashMap<(&'a str, &'a str), ConstantInfo<'a>>,
 }
 
 impl<'a> Registry<'a> {
     pub fn build(module: &'a ModModule) -> Self {
         let mut classes = HashMap::new();
         let mut constants = HashMap::new();
+        let mut class_constants = HashMap::new();
 
         for stmt in &module.body {
             match stmt {
                 Stmt::ClassDef(def) => {
                     let info = build_class_info(def);
+                    let class_name = info.name;
                     classes.insert(info.name, info);
+                    // Walk the class body for annotated constants too —
+                    // real codebases declare data sources inside a
+                    // `@dataclass class DataSources:` body, not at module
+                    // top level.
+                    for body_stmt in &def.body {
+                        if let Stmt::AnnAssign(ann) = body_stmt {
+                            if let Some(const_info) = build_constant_info(ann) {
+                                class_constants.insert((class_name, const_info.name), const_info);
+                            }
+                        }
+                    }
                 }
                 Stmt::AnnAssign(ann) => {
                     if let Some(info) = build_constant_info(ann) {
@@ -102,7 +120,11 @@ impl<'a> Registry<'a> {
             }
         }
 
-        Self { classes, constants }
+        Self {
+            classes,
+            constants,
+            class_constants,
+        }
     }
 
     pub fn find_class(&self, name: &str) -> Option<&ClassInfo<'a>> {
@@ -111,6 +133,22 @@ impl<'a> Registry<'a> {
 
     pub fn find_constant(&self, name: &str) -> Option<&ConstantInfo<'a>> {
         self.constants.get(name)
+    }
+
+    /// Look up a class-qualified annotated constant — `ClassName.NAME`.
+    /// HashMap lookup against a `(&str, &str)` tuple key doesn't borrow
+    /// cleanly against the stored `&'a str` keys, so we scan linearly.
+    /// The class-constants map is tiny in practice (one entry per
+    /// declared data source).
+    pub fn find_class_constant(
+        &self,
+        class_name: &str,
+        const_name: &str,
+    ) -> Option<&ConstantInfo<'a>> {
+        self.class_constants
+            .iter()
+            .find(|((c, n), _)| *c == class_name && *n == const_name)
+            .map(|(_, info)| info)
     }
 }
 

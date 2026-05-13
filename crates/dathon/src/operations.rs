@@ -518,6 +518,19 @@ fn analyze_expr<'a>(
     match expr {
         Expr::Name(n) => ctx.lookup(n.id.as_str()),
         Expr::Call(call) => analyze_method_call(call, ctx, source, line_index, diagnostics),
+        // `DataSources.RAW_ORDERS` — class-qualified annotated
+        // constant. Real codebases declare every data source inside a
+        // `@dataclass(frozen=True) class DataSources:` body, so this
+        // shape needs to resolve to the same `SchemaView::Declared`
+        // that a module-level `RAW_ORDERS: DataSource[X] = ...` would.
+        Expr::Attribute(a) => {
+            let class_name = a.value.as_name_expr()?.id.as_str();
+            let constant = ctx
+                .registry()
+                .find_class_constant(class_name, a.attr.id.as_str())?;
+            let schema = ctx.find_schema(constant.schema_name)?;
+            Some(SchemaView::Declared(schema))
+        }
         _ => None,
     }
 }
