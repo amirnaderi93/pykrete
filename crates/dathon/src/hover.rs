@@ -4,7 +4,7 @@
 //! markdown blob describing the symbol at that point. The LSP server
 //! wraps the markdown in a `textDocument/hover` response.
 //!
-//! v0.1 supports three positions:
+//! v0.1 supports four positions:
 //!
 //! 1. Cursor on a Schema class **declaration** (`class Orders(Schema):`)
 //!    — return the schema's fields with their `ColumnType`s.
@@ -14,11 +14,14 @@
 //!    recognize (the `X` inside `DataFrame[X]` on a function signature,
 //!    or the bare-name annotation of a Schema field) — return that
 //!    schema's info.
+//! 4. Cursor on a `col("foo")` **string literal** in a function body
+//!    — return the column's resolved type on the surrounding schema.
+//!    Requires running body analysis to know which schema each `col(…)`
+//!    refers to (handled lazily, only when cases 1–3 don't match).
 //!
 //! Everything else returns `None` (the LSP server then sends no hover).
-//! Hover for column references, local-variable inferred schemas, and
-//! cross-file references is intentionally deferred to follow-up
-//! iterations.
+//! Hover for local-variable bindings (`x = raw.select(...)`) and cross-file
+//! references is intentionally deferred to follow-up iterations.
 
 use std::fmt::Write as _;
 
@@ -27,7 +30,11 @@ use ruff_source_file::{LineIndex, OneIndexed};
 use ruff_text_size::TextSize;
 
 use crate::dataframe::{DataFrameAnnotation, SlotLabel, TypedSlot, typed_slots};
-use crate::schema::{FieldResolution, Schema, discover_schemas};
+use crate::operations::ColumnRefTrace;
+use crate::registry::Registry;
+use crate::schema::{
+    FieldPathResult, FieldResolution, Schema, SchemaView, discover_schemas, resolve_path,
+};
 use crate::walk::{DiscoveredFunction, discover_top_level_classes, discover_top_level_functions};
 
 /// The hover payload returned by [`hover`]. `markdown` is the rendered
@@ -65,6 +72,16 @@ pub fn hover(source: &str, line: usize, column: usize) -> Option<HoverInfo> {
         return Some(info);
     }
     if let Some(info) = hover_on_schema_reference_in_schema_field(offset, &schemas) {
+        return Some(info);
+    }
+    // Body-context-aware case: cursor on a `col("foo")` string literal.
+    // Building the registry + running body analysis is the expensive
+    // path, so we do it last after the cheap AST-lookup cases above
+    // have all failed.
+    let registry = Registry::build(module);
+    let traces =
+        crate::collect_module_column_refs(&functions, source, &line_index, &schemas, &registry);
+    if let Some(info) = hover_on_column_ref(offset, &traces, &schemas) {
         return Some(info);
     }
     None
@@ -148,6 +165,67 @@ fn hover_on_schema_reference_in_schema_field(
         }
     }
     None
+}
+
+// ---------------------------------------------------------------------------
+// Case 4: cursor inside a `col("foo")` string literal — show the column's
+// resolved type on the surrounding schema. Requires running body analysis
+// to know which schema each col() refers to.
+// ---------------------------------------------------------------------------
+
+fn hover_on_column_ref(
+    offset: TextSize,
+    traces: &[ColumnRefTrace<'_>],
+    schemas: &[Schema<'_>],
+) -> Option<HoverInfo> {
+    let trace = traces.iter().find(|t| t.range.contains_inclusive(offset))?;
+    Some(render_column_ref_hover(trace, schemas))
+}
+
+fn render_column_ref_hover(trace: &ColumnRefTrace<'_>, schemas: &[Schema<'_>]) -> HoverInfo {
+    let mut md = String::new();
+    writeln!(md, "**column `{}`**", trace.name).unwrap();
+    writeln!(md).unwrap();
+    writeln!(md, "on {}", trace.schema.display_name()).unwrap();
+    writeln!(md).unwrap();
+
+    match resolve_path(&trace.schema, trace.name, schemas) {
+        FieldPathResult::Missing { field, on } => {
+            writeln!(
+                md,
+                "_Column `{field}` does not exist on {} — see D0030._",
+                on.display_name(),
+            )
+            .unwrap();
+        }
+        FieldPathResult::Resolved => {
+            // resolve_path only confirms existence. For type info we have
+            // to look the field up on the underlying Schema (if the trace
+            // carries a Declared one) — Derived/Grouped views drop types,
+            // so we just show the field name.
+            if let Some(label) = column_type_label(&trace.schema, trace.name, schemas) {
+                writeln!(md, "Type: {label}").unwrap();
+            }
+        }
+    }
+    HoverInfo { markdown: md }
+}
+
+/// Look up `name` on `view` (a `Declared` view) and return a markdown
+/// type label. For `Derived` and `Grouped` views we don't carry the
+/// per-field annotation, so this returns `None`.
+fn column_type_label(view: &SchemaView<'_>, name: &str, schemas: &[Schema<'_>]) -> Option<String> {
+    let schema = match view {
+        SchemaView::Declared(s) => *s,
+        _ => return None,
+    };
+    let field = schema.fields().into_iter().find(|f| f.name == name)?;
+    Some(match field.resolve(schemas) {
+        FieldResolution::Resolved(ct) => format!("`{}`", ct.as_str()),
+        FieldResolution::ResolvedNested(nested) => format!("`{}` (nested)", nested.name()),
+        FieldResolution::UnknownType { name } => format!("`{name}` (unresolved)"),
+        FieldResolution::NotABareName => "_unresolved_".to_string(),
+    })
 }
 
 // ---------------------------------------------------------------------------
