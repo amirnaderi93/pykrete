@@ -16,7 +16,10 @@
 //! - Diagnostics are zero-width at their start position; editors typically
 //!   extend the underline to the word at that position.
 
+pub mod child;
+pub mod multiplex;
 pub mod project;
+pub mod virtualdoc;
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -52,33 +55,126 @@ pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
         code_action_provider: Some(lsp_types::CodeActionProviderCapability::Simple(true)),
         ..Default::default()
     })?;
-    connection.initialize(server_capabilities)?;
+    // `initialize` returns the client's InitializeParams — we hand the
+    // same params to the embedded Python engine so it sees the editor's
+    // workspace folders, capabilities, etc.
+    let init_params = connection.initialize(server_capabilities)?;
 
-    main_loop(connection)?;
+    // Spawn + handshake the embedded Python LSP. `explicit` is the
+    // `dathon.pythonServer.path` initialization option, if the client
+    // set one. When no engine is found the multiplexer's `child` is
+    // `None` and dathon-lsp runs dathon-only.
+    let explicit = init_params
+        .get("initializationOptions")
+        .and_then(|o| o.get("pythonServerPath"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let multiplexer = multiplex::Multiplexer::start(explicit.as_deref(), &init_params);
+
+    main_loop(connection, multiplexer)?;
     io_threads.join()?;
     Ok(())
 }
 
-fn main_loop(connection: Connection) -> Result<(), Box<dyn Error + Sync + Send>> {
+fn main_loop(
+    connection: Connection,
+    mut multiplexer: multiplex::Multiplexer,
+) -> Result<(), Box<dyn Error + Sync + Send>> {
     // In-memory shadow of every open document. `didOpen` adds; `didChange`
     // overwrites (FULL sync); `didClose` removes.
     let mut docs: HashMap<Url, String> = HashMap::new();
 
-    for msg in &connection.receiver {
-        match msg {
-            Message::Request(req) => {
-                if connection.handle_shutdown(&req)? {
-                    return Ok(());
+    // The embedded Python engine's outbound message channel. When no
+    // engine is embedded we use a never-ready receiver so `select!`
+    // simply only ever fires on the editor side.
+    let child_rx = multiplexer
+        .child
+        .as_ref()
+        .map(|c| c.receiver.clone())
+        .unwrap_or_else(crossbeam_channel::never);
+
+    loop {
+        crossbeam_channel::select! {
+            recv(connection.receiver) -> msg => {
+                let Ok(msg) = msg else {
+                    break; // editor disconnected
+                };
+                match msg {
+                    Message::Request(req) => {
+                        if connection.handle_shutdown(&req)? {
+                            multiplexer.shutdown();
+                            return Ok(());
+                        }
+                        handle_request(&connection, &docs, req)?;
+                    }
+                    Message::Notification(notif) => {
+                        handle_notification(&connection, &mut docs, &mut multiplexer, notif)?;
+                    }
+                    Message::Response(_) => {
+                        // We don't currently send requests TO the editor.
+                    }
                 }
-                handle_request(&connection, &docs, req)?;
             }
-            Message::Notification(notif) => {
-                handle_notification(&connection, &mut docs, notif)?;
+            recv(child_rx) -> msg => {
+                let Ok(msg) = msg else {
+                    // The embedded engine exited. Keep serving
+                    // dathon-only for the rest of the session.
+                    continue;
+                };
+                handle_child_message(&connection, &mut multiplexer, msg)?;
             }
-            Message::Response(_) => {
-                // We don't currently send requests TO the client, so we
-                // don't expect responses back.
+        }
+    }
+    multiplexer.shutdown();
+    Ok(())
+}
+
+/// Handle one message emitted by the embedded Python engine.
+///
+/// Foundation scope: `publishDiagnostics` notifications are remapped
+/// out of virtual-document coordinates and merged with dathon's
+/// diagnostics. Requests the engine sends us (`workspace/configuration`,
+/// `client/registerCapability`, …) get a minimal success reply so the
+/// engine doesn't stall — proper editor proxying is a later iteration.
+/// Everything else (log messages, responses) is ignored for now.
+fn handle_child_message(
+    connection: &Connection,
+    multiplexer: &mut multiplex::Multiplexer,
+    msg: serde_json::Value,
+) -> Result<(), Box<dyn Error + Sync + Send>> {
+    let method = msg.get("method").and_then(|m| m.as_str());
+    let id = msg.get("id");
+
+    match (method, id) {
+        (Some("textDocument/publishDiagnostics"), _) => {
+            if let Some(params) = msg.get("params")
+                && let Some((uri, child_diags)) = multiplex::child_diagnostics_to_editor(params)
+            {
+                let merged = multiplexer.diagnostics.set_child(uri.clone(), child_diags);
+                send_diagnostics(connection, &uri, merged)?;
             }
+        }
+        (Some(_), Some(id)) => {
+            // A request from the engine. Reply with a null success so
+            // it doesn't block waiting on us. `workspace/configuration`
+            // wants an array; everything else tolerates `null`.
+            let result = if method == Some("workspace/configuration") {
+                let count = msg
+                    .get("params")
+                    .and_then(|p| p.get("items"))
+                    .and_then(|i| i.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                serde_json::Value::Array(vec![serde_json::Value::Null; count])
+            } else {
+                serde_json::Value::Null
+            };
+            multiplexer.reply_to_child(id.clone(), result);
+        }
+        _ => {
+            // Notifications (window/logMessage, …) and responses — the
+            // foundation doesn't surface these. Later iterations route
+            // log messages to the editor's output channel.
         }
     }
     Ok(())
@@ -315,6 +411,7 @@ fn span_to_range(span: dathon::Span) -> Range {
 fn handle_notification(
     connection: &Connection,
     docs: &mut HashMap<Url, String>,
+    multiplexer: &mut multiplex::Multiplexer,
     notif: Notification,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
     match notif.method.as_str() {
@@ -322,30 +419,44 @@ fn handle_notification(
             let params: DidOpenTextDocumentParams = serde_json::from_value(notif.params)?;
             let uri = params.text_document.uri.clone();
             let text = params.text_document.text;
+            // Forward to the embedded Python engine as a virtual document
+            // before we stash the real text — `forward_did_open` does the
+            // preamble injection internally.
+            multiplexer.forward_did_open(
+                &uri,
+                &params.text_document.language_id,
+                params.text_document.version as i64,
+                &text,
+            );
             docs.insert(uri, text);
-            publish_project_diagnostics(connection, docs)?;
+            publish_project_diagnostics(connection, docs, multiplexer)?;
         }
         "textDocument/didChange" => {
             let params: DidChangeTextDocumentParams = serde_json::from_value(notif.params)?;
             let uri = params.text_document.uri.clone();
+            let version = params.text_document.version as i64;
             // FULL sync — content_changes is a single entry whose `text`
             // field is the entire new buffer.
             if let Some(change) = params.content_changes.into_iter().next() {
                 let text = change.text;
+                multiplexer.forward_did_change(&uri, version, &text);
                 docs.insert(uri, text);
-                publish_project_diagnostics(connection, docs)?;
+                publish_project_diagnostics(connection, docs, multiplexer)?;
             }
         }
         "textDocument/didClose" => {
             let params: DidCloseTextDocumentParams = serde_json::from_value(notif.params)?;
             let uri = params.text_document.uri;
             docs.remove(&uri);
-            // Clear any existing diagnostics for the closed file so the
-            // editor doesn't show stale errors, then re-publish project
-            // diagnostics for the rest — closing a file can change what
-            // other open files see (e.g. removing an import target).
+            multiplexer.forward_did_close(&uri);
+            // Drop the merged-diagnostic state for the closed file and
+            // clear any underlines the editor was still showing, then
+            // re-publish project diagnostics for the rest — closing a
+            // file can change what other open files see (e.g. removing
+            // an import target).
+            multiplexer.diagnostics.clear(&uri);
             publish_empty_diagnostics(connection, &uri)?;
-            publish_project_diagnostics(connection, docs)?;
+            publish_project_diagnostics(connection, docs, multiplexer)?;
         }
         // didSave, willSave, etc. are ignored — diagnostics already update
         // on every didChange. `initialized` arrives once and is a no-op.
@@ -365,13 +476,14 @@ fn handle_notification(
 fn publish_project_diagnostics(
     connection: &Connection,
     docs: &HashMap<Url, String>,
+    multiplexer: &mut multiplex::Multiplexer,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
     let Some(snapshot) = project::build_project_snapshot(docs) else {
         // Fall back: no usable project root. Check each open doc on
         // its own so we still publish *something* — the user will
         // see the same single-file behaviour we had before iteration 33.
         for (uri, text) in docs {
-            publish_single_file_diagnostics(connection, uri, text)?;
+            publish_single_file_diagnostics(connection, multiplexer, uri, text)?;
         }
         return Ok(());
     };
@@ -395,7 +507,11 @@ fn publish_project_diagnostics(
             .iter()
             .map(to_lsp_diagnostic)
             .collect();
-        send_diagnostics(connection, uri, diagnostics)?;
+        // Route dathon's diagnostics through the merge store so they're
+        // published alongside whatever the embedded Python engine last
+        // reported for the same file.
+        let merged = multiplexer.diagnostics.set_dathon(uri.clone(), diagnostics);
+        send_diagnostics(connection, uri, merged)?;
     }
     Ok(())
 }
@@ -405,13 +521,15 @@ fn publish_project_diagnostics(
 /// project). Same behaviour the LSP had before iteration 33.
 fn publish_single_file_diagnostics(
     connection: &Connection,
+    multiplexer: &mut multiplex::Multiplexer,
     uri: &Url,
     text: &str,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
     let path = uri_to_path(uri);
     let result = dathon::check(&path, text);
     let diagnostics: Vec<Diagnostic> = result.diagnostics.iter().map(to_lsp_diagnostic).collect();
-    send_diagnostics(connection, uri, diagnostics)
+    let merged = multiplexer.diagnostics.set_dathon(uri.clone(), diagnostics);
+    send_diagnostics(connection, uri, merged)
 }
 
 /// Push an empty diagnostic list — used when a document closes, to clear

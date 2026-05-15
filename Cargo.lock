@@ -128,6 +128,7 @@ dependencies = [
 name = "dathon-lsp"
 version = "0.0.1"
 dependencies = [
+ "crossbeam-channel",
  "dathon",
  "lsp-server",
  "lsp-types",
