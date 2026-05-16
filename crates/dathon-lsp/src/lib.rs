@@ -285,11 +285,18 @@ fn handle_child_message(
                     .get("result")
                     .cloned()
                     .unwrap_or(serde_json::Value::Null);
-                let merged = multiplex::merge_child_response(
-                    &pending.method,
-                    pending.dathon_result,
-                    child_result,
-                );
+                // Semantic tokens need the document's `__future__`-import
+                // line to place the hoisted import's tokens; the rest of
+                // the merge doesn't, so it's branched here.
+                let merged = if pending.method == "textDocument/semanticTokens/full" {
+                    multiplex::remap_semantic_tokens(child_result, pending.future_line)
+                } else {
+                    multiplex::merge_child_response(
+                        &pending.method,
+                        pending.dathon_result,
+                        child_result,
+                    )
+                };
                 connection.sender.send(Message::Response(Response {
                     id: pending.editor_id,
                     result: Some(merged),
@@ -373,17 +380,17 @@ fn handle_request(
         "textDocument/hover" => {
             let params: HoverParams = serde_json::from_value(req.params.clone())?;
             let dathon_result = serde_json::to_value(handle_hover(docs, params))?;
-            fanout_request(connection, multiplexer, req, dathon_result)?;
+            fanout_request(connection, multiplexer, docs, req, dathon_result)?;
         }
         "textDocument/definition" => {
             let params: GotoDefinitionParams = serde_json::from_value(req.params.clone())?;
             let dathon_result = serde_json::to_value(handle_definition(docs, params))?;
-            fanout_request(connection, multiplexer, req, dathon_result)?;
+            fanout_request(connection, multiplexer, docs, req, dathon_result)?;
         }
         "textDocument/completion" => {
             let params: CompletionParams = serde_json::from_value(req.params.clone())?;
             let dathon_result = serde_json::to_value(handle_completion(docs, params))?;
-            fanout_request(connection, multiplexer, req, dathon_result)?;
+            fanout_request(connection, multiplexer, docs, req, dathon_result)?;
         }
         // These are pure passthrough — dathon has no schema-specific
         // answer, so dathon's result is `null` and the merge just
@@ -396,7 +403,7 @@ fn handle_request(
         | "textDocument/rename"
         | "textDocument/prepareRename"
         | "textDocument/semanticTokens/full" => {
-            fanout_request(connection, multiplexer, req, serde_json::Value::Null)?;
+            fanout_request(connection, multiplexer, docs, req, serde_json::Value::Null)?;
         }
         "textDocument/documentSymbol" => {
             let params: DocumentSymbolParams = serde_json::from_value(req.params)?;
@@ -444,13 +451,28 @@ fn handle_request(
 fn fanout_request(
     connection: &Connection,
     multiplexer: &mut multiplex::Multiplexer,
+    docs: &HashMap<Url, String>,
     req: Request,
     dathon_result: serde_json::Value,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
+    // The document's `from __future__` line, if any — semantic tokens
+    // need it to place the hoisted import's tokens back (see
+    // `remap_semantic_tokens`).
+    let future_line = req
+        .params
+        .pointer("/textDocument/uri")
+        .and_then(|uri| uri.as_str())
+        .and_then(|uri| uri.parse::<Url>().ok())
+        .and_then(|uri| docs.get(&uri))
+        .and_then(|source| virtualdoc::first_future_import_line(source));
     let child_params = multiplex::request_params_to_child(req.params);
-    if let Some(dathon_only) =
-        multiplexer.forward_request(req.id.clone(), &req.method, child_params, dathon_result)
-    {
+    if let Some(dathon_only) = multiplexer.forward_request(
+        req.id.clone(),
+        &req.method,
+        child_params,
+        dathon_result,
+        future_line,
+    ) {
         connection.sender.send(Message::Response(Response {
             id: req.id,
             result: Some(dathon_only),
