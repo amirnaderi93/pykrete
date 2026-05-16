@@ -120,6 +120,17 @@ fn parse_future_import(line: &str) -> Option<Vec<String>> {
     (!names.is_empty()).then_some(names)
 }
 
+/// The 0-indexed editor line of the first `from __future__` import in
+/// `source`, if any. [`to_virtual`] hoists that import into the virtual
+/// document's preamble region, so callers that remap positions back
+/// (e.g. semantic tokens) need to know where it really lives.
+pub fn first_future_import_line(source: &str) -> Option<u32> {
+    source
+        .lines()
+        .position(|line| parse_future_import(line).is_some())
+        .map(|index| index as u32)
+}
+
 /// Map a real-file 0-indexed line to the virtual document's line.
 pub fn to_child_line(real_line: u32) -> u32 {
     real_line + PREFIX_LINE_COUNT

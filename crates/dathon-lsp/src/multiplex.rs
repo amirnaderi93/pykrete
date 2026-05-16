@@ -140,6 +140,11 @@ pub struct PendingRequest {
     /// dathon's own result for this request, already computed. `Null`
     /// when dathon had nothing at the cursor.
     pub dathon_result: Value,
+    /// The editor line of the document's `from __future__` import, if it
+    /// has one. The import is hoisted into the virtual document's
+    /// preamble region, so its semantic tokens come back on virtual
+    /// line 0; this maps them back. `None` for documents without one.
+    pub future_line: Option<u32>,
 }
 
 /// A request the child sent us that was proxied to the editor, awaiting
@@ -360,6 +365,7 @@ impl Multiplexer {
         method: &str,
         params: Value,
         dathon_result: Value,
+        future_line: Option<u32>,
     ) -> Option<Value> {
         if self.child.is_none() {
             return Some(dathon_result);
@@ -382,6 +388,7 @@ impl Multiplexer {
                 editor_id,
                 method: method.to_string(),
                 dathon_result,
+                future_line,
             },
         );
         None
@@ -547,6 +554,10 @@ pub fn request_params_to_child(mut params: Value) -> Value {
 /// `documentHighlight`, `rename`, `prepareRename`, and `semanticTokens`
 /// all carry document positions; `signatureHelp` does not. Any other
 /// method just returns dathon's result.
+///
+/// `semanticTokens/full` is handled directly by [`remap_semantic_tokens`]
+/// at the call site — it needs the document's `__future__`-import line,
+/// which the rest of the merge doesn't.
 pub fn merge_child_response(method: &str, dathon_result: Value, child_result: Value) -> Value {
     match method {
         "textDocument/hover" => merge_hover(dathon_result, child_result),
@@ -558,7 +569,7 @@ pub fn merge_child_response(method: &str, dathon_result: Value, child_result: Va
         "textDocument/documentHighlight" => remap_highlights(child_result),
         "textDocument/rename" => remap_workspace_edit(child_result),
         "textDocument/prepareRename" => remap_prepare_rename(child_result),
-        "textDocument/semanticTokens/full" => remap_semantic_tokens(child_result),
+        "textDocument/semanticTokens/full" => remap_semantic_tokens(child_result, None),
         _ => dathon_result,
     }
 }
@@ -782,7 +793,21 @@ fn to_location(value: &Value) -> Option<Value> {
 
 /// Remap a `Location`'s range out of virtual coordinates; `None` when
 /// it falls inside the preamble.
+///
+/// Only `.dpy` files are virtual documents carrying the injected
+/// preamble. A location in a real file — stdlib, site-packages, a plain
+/// `.py` the engine resolved an import to — is already in editor
+/// coordinates and passes through untouched; remapping it would shift
+/// its line numbers by the preamble height (often underflowing the
+/// location into nothing).
 fn remap_location_to_editor(mut loc: Value) -> Option<Value> {
+    let in_virtual_doc = loc
+        .get("uri")
+        .and_then(Value::as_str)
+        .is_some_and(|uri| uri.ends_with(".dpy"));
+    if !in_virtual_doc {
+        return Some(loc);
+    }
     let range = loc.get_mut("range")?;
     remap_range_to_editor(range).then_some(loc)
 }
@@ -888,7 +913,13 @@ fn remap_prepare_rename(mut result: Value) -> Value {
 /// to absolute positions, tokens inside the preamble are dropped, the
 /// rest are shifted up by the preamble height, and the stream is
 /// re-encoded.
-fn remap_semantic_tokens(result: Value) -> Value {
+///
+/// The one exception is the hoisted `from __future__` import: it lives
+/// on virtual line 0 (the preamble region), so its tokens are mapped to
+/// `future_line` — the editor line the import really sits on — instead
+/// of being dropped. Without this the `__future__` line would lose its
+/// semantic-token coloring.
+pub fn remap_semantic_tokens(result: Value, future_line: Option<u32>) -> Value {
     let Some(data) = result.get("data").and_then(|d| d.as_array()) else {
         return Value::Null;
     };
@@ -909,15 +940,21 @@ fn remap_semantic_tokens(result: Value) -> Value {
         tokens.push([abs_line, abs_char, field(2), field(3), field(4)]);
     }
 
-    // Drop preamble tokens, shift the rest into editor coordinates, and
-    // re-encode as deltas.
+    // Map each token's virtual line to an editor line, then re-encode.
     let mut out: Vec<i64> = Vec::new();
     let (mut prev_line, mut prev_char) = (0i64, 0i64);
     for [line, char, length, token_type, modifiers] in tokens {
-        if line < preamble {
-            continue;
-        }
-        let editor_line = line - preamble;
+        let editor_line = if line >= preamble {
+            line - preamble
+        } else if line == 0 {
+            // The hoisted `from __future__` import.
+            match future_line {
+                Some(future) => i64::from(future),
+                None => continue,
+            }
+        } else {
+            continue; // elsewhere in the preamble — no editor counterpart
+        };
         let delta_line = editor_line - prev_line;
         let delta_start = if delta_line == 0 {
             char - prev_char
@@ -1208,6 +1245,7 @@ mod tests {
             "textDocument/hover",
             json!({}),
             hover("dathon"),
+            None,
         );
         // No child → the caller gets dathon's result straight back, and
         // nothing is parked in the pending table.
@@ -1389,8 +1427,8 @@ mod tests {
     #[test]
     fn merge_definition_unions_locations_from_both_sources() {
         // dathon's location is already in editor coordinates; the
-        // child's is at a distinct virtual line.
-        let child = location("file:///other.py", virtualdoc::PREFIX_LINE_COUNT + 9);
+        // child's is in another `.dpy` file at a distinct virtual line.
+        let child = location("file:///other.dpy", virtualdoc::PREFIX_LINE_COUNT + 9);
         let merged = merge_child_response(
             "textDocument/definition",
             location("file:///t.dpy", 0),
@@ -1400,6 +1438,16 @@ mod tests {
         assert_eq!(locs.len(), 2);
         assert_eq!(locs[0]["range"]["start"]["line"], json!(0));
         assert_eq!(locs[1]["range"]["start"]["line"], json!(9));
+    }
+
+    #[test]
+    fn merge_definition_keeps_real_file_locations_unremapped() {
+        // The child resolved a `pyspark` symbol to a real `.py` file —
+        // that file has no injected preamble, so its line numbers must
+        // pass through untouched (not shifted down by the prefix).
+        let child = location("file:///site-packages/pyspark/sql/functions.py", 42);
+        let merged = merge_child_response("textDocument/definition", Value::Null, child);
+        assert_eq!(merged[0]["range"]["start"]["line"], json!(42));
     }
 
     #[test]
@@ -1702,5 +1750,31 @@ mod tests {
         let merged = merge_child_response("textDocument/semanticTokens/full", Value::Null, child);
         // First token shifts to editor line 0; the same-line delta is intact.
         assert_eq!(merged["data"], json!([0, 0, 3, 0, 0, 0, 5, 2, 0, 0]));
+    }
+
+    #[test]
+    fn semantic_tokens_map_the_hoisted_future_line_to_its_editor_line() {
+        // A token on virtual line 0 is the hoisted `from __future__`
+        // import; with the import on editor line 3 its tokens land there
+        // rather than being dropped.
+        let preamble = i64::from(virtualdoc::PREFIX_LINE_COUNT);
+        let child = json!({
+            "data": [
+                0, 5, 10, 0, 0,             // virtual line 0 — the hoisted import
+                preamble + 8, 0, 4, 1, 0,   // virtual line preamble+8 — real line 8
+            ],
+        });
+        let remapped = remap_semantic_tokens(child, Some(3));
+        // The `__future__` token → editor line 3; the body token → line 8.
+        assert_eq!(remapped["data"], json!([3, 5, 10, 0, 0, 5, 0, 4, 1, 0]));
+    }
+
+    #[test]
+    fn semantic_tokens_drop_the_hoisted_line_when_there_is_no_future_import() {
+        // A virtual-line-0 token with no `from __future__` line to map
+        // to is dropped (it can only be preamble noise).
+        let child = json!({ "data": [0, 0, 4, 0, 0] });
+        let remapped = remap_semantic_tokens(child, None);
+        assert_eq!(remapped["data"], json!([]));
     }
 }
