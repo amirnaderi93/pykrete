@@ -2,7 +2,7 @@
   "name": "dathon-vscode",
   "displayName": "Dathon",
   "description": "Static schema checking for PySpark .dpy files — diagnostics, hover, completion, go-to-definition, quick-fixes — plus general Python language features from a bundled, multiplexed Python engine.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "dathon",
   "license": "MIT",
   "repository": {
@@ -28,6 +28,13 @@
         "aliases": ["Dathon", "dathon"],
         "extensions": [".dpy"],
         "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "dathon",
+        "scopeName": "source.dathon",
+        "path": "./syntaxes/dathon.tmLanguage.json"
       }
     ],
     "configuration": {
