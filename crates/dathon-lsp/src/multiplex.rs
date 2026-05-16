@@ -892,7 +892,7 @@ fn remap_semantic_tokens(result: Value) -> Value {
     let Some(data) = result.get("data").and_then(|d| d.as_array()) else {
         return Value::Null;
     };
-    let preamble = i64::from(virtualdoc::PREAMBLE_LINE_COUNT);
+    let preamble = i64::from(virtualdoc::PREFIX_LINE_COUNT);
 
     // Decode the delta stream to absolute (line, char, length, type, mods).
     let mut tokens: Vec<[i64; 5]> = Vec::with_capacity(data.len() / 5);
@@ -991,8 +991,8 @@ mod tests {
     #[test]
     fn child_diagnostics_are_remapped_out_of_virtual_coordinates() {
         // The child reports a diagnostic at virtual line
-        // PREAMBLE_LINE_COUNT + 3 — that's real line 3.
-        let vline = virtualdoc::PREAMBLE_LINE_COUNT + 3;
+        // PREFIX_LINE_COUNT + 3 — that's real line 3.
+        let vline = virtualdoc::PREFIX_LINE_COUNT + 3;
         let params = json!({
             "uri": "file:///t.dpy",
             "diagnostics": [{
@@ -1081,11 +1081,11 @@ mod tests {
             "position": { "line": 7, "character": 4 },
         });
         let shifted = request_params_to_child(params);
-        // Real line 7 lands at virtual line 7 + PREAMBLE_LINE_COUNT;
+        // Real line 7 lands at virtual line 7 + PREFIX_LINE_COUNT;
         // the character is untouched.
         assert_eq!(
             shifted["position"]["line"],
-            json!(virtualdoc::PREAMBLE_LINE_COUNT + 7),
+            json!(virtualdoc::PREFIX_LINE_COUNT + 7),
         );
         assert_eq!(shifted["position"]["character"], json!(4));
     }
@@ -1141,8 +1141,8 @@ mod tests {
     #[test]
     fn merge_hover_remaps_the_child_range_out_of_virtual_coordinates() {
         // The child reports its hover range at virtual line
-        // PREAMBLE_LINE_COUNT + 2 — that's real line 2.
-        let vline = virtualdoc::PREAMBLE_LINE_COUNT + 2;
+        // PREFIX_LINE_COUNT + 2 — that's real line 2.
+        let vline = virtualdoc::PREFIX_LINE_COUNT + 2;
         let child = json!({
             "contents": { "kind": "markdown", "value": "python" },
             "range": {
@@ -1339,8 +1339,8 @@ mod tests {
     #[test]
     fn merge_completion_remaps_a_child_item_text_edit_range() {
         // The child's textEdit range is in virtual coordinates — at
-        // virtual line PREAMBLE_LINE_COUNT + 4, i.e. real line 4.
-        let vline = virtualdoc::PREAMBLE_LINE_COUNT + 4;
+        // virtual line PREFIX_LINE_COUNT + 4, i.e. real line 4.
+        let vline = virtualdoc::PREFIX_LINE_COUNT + 4;
         let child = json!([{
             "label": "explode",
             "textEdit": {
@@ -1390,7 +1390,7 @@ mod tests {
     fn merge_definition_unions_locations_from_both_sources() {
         // dathon's location is already in editor coordinates; the
         // child's is at a distinct virtual line.
-        let child = location("file:///other.py", virtualdoc::PREAMBLE_LINE_COUNT + 9);
+        let child = location("file:///other.py", virtualdoc::PREFIX_LINE_COUNT + 9);
         let merged = merge_child_response(
             "textDocument/definition",
             location("file:///t.dpy", 0),
@@ -1406,7 +1406,7 @@ mod tests {
     fn merge_definition_coerces_a_location_link_to_a_location() {
         // The child answers with a LocationLink (the editor advertised
         // linkSupport) — it must collapse to a plain Location.
-        let vline = virtualdoc::PREAMBLE_LINE_COUNT + 2;
+        let vline = virtualdoc::PREFIX_LINE_COUNT + 2;
         let child = json!([{
             "targetUri": "file:///t.dpy",
             "targetRange": {
@@ -1443,7 +1443,7 @@ mod tests {
         // dathon and the child both resolve a Schema name to its class
         // declaration on real line 0 — the merged list has it once.
         let dathon = location("file:///t.dpy", 0);
-        let child = location("file:///t.dpy", virtualdoc::PREAMBLE_LINE_COUNT);
+        let child = location("file:///t.dpy", virtualdoc::PREFIX_LINE_COUNT);
         let merged = merge_child_response("textDocument/definition", dathon, child);
         assert_eq!(merged.as_array().expect("array").len(), 1);
     }
@@ -1452,7 +1452,7 @@ mod tests {
     fn merge_references_remaps_the_child_locations() {
         // `references` is a pure passthrough — dathon contributes
         // nothing — but the child's locations still need remapping.
-        let child = location("file:///t.dpy", virtualdoc::PREAMBLE_LINE_COUNT + 7);
+        let child = location("file:///t.dpy", virtualdoc::PREFIX_LINE_COUNT + 7);
         let merged = merge_child_response("textDocument/references", Value::Null, child);
         assert_eq!(merged[0]["range"]["start"]["line"], json!(7));
     }
@@ -1608,7 +1608,7 @@ mod tests {
     fn document_highlight_remaps_and_drops_preamble_hits() {
         let child = json!([
             { "range": ranged(1), "kind": 1 },                                  // preamble
-            { "range": ranged(virtualdoc::PREAMBLE_LINE_COUNT + 6), "kind": 2 }, // real line 6
+            { "range": ranged(virtualdoc::PREFIX_LINE_COUNT + 6), "kind": 2 }, // real line 6
         ]);
         let merged = merge_child_response("textDocument/documentHighlight", Value::Null, child);
         let out = merged.as_array().expect("array");
@@ -1624,7 +1624,7 @@ mod tests {
             "changes": {
                 uri: [
                     { "range": ranged(1), "newText": "x" },                                  // preamble
-                    { "range": ranged(virtualdoc::PREAMBLE_LINE_COUNT + 4), "newText": "x" }, // real line 4
+                    { "range": ranged(virtualdoc::PREFIX_LINE_COUNT + 4), "newText": "x" }, // real line 4
                 ],
             },
         });
@@ -1641,7 +1641,7 @@ mod tests {
             "documentChanges": [{
                 "textDocument": { "uri": "file:///t.dpy", "version": 1 },
                 "edits": [
-                    { "range": ranged(virtualdoc::PREAMBLE_LINE_COUNT + 9), "newText": "y" },
+                    { "range": ranged(virtualdoc::PREFIX_LINE_COUNT + 9), "newText": "y" },
                 ],
             }],
         });
@@ -1658,7 +1658,7 @@ mod tests {
         let bare = merge_child_response(
             "textDocument/prepareRename",
             Value::Null,
-            ranged(virtualdoc::PREAMBLE_LINE_COUNT + 3),
+            ranged(virtualdoc::PREFIX_LINE_COUNT + 3),
         );
         assert_eq!(bare["start"]["line"], json!(3));
 
@@ -1666,7 +1666,7 @@ mod tests {
         let with_placeholder = merge_child_response(
             "textDocument/prepareRename",
             Value::Null,
-            json!({ "range": ranged(virtualdoc::PREAMBLE_LINE_COUNT + 3), "placeholder": "old" }),
+            json!({ "range": ranged(virtualdoc::PREFIX_LINE_COUNT + 3), "placeholder": "old" }),
         );
         assert_eq!(with_placeholder["range"]["start"]["line"], json!(3));
         assert_eq!(with_placeholder["placeholder"], json!("old"));
@@ -1674,7 +1674,7 @@ mod tests {
 
     #[test]
     fn semantic_tokens_drop_the_preamble_and_shift_real_tokens() {
-        let preamble = i64::from(virtualdoc::PREAMBLE_LINE_COUNT);
+        let preamble = i64::from(virtualdoc::PREFIX_LINE_COUNT);
         // Token A on preamble line 1; token B on real line 2 (virtual
         // line preamble+2), delta-encoded against A.
         let child = json!({
@@ -1690,7 +1690,7 @@ mod tests {
 
     #[test]
     fn semantic_tokens_preserve_same_line_delta_encoding() {
-        let preamble = i64::from(virtualdoc::PREAMBLE_LINE_COUNT);
+        let preamble = i64::from(virtualdoc::PREFIX_LINE_COUNT);
         // Two real tokens on the same line (virtual line preamble+0):
         // the second is delta-encoded against the first.
         let child = json!({
