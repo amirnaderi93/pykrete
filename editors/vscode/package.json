@@ -1,8 +1,8 @@
 {
   "name": "dathon-vscode",
   "displayName": "Dathon",
-  "description": "Static schema checking for PySpark — diagnostics, hover, completion, go-to-definition, and quick-fixes for .dpy files. Pairs with any Python LSP (basedpyright / Pylance / ruff-lsp) for general Python features.",
-  "version": "0.1.0",
+  "description": "Static schema checking for PySpark .dpy files — diagnostics, hover, completion, go-to-definition, quick-fixes — plus general Python language features from a bundled, multiplexed Python engine.",
+  "version": "0.2.0",
   "publisher": "dathon",
   "license": "MIT",
   "repository": {
