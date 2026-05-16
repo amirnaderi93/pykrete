@@ -336,12 +336,17 @@ fn handle_request(
             let dathon_result = serde_json::to_value(handle_completion(docs, params))?;
             fanout_request(connection, multiplexer, req, dathon_result)?;
         }
-        // signatureHelp / references are pure passthrough — dathon has
-        // no schema-specific answer, so dathon's result is `null` and
-        // the merge just returns the (remapped) child result. These are
-        // only advertised to the editor when the embedded engine
-        // provides them (see `merge_capabilities`).
-        "textDocument/signatureHelp" | "textDocument/references" => {
+        // These are pure passthrough — dathon has no schema-specific
+        // answer, so dathon's result is `null` and the merge just
+        // returns the (remapped) child result. They're only advertised
+        // to the editor when the embedded engine provides them (see
+        // `merge_capabilities`).
+        "textDocument/signatureHelp"
+        | "textDocument/references"
+        | "textDocument/documentHighlight"
+        | "textDocument/rename"
+        | "textDocument/prepareRename"
+        | "textDocument/semanticTokens/full" => {
             fanout_request(connection, multiplexer, req, serde_json::Value::Null)?;
         }
         "textDocument/documentSymbol" => {

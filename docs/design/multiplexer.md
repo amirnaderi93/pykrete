@@ -137,9 +137,12 @@ This is multi-iteration. The slices, smallest-shippable first:
    settings instead of a stub. Known gap: notifications the editor
    sends as a result of a dynamic registration aren't forwarded to the
    child yet.
-5. **Wider passthrough** — `rename`, `documentHighlight`, semantic
-   tokens, …: each needs its own virtual↔editor coordinate transform
-   before it joins the capability allowlist.
+5. **Wider passthrough** *(done)* — `documentHighlight`, `rename` /
+   `prepareRename`, and `semanticTokens/full` join the capability
+   allowlist, each with its own virtual↔editor coordinate transform
+   (range remap + preamble drop; for semantic tokens, decode the delta
+   stream, drop preamble tokens, shift, re-encode). `semanticTokens`
+   advertises only `full` — `range` / `full/delta` aren't remapped.
 6. **Bundle the engine** — *VS Code done:* the extension ships
    basedpyright in `node_modules` and passes dathon-lsp a
    `node <langserver.js> --stdio` launch spec via
