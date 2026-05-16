@@ -19,7 +19,7 @@
 use std::collections::HashMap;
 
 use lsp_server::RequestId;
-use lsp_types::{Diagnostic, Url};
+use lsp_types::{Diagnostic, NumberOrString, Url};
 use serde_json::{Value, json};
 
 use crate::child::ChildLsp;
@@ -103,6 +103,32 @@ pub fn child_diagnostics_to_editor(params: &Value) -> Option<(Url, Vec<Diagnosti
     Some((uri, out))
 }
 
+/// Whether `diagnostic` is the embedded engine reporting an import it
+/// couldn't resolve, where the import targets another dathon module —
+/// i.e. a relative import (`from .schemas import …`). The engine
+/// resolves imports as `.py`, so it never finds the sibling `.dpy`;
+/// dathon resolves those itself, so the engine's complaint there is
+/// noise and gets dropped. Absolute imports (`pyspark`, `os`) keep
+/// their unresolved-import diagnostic — those are real.
+///
+/// `source` is the document text in editor coordinates; the
+/// diagnostic's start line indexes into it to read the import
+/// statement.
+pub fn is_unresolved_dathon_import(diagnostic: &Diagnostic, source: &str) -> bool {
+    let is_missing_import = matches!(
+        diagnostic.code.as_ref(),
+        Some(NumberOrString::String(code))
+            if code == "reportMissingImports" || code == "reportMissingModuleSource"
+    );
+    if !is_missing_import {
+        return false;
+    }
+    source
+        .lines()
+        .nth(diagnostic.range.start.line as usize)
+        .is_some_and(|line| line.trim_start().starts_with("from ."))
+}
+
 /// An editor request that was fanned out to the child and is still
 /// awaiting the child's reply. dathon's own answer is computed up front
 /// and parked here; when the child responds the two are merged.
@@ -114,6 +140,17 @@ pub struct PendingRequest {
     /// dathon's own result for this request, already computed. `Null`
     /// when dathon had nothing at the cursor.
     pub dathon_result: Value,
+}
+
+/// A request the child sent us that was proxied to the editor, awaiting
+/// the editor's reply.
+pub struct ProxiedRequest {
+    /// The child's original request id — the reply must carry it back.
+    pub child_id: Value,
+    /// For a `workspace/configuration` request, the `section` of each
+    /// requested item, in order; empty for other methods. Used to patch
+    /// the per-slot response (see [`patch_engine_config`]).
+    pub config_sections: Vec<String>,
 }
 
 /// The embedded Python language server plus the merged-diagnostic state.
@@ -132,9 +169,9 @@ pub struct Multiplexer {
     /// Monotonic counter for synthetic child request ids.
     next_request_seq: u64,
     /// Requests the child sent us and we proxied to the editor, keyed
-    /// by the editor-facing id (`dathon-c2e-N`) → the child's original
-    /// request id. Drained as the editor answers.
-    child_requests: HashMap<String, Value>,
+    /// by the editor-facing id (`dathon-c2e-N`). Drained as the editor
+    /// answers.
+    child_requests: HashMap<String, ProxiedRequest>,
     /// Monotonic counter for editor-facing proxied-request ids.
     next_child_request_seq: u64,
 }
@@ -257,17 +294,30 @@ impl Multiplexer {
     }
 
     /// Register a request the child sent us, to be proxied to the
-    /// editor. Returns the editor-facing request id to forward it under.
-    pub fn register_child_request(&mut self, child_id: Value) -> String {
+    /// editor. `config_sections` is the requested `section` list for a
+    /// `workspace/configuration` request (empty otherwise) — kept so
+    /// the response can be patched per slot. Returns the editor-facing
+    /// request id to forward it under.
+    pub fn register_child_request(
+        &mut self,
+        child_id: Value,
+        config_sections: Vec<String>,
+    ) -> String {
         self.next_child_request_seq += 1;
         let editor_id = format!("dathon-c2e-{}", self.next_child_request_seq);
-        self.child_requests.insert(editor_id.clone(), child_id);
+        self.child_requests.insert(
+            editor_id.clone(),
+            ProxiedRequest {
+                child_id,
+                config_sections,
+            },
+        );
         editor_id
     }
 
-    /// Look up (and remove) the child's original request id for an
-    /// editor response. `None` for an id dathon-lsp never issued.
-    pub fn take_child_request(&mut self, editor_id: &str) -> Option<Value> {
+    /// Look up (and remove) the proxied request an editor response
+    /// belongs to. `None` for an id dathon-lsp never issued.
+    pub fn take_child_request(&mut self, editor_id: &str) -> Option<ProxiedRequest> {
         self.child_requests.remove(editor_id)
     }
 
@@ -392,6 +442,51 @@ pub fn merge_capabilities(mut dathon: Value, child: &Value) -> Value {
         dathon["semanticTokensProvider"] = json!({ "legend": legend, "full": true });
     }
     dathon
+}
+
+/// Patch the editor's `workspace/configuration` response before it
+/// reaches the embedded engine: default `typeCheckingMode` to
+/// `standard` on the Python-analysis sections, so the engine runs at
+/// the type-checking level an ordinary Python setup uses (Pylance /
+/// pyright default) rather than basedpyright's louder out-of-the-box
+/// strictness. A mode the user has explicitly configured is left
+/// alone — this only fills the gap when the editor has no setting.
+///
+/// `result` is an array parallel to `sections`, one settings value per
+/// requested config item.
+pub fn patch_engine_config(mut result: Value, sections: &[String]) -> Value {
+    let Some(slots) = result.as_array_mut() else {
+        return result;
+    };
+    for (slot, section) in slots.iter_mut().zip(sections) {
+        match section.as_str() {
+            // The analysis subtree was requested directly.
+            "python.analysis" | "basedpyright.analysis" => default_standard_type_checking(slot),
+            // The whole `python` / `basedpyright` tree — analysis nests
+            // under `.analysis`.
+            "python" | "basedpyright" => {
+                if !slot.is_object() {
+                    *slot = json!({});
+                }
+                default_standard_type_checking(&mut slot["analysis"]);
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
+/// Set `settings.typeCheckingMode` to `standard` unless it's already
+/// set to a non-null value.
+fn default_standard_type_checking(settings: &mut Value) {
+    if !settings.is_object() {
+        *settings = json!({});
+    }
+    let obj = settings.as_object_mut().expect("set to an object above");
+    let unset = obj.get("typeCheckingMode").is_none_or(Value::is_null);
+    if unset {
+        obj.insert("typeCheckingMode".to_string(), json!("standard"));
+    }
 }
 
 /// Rewrite an editor request's params for the child: the cursor
@@ -898,6 +993,48 @@ mod tests {
         assert!(diags.is_empty());
     }
 
+    fn missing_import_diag(line: u32, code: &str) -> Diagnostic {
+        Diagnostic {
+            range: Range {
+                start: Position { line, character: 0 },
+                end: Position {
+                    line,
+                    character: 10,
+                },
+            },
+            code: Some(lsp_types::NumberOrString::String(code.to_string())),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn unresolved_relative_import_is_recognized_as_a_dathon_import() {
+        let source =
+            "from pyspark.sql import functions as F\nfrom .schemas import RawEvents\n";
+        // Line 1 is the relative import — the engine can't resolve the
+        // sibling `.dpy`, so its complaint is dathon's to own.
+        let relative = missing_import_diag(1, "reportMissingImports");
+        assert!(is_unresolved_dathon_import(&relative, source));
+    }
+
+    #[test]
+    fn unresolved_absolute_import_is_kept() {
+        // Line 0 is an absolute import — a genuinely missing package is
+        // a real diagnostic and must reach the editor.
+        let source =
+            "from pyspark.sql import functions as F\nfrom .schemas import RawEvents\n";
+        let absolute = missing_import_diag(0, "reportMissingImports");
+        assert!(!is_unresolved_dathon_import(&absolute, source));
+    }
+
+    #[test]
+    fn non_import_diagnostic_is_never_treated_as_a_dathon_import() {
+        let source = "from .schemas import RawEvents\n";
+        // Same line, but a different rule — not an import complaint.
+        let other = missing_import_diag(0, "reportUnusedVariable");
+        assert!(!is_unresolved_dathon_import(&other, source));
+    }
+
     // -----------------------------------------------------------------------
     // request fan-out: param/position remapping
     // -----------------------------------------------------------------------
@@ -1057,26 +1194,76 @@ mod tests {
         let mut mux = test_multiplexer();
         // The child's id can be a number or a string — it's echoed back
         // verbatim, so it must survive the round-trip unchanged.
-        let editor_id = mux.register_child_request(json!(42));
-        assert_eq!(mux.take_child_request(&editor_id), Some(json!(42)));
+        let editor_id = mux.register_child_request(json!(42), Vec::new());
+        assert_eq!(
+            mux.take_child_request(&editor_id).map(|p| p.child_id),
+            Some(json!(42)),
+        );
         // A second take of the same id finds nothing — it was consumed.
-        assert_eq!(mux.take_child_request(&editor_id), None);
+        assert!(mux.take_child_request(&editor_id).is_none());
     }
 
     #[test]
     fn register_child_request_issues_distinct_editor_ids() {
         let mut mux = test_multiplexer();
-        let first = mux.register_child_request(json!("a"));
-        let second = mux.register_child_request(json!("b"));
+        let first = mux.register_child_request(json!("a"), Vec::new());
+        let second = mux.register_child_request(json!("b"), Vec::new());
         assert_ne!(first, second);
-        assert_eq!(mux.take_child_request(&first), Some(json!("a")));
-        assert_eq!(mux.take_child_request(&second), Some(json!("b")));
+        assert_eq!(
+            mux.take_child_request(&first).map(|p| p.child_id),
+            Some(json!("a")),
+        );
+        assert_eq!(
+            mux.take_child_request(&second).map(|p| p.child_id),
+            Some(json!("b")),
+        );
+    }
+
+    #[test]
+    fn register_child_request_keeps_the_config_sections() {
+        let mut mux = test_multiplexer();
+        let sections = vec!["python".to_string(), "python.analysis".to_string()];
+        let editor_id = mux.register_child_request(json!(1), sections.clone());
+        let proxied = mux.take_child_request(&editor_id).expect("registered");
+        assert_eq!(proxied.config_sections, sections);
     }
 
     #[test]
     fn take_child_request_returns_none_for_an_unissued_id() {
         let mut mux = test_multiplexer();
         assert!(mux.take_child_request("dathon-c2e-999").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // workspace/configuration patching
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn patch_engine_config_defaults_type_checking_to_standard() {
+        // The editor has no Python config — the `python.analysis` slot
+        // comes back null; it must become `{typeCheckingMode: standard}`.
+        let sections = vec!["python".to_string(), "python.analysis".to_string()];
+        let patched = patch_engine_config(json!([null, null]), &sections);
+        assert_eq!(
+            patched[0]["analysis"]["typeCheckingMode"],
+            json!("standard")
+        );
+        assert_eq!(patched[1]["typeCheckingMode"], json!("standard"));
+    }
+
+    #[test]
+    fn patch_engine_config_leaves_an_explicit_user_mode_alone() {
+        let sections = vec!["python.analysis".to_string()];
+        let patched = patch_engine_config(json!([{ "typeCheckingMode": "strict" }]), &sections);
+        // The user chose strict — dathon-lsp must not override it.
+        assert_eq!(patched[0]["typeCheckingMode"], json!("strict"));
+    }
+
+    #[test]
+    fn patch_engine_config_ignores_non_analysis_sections() {
+        // A non-analysis section (e.g. an editor section) is untouched.
+        let patched = patch_engine_config(json!(["keep-me"]), &["editor".to_string()]);
+        assert_eq!(patched[0], json!("keep-me"));
     }
 
     // -----------------------------------------------------------------------
