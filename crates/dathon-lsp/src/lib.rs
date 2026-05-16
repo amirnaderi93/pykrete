@@ -86,8 +86,10 @@ fn main_loop(
 
     // The embedded Python engine's outbound message channel. When no
     // engine is embedded we use a never-ready receiver so `select!`
-    // simply only ever fires on the editor side.
-    let child_rx = multiplexer
+    // simply only ever fires on the editor side. When the engine later
+    // exits, `child_rx` is swapped back to `never()` so the closed
+    // channel doesn't spin the select loop.
+    let mut child_rx = multiplexer
         .child
         .as_ref()
         .map(|c| c.receiver.clone())
@@ -105,7 +107,7 @@ fn main_loop(
                             multiplexer.shutdown();
                             return Ok(());
                         }
-                        handle_request(&connection, &docs, req)?;
+                        handle_request(&connection, &docs, &mut multiplexer, req)?;
                     }
                     Message::Notification(notif) => {
                         handle_notification(&connection, &mut docs, &mut multiplexer, notif)?;
@@ -117,8 +119,19 @@ fn main_loop(
             }
             recv(child_rx) -> msg => {
                 let Ok(msg) = msg else {
-                    // The embedded engine exited. Keep serving
-                    // dathon-only for the rest of the session.
+                    // The embedded engine exited. Answer any in-flight
+                    // fanned-out requests with dathon's own result so
+                    // they don't hang, drop the child, and swap the
+                    // channel to `never()` so this branch stops firing.
+                    for pending in multiplexer.drain_pending() {
+                        connection.sender.send(Message::Response(Response {
+                            id: pending.editor_id,
+                            result: Some(pending.dathon_result),
+                            error: None,
+                        }))?;
+                    }
+                    multiplexer.child = None;
+                    child_rx = crossbeam_channel::never();
                     continue;
                 };
                 handle_child_message(&connection, &mut multiplexer, msg)?;
@@ -131,12 +144,15 @@ fn main_loop(
 
 /// Handle one message emitted by the embedded Python engine.
 ///
-/// Foundation scope: `publishDiagnostics` notifications are remapped
-/// out of virtual-document coordinates and merged with dathon's
-/// diagnostics. Requests the engine sends us (`workspace/configuration`,
-/// `client/registerCapability`, …) get a minimal success reply so the
-/// engine doesn't stall — proper editor proxying is a later iteration.
-/// Everything else (log messages, responses) is ignored for now.
+/// - `publishDiagnostics` notifications are remapped out of
+///   virtual-document coordinates and merged with dathon's diagnostics.
+/// - Responses to requests we fanned out (`dathon-req-*`) are merged
+///   with dathon's own result and forwarded to the editor.
+/// - Requests the engine sends us (`workspace/configuration`,
+///   `client/registerCapability`, …) get a minimal success reply so the
+///   engine doesn't stall — proper editor proxying is a later iteration.
+///
+/// Everything else (log messages, …) is ignored for now.
 fn handle_child_message(
     connection: &Connection,
     multiplexer: &mut multiplex::Multiplexer,
@@ -171,10 +187,35 @@ fn handle_child_message(
             };
             multiplexer.reply_to_child(id.clone(), result);
         }
+        (None, Some(id)) => {
+            // A response to a request we fanned out. Match it to the
+            // parked editor request, merge dathon's result with the
+            // child's, and send the combined reply to the editor.
+            if let Some(child_id) = id.as_str()
+                && let Some(pending) = multiplexer.take_pending(child_id)
+            {
+                // An `error` response (or no `result`) becomes `Null` —
+                // the merge then just yields dathon's own answer.
+                let child_result = msg
+                    .get("result")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                let merged = multiplex::merge_child_response(
+                    &pending.method,
+                    pending.dathon_result,
+                    child_result,
+                );
+                connection.sender.send(Message::Response(Response {
+                    id: pending.editor_id,
+                    result: Some(merged),
+                    error: None,
+                }))?;
+            }
+        }
         _ => {
-            // Notifications (window/logMessage, …) and responses — the
-            // foundation doesn't surface these. Later iterations route
-            // log messages to the editor's output channel.
+            // Notifications (window/logMessage, …) — the foundation
+            // doesn't surface these. Later iterations route log
+            // messages to the editor's output channel.
         }
     }
     Ok(())
@@ -183,17 +224,31 @@ fn handle_child_message(
 fn handle_request(
     connection: &Connection,
     docs: &HashMap<Url, String>,
+    multiplexer: &mut multiplex::Multiplexer,
     req: Request,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
     match req.method.as_str() {
         "textDocument/hover" => {
-            let params: HoverParams = serde_json::from_value(req.params)?;
-            let response_value = handle_hover(docs, params);
-            connection.sender.send(Message::Response(Response {
-                id: req.id,
-                result: Some(serde_json::to_value(response_value)?),
-                error: None,
-            }))?;
+            // Compute dathon's schema-aware hover, then fan the request
+            // out to the embedded Python engine. When an engine is
+            // present the reply is deferred — `handle_child_message`
+            // merges the two answers and replies. Otherwise we answer
+            // with dathon's hover alone, right here.
+            let params: HoverParams = serde_json::from_value(req.params.clone())?;
+            let dathon_hover = serde_json::to_value(handle_hover(docs, params))?;
+            let child_params = multiplex::request_params_to_child(req.params);
+            if let Some(dathon_only) = multiplexer.forward_request(
+                req.id.clone(),
+                "textDocument/hover",
+                child_params,
+                dathon_hover,
+            ) {
+                connection.sender.send(Message::Response(Response {
+                    id: req.id,
+                    result: Some(dathon_only),
+                    error: None,
+                }))?;
+            }
         }
         "textDocument/documentSymbol" => {
             let params: DocumentSymbolParams = serde_json::from_value(req.params)?;
