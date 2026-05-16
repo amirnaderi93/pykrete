@@ -11,10 +11,10 @@
 //! - [`Multiplexer`] — the optional child process plus the helpers that
 //!   forward text-sync notifications to it (transformed into virtual
 //!   documents) and translate the child's messages back.
-//!
-//! Foundation scope (this iteration): lifecycle + text sync + diagnostic
-//! merge. Request fan-out (hover / completion / definition) is the next
-//! iteration — until then those stay dathon-only.
+//! - Request fan-out — `hover` / `completion` / `definition` requests
+//!   are answered by both engines. The pending-request table correlates
+//!   each forwarded request with the child's eventual reply, and
+//!   [`merge_child_response`] combines the two answers.
 
 use std::collections::HashMap;
 
@@ -327,13 +327,15 @@ pub fn request_params_to_child(mut params: Value) -> Value {
 /// Merge dathon's own answer for a fanned-out request with the child
 /// engine's answer.
 ///
-/// Foundation scope: only `textDocument/hover` is fanned out — dathon's
-/// schema-aware hover is stacked above the Python engine's. Any other
-/// method just returns dathon's result unchanged (it isn't fanned out
-/// yet, so the child result is empty anyway).
+/// Fanned-out methods: `hover` stacks the two; `completion` concatenates
+/// the item lists; `definition` unions the locations. Any other method
+/// just returns dathon's result (it isn't fanned out, so the child
+/// result is empty anyway).
 pub fn merge_child_response(method: &str, dathon_result: Value, child_result: Value) -> Value {
     match method {
         "textDocument/hover" => merge_hover(dathon_result, child_result),
+        "textDocument/completion" => merge_completion(dathon_result, child_result),
+        "textDocument/definition" => merge_definition(dathon_result, child_result),
         _ => dathon_result,
     }
 }
@@ -411,16 +413,160 @@ fn remap_hover_to_editor(mut hover: Value) -> Value {
 }
 
 /// Shift a `Range`'s `start.line` and `end.line` from virtual to editor
-/// coordinates in place. Returns `false` (leaving the range partially
-/// mutated) if either endpoint falls inside the preamble.
+/// coordinates. Atomic: if either endpoint falls inside the preamble
+/// the range is left untouched and `false` is returned.
 fn remap_range_to_editor(range: &mut Value) -> bool {
-    let remap_endpoint = |range: &mut Value, key: &str| -> Option<()> {
-        let line = range.pointer_mut(&format!("/{key}/line"))?;
-        let mapped = virtualdoc::to_editor_line(line.as_u64()? as u32)?;
-        *line = json!(mapped);
-        Some(())
+    let endpoint = |key: &str| -> Option<u32> {
+        let line = range.pointer(&format!("/{key}/line"))?.as_u64()? as u32;
+        virtualdoc::to_editor_line(line)
     };
-    remap_endpoint(range, "start").is_some() && remap_endpoint(range, "end").is_some()
+    let (Some(start), Some(end)) = (endpoint("start"), endpoint("end")) else {
+        return false;
+    };
+    range["start"]["line"] = json!(start);
+    range["end"]["line"] = json!(end);
+    true
+}
+
+// ---------------------------------------------------------------------------
+// completion merge
+// ---------------------------------------------------------------------------
+
+/// Merge two completion results. Items from both sources are
+/// concatenated, dathon's first; each child item's edit ranges are
+/// remapped out of virtual coordinates. The result is a
+/// `CompletionList` when the child reports its list incomplete (so the
+/// editor keeps re-querying), otherwise a plain item array.
+///
+/// The child's `itemDefaults` are dropped — applying them to the merged
+/// list would also (wrongly) apply them to dathon's items. Child items
+/// that relied on a default edit range fall back to label insertion,
+/// which is correct for the common `.`-member-access case.
+fn merge_completion(dathon: Value, child: Value) -> Value {
+    let mut items = completion_items(&dathon);
+    for mut item in completion_items(&child) {
+        remap_completion_item(&mut item);
+        items.push(item);
+    }
+    let child_incomplete = child
+        .get("isIncomplete")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if child_incomplete {
+        json!({ "isIncomplete": true, "items": items })
+    } else {
+        Value::Array(items)
+    }
+}
+
+/// Pull the item array out of either completion shape — a bare
+/// `CompletionItem[]` or a `CompletionList { items }`.
+fn completion_items(result: &Value) -> Vec<Value> {
+    match result {
+        Value::Array(items) => items.clone(),
+        Value::Object(obj) => obj
+            .get("items")
+            .and_then(|i| i.as_array())
+            .cloned()
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+/// Remap a child completion item's edit ranges out of virtual
+/// coordinates — its `textEdit` and any `additionalTextEdits`.
+fn remap_completion_item(item: &mut Value) {
+    if let Some(text_edit) = item.get_mut("textEdit") {
+        remap_text_edit(text_edit);
+    }
+    if let Some(extra) = item
+        .get_mut("additionalTextEdits")
+        .and_then(|e| e.as_array_mut())
+    {
+        for edit in extra {
+            remap_text_edit(edit);
+        }
+    }
+}
+
+/// Remap whatever range shape a text edit carries: a `TextEdit`'s
+/// `range`, or an `InsertReplaceEdit`'s `insert` + `replace`.
+fn remap_text_edit(edit: &mut Value) {
+    for key in ["range", "insert", "replace"] {
+        if let Some(range) = edit.get_mut(key) {
+            remap_range_to_editor(range);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// definition merge
+// ---------------------------------------------------------------------------
+
+/// Merge two definition results into one `Location[]`. dathon's
+/// schema-aware locations come first (already in editor coordinates);
+/// the child's are normalized from whatever shape it used (`Location` /
+/// `LocationLink`, scalar or array), remapped out of virtual
+/// coordinates, and de-duplicated against what's already there.
+///
+/// A child location inside the preamble is dropped — it points at
+/// injected code the user can't see.
+fn merge_definition(dathon: Value, child: Value) -> Value {
+    let mut out = locations(&dathon);
+    for loc in locations(&child) {
+        let Some(loc) = remap_location_to_editor(loc) else {
+            continue; // landed inside the preamble
+        };
+        if !out.iter().any(|existing| same_location(existing, &loc)) {
+            out.push(loc);
+        }
+    }
+    if out.is_empty() {
+        Value::Null
+    } else {
+        Value::Array(out)
+    }
+}
+
+/// Normalize any definition-response shape — a scalar or array of
+/// `Location` / `LocationLink` — into a flat list of plain `Location`s.
+fn locations(result: &Value) -> Vec<Value> {
+    match result {
+        Value::Array(items) => items.iter().filter_map(to_location).collect(),
+        Value::Object(_) => to_location(result).into_iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Coerce one `Location` or `LocationLink` into a plain `Location`.
+fn to_location(value: &Value) -> Option<Value> {
+    let obj = value.as_object()?;
+    if let Some(uri) = obj.get("uri") {
+        // Already a Location.
+        Some(json!({ "uri": uri, "range": obj.get("range")? }))
+    } else if let Some(target_uri) = obj.get("targetUri") {
+        // LocationLink — collapse to its target selection range.
+        let range = obj
+            .get("targetSelectionRange")
+            .or_else(|| obj.get("targetRange"))?;
+        Some(json!({ "uri": target_uri, "range": range }))
+    } else {
+        None
+    }
+}
+
+/// Remap a `Location`'s range out of virtual coordinates; `None` when
+/// it falls inside the preamble.
+fn remap_location_to_editor(mut loc: Value) -> Option<Value> {
+    let range = loc.get_mut("range")?;
+    remap_range_to_editor(range).then_some(loc)
+}
+
+/// Whether two locations point at the same place — same URI and same
+/// start position. Used to drop the duplicate when dathon and the child
+/// both resolve, say, a `Schema` class name to its declaration.
+fn same_location(a: &Value, b: &Value) -> bool {
+    a.get("uri") == b.get("uri") && a.pointer("/range/start") == b.pointer("/range/start")
 }
 
 #[cfg(test)]
@@ -662,5 +808,141 @@ mod tests {
             next_request_seq: 0,
         };
         assert!(mux.take_pending("dathon-req-999").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // request fan-out: completion merge
+    // -----------------------------------------------------------------------
+
+    fn item(label: &str) -> Value {
+        json!({ "label": label })
+    }
+
+    #[test]
+    fn merge_completion_concatenates_both_sources_dathon_first() {
+        let merged = merge_child_response(
+            "textDocument/completion",
+            json!([item("price"), item("place_code")]),
+            json!([item("explode"), item("split")]),
+        );
+        let labels: Vec<&str> = merged
+            .as_array()
+            .expect("array")
+            .iter()
+            .map(|i| i["label"].as_str().unwrap())
+            .collect();
+        assert_eq!(labels, vec!["price", "place_code", "explode", "split"]);
+    }
+
+    #[test]
+    fn merge_completion_remaps_a_child_item_text_edit_range() {
+        // The child's textEdit range is in virtual coordinates — at
+        // virtual line PREAMBLE_LINE_COUNT + 4, i.e. real line 4.
+        let vline = virtualdoc::PREAMBLE_LINE_COUNT + 4;
+        let child = json!([{
+            "label": "explode",
+            "textEdit": {
+                "range": {
+                    "start": { "line": vline, "character": 8 },
+                    "end": { "line": vline, "character": 12 },
+                },
+                "newText": "explode",
+            },
+        }]);
+        let merged = merge_child_response("textDocument/completion", json!([]), child);
+        let range = &merged[0]["textEdit"]["range"];
+        assert_eq!(range["start"]["line"], json!(4));
+        assert_eq!(range["end"]["line"], json!(4));
+        // The character is untouched.
+        assert_eq!(range["start"]["character"], json!(8));
+    }
+
+    #[test]
+    fn merge_completion_is_a_completion_list_when_the_child_is_incomplete() {
+        let merged = merge_child_response(
+            "textDocument/completion",
+            json!([item("price")]),
+            json!({ "isIncomplete": true, "items": [item("explode")] }),
+        );
+        // An incomplete child list must surface as a CompletionList so
+        // the editor keeps re-querying as the user types.
+        assert_eq!(merged["isIncomplete"], json!(true));
+        assert_eq!(merged["items"].as_array().expect("items").len(), 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // request fan-out: definition merge
+    // -----------------------------------------------------------------------
+
+    fn location(uri: &str, line: u32) -> Value {
+        json!({
+            "uri": uri,
+            "range": {
+                "start": { "line": line, "character": 0 },
+                "end": { "line": line, "character": 4 },
+            },
+        })
+    }
+
+    #[test]
+    fn merge_definition_unions_locations_from_both_sources() {
+        // dathon's location is already in editor coordinates; the
+        // child's is at a distinct virtual line.
+        let child = location("file:///other.py", virtualdoc::PREAMBLE_LINE_COUNT + 9);
+        let merged = merge_child_response(
+            "textDocument/definition",
+            location("file:///t.dpy", 0),
+            child,
+        );
+        let locs = merged.as_array().expect("array");
+        assert_eq!(locs.len(), 2);
+        assert_eq!(locs[0]["range"]["start"]["line"], json!(0));
+        assert_eq!(locs[1]["range"]["start"]["line"], json!(9));
+    }
+
+    #[test]
+    fn merge_definition_coerces_a_location_link_to_a_location() {
+        // The child answers with a LocationLink (the editor advertised
+        // linkSupport) — it must collapse to a plain Location.
+        let vline = virtualdoc::PREAMBLE_LINE_COUNT + 2;
+        let child = json!([{
+            "targetUri": "file:///t.dpy",
+            "targetRange": {
+                "start": { "line": vline, "character": 0 },
+                "end": { "line": vline, "character": 20 },
+            },
+            "targetSelectionRange": {
+                "start": { "line": vline, "character": 6 },
+                "end": { "line": vline, "character": 12 },
+            },
+        }]);
+        let merged = merge_child_response("textDocument/definition", Value::Null, child);
+        let loc = &merged[0];
+        assert_eq!(loc["uri"], json!("file:///t.dpy"));
+        // Collapsed to the target *selection* range, remapped to real line 2.
+        assert_eq!(loc["range"]["start"]["line"], json!(2));
+        assert_eq!(loc["range"]["start"]["character"], json!(6));
+    }
+
+    #[test]
+    fn merge_definition_drops_a_child_location_inside_the_preamble() {
+        // The child resolves a name to the injected preamble — that
+        // location has no editor counterpart and must be dropped.
+        let merged = merge_child_response(
+            "textDocument/definition",
+            Value::Null,
+            location("file:///t.dpy", 1),
+        );
+        assert!(merged.is_null());
+    }
+
+    #[test]
+    fn merge_definition_dedups_a_location_both_sources_resolve() {
+        // dathon and the child both resolve a Schema name to its class
+        // declaration on real line 0 — the merged list has it once.
+        let dathon = location("file:///t.dpy", 0);
+        let child = location("file:///t.dpy", virtualdoc::PREAMBLE_LINE_COUNT);
+        let merged = merge_child_response("textDocument/definition", dathon, child);
+        assert_eq!(merged.as_array().expect("array").len(), 1);
     }
 }

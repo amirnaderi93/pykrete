@@ -228,49 +228,29 @@ fn handle_request(
     req: Request,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
     match req.method.as_str() {
+        // hover / definition / completion are fanned out: dathon's own
+        // answer is computed here, then merged with the embedded Python
+        // engine's. When no engine is embedded the reply goes out
+        // immediately; otherwise it's deferred until the child answers
+        // (see `fanout_request` / `handle_child_message`).
         "textDocument/hover" => {
-            // Compute dathon's schema-aware hover, then fan the request
-            // out to the embedded Python engine. When an engine is
-            // present the reply is deferred — `handle_child_message`
-            // merges the two answers and replies. Otherwise we answer
-            // with dathon's hover alone, right here.
             let params: HoverParams = serde_json::from_value(req.params.clone())?;
-            let dathon_hover = serde_json::to_value(handle_hover(docs, params))?;
-            let child_params = multiplex::request_params_to_child(req.params);
-            if let Some(dathon_only) = multiplexer.forward_request(
-                req.id.clone(),
-                "textDocument/hover",
-                child_params,
-                dathon_hover,
-            ) {
-                connection.sender.send(Message::Response(Response {
-                    id: req.id,
-                    result: Some(dathon_only),
-                    error: None,
-                }))?;
-            }
+            let dathon_result = serde_json::to_value(handle_hover(docs, params))?;
+            fanout_request(connection, multiplexer, req, dathon_result)?;
+        }
+        "textDocument/definition" => {
+            let params: GotoDefinitionParams = serde_json::from_value(req.params.clone())?;
+            let dathon_result = serde_json::to_value(handle_definition(docs, params))?;
+            fanout_request(connection, multiplexer, req, dathon_result)?;
+        }
+        "textDocument/completion" => {
+            let params: CompletionParams = serde_json::from_value(req.params.clone())?;
+            let dathon_result = serde_json::to_value(handle_completion(docs, params))?;
+            fanout_request(connection, multiplexer, req, dathon_result)?;
         }
         "textDocument/documentSymbol" => {
             let params: DocumentSymbolParams = serde_json::from_value(req.params)?;
             let response_value = handle_document_symbol(docs, params);
-            connection.sender.send(Message::Response(Response {
-                id: req.id,
-                result: Some(serde_json::to_value(response_value)?),
-                error: None,
-            }))?;
-        }
-        "textDocument/definition" => {
-            let params: GotoDefinitionParams = serde_json::from_value(req.params)?;
-            let response_value = handle_definition(docs, params);
-            connection.sender.send(Message::Response(Response {
-                id: req.id,
-                result: Some(serde_json::to_value(response_value)?),
-                error: None,
-            }))?;
-        }
-        "textDocument/completion" => {
-            let params: CompletionParams = serde_json::from_value(req.params)?;
-            let response_value = handle_completion(docs, params);
             connection.sender.send(Message::Response(Response {
                 id: req.id,
                 result: Some(serde_json::to_value(response_value)?),
@@ -300,6 +280,32 @@ fn handle_request(
                 }),
             }))?;
         }
+    }
+    Ok(())
+}
+
+/// Fan a request out to the embedded Python engine.
+///
+/// `dathon_result` is dathon's own answer, already computed. When an
+/// engine is embedded the request is forwarded (its cursor position
+/// shifted into virtual-document coordinates) and the editor reply is
+/// deferred — `handle_child_message` merges the two answers and
+/// replies. When there's no engine, dathon's result is sent right away.
+fn fanout_request(
+    connection: &Connection,
+    multiplexer: &mut multiplex::Multiplexer,
+    req: Request,
+    dathon_result: serde_json::Value,
+) -> Result<(), Box<dyn Error + Sync + Send>> {
+    let child_params = multiplex::request_params_to_child(req.params);
+    if let Some(dathon_only) =
+        multiplexer.forward_request(req.id.clone(), &req.method, child_params, dathon_result)
+    {
+        connection.sender.send(Message::Response(Response {
+            id: req.id,
+            result: Some(dathon_only),
+            error: None,
+        }))?;
     }
     Ok(())
 }
