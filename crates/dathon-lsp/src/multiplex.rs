@@ -222,7 +222,7 @@ impl Multiplexer {
             "jsonrpc": "2.0",
             "id": "dathon-child-init",
             "method": "initialize",
-            "params": init_params,
+            "params": child_init_params(init_params),
         });
         if child.send(&initialize).is_err() {
             return None;
@@ -417,6 +417,33 @@ impl Multiplexer {
             }
         }
     }
+}
+
+/// The `InitializeParams` to hand the child, with the editor's
+/// pull-diagnostics client capabilities stripped out.
+///
+/// dathon-lsp implements **push** diagnostics (`publishDiagnostics`) —
+/// it merges and remaps the child's pushed set. If the child sees the
+/// editor's pull capability it instead registers a `textDocument/
+/// diagnostic` provider; that registration would be proxied to the
+/// editor, which would then pull from dathon-lsp — a method dathon-lsp
+/// doesn't serve. Removing the capability keeps the child on the push
+/// path dathon-lsp actually handles.
+fn child_init_params(init_params: &Value) -> Value {
+    let mut params = init_params.clone();
+    if let Some(text_document) = params
+        .pointer_mut("/capabilities/textDocument")
+        .and_then(Value::as_object_mut)
+    {
+        text_document.remove("diagnostic");
+    }
+    if let Some(workspace) = params
+        .pointer_mut("/capabilities/workspace")
+        .and_then(Value::as_object_mut)
+    {
+        workspace.remove("diagnostics");
+    }
+    params
 }
 
 /// Build the capability set dathon-lsp advertises to the editor: its
@@ -1496,6 +1523,39 @@ mod tests {
         let dathon = json!({ "hoverProvider": true, "definitionProvider": true });
         let merged = merge_capabilities(dathon.clone(), &Value::Null);
         assert_eq!(merged, dathon);
+    }
+
+    #[test]
+    fn child_init_params_strips_pull_diagnostic_capabilities() {
+        let params = json!({
+            "capabilities": {
+                "textDocument": { "diagnostic": { "dynamicRegistration": true }, "hover": {} },
+                "workspace": { "diagnostics": { "refreshSupport": true }, "configuration": true },
+            },
+        });
+        let sanitized = child_init_params(&params);
+        // The pull-diagnostics capabilities are gone — so the child
+        // falls back to pushing `publishDiagnostics`.
+        assert!(
+            sanitized
+                .pointer("/capabilities/textDocument/diagnostic")
+                .is_none()
+        );
+        assert!(
+            sanitized
+                .pointer("/capabilities/workspace/diagnostics")
+                .is_none()
+        );
+        // Every other capability is forwarded untouched.
+        assert!(
+            sanitized
+                .pointer("/capabilities/textDocument/hover")
+                .is_some()
+        );
+        assert_eq!(
+            sanitized.pointer("/capabilities/workspace/configuration"),
+            Some(&json!(true)),
+        );
     }
 
     #[test]
