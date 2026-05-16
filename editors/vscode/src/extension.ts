@@ -30,6 +30,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // and failing that to dathon-only mode.
   const pythonServer = resolvePythonServer(context);
 
+  // dathon-lsp multiplexes the embedded Python engine internally;
+  // `pythonServer` tells it how to launch the one this extension
+  // bundles, and `typeCheckingMode` is the single strictness knob it
+  // applies to both dathon's checks and the engine.
+  const initializationOptions: Record<string, unknown> = {
+    typeCheckingMode: vscode.workspace
+      .getConfiguration("dathon")
+      .get<string>("typeCheckingMode", "standard"),
+  };
+  if (pythonServer) {
+    initializationOptions.pythonServer = pythonServer;
+  }
+
   const clientOptions: LanguageClientOptions = {
     // Two selectors so dathon-lsp activates whether VS Code identifies
     // `.dpy` as this extension's `dathon` language (the default) or as
@@ -38,10 +51,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       { scheme: "file", language: "dathon" },
       { scheme: "file", language: "python", pattern: "**/*.dpy" },
     ],
-    // dathon-lsp multiplexes the embedded Python engine internally;
-    // `pythonServer` tells it how to launch the one this extension
-    // bundles. dathon's schema features work even when it's absent.
-    initializationOptions: pythonServer ? { pythonServer } : {},
+    initializationOptions,
   };
 
   client = new LanguageClient(

@@ -6,6 +6,54 @@
 use ruff_source_file::LineIndex;
 use ruff_text_size::{TextRange, TextSize};
 
+/// How strict the checker is. Mirrors the embedded Python engine's
+/// `typeCheckingMode` so a single `dathon.typeCheckingMode` setting
+/// drives both engines. Ordered weakest → strongest: a diagnostic
+/// surfaces when the active mode is at least its [`Diagnostic::min_mode`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum CheckMode {
+    /// No checking — the checker stays silent.
+    Off,
+    /// Fundamental errors only.
+    Basic,
+    /// The default — every error dathon reports today.
+    #[default]
+    Standard,
+    /// Standard plus advisory checks (e.g. structural-compatibility
+    /// warnings) that would be too noisy for everyday use.
+    Strict,
+}
+
+impl CheckMode {
+    /// Parse the `typeCheckingMode` setting string. Unknown or missing
+    /// values fall back to [`CheckMode::Standard`].
+    pub fn parse(value: &str) -> CheckMode {
+        match value {
+            "off" => CheckMode::Off,
+            "basic" => CheckMode::Basic,
+            "strict" => CheckMode::Strict,
+            _ => CheckMode::Standard,
+        }
+    }
+
+    /// The setting-string form — also exactly what the embedded Python
+    /// engine's `typeCheckingMode` expects.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CheckMode::Off => "off",
+            CheckMode::Basic => "basic",
+            CheckMode::Standard => "standard",
+            CheckMode::Strict => "strict",
+        }
+    }
+
+    /// Whether a diagnostic whose minimum mode is `min` surfaces at this
+    /// mode. `Off` shows nothing.
+    pub fn shows(self, min: CheckMode) -> bool {
+        self != CheckMode::Off && self >= min
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
     Error,
@@ -37,6 +85,10 @@ pub struct Diagnostic {
     /// layer round-trips this so `textDocument/codeAction` can offer a
     /// quick-fix that swaps the literal in place.
     pub suggestion: Option<String>,
+    /// The weakest [`CheckMode`] at which this diagnostic surfaces.
+    /// Defaults to [`CheckMode::Basic`] (shown unless checking is off);
+    /// advisory checks set [`CheckMode::Strict`].
+    pub min_mode: CheckMode,
 }
 
 impl Diagnostic {
@@ -83,6 +135,7 @@ impl Diagnostic {
             end_line: end.line.get(),
             end_column: end.column.get(),
             suggestion: None,
+            min_mode: CheckMode::Basic,
         }
     }
 
@@ -90,6 +143,14 @@ impl Diagnostic {
     /// `D0030` to surface the closest matching column name as a quick-fix.
     pub fn with_suggestion(mut self, suggestion: Option<String>) -> Self {
         self.suggestion = suggestion;
+        self
+    }
+
+    /// Set the weakest [`CheckMode`] at which this diagnostic surfaces.
+    /// Defaults to [`CheckMode::Basic`]; advisory checks that should
+    /// only fire under `strict` use [`CheckMode::Strict`].
+    pub fn with_min_mode(mut self, min_mode: CheckMode) -> Self {
+        self.min_mode = min_mode;
         self
     }
 

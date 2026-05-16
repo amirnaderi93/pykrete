@@ -72,7 +72,15 @@ pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
     // multiplexer falls back to `PATH` discovery, and if that finds
     // nothing the `child` is `None` and dathon-lsp runs dathon-only.
     let explicit = explicit_python_server(&init_params);
-    let multiplexer = multiplex::Multiplexer::start(explicit, &init_params);
+    // The `dathon.typeCheckingMode` setting drives both dathon's own
+    // checker and the embedded engine; defaults to `standard`.
+    let mode = init_params
+        .get("initializationOptions")
+        .and_then(|options| options.get("typeCheckingMode"))
+        .and_then(|value| value.as_str())
+        .map(dathon::CheckMode::parse)
+        .unwrap_or_default();
+    let multiplexer = multiplex::Multiplexer::start(explicit, mode, &init_params);
 
     // Advertise dathon's capabilities plus the embedded engine's, for
     // the methods dathon-lsp knows how to proxy.
@@ -325,12 +333,16 @@ fn handle_editor_response(multiplexer: &mut multiplex::Multiplexer, resp: Respon
         return;
     };
     let error = resp.error.and_then(|e| serde_json::to_value(e).ok());
-    // A `workspace/configuration` reply is patched so the engine runs
-    // at a standard type-checking level (see `patch_engine_config`).
+    // A `workspace/configuration` reply is patched so the engine's
+    // type-checking level matches `dathon.typeCheckingMode`.
     let result = match resp.result {
-        Some(result) if !proxied.config_sections.is_empty() => Some(
-            multiplex::patch_engine_config(result, &proxied.config_sections),
-        ),
+        Some(result) if !proxied.config_sections.is_empty() => {
+            Some(multiplex::patch_engine_config(
+                result,
+                &proxied.config_sections,
+                multiplexer.type_checking_mode,
+            ))
+        }
         other => other,
     };
     multiplexer.respond_to_child(proxied.child_id, result, error);
@@ -687,7 +699,7 @@ fn publish_project_diagnostics(
         return Ok(());
     };
 
-    let result = dathon::check_project(&snapshot);
+    let result = dathon::check_project_with_mode(&snapshot, multiplexer.type_checking_mode);
     // Map each file in the project back to a Url for diagnostic
     // delivery. Only publish for URIs that are actually open in the
     // editor — closed files' diagnostics would be invisible.
@@ -725,7 +737,7 @@ fn publish_single_file_diagnostics(
     text: &str,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
     let path = uri_to_path(uri);
-    let result = dathon::check(&path, text);
+    let result = dathon::check_with_mode(&path, text, multiplexer.type_checking_mode);
     let diagnostics: Vec<Diagnostic> = result.diagnostics.iter().map(to_lsp_diagnostic).collect();
     let merged = multiplexer.diagnostics.set_dathon(uri.clone(), diagnostics);
     send_diagnostics(connection, uri, merged)
@@ -876,6 +888,7 @@ mod tests {
             end_line: end.0,
             end_column: end.1,
             suggestion: None,
+            min_mode: dathon::CheckMode::Basic,
         }
     }
 
