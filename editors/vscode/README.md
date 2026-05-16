@@ -2,83 +2,37 @@
 
 Thin client that launches `dathon-lsp` and routes `.dpy` files to it.
 
-## Two ways to use it
+## What you get
 
-### Default — dathon-only
+Install the extension, open a `.dpy` file. dathon-lsp gives you:
 
-Install the extension. Open a `.dpy` file. You get dathon's dataframe-specific
-features: diagnostics, hover on `class X(Schema)` / `DataFrame[X]` /
-`col("foo")`, completion inside `col("…")` / `df.` / `DataFrame[…]`,
-go-to-definition, "Did you mean?" quick-fixes.
+- **dathon's schema features** — diagnostics, hover on `class X(Schema)` /
+  `DataFrame[X]` / `col("foo")`, completion inside `col("…")` / `df.` /
+  `DataFrame[…]`, go-to-definition, "Did you mean?" quick-fixes.
+- **general Python features** — hover, completion, go-to-definition,
+  find-all-references, and signature help for ordinary Python code,
+  plus Python type diagnostics.
 
-Standard Python features (general syntax highlighting, std-lib completion,
-references, rename, formatting, type errors on `def f(`, etc.) are NOT
-provided in this mode — dathon-lsp only knows about dataframe-specific
-positions and stays silent on everything else.
+There is **nothing else to install or configure** — no separate Python
+LSP extension, no `files.associations`, no import stub, no import line
+in your `.dpy` files.
 
-### Recommended — co-activation with a Python LSP
+## How it works
 
-Because `.dpy` is a strict superset of Python, the same files work as
-input to any Python language server. Pair this extension with a Python
-LSP and you get **every Python feature on `.dpy` files** plus dathon's
-schema checks layered on top.
+dathon-lsp is a **multiplexer**: it embeds a Python language server
+([basedpyright](https://github.com/detachhead/basedpyright), bundled
+with this extension) as a child process, and presents a single merged
+language server to VS Code. Schema-aware answers come from dathon;
+general Python answers come from the embedded engine; dathon-lsp merges
+the two.
 
-1. **Install a Python LSP extension**, in order of preference:
+The bundled engine runs on **Node.js** — if `node` isn't on your `PATH`,
+dathon-lsp logs it and runs **dathon-only**: the schema features still
+work, the general Python features are simply absent. Nothing breaks.
 
-   - **[basedpyright](https://marketplace.visualstudio.com/items?itemName=detachhead.basedpyright)**
-     (recommended) — free, MIT, no telemetry, type-checker.
-   - **[Pylance](https://marketplace.visualstudio.com/items?itemName=ms-python.vscode-pylance)**
-     — Microsoft's, fastest type-checker, requires the Python extension.
-   - **[ruff-lsp](https://marketplace.visualstudio.com/items?itemName=charliermarsh.ruff)**
-     — minimal, lint-focused; pair with one of the above if you want
-     type checking.
-
-2. **Tell VS Code that `.dpy` files are Python**. Add to your user
-   `settings.json`:
-
-   ```json
-   "files.associations": {
-     "*.dpy": "python"
-   }
-   ```
-
-3. **Drop `python_stubs/dathon.py` into your project root** (or anywhere
-   on the Python module-search path). dathon's magic names — `Schema`,
-   `DataFrame`, `col`, `string`, `date`, `timestamp`, `double`, `long` —
-   aren't real Python identifiers; the stub provides Pylance-friendly
-   declarations for them so the type-checker doesn't flag every Schema
-   class as "undefined name." dathon itself ignores the import.
-
-4. **Add a one-line import at the top of every `.dpy` file**:
-
-   ```python
-   from dathon import Schema, DataFrame, col, string, date, timestamp, double
-   ```
-
-   (Cherry-pick names per file as needed.) Examples are in
-   [`examples/pipelines/`](../../examples/pipelines/) — the
-   schemas.dpy / dal.dpy / example_job.dpy fixtures all use the
-   pattern.
-
-5. Open a `.dpy` file. Both servers run side-by-side:
-
-   - The Python LSP handles general Python features.
-   - dathon-lsp handles `DataFrame[X]`, `col("…")`, Schema classes,
-     return-type validation, "Did you mean?" suggestions.
-
-   VS Code merges their responses automatically.
-
-If your Python LSP still complains about specific dathon idioms after
-the stub is in place, the most common knobs are:
-
-- **`from pyspark.sql.functions import col` shows red** — PySpark isn't
-  installed in the active Python interpreter. `pip install pyspark` in
-  the project's venv, or silence with `"reportMissingImports": "none"`
-  (basedpyright) for `.dpy` files.
-- **`DataFrame[X]` triggers "Unknown" warnings** — the stub's
-  `DataFrame` is a generic, so basedpyright's stricter rules like
-  `reportUnknownArgumentType` may complain. Add `"reportUnknownArgumentType": "none"`
-  in your project's basedpyright config to silence.
+To embed your own Python language server instead of the bundled one,
+set `dathon.pythonServer.path` to a `basedpyright-langserver` /
+`pyright-langserver` binary.
 
 ## Develop
 
@@ -87,6 +41,9 @@ npm install
 npm run compile         # one-shot
 npm run watch           # rebuild on save
 ```
+
+`npm install` also fetches the bundled basedpyright (~40 MB) into
+`node_modules`; it ships inside the packaged `.vsix`.
 
 ## Package + install locally
 
@@ -109,3 +66,10 @@ The extension looks for the `dathon-lsp` binary in this order:
 
 Run `cargo build --release -p dathon-lsp` from the workspace root before
 opening a `.dpy` file.
+
+The embedded Python engine is resolved separately:
+
+1. `dathon.pythonServer.path` setting, if set.
+2. The basedpyright bundled in this extension (needs Node.js on `PATH`).
+3. `basedpyright-langserver` / `pyright-langserver` on `PATH`.
+4. None found — dathon-lsp runs dathon-only.

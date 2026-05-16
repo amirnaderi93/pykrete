@@ -146,21 +146,20 @@ fn reader_loop<R: Read>(mut reader: BufReader<R>, tx: Sender<Value>) {
 /// Locate a Python language server to embed.
 ///
 /// Resolution order:
-/// 1. An explicit override (the `dathon.pythonServer.path` setting,
-///    threaded in by the caller).
+/// 1. An `explicit` launch spec the editor supplied — the basedpyright
+///    the VS Code extension bundles, or a `dathon.pythonServer.path`
+///    override. Used verbatim.
 /// 2. `basedpyright-langserver` on `PATH`.
 /// 3. `pyright-langserver` on `PATH`.
 ///
 /// Returns the `(program, args)` to spawn, or `None` — in which case
 /// the multiplexer runs dathon-only (no Python features), exactly the
 /// pre-multiplexer behavior.
-pub fn discover(explicit: Option<&str>) -> Option<(String, Vec<String>)> {
-    let stdio = vec!["--stdio".to_string()];
-    if let Some(path) = explicit
-        && !path.is_empty()
-    {
-        return Some((path.to_string(), stdio));
+pub fn discover(explicit: Option<(String, Vec<String>)>) -> Option<(String, Vec<String>)> {
+    if let Some(spec) = explicit {
+        return Some(spec);
     }
+    let stdio = vec!["--stdio".to_string()];
     for candidate in ["basedpyright-langserver", "pyright-langserver"] {
         if is_on_path(candidate) {
             return Some((candidate.to_string(), stdio));
@@ -238,21 +237,23 @@ mod tests {
     }
 
     #[test]
-    fn discover_honors_an_explicit_path() {
-        let found = discover(Some("/opt/my/pyright-langserver"));
-        assert_eq!(
-            found,
-            Some((
-                "/opt/my/pyright-langserver".to_string(),
-                vec!["--stdio".to_string()],
-            )),
+    fn discover_uses_an_explicit_spec_verbatim() {
+        // The bundled-engine spec — `node <langserver.js> --stdio` —
+        // must come back exactly as given, multi-arg and all.
+        let spec = (
+            "node".to_string(),
+            vec![
+                "/ext/node_modules/basedpyright/langserver.index.js".to_string(),
+                "--stdio".to_string(),
+            ],
         );
+        assert_eq!(discover(Some(spec.clone())), Some(spec));
     }
 
     #[test]
-    fn discover_ignores_an_empty_explicit_path() {
-        // An empty override is treated as "not set" — fall through to
-        // PATH discovery (which may or may not find anything here).
-        let _ = discover(Some(""));
+    fn discover_without_an_explicit_spec_searches_path() {
+        // No spec → PATH discovery. The result depends on the host, so
+        // we only assert the call doesn't panic.
+        let _ = discover(None);
     }
 }
