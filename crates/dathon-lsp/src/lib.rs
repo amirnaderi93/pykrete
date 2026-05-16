@@ -25,7 +25,9 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::path::PathBuf;
 
-use lsp_server::{Connection, ErrorCode, Message, Notification, Request, Response, ResponseError};
+use lsp_server::{
+    Connection, ErrorCode, Message, Notification, Request, RequestId, Response, ResponseError,
+};
 use lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, CodeActionResponse,
     CompletionItem, CompletionItemKind, CompletionOptions, CompletionParams, CompletionResponse,
@@ -126,8 +128,11 @@ fn main_loop(
                     Message::Notification(notif) => {
                         handle_notification(&connection, &mut docs, &mut multiplexer, notif)?;
                     }
-                    Message::Response(_) => {
-                        // We don't currently send requests TO the editor.
+                    Message::Response(resp) => {
+                        // A response from the editor to a request we
+                        // proxied on the embedded engine's behalf —
+                        // route it back to the engine.
+                        handle_editor_response(&mut multiplexer, resp);
                     }
                 }
             }
@@ -163,8 +168,8 @@ fn main_loop(
 /// - Responses to requests we fanned out (`dathon-req-*`) are merged
 ///   with dathon's own result and forwarded to the editor.
 /// - Requests the engine sends us (`workspace/configuration`,
-///   `client/registerCapability`, …) get a minimal success reply so the
-///   engine doesn't stall — proper editor proxying is a later iteration.
+///   `client/registerCapability`, …) are proxied to the real editor;
+///   the editor's reply is routed back from `handle_editor_response`.
 /// - Notifications the engine emits (`window/logMessage`,
 ///   `window/showMessage`, `$/progress`, …) are relayed to the editor
 ///   verbatim.
@@ -185,22 +190,20 @@ fn handle_child_message(
                 send_diagnostics(connection, &uri, merged)?;
             }
         }
-        (Some(_), Some(id)) => {
-            // A request from the engine. Reply with a null success so
-            // it doesn't block waiting on us. `workspace/configuration`
-            // wants an array; everything else tolerates `null`.
-            let result = if method == Some("workspace/configuration") {
-                let count = msg
+        (Some(method), Some(child_id)) => {
+            // A request from the engine — proxy it to the real editor
+            // so the engine sees the editor's actual answers (Python
+            // interpreter / analysis config, progress tokens, …). The
+            // editor's reply comes back via `handle_editor_response`.
+            let editor_id = multiplexer.register_child_request(child_id.clone());
+            connection.sender.send(Message::Request(Request {
+                id: RequestId::from(editor_id),
+                method: method.to_string(),
+                params: msg
                     .get("params")
-                    .and_then(|p| p.get("items"))
-                    .and_then(|i| i.as_array())
-                    .map(|a| a.len())
-                    .unwrap_or(0);
-                serde_json::Value::Array(vec![serde_json::Value::Null; count])
-            } else {
-                serde_json::Value::Null
-            };
-            multiplexer.reply_to_child(id.clone(), result);
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null),
+            }))?;
         }
         (None, Some(id)) => {
             // A response to a request we fanned out. Match it to the
@@ -246,6 +249,34 @@ fn handle_child_message(
         }
     }
     Ok(())
+}
+
+/// Route the editor's response to a proxied child request back to the
+/// embedded engine.
+///
+/// Every `Message::Response` from the editor is an answer to a request
+/// dathon-lsp forwarded on the engine's behalf — dathon-lsp issues the
+/// editor no requests of its own. A response whose id isn't in the
+/// proxy table is ignored.
+fn handle_editor_response(multiplexer: &mut multiplex::Multiplexer, resp: Response) {
+    let Some(editor_id) = request_id_as_str(&resp.id) else {
+        return;
+    };
+    let Some(child_id) = multiplexer.take_child_request(&editor_id) else {
+        return;
+    };
+    let error = resp.error.and_then(|e| serde_json::to_value(e).ok());
+    multiplexer.respond_to_child(child_id, resp.result, error);
+}
+
+/// The string form of a `RequestId`. dathon-lsp issues proxied-request
+/// ids as `dathon-c2e-N` strings, so a non-string id is one we never
+/// issued.
+fn request_id_as_str(id: &RequestId) -> Option<String> {
+    match serde_json::to_value(id).ok()? {
+        serde_json::Value::String(s) => Some(s),
+        _ => None,
+    }
 }
 
 fn handle_request(

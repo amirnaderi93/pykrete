@@ -131,6 +131,12 @@ pub struct Multiplexer {
     pending: HashMap<String, PendingRequest>,
     /// Monotonic counter for synthetic child request ids.
     next_request_seq: u64,
+    /// Requests the child sent us and we proxied to the editor, keyed
+    /// by the editor-facing id (`dathon-c2e-N`) → the child's original
+    /// request id. Drained as the editor answers.
+    child_requests: HashMap<String, Value>,
+    /// Monotonic counter for editor-facing proxied-request ids.
+    next_child_request_seq: u64,
 }
 
 impl Multiplexer {
@@ -156,6 +162,8 @@ impl Multiplexer {
             child_capabilities,
             pending: HashMap::new(),
             next_request_seq: 0,
+            child_requests: HashMap::new(),
+            next_child_request_seq: 0,
         }
     }
 
@@ -247,16 +255,35 @@ impl Multiplexer {
         }));
     }
 
+    /// Register a request the child sent us, to be proxied to the
+    /// editor. Returns the editor-facing request id to forward it under.
+    pub fn register_child_request(&mut self, child_id: Value) -> String {
+        self.next_child_request_seq += 1;
+        let editor_id = format!("dathon-c2e-{}", self.next_child_request_seq);
+        self.child_requests.insert(editor_id.clone(), child_id);
+        editor_id
+    }
+
+    /// Look up (and remove) the child's original request id for an
+    /// editor response. `None` for an id dathon-lsp never issued.
+    pub fn take_child_request(&mut self, editor_id: &str) -> Option<Value> {
+        self.child_requests.remove(editor_id)
+    }
+
     /// Send a JSON-RPC response back to the child for a request it made
-    /// of us (`workspace/configuration`, `client/registerCapability`, …).
-    /// The foundation answers these minimally so the child doesn't stall;
-    /// real editor proxying is a later iteration.
-    pub fn reply_to_child(&mut self, id: Value, result: Value) {
-        self.send_to_child(&json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": result,
-        }));
+    /// of us — carrying either the editor's `result` or its `error`.
+    pub fn respond_to_child(
+        &mut self,
+        child_id: Value,
+        result: Option<Value>,
+        error: Option<Value>,
+    ) {
+        let mut response = json!({ "jsonrpc": "2.0", "id": child_id });
+        match error {
+            Some(error) => response["error"] = error,
+            None => response["result"] = result.unwrap_or(Value::Null),
+        }
+        self.send_to_child(&response);
     }
 
     /// Fan an editor request out to the child.
@@ -830,15 +857,23 @@ mod tests {
     // request fan-out: pending table
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn forward_request_with_no_child_replies_dathon_only() {
-        let mut mux = Multiplexer {
+    /// A childless multiplexer for exercising the bookkeeping tables
+    /// (pending requests, proxied child requests) without a subprocess.
+    fn test_multiplexer() -> Multiplexer {
+        Multiplexer {
             child: None,
             diagnostics: DiagnosticStore::default(),
             child_capabilities: Value::Null,
             pending: HashMap::new(),
             next_request_seq: 0,
-        };
+            child_requests: HashMap::new(),
+            next_child_request_seq: 0,
+        }
+    }
+
+    #[test]
+    fn forward_request_with_no_child_replies_dathon_only() {
+        let mut mux = test_multiplexer();
         let dathon_only = mux.forward_request(
             RequestId::from(1),
             "textDocument/hover",
@@ -853,14 +888,39 @@ mod tests {
 
     #[test]
     fn take_pending_returns_none_for_an_unknown_id() {
-        let mut mux = Multiplexer {
-            child: None,
-            diagnostics: DiagnosticStore::default(),
-            child_capabilities: Value::Null,
-            pending: HashMap::new(),
-            next_request_seq: 0,
-        };
+        let mut mux = test_multiplexer();
         assert!(mux.take_pending("dathon-req-999").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // child→editor request proxying
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn register_then_take_child_request_round_trips_the_child_id() {
+        let mut mux = test_multiplexer();
+        // The child's id can be a number or a string — it's echoed back
+        // verbatim, so it must survive the round-trip unchanged.
+        let editor_id = mux.register_child_request(json!(42));
+        assert_eq!(mux.take_child_request(&editor_id), Some(json!(42)));
+        // A second take of the same id finds nothing — it was consumed.
+        assert_eq!(mux.take_child_request(&editor_id), None);
+    }
+
+    #[test]
+    fn register_child_request_issues_distinct_editor_ids() {
+        let mut mux = test_multiplexer();
+        let first = mux.register_child_request(json!("a"));
+        let second = mux.register_child_request(json!("b"));
+        assert_ne!(first, second);
+        assert_eq!(mux.take_child_request(&first), Some(json!("a")));
+        assert_eq!(mux.take_child_request(&second), Some(json!("b")));
+    }
+
+    #[test]
+    fn take_child_request_returns_none_for_an_unissued_id() {
+        let mut mux = test_multiplexer();
+        assert!(mux.take_child_request("dathon-c2e-999").is_none());
     }
 
     // -----------------------------------------------------------------------

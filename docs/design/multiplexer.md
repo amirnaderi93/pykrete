@@ -130,10 +130,13 @@ This is multi-iteration. The slices, smallest-shippable first:
    advertise dathon's capabilities ∪ the child's, for an allowlist of
    methods dathon-lsp can proxy correctly (`signatureHelp`,
    `references`). Relay the child's notifications to the editor.
-4. **child→editor request proxying** — proxy `workspace/configuration`,
+4. **child→editor request proxying** *(done)* — `workspace/configuration`,
    `client/registerCapability`, `window/workDoneProgress/create` etc.
-   through to the real editor and the reply back (id-remap table), so
-   the engine picks up the editor's Python settings instead of a stub.
+   are proxied through to the real editor and the reply routed back (a
+   second id-remap table), so the engine picks up the editor's Python
+   settings instead of a stub. Known gap: notifications the editor
+   sends as a result of a dynamic registration aren't forwarded to the
+   child yet.
 5. **Wider passthrough** — `rename`, `documentHighlight`, semantic
    tokens, …: each needs its own virtual↔editor coordinate transform
    before it joins the capability allowlist.
