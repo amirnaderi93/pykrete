@@ -119,17 +119,26 @@ Phased:
 
 This is multi-iteration. The slices, smallest-shippable first:
 
-1. **Foundation** *(this iteration)* — spawn the child, frame JSON-RPC
-   both ways, forward lifecycle (`initialize`/`initialized`/`shutdown`/
-   `exit`) and text-sync notifications with the virtual-document
-   transform, merge `publishDiagnostics`. Engine located via setting /
-   PATH; dathon-only fallback. No request fan-out yet.
-2. **Request fan-out** — hover, completion, definition: query both,
-   merge.
-3. **Capability negotiation + child→editor requests** — merge
-   `initialize` capabilities, proxy `workspace/configuration` etc.
-4. **Bundle the engine** in the VS Code extension; PyCharm setup docs.
-5. **`ty` swap** when it's stable.
+1. **Foundation** *(done)* — spawn the child, frame JSON-RPC both ways,
+   forward lifecycle (`initialize`/`initialized`/`shutdown`/`exit`) and
+   text-sync notifications with the virtual-document transform, merge
+   `publishDiagnostics`. Engine located via setting / PATH; dathon-only
+   fallback.
+2. **Request fan-out** *(done)* — hover, completion, definition: query
+   both, merge.
+3. **Capability negotiation** *(done)* — manual `initialize` handshake;
+   advertise dathon's capabilities ∪ the child's, for an allowlist of
+   methods dathon-lsp can proxy correctly (`signatureHelp`,
+   `references`). Relay the child's notifications to the editor.
+4. **child→editor request proxying** — proxy `workspace/configuration`,
+   `client/registerCapability`, `window/workDoneProgress/create` etc.
+   through to the real editor and the reply back (id-remap table), so
+   the engine picks up the editor's Python settings instead of a stub.
+5. **Wider passthrough** — `rename`, `documentHighlight`, semantic
+   tokens, …: each needs its own virtual↔editor coordinate transform
+   before it joins the capability allowlist.
+6. **Bundle the engine** in the VS Code extension; PyCharm setup docs.
+7. **`ty` swap** when it's stable.
 
 ## Out of scope (for now)
 

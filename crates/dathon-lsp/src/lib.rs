@@ -40,7 +40,9 @@ use lsp_types::{
 pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
     let (connection, io_threads) = Connection::stdio();
 
-    let server_capabilities = serde_json::to_value(ServerCapabilities {
+    // dathon's own capabilities. The embedded Python engine's are folded
+    // in below, after it handshakes.
+    let dathon_capabilities = serde_json::to_value(ServerCapabilities {
         text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
@@ -55,10 +57,12 @@ pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
         code_action_provider: Some(lsp_types::CodeActionProviderCapability::Simple(true)),
         ..Default::default()
     })?;
-    // `initialize` returns the client's InitializeParams — we hand the
-    // same params to the embedded Python engine so it sees the editor's
-    // workspace folders, capabilities, etc.
-    let init_params = connection.initialize(server_capabilities)?;
+
+    // Manual `initialize` handshake: we need the editor's params to
+    // spawn the embedded engine, and the engine's capabilities to fold
+    // into what we advertise back. So receive `initialize`, bring the
+    // engine up, then answer with the merged capability set.
+    let (init_id, init_params) = connection.initialize_start()?;
 
     // Spawn + handshake the embedded Python LSP. `explicit` is the
     // `dathon.pythonServer.path` initialization option, if the client
@@ -70,6 +74,16 @@ pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
         .and_then(|v| v.as_str())
         .map(str::to_string);
     let multiplexer = multiplex::Multiplexer::start(explicit.as_deref(), &init_params);
+
+    // Advertise dathon's capabilities plus the embedded engine's, for
+    // the methods dathon-lsp knows how to proxy.
+    let capabilities =
+        multiplex::merge_capabilities(dathon_capabilities, multiplexer.child_capabilities());
+    let initialize_result = serde_json::json!({
+        "capabilities": capabilities,
+        "serverInfo": { "name": "dathon-lsp", "version": env!("CARGO_PKG_VERSION") },
+    });
+    connection.initialize_finish(init_id, initialize_result)?;
 
     main_loop(connection, multiplexer)?;
     io_threads.join()?;
@@ -151,8 +165,9 @@ fn main_loop(
 /// - Requests the engine sends us (`workspace/configuration`,
 ///   `client/registerCapability`, …) get a minimal success reply so the
 ///   engine doesn't stall — proper editor proxying is a later iteration.
-///
-/// Everything else (log messages, …) is ignored for now.
+/// - Notifications the engine emits (`window/logMessage`,
+///   `window/showMessage`, `$/progress`, …) are relayed to the editor
+///   verbatim.
 fn handle_child_message(
     connection: &Connection,
     multiplexer: &mut multiplex::Multiplexer,
@@ -212,10 +227,22 @@ fn handle_child_message(
                 }))?;
             }
         }
+        (Some(method), None) => {
+            // A notification from the engine (window/logMessage,
+            // window/showMessage, $/progress, …). These carry no
+            // document coordinates, so relay them to the editor
+            // verbatim — log messages land in its LSP output channel.
+            connection.sender.send(Message::Notification(Notification {
+                method: method.to_string(),
+                params: msg
+                    .get("params")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null),
+            }))?;
+        }
         _ => {
-            // Notifications (window/logMessage, …) — the foundation
-            // doesn't surface these. Later iterations route log
-            // messages to the editor's output channel.
+            // A response with a non-string id, or some other shape we
+            // don't route. Nothing actionable.
         }
     }
     Ok(())
@@ -247,6 +274,14 @@ fn handle_request(
             let params: CompletionParams = serde_json::from_value(req.params.clone())?;
             let dathon_result = serde_json::to_value(handle_completion(docs, params))?;
             fanout_request(connection, multiplexer, req, dathon_result)?;
+        }
+        // signatureHelp / references are pure passthrough — dathon has
+        // no schema-specific answer, so dathon's result is `null` and
+        // the merge just returns the (remapped) child result. These are
+        // only advertised to the editor when the embedded engine
+        // provides them (see `merge_capabilities`).
+        "textDocument/signatureHelp" | "textDocument/references" => {
+            fanout_request(connection, multiplexer, req, serde_json::Value::Null)?;
         }
         "textDocument/documentSymbol" => {
             let params: DocumentSymbolParams = serde_json::from_value(req.params)?;

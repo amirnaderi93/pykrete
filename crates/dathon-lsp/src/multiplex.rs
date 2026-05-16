@@ -123,6 +123,9 @@ pub struct PendingRequest {
 pub struct Multiplexer {
     pub child: Option<ChildLsp>,
     pub diagnostics: DiagnosticStore,
+    /// The child engine's advertised `ServerCapabilities`, captured from
+    /// its `initialize` response. `Null` when no engine is embedded.
+    child_capabilities: Value,
     /// Requests forwarded to the child, keyed by the synthetic id we
     /// gave the child (`dathon-req-N`). Drained as the child answers.
     pending: HashMap<String, PendingRequest>,
@@ -138,20 +141,28 @@ impl Multiplexer {
     /// Never fails — if no engine is found or it doesn't handshake,
     /// the returned `Multiplexer` simply has `child: None`.
     pub fn start(explicit: Option<&str>, init_params: &Value) -> Multiplexer {
+        let mut child_capabilities = Value::Null;
         let child = crate::child::discover(explicit)
             .and_then(|(program, args)| ChildLsp::spawn(&program, &args))
-            .and_then(|mut child| Self::handshake(&mut child, init_params).then_some(child));
+            .and_then(|mut child| {
+                Self::handshake(&mut child, init_params).map(|capabilities| {
+                    child_capabilities = capabilities;
+                    child
+                })
+            });
         Multiplexer {
             child,
             diagnostics: DiagnosticStore::default(),
+            child_capabilities,
             pending: HashMap::new(),
             next_request_seq: 0,
         }
     }
 
     /// Run the LSP `initialize` / `initialized` handshake with the
-    /// child. Returns whether it succeeded.
-    fn handshake(child: &mut ChildLsp, init_params: &Value) -> bool {
+    /// child. Returns the child's advertised `ServerCapabilities` on
+    /// success, or `None` if the child failed to handshake.
+    fn handshake(child: &mut ChildLsp, init_params: &Value) -> Option<Value> {
         let initialize = json!({
             "jsonrpc": "2.0",
             "id": "dathon-child-init",
@@ -159,32 +170,42 @@ impl Multiplexer {
             "params": init_params,
         });
         if child.send(&initialize).is_err() {
-            return false;
+            return None;
         }
         // Wait for the child's initialize response. The child shouldn't
         // emit anything else before it, but tolerate interleaved
         // notifications by looping until we see our id back.
-        loop {
+        let capabilities = loop {
             match child.receiver.recv() {
                 Ok(msg) => {
                     if msg.get("id").and_then(|v| v.as_str()) == Some("dathon-child-init") {
-                        break;
+                        break msg
+                            .pointer("/result/capabilities")
+                            .cloned()
+                            .unwrap_or(Value::Null);
                     }
                 }
-                Err(_) => return false, // child died during handshake
+                Err(_) => return None, // child died during handshake
             }
-        }
+        };
         let initialized = json!({
             "jsonrpc": "2.0",
             "method": "initialized",
             "params": {},
         });
-        child.send(&initialized).is_ok()
+        child.send(&initialized).ok()?;
+        Some(capabilities)
     }
 
     /// Whether a Python engine is embedded. `false` means dathon-only.
     pub fn has_child(&self) -> bool {
         self.child.is_some()
+    }
+
+    /// The embedded engine's advertised `ServerCapabilities` — `Null`
+    /// when no engine is embedded.
+    pub fn child_capabilities(&self) -> &Value {
+        &self.child_capabilities
     }
 
     /// Forward a `textDocument/didOpen` to the child, rewriting the
@@ -311,6 +332,30 @@ impl Multiplexer {
     }
 }
 
+/// Build the capability set dathon-lsp advertises to the editor: its
+/// own, plus the embedded engine's for the methods dathon-lsp knows how
+/// to proxy. A child capability is taken only when dathon doesn't
+/// already provide it (dathon's own handler wins) and the method is on
+/// the proxy allowlist.
+///
+/// The allowlist is deliberately small — every entry needs the child's
+/// result for that method to survive the virtual↔editor coordinate
+/// transform. Methods whose results aren't remapped yet (semantic
+/// tokens, rename, …) stay off it, so the editor simply never asks and
+/// dathon-lsp degrades cleanly instead of returning broken positions.
+pub fn merge_capabilities(mut dathon: Value, child: &Value) -> Value {
+    const PROXIED: [&str; 2] = ["signatureHelpProvider", "referencesProvider"];
+    for key in PROXIED {
+        if dathon.get(key).is_none()
+            && let Some(value) = child.get(key)
+            && !value.is_null()
+        {
+            dathon[key] = value.clone();
+        }
+    }
+    dathon
+}
+
 /// Rewrite an editor request's params for the child: the cursor
 /// `position` is shifted down by the preamble so it lands on the
 /// matching line of the virtual document. Params without a `position`
@@ -327,15 +372,19 @@ pub fn request_params_to_child(mut params: Value) -> Value {
 /// Merge dathon's own answer for a fanned-out request with the child
 /// engine's answer.
 ///
-/// Fanned-out methods: `hover` stacks the two; `completion` concatenates
-/// the item lists; `definition` unions the locations. Any other method
-/// just returns dathon's result (it isn't fanned out, so the child
-/// result is empty anyway).
+/// `hover` stacks the two; `completion` concatenates the item lists;
+/// `definition` / `references` union the locations; `signatureHelp` is
+/// a pure passthrough (the child is the only source — its result has no
+/// document coordinates to remap). Any other method just returns
+/// dathon's result.
 pub fn merge_child_response(method: &str, dathon_result: Value, child_result: Value) -> Value {
     match method {
         "textDocument/hover" => merge_hover(dathon_result, child_result),
         "textDocument/completion" => merge_completion(dathon_result, child_result),
-        "textDocument/definition" => merge_definition(dathon_result, child_result),
+        "textDocument/definition" | "textDocument/references" => {
+            merge_locations(dathon_result, child_result)
+        }
+        "textDocument/signatureHelp" => child_result,
         _ => dathon_result,
     }
 }
@@ -503,15 +552,17 @@ fn remap_text_edit(edit: &mut Value) {
 // definition merge
 // ---------------------------------------------------------------------------
 
-/// Merge two definition results into one `Location[]`. dathon's
-/// schema-aware locations come first (already in editor coordinates);
-/// the child's are normalized from whatever shape it used (`Location` /
-/// `LocationLink`, scalar or array), remapped out of virtual
-/// coordinates, and de-duplicated against what's already there.
+/// Merge two location-list results (`definition` / `references`) into
+/// one `Location[]`. dathon's schema-aware locations come first
+/// (already in editor coordinates); the child's are normalized from
+/// whatever shape it used (`Location` / `LocationLink`, scalar or
+/// array), remapped out of virtual coordinates, and de-duplicated
+/// against what's already there. For `references` dathon contributes
+/// nothing, so this is effectively the remapped child list.
 ///
 /// A child location inside the preamble is dropped — it points at
 /// injected code the user can't see.
-fn merge_definition(dathon: Value, child: Value) -> Value {
+fn merge_locations(dathon: Value, child: Value) -> Value {
     let mut out = locations(&dathon);
     for loc in locations(&child) {
         let Some(loc) = remap_location_to_editor(loc) else {
@@ -784,6 +835,7 @@ mod tests {
         let mut mux = Multiplexer {
             child: None,
             diagnostics: DiagnosticStore::default(),
+            child_capabilities: Value::Null,
             pending: HashMap::new(),
             next_request_seq: 0,
         };
@@ -804,6 +856,7 @@ mod tests {
         let mut mux = Multiplexer {
             child: None,
             diagnostics: DiagnosticStore::default(),
+            child_capabilities: Value::Null,
             pending: HashMap::new(),
             next_request_seq: 0,
         };
@@ -944,5 +997,81 @@ mod tests {
         let child = location("file:///t.dpy", virtualdoc::PREAMBLE_LINE_COUNT);
         let merged = merge_child_response("textDocument/definition", dathon, child);
         assert_eq!(merged.as_array().expect("array").len(), 1);
+    }
+
+    #[test]
+    fn merge_references_remaps_the_child_locations() {
+        // `references` is a pure passthrough — dathon contributes
+        // nothing — but the child's locations still need remapping.
+        let child = location("file:///t.dpy", virtualdoc::PREAMBLE_LINE_COUNT + 7);
+        let merged = merge_child_response("textDocument/references", Value::Null, child);
+        assert_eq!(merged[0]["range"]["start"]["line"], json!(7));
+    }
+
+    #[test]
+    fn merge_signature_help_passes_the_child_result_through() {
+        // A SignatureHelp carries no document coordinates — it's
+        // returned exactly as the child sent it.
+        let child = json!({
+            "signatures": [{ "label": "explode(col: Column) -> Column" }],
+            "activeSignature": 0,
+            "activeParameter": 0,
+        });
+        let merged = merge_child_response("textDocument/signatureHelp", Value::Null, child.clone());
+        assert_eq!(merged, child);
+    }
+
+    // -----------------------------------------------------------------------
+    // capability negotiation
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn merge_capabilities_adopts_an_allowlisted_child_capability() {
+        let dathon = json!({ "hoverProvider": true });
+        let child = json!({
+            "signatureHelpProvider": { "triggerCharacters": ["(", ","] },
+            "referencesProvider": true,
+        });
+        let merged = merge_capabilities(dathon, &child);
+        // Both allowlisted capabilities are now advertised, with the
+        // child's own value (so trigger characters are preserved).
+        assert_eq!(
+            merged["signatureHelpProvider"]["triggerCharacters"],
+            json!(["(", ","]),
+        );
+        assert_eq!(merged["referencesProvider"], json!(true));
+        // dathon's own capability is untouched.
+        assert_eq!(merged["hoverProvider"], json!(true));
+    }
+
+    #[test]
+    fn merge_capabilities_ignores_capabilities_off_the_allowlist() {
+        // The child supports rename, but dathon-lsp can't remap a
+        // rename's edits yet — it must not be advertised to the editor.
+        let merged = merge_capabilities(
+            json!({ "hoverProvider": true }),
+            &json!({ "renameProvider": true, "semanticTokensProvider": {} }),
+        );
+        assert!(merged.get("renameProvider").is_none());
+        assert!(merged.get("semanticTokensProvider").is_none());
+    }
+
+    #[test]
+    fn merge_capabilities_keeps_dathons_value_when_both_provide_a_method() {
+        // dathon already answers references itself (hypothetically) —
+        // its own capability wins over the child's.
+        let merged = merge_capabilities(
+            json!({ "referencesProvider": false }),
+            &json!({ "referencesProvider": true }),
+        );
+        assert_eq!(merged["referencesProvider"], json!(false));
+    }
+
+    #[test]
+    fn merge_capabilities_with_no_child_leaves_dathons_unchanged() {
+        // No embedded engine → child capabilities are `Null`.
+        let dathon = json!({ "hoverProvider": true, "definitionProvider": true });
+        let merged = merge_capabilities(dathon.clone(), &Value::Null);
+        assert_eq!(merged, dathon);
     }
 }
