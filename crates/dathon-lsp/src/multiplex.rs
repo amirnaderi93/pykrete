@@ -366,13 +366,18 @@ impl Multiplexer {
 /// already provide it (dathon's own handler wins) and the method is on
 /// the proxy allowlist.
 ///
-/// The allowlist is deliberately small — every entry needs the child's
-/// result for that method to survive the virtual↔editor coordinate
-/// transform. Methods whose results aren't remapped yet (semantic
-/// tokens, rename, …) stay off it, so the editor simply never asks and
-/// dathon-lsp degrades cleanly instead of returning broken positions.
+/// Every entry needs the child's result for that method to survive the
+/// virtual↔editor coordinate transform — see [`merge_child_response`].
+/// `semanticTokensProvider` is special-cased: its `legend` is forwarded
+/// (the editor needs it to decode token types) but only `full` requests
+/// are advertised, since `range` / `full/delta` aren't remapped.
 pub fn merge_capabilities(mut dathon: Value, child: &Value) -> Value {
-    const PROXIED: [&str; 2] = ["signatureHelpProvider", "referencesProvider"];
+    const PROXIED: [&str; 4] = [
+        "signatureHelpProvider",
+        "referencesProvider",
+        "documentHighlightProvider",
+        "renameProvider",
+    ];
     for key in PROXIED {
         if dathon.get(key).is_none()
             && let Some(value) = child.get(key)
@@ -380,6 +385,11 @@ pub fn merge_capabilities(mut dathon: Value, child: &Value) -> Value {
         {
             dathon[key] = value.clone();
         }
+    }
+    if dathon.get("semanticTokensProvider").is_none()
+        && let Some(legend) = child.pointer("/semanticTokensProvider/legend")
+    {
+        dathon["semanticTokensProvider"] = json!({ "legend": legend, "full": true });
     }
     dathon
 }
@@ -401,10 +411,12 @@ pub fn request_params_to_child(mut params: Value) -> Value {
 /// engine's answer.
 ///
 /// `hover` stacks the two; `completion` concatenates the item lists;
-/// `definition` / `references` union the locations; `signatureHelp` is
-/// a pure passthrough (the child is the only source — its result has no
-/// document coordinates to remap). Any other method just returns
-/// dathon's result.
+/// `definition` / `references` union the locations. The remaining
+/// methods are pure passthroughs — the child is the only source — but
+/// most still need their result remapped out of virtual coordinates:
+/// `documentHighlight`, `rename`, `prepareRename`, and `semanticTokens`
+/// all carry document positions; `signatureHelp` does not. Any other
+/// method just returns dathon's result.
 pub fn merge_child_response(method: &str, dathon_result: Value, child_result: Value) -> Value {
     match method {
         "textDocument/hover" => merge_hover(dathon_result, child_result),
@@ -413,6 +425,10 @@ pub fn merge_child_response(method: &str, dathon_result: Value, child_result: Va
             merge_locations(dathon_result, child_result)
         }
         "textDocument/signatureHelp" => child_result,
+        "textDocument/documentHighlight" => remap_highlights(child_result),
+        "textDocument/rename" => remap_workspace_edit(child_result),
+        "textDocument/prepareRename" => remap_prepare_rename(child_result),
+        "textDocument/semanticTokens/full" => remap_semantic_tokens(child_result),
         _ => dathon_result,
     }
 }
@@ -646,6 +662,145 @@ fn remap_location_to_editor(mut loc: Value) -> Option<Value> {
 /// both resolve, say, a `Schema` class name to its declaration.
 fn same_location(a: &Value, b: &Value) -> bool {
     a.get("uri") == b.get("uri") && a.pointer("/range/start") == b.pointer("/range/start")
+}
+
+// ---------------------------------------------------------------------------
+// documentHighlight remap
+// ---------------------------------------------------------------------------
+
+/// Remap a `DocumentHighlight[]` result out of virtual coordinates,
+/// dropping any highlight whose range lands inside the preamble.
+fn remap_highlights(child: Value) -> Value {
+    let Some(items) = child.as_array() else {
+        return Value::Null;
+    };
+    let out: Vec<Value> = items
+        .iter()
+        .filter_map(|highlight| {
+            let mut highlight = highlight.clone();
+            let range = highlight.get_mut("range")?;
+            remap_range_to_editor(range).then_some(highlight)
+        })
+        .collect();
+    if out.is_empty() {
+        Value::Null
+    } else {
+        Value::Array(out)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// rename remap
+// ---------------------------------------------------------------------------
+
+/// Remap a `rename` result — a `WorkspaceEdit` — out of virtual
+/// coordinates. Edits are carried in `changes` (a URI→`TextEdit[]` map)
+/// and/or `documentChanges` (an array of `TextDocumentEdit`s); every
+/// edit range is remapped and edits inside the preamble are dropped.
+fn remap_workspace_edit(mut edit: Value) -> Value {
+    if !edit.is_object() {
+        return Value::Null;
+    }
+    if let Some(changes) = edit.get_mut("changes").and_then(|c| c.as_object_mut()) {
+        for edits in changes.values_mut() {
+            remap_text_edit_array(edits);
+        }
+    }
+    if let Some(doc_changes) = edit
+        .get_mut("documentChanges")
+        .and_then(|d| d.as_array_mut())
+    {
+        for change in doc_changes {
+            // TextDocumentEdit carries `edits`; CreateFile / RenameFile /
+            // DeleteFile carry no ranges and are left untouched.
+            if let Some(edits) = change.get_mut("edits") {
+                remap_text_edit_array(edits);
+            }
+        }
+    }
+    edit
+}
+
+/// Remap a `TextEdit[]` in place, dropping any edit whose range falls
+/// inside the preamble.
+fn remap_text_edit_array(edits: &mut Value) {
+    if let Some(array) = edits.as_array_mut() {
+        array.retain_mut(|edit| {
+            edit.get_mut("range")
+                .map(remap_range_to_editor)
+                .unwrap_or(false)
+        });
+    }
+}
+
+/// Remap a `prepareRename` result out of virtual coordinates. The
+/// result is either a bare `Range`, a `{ range, placeholder }` object,
+/// or `{ defaultBehavior }` / `null` (no range — returned as-is).
+fn remap_prepare_rename(mut result: Value) -> Value {
+    if result.get("start").is_some() {
+        // Bare `Range`.
+        remap_range_to_editor(&mut result);
+    } else if let Some(range) = result.get_mut("range") {
+        remap_range_to_editor(range);
+    }
+    result
+}
+
+// ---------------------------------------------------------------------------
+// semanticTokens remap
+// ---------------------------------------------------------------------------
+
+/// Remap a `semanticTokens/full` result out of virtual coordinates.
+///
+/// The `data` array is a flat stream of 5-tuples `[deltaLine,
+/// deltaStartChar, length, tokenType, tokenModifiers]`, each token's
+/// line delta-encoded against the previous one. The stream is decoded
+/// to absolute positions, tokens inside the preamble are dropped, the
+/// rest are shifted up by the preamble height, and the stream is
+/// re-encoded.
+fn remap_semantic_tokens(result: Value) -> Value {
+    let Some(data) = result.get("data").and_then(|d| d.as_array()) else {
+        return Value::Null;
+    };
+    let preamble = i64::from(virtualdoc::PREAMBLE_LINE_COUNT);
+
+    // Decode the delta stream to absolute (line, char, length, type, mods).
+    let mut tokens: Vec<[i64; 5]> = Vec::with_capacity(data.len() / 5);
+    let (mut abs_line, mut abs_char) = (0i64, 0i64);
+    for tuple in data.chunks_exact(5) {
+        let field = |i: usize| tuple[i].as_i64().unwrap_or(0);
+        let (delta_line, delta_start) = (field(0), field(1));
+        abs_line += delta_line;
+        abs_char = if delta_line == 0 {
+            abs_char + delta_start
+        } else {
+            delta_start
+        };
+        tokens.push([abs_line, abs_char, field(2), field(3), field(4)]);
+    }
+
+    // Drop preamble tokens, shift the rest into editor coordinates, and
+    // re-encode as deltas.
+    let mut out: Vec<i64> = Vec::new();
+    let (mut prev_line, mut prev_char) = (0i64, 0i64);
+    for [line, char, length, token_type, modifiers] in tokens {
+        if line < preamble {
+            continue;
+        }
+        let editor_line = line - preamble;
+        let delta_line = editor_line - prev_line;
+        let delta_start = if delta_line == 0 {
+            char - prev_char
+        } else {
+            char
+        };
+        out.extend([delta_line, delta_start, length, token_type, modifiers]);
+        (prev_line, prev_char) = (editor_line, char);
+    }
+
+    let mut remapped = result;
+    remapped["data"] = json!(out);
+    remapped
 }
 
 #[cfg(test)]
@@ -1107,14 +1262,15 @@ mod tests {
 
     #[test]
     fn merge_capabilities_ignores_capabilities_off_the_allowlist() {
-        // The child supports rename, but dathon-lsp can't remap a
-        // rename's edits yet — it must not be advertised to the editor.
+        // The child supports type-definition and code lenses, but
+        // dathon-lsp doesn't remap those results yet — they must not be
+        // advertised to the editor.
         let merged = merge_capabilities(
             json!({ "hoverProvider": true }),
-            &json!({ "renameProvider": true, "semanticTokensProvider": {} }),
+            &json!({ "typeDefinitionProvider": true, "codeLensProvider": {} }),
         );
-        assert!(merged.get("renameProvider").is_none());
-        assert!(merged.get("semanticTokensProvider").is_none());
+        assert!(merged.get("typeDefinitionProvider").is_none());
+        assert!(merged.get("codeLensProvider").is_none());
     }
 
     #[test]
@@ -1134,5 +1290,151 @@ mod tests {
         let dathon = json!({ "hoverProvider": true, "definitionProvider": true });
         let merged = merge_capabilities(dathon.clone(), &Value::Null);
         assert_eq!(merged, dathon);
+    }
+
+    #[test]
+    fn merge_capabilities_adopts_document_highlight_and_rename() {
+        let merged = merge_capabilities(
+            json!({ "hoverProvider": true }),
+            &json!({
+                "documentHighlightProvider": true,
+                "renameProvider": { "prepareProvider": true },
+            }),
+        );
+        assert_eq!(merged["documentHighlightProvider"], json!(true));
+        assert_eq!(merged["renameProvider"]["prepareProvider"], json!(true));
+    }
+
+    #[test]
+    fn merge_capabilities_restricts_semantic_tokens_to_full_with_the_legend() {
+        // The child supports range and delta requests too; dathon-lsp
+        // only remaps `full`, so it advertises just that — but it must
+        // forward the legend so the editor can decode token types.
+        let legend = json!({ "tokenTypes": ["class", "function"], "tokenModifiers": [] });
+        let merged = merge_capabilities(
+            json!({ "hoverProvider": true }),
+            &json!({
+                "semanticTokensProvider": {
+                    "legend": legend,
+                    "full": { "delta": true },
+                    "range": true,
+                },
+            }),
+        );
+        let st = &merged["semanticTokensProvider"];
+        assert_eq!(st["legend"], legend);
+        assert_eq!(st["full"], json!(true));
+        assert!(st.get("range").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // wider passthrough: documentHighlight / rename / semanticTokens
+    // -----------------------------------------------------------------------
+
+    fn ranged(line: u32) -> Value {
+        json!({
+            "start": { "line": line, "character": 0 },
+            "end": { "line": line, "character": 4 },
+        })
+    }
+
+    #[test]
+    fn document_highlight_remaps_and_drops_preamble_hits() {
+        let child = json!([
+            { "range": ranged(1), "kind": 1 },                                  // preamble
+            { "range": ranged(virtualdoc::PREAMBLE_LINE_COUNT + 6), "kind": 2 }, // real line 6
+        ]);
+        let merged = merge_child_response("textDocument/documentHighlight", Value::Null, child);
+        let out = merged.as_array().expect("array");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["range"]["start"]["line"], json!(6));
+        assert_eq!(out[0]["kind"], json!(2));
+    }
+
+    #[test]
+    fn rename_remaps_workspace_edit_changes_and_drops_preamble_edits() {
+        let uri = "file:///t.dpy";
+        let child = json!({
+            "changes": {
+                uri: [
+                    { "range": ranged(1), "newText": "x" },                                  // preamble
+                    { "range": ranged(virtualdoc::PREAMBLE_LINE_COUNT + 4), "newText": "x" }, // real line 4
+                ],
+            },
+        });
+        let merged = merge_child_response("textDocument/rename", Value::Null, child);
+        let edits = merged["changes"][uri].as_array().expect("edits");
+        // The preamble edit is dropped; the real edit is remapped.
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0]["range"]["start"]["line"], json!(4));
+    }
+
+    #[test]
+    fn rename_remaps_document_changes_form() {
+        let child = json!({
+            "documentChanges": [{
+                "textDocument": { "uri": "file:///t.dpy", "version": 1 },
+                "edits": [
+                    { "range": ranged(virtualdoc::PREAMBLE_LINE_COUNT + 9), "newText": "y" },
+                ],
+            }],
+        });
+        let merged = merge_child_response("textDocument/rename", Value::Null, child);
+        let edits = merged["documentChanges"][0]["edits"]
+            .as_array()
+            .expect("edits");
+        assert_eq!(edits[0]["range"]["start"]["line"], json!(9));
+    }
+
+    #[test]
+    fn prepare_rename_remaps_both_result_shapes() {
+        // Bare `Range`.
+        let bare = merge_child_response(
+            "textDocument/prepareRename",
+            Value::Null,
+            ranged(virtualdoc::PREAMBLE_LINE_COUNT + 3),
+        );
+        assert_eq!(bare["start"]["line"], json!(3));
+
+        // `{ range, placeholder }`.
+        let with_placeholder = merge_child_response(
+            "textDocument/prepareRename",
+            Value::Null,
+            json!({ "range": ranged(virtualdoc::PREAMBLE_LINE_COUNT + 3), "placeholder": "old" }),
+        );
+        assert_eq!(with_placeholder["range"]["start"]["line"], json!(3));
+        assert_eq!(with_placeholder["placeholder"], json!("old"));
+    }
+
+    #[test]
+    fn semantic_tokens_drop_the_preamble_and_shift_real_tokens() {
+        let preamble = i64::from(virtualdoc::PREAMBLE_LINE_COUNT);
+        // Token A on preamble line 1; token B on real line 2 (virtual
+        // line preamble+2), delta-encoded against A.
+        let child = json!({
+            "data": [
+                1, 0, 4, 0, 0,                  // A: deltaLine 1 → virtual line 1
+                preamble + 1, 3, 5, 1, 0,       // B: → virtual line preamble+2
+            ],
+        });
+        let merged = merge_child_response("textDocument/semanticTokens/full", Value::Null, child);
+        // A is dropped; B becomes the first token at editor line 2.
+        assert_eq!(merged["data"], json!([2, 3, 5, 1, 0]));
+    }
+
+    #[test]
+    fn semantic_tokens_preserve_same_line_delta_encoding() {
+        let preamble = i64::from(virtualdoc::PREAMBLE_LINE_COUNT);
+        // Two real tokens on the same line (virtual line preamble+0):
+        // the second is delta-encoded against the first.
+        let child = json!({
+            "data": [
+                preamble, 0, 3, 0, 0,   // first real token, char 0
+                0, 5, 2, 0, 0,          // same line, char 5
+            ],
+        });
+        let merged = merge_child_response("textDocument/semanticTokens/full", Value::Null, child);
+        // First token shifts to editor line 0; the same-line delta is intact.
+        assert_eq!(merged["data"], json!([0, 0, 3, 0, 0, 0, 5, 2, 0, 0]));
     }
 }
