@@ -142,11 +142,12 @@ pub struct Multiplexer {
 impl Multiplexer {
     /// Spawn and initialize the embedded Python engine, handing it the
     /// same `InitializeParams` the editor sent dathon-lsp. `explicit`
-    /// is the `dathon.pythonServer.path` setting, if configured.
+    /// is the launch spec the editor supplied (the bundled engine, or a
+    /// user override), or `None` to fall back to `PATH` discovery.
     ///
     /// Never fails — if no engine is found or it doesn't handshake,
     /// the returned `Multiplexer` simply has `child: None`.
-    pub fn start(explicit: Option<&str>, init_params: &Value) -> Multiplexer {
+    pub fn start(explicit: Option<(String, Vec<String>)>, init_params: &Value) -> Multiplexer {
         let mut child_capabilities = Value::Null;
         let child = crate::child::discover(explicit)
             .and_then(|(program, args)| ChildLsp::spawn(&program, &args))

@@ -38,6 +38,11 @@
           "default": "",
           "description": "Absolute path to the dathon-lsp binary. If empty, the extension searches the workspace's target/release and target/debug directories, then falls back to 'dathon-lsp' on PATH."
         },
+        "dathon.pythonServer.path": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to a Python language server (basedpyright-langserver / pyright-langserver) for dathon-lsp to embed for general Python features. If empty, the basedpyright bundled with this extension is used (requires Node.js on PATH). dathon's schema features work regardless."
+        },
         "dathon.trace.server": {
           "type": "string",
           "enum": ["off", "messages", "verbose"],
@@ -54,6 +59,7 @@
     "package": "vsce package"
   },
   "dependencies": {
+    "basedpyright": "1.39.4",
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {

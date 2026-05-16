@@ -25,21 +25,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     debug: { command: serverPath, transport: TransportKind.stdio },
   };
 
+  // The Python language server dathon-lsp embeds for general Python
+  // features. `undefined` lets dathon-lsp fall back to PATH discovery,
+  // and failing that to dathon-only mode.
+  const pythonServer = resolvePythonServer(context);
+
   const clientOptions: LanguageClientOptions = {
-    // Two selectors so dathon-lsp activates in both modes:
-    //
-    //   1. Default — VS Code identifies `.dpy` as the `dathon` language
-    //      (declared by this extension's `contributes.languages`).
-    //   2. Co-activation — the user has `"files.associations": {"*.dpy":
-    //      "python"}` in settings, so VS Code identifies `.dpy` as
-    //      `python` and a Python LSP (Pylance / basedpyright /
-    //      pyright / ruff-lsp) handles general Python features
-    //      (highlighting, std-lib completion, formatting, references)
-    //      alongside dathon's dataframe-specific checks.
+    // Two selectors so dathon-lsp activates whether VS Code identifies
+    // `.dpy` as this extension's `dathon` language (the default) or as
+    // `python` (when the user sets `"files.associations"`).
     documentSelector: [
       { scheme: "file", language: "dathon" },
       { scheme: "file", language: "python", pattern: "**/*.dpy" },
     ],
+    // dathon-lsp multiplexes the embedded Python engine internally;
+    // `pythonServer` tells it how to launch the one this extension
+    // bundles. dathon's schema features work even when it's absent.
+    initializationOptions: pythonServer ? { pythonServer } : {},
   };
 
   client = new LanguageClient(
@@ -86,4 +88,39 @@ function resolveServerPath(): string | undefined {
   }
 
   return "dathon-lsp";
+}
+
+/**
+ * Resolve how dathon-lsp should launch the embedded Python engine.
+ *
+ *   1. `dathon.pythonServer.path` — a user-supplied langserver binary,
+ *      run directly as `<path> --stdio`.
+ *   2. The basedpyright bundled in this extension's `node_modules`,
+ *      run as `node <langserver.index.js> --stdio` (needs Node.js on
+ *      PATH).
+ *   3. `undefined` — dathon-lsp searches PATH itself, and runs
+ *      dathon-only if nothing is found.
+ */
+function resolvePythonServer(
+  context: vscode.ExtensionContext,
+): { command: string; args: string[] } | undefined {
+  const override = vscode.workspace
+    .getConfiguration("dathon")
+    .get<string>("pythonServer.path", "")
+    .trim();
+  if (override.length > 0) {
+    return { command: override, args: ["--stdio"] };
+  }
+
+  const bundled = path.join(
+    context.extensionPath,
+    "node_modules",
+    "basedpyright",
+    "langserver.index.js",
+  );
+  if (fs.existsSync(bundled)) {
+    return { command: "node", args: [bundled, "--stdio"] };
+  }
+
+  return undefined;
 }

@@ -67,15 +67,12 @@ pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
     let (init_id, init_params) = connection.initialize_start()?;
 
     // Spawn + handshake the embedded Python LSP. `explicit` is the
-    // `dathon.pythonServer.path` initialization option, if the client
-    // set one. When no engine is found the multiplexer's `child` is
-    // `None` and dathon-lsp runs dathon-only.
-    let explicit = init_params
-        .get("initializationOptions")
-        .and_then(|o| o.get("pythonServerPath"))
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
-    let multiplexer = multiplex::Multiplexer::start(explicit.as_deref(), &init_params);
+    // launch spec the editor supplied (the bundled engine, or a
+    // `dathon.pythonServer.path` override). When it's `None` the
+    // multiplexer falls back to `PATH` discovery, and if that finds
+    // nothing the `child` is `None` and dathon-lsp runs dathon-only.
+    let explicit = explicit_python_server(&init_params);
+    let multiplexer = multiplex::Multiplexer::start(explicit, &init_params);
 
     // Advertise dathon's capabilities plus the embedded engine's, for
     // the methods dathon-lsp knows how to proxy.
@@ -90,6 +87,39 @@ pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
     main_loop(connection, multiplexer)?;
     io_threads.join()?;
     Ok(())
+}
+
+/// Read the embedded Python engine's launch spec out of the editor's
+/// `initializationOptions`. Two forms are accepted:
+///
+/// - `pythonServer: { command, args }` — a full launch spec, used by
+///   the VS Code extension to point at the basedpyright it bundles
+///   (`node <langserver.js> --stdio`). `args` defaults to `["--stdio"]`.
+/// - `pythonServerPath: "<path>"` — just a path to a langserver binary,
+///   the `dathon.pythonServer.path` user override.
+///
+/// `None` (neither set, or set empty) means fall back to `PATH`
+/// discovery.
+fn explicit_python_server(init_params: &serde_json::Value) -> Option<(String, Vec<String>)> {
+    let options = init_params.get("initializationOptions")?;
+
+    if let Some(server) = options.get("pythonServer") {
+        let command = server.get("command")?.as_str()?.trim();
+        if command.is_empty() {
+            return None;
+        }
+        let args = match server.get("args").and_then(|a| a.as_array()) {
+            Some(raw) => raw
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect(),
+            None => vec!["--stdio".to_string()],
+        };
+        return Some((command.to_string(), args));
+    }
+
+    let path = options.get("pythonServerPath")?.as_str()?.trim();
+    (!path.is_empty()).then(|| (path.to_string(), vec!["--stdio".to_string()]))
 }
 
 fn main_loop(
@@ -1192,5 +1222,77 @@ mod tests {
             }
             other => panic!("expected Array, got {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // embedded-engine launch spec
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn explicit_python_server_reads_a_full_launch_spec() {
+        // The VS Code extension points dathon-lsp at the basedpyright
+        // it bundles via a `node <langserver.js> --stdio` spec.
+        let init = serde_json::json!({
+            "initializationOptions": {
+                "pythonServer": {
+                    "command": "node",
+                    "args": ["/ext/basedpyright/langserver.index.js", "--stdio"],
+                },
+            },
+        });
+        assert_eq!(
+            explicit_python_server(&init),
+            Some((
+                "node".to_string(),
+                vec![
+                    "/ext/basedpyright/langserver.index.js".to_string(),
+                    "--stdio".to_string(),
+                ],
+            )),
+        );
+    }
+
+    #[test]
+    fn explicit_python_server_defaults_args_to_stdio() {
+        let init = serde_json::json!({
+            "initializationOptions": { "pythonServer": { "command": "pyright-langserver" } },
+        });
+        assert_eq!(
+            explicit_python_server(&init),
+            Some((
+                "pyright-langserver".to_string(),
+                vec!["--stdio".to_string()]
+            )),
+        );
+    }
+
+    #[test]
+    fn explicit_python_server_reads_the_path_override_form() {
+        // `dathon.pythonServer.path` — a plain path to a langserver.
+        let init = serde_json::json!({
+            "initializationOptions": { "pythonServerPath": "/usr/local/bin/basedpyright-langserver" },
+        });
+        assert_eq!(
+            explicit_python_server(&init),
+            Some((
+                "/usr/local/bin/basedpyright-langserver".to_string(),
+                vec!["--stdio".to_string()],
+            )),
+        );
+    }
+
+    #[test]
+    fn explicit_python_server_is_none_when_unset_or_empty() {
+        // No options at all.
+        assert_eq!(explicit_python_server(&serde_json::json!({})), None);
+        // Present but empty — treated as "not set", falls back to PATH.
+        let empty_path = serde_json::json!({
+            "initializationOptions": { "pythonServerPath": "  " },
+        });
+        assert_eq!(explicit_python_server(&empty_path), None);
+        let empty_command = serde_json::json!({
+            "initializationOptions": { "pythonServer": { "command": "" } },
+        });
+        assert_eq!(explicit_python_server(&empty_command), None);
     }
 }

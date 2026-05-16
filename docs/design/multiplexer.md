@@ -140,8 +140,13 @@ This is multi-iteration. The slices, smallest-shippable first:
 5. **Wider passthrough** — `rename`, `documentHighlight`, semantic
    tokens, …: each needs its own virtual↔editor coordinate transform
    before it joins the capability allowlist.
-6. **Bundle the engine** in the VS Code extension; PyCharm setup docs.
-7. **`ty` swap** when it's stable.
+6. **Bundle the engine** — *VS Code done:* the extension ships
+   basedpyright in `node_modules` and passes dathon-lsp a
+   `node <langserver.js> --stdio` launch spec via
+   `initializationOptions.pythonServer`. Needs Node.js on `PATH`;
+   degrades to dathon-only otherwise. *Pending:* PyCharm setup docs.
+7. **`ty` swap** when it's stable — a native Rust engine drops the
+   Node.js dependency entirely.
 
 ## Out of scope (for now)
 
