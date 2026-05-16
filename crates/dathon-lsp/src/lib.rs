@@ -183,7 +183,7 @@ fn main_loop(
                     child_rx = crossbeam_channel::never();
                     continue;
                 };
-                handle_child_message(&connection, &mut multiplexer, msg)?;
+                handle_child_message(&connection, &docs, &mut multiplexer, msg)?;
             }
         }
     }
@@ -194,7 +194,9 @@ fn main_loop(
 /// Handle one message emitted by the embedded Python engine.
 ///
 /// - `publishDiagnostics` notifications are remapped out of
-///   virtual-document coordinates and merged with dathon's diagnostics.
+///   virtual-document coordinates and merged with dathon's diagnostics;
+///   the engine's unresolved-import complaints about cross-`.dpy`
+///   imports are dropped (dathon resolves those itself).
 /// - Responses to requests we fanned out (`dathon-req-*`) are merged
 ///   with dathon's own result and forwarded to the editor.
 /// - Requests the engine sends us (`workspace/configuration`,
@@ -205,6 +207,7 @@ fn main_loop(
 ///   verbatim.
 fn handle_child_message(
     connection: &Connection,
+    docs: &HashMap<Url, String>,
     multiplexer: &mut multiplex::Multiplexer,
     msg: serde_json::Value,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
@@ -214,8 +217,13 @@ fn handle_child_message(
     match (method, id) {
         (Some("textDocument/publishDiagnostics"), _) => {
             if let Some(params) = msg.get("params")
-                && let Some((uri, child_diags)) = multiplex::child_diagnostics_to_editor(params)
+                && let Some((uri, mut child_diags)) = multiplex::child_diagnostics_to_editor(params)
             {
+                // Drop the engine's unresolved-import complaints about
+                // cross-`.dpy` imports — dathon resolves those itself.
+                if let Some(source) = docs.get(&uri) {
+                    child_diags.retain(|d| !multiplex::is_unresolved_dathon_import(d, source));
+                }
                 let merged = multiplexer.diagnostics.set_child(uri.clone(), child_diags);
                 send_diagnostics(connection, &uri, merged)?;
             }
@@ -225,7 +233,28 @@ fn handle_child_message(
             // so the engine sees the editor's actual answers (Python
             // interpreter / analysis config, progress tokens, …). The
             // editor's reply comes back via `handle_editor_response`.
-            let editor_id = multiplexer.register_child_request(child_id.clone());
+            //
+            // For `workspace/configuration` the requested sections are
+            // kept so the reply can be patched (`patch_engine_config`).
+            let config_sections: Vec<String> = if method == "workspace/configuration" {
+                msg.pointer("/params/items")
+                    .and_then(|items| items.as_array())
+                    .map(|items| {
+                        items
+                            .iter()
+                            .map(|item| {
+                                item.get("section")
+                                    .and_then(|s| s.as_str())
+                                    .unwrap_or_default()
+                                    .to_string()
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let editor_id = multiplexer.register_child_request(child_id.clone(), config_sections);
             connection.sender.send(Message::Request(Request {
                 id: RequestId::from(editor_id),
                 method: method.to_string(),
@@ -292,11 +321,19 @@ fn handle_editor_response(multiplexer: &mut multiplex::Multiplexer, resp: Respon
     let Some(editor_id) = request_id_as_str(&resp.id) else {
         return;
     };
-    let Some(child_id) = multiplexer.take_child_request(&editor_id) else {
+    let Some(proxied) = multiplexer.take_child_request(&editor_id) else {
         return;
     };
     let error = resp.error.and_then(|e| serde_json::to_value(e).ok());
-    multiplexer.respond_to_child(child_id, resp.result, error);
+    // A `workspace/configuration` reply is patched so the engine runs
+    // at a standard type-checking level (see `patch_engine_config`).
+    let result = match resp.result {
+        Some(result) if !proxied.config_sections.is_empty() => Some(
+            multiplex::patch_engine_config(result, &proxied.config_sections),
+        ),
+        other => other,
+    };
+    multiplexer.respond_to_child(proxied.child_id, result, error);
 }
 
 /// The string form of a `RequestId`. dathon-lsp issues proxied-request
