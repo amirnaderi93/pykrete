@@ -19,12 +19,24 @@
 /// resolves them. Kept on a single logical block so the line count is
 /// stable and easy to reason about.
 ///
+/// Two groups of names:
+/// - `Schema` / `DataFrame` / `col` — dathon's magic identifiers.
+/// - `string` / `date` / `timestamp` / `double` / `long` — dathon's
+///   column-type keywords. They appear as *string literals* in schema
+///   bodies (`EventDate: "date"`), which the embedded engine reads as
+///   forward-reference type annotations; aliasing each to `object`
+///   makes it resolve them cleanly instead of flagging them as
+///   undefined. (`int` / `bool` are Python builtins and need no alias;
+///   `object` rather than `Any` keeps the engine's no-explicit-`Any`
+///   rule quiet on schema bodies.)
+///
 /// Every line here counts toward [`PREAMBLE_LINE_COUNT`]; if you edit
 /// this string, the test `preamble_line_count_matches_constant` keeps
 /// the constant honest.
 pub const PREAMBLE: &str = "\
 from typing import Any as _DathonAny, Generic as _DathonGeneric, TypeVar as _DathonT
 _DT = _DathonT('_DT')
+string = date = timestamp = double = long = object
 class Schema: ...
 class DataFrame(_DathonGeneric[_DT]): ...
 def col(name: str) -> _DathonAny: ...
@@ -33,7 +45,7 @@ def col(name: str) -> _DathonAny: ...
 /// Number of newline-terminated lines in [`PREAMBLE`]. The virtual
 /// document is `PREAMBLE` followed by the original source, so a real
 /// 0-indexed line `n` sits at virtual line `n + PREAMBLE_LINE_COUNT`.
-pub const PREAMBLE_LINE_COUNT: u32 = 5;
+pub const PREAMBLE_LINE_COUNT: u32 = 6;
 
 /// Build the virtual document the child LSP should see for a `.dpy`
 /// file with the given real `source`.
