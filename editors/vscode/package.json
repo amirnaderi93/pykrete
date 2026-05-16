@@ -43,6 +43,18 @@
           "default": "",
           "description": "Absolute path to a Python language server (basedpyright-langserver / pyright-langserver) for dathon-lsp to embed for general Python features. If empty, the basedpyright bundled with this extension is used (requires Node.js on PATH). dathon's schema features work regardless."
         },
+        "dathon.typeCheckingMode": {
+          "type": "string",
+          "enum": ["off", "basic", "standard", "strict"],
+          "enumDescriptions": [
+            "No checking — dathon and the embedded Python engine both stay silent.",
+            "Fundamental errors only.",
+            "Every error dathon and the engine report by default.",
+            "Standard plus advisory checks that are too noisy for everyday use."
+          ],
+          "default": "standard",
+          "description": "How strict dathon's checking is. A single knob driving both dathon's own schema checks and the embedded Python engine's typeCheckingMode."
+        },
         "dathon.trace.server": {
           "type": "string",
           "enum": ["off", "messages", "verbose"],

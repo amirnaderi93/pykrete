@@ -160,6 +160,9 @@ pub struct ProxiedRequest {
 pub struct Multiplexer {
     pub child: Option<ChildLsp>,
     pub diagnostics: DiagnosticStore,
+    /// The `dathon.typeCheckingMode` setting — drives both dathon's own
+    /// checker and the embedded engine's `typeCheckingMode`.
+    pub type_checking_mode: dathon::CheckMode,
     /// The child engine's advertised `ServerCapabilities`, captured from
     /// its `initialize` response. `Null` when no engine is embedded.
     child_capabilities: Value,
@@ -181,10 +184,15 @@ impl Multiplexer {
     /// same `InitializeParams` the editor sent dathon-lsp. `explicit`
     /// is the launch spec the editor supplied (the bundled engine, or a
     /// user override), or `None` to fall back to `PATH` discovery.
+    /// `mode` is the `dathon.typeCheckingMode` setting.
     ///
     /// Never fails — if no engine is found or it doesn't handshake,
     /// the returned `Multiplexer` simply has `child: None`.
-    pub fn start(explicit: Option<(String, Vec<String>)>, init_params: &Value) -> Multiplexer {
+    pub fn start(
+        explicit: Option<(String, Vec<String>)>,
+        mode: dathon::CheckMode,
+        init_params: &Value,
+    ) -> Multiplexer {
         let mut child_capabilities = Value::Null;
         let child = crate::child::discover(explicit)
             .and_then(|(program, args)| ChildLsp::spawn(&program, &args))
@@ -197,6 +205,7 @@ impl Multiplexer {
         Multiplexer {
             child,
             diagnostics: DiagnosticStore::default(),
+            type_checking_mode: mode,
             child_capabilities,
             pending: HashMap::new(),
             next_request_seq: 0,
@@ -445,30 +454,33 @@ pub fn merge_capabilities(mut dathon: Value, child: &Value) -> Value {
 }
 
 /// Patch the editor's `workspace/configuration` response before it
-/// reaches the embedded engine: default `typeCheckingMode` to
-/// `standard` on the Python-analysis sections, so the engine runs at
-/// the type-checking level an ordinary Python setup uses (Pylance /
-/// pyright default) rather than basedpyright's louder out-of-the-box
-/// strictness. A mode the user has explicitly configured is left
-/// alone — this only fills the gap when the editor has no setting.
+/// reaches the embedded engine: force `typeCheckingMode` on the
+/// Python-analysis sections to `mode`. dathon's own
+/// `dathon.typeCheckingMode` setting is authoritative for `.dpy` files,
+/// so it drives the embedded engine too — instead of basedpyright's
+/// louder out-of-the-box default.
 ///
 /// `result` is an array parallel to `sections`, one settings value per
 /// requested config item.
-pub fn patch_engine_config(mut result: Value, sections: &[String]) -> Value {
+pub fn patch_engine_config(
+    mut result: Value,
+    sections: &[String],
+    mode: dathon::CheckMode,
+) -> Value {
     let Some(slots) = result.as_array_mut() else {
         return result;
     };
     for (slot, section) in slots.iter_mut().zip(sections) {
         match section.as_str() {
             // The analysis subtree was requested directly.
-            "python.analysis" | "basedpyright.analysis" => default_standard_type_checking(slot),
+            "python.analysis" | "basedpyright.analysis" => set_type_checking_mode(slot, mode),
             // The whole `python` / `basedpyright` tree — analysis nests
             // under `.analysis`.
             "python" | "basedpyright" => {
                 if !slot.is_object() {
                     *slot = json!({});
                 }
-                default_standard_type_checking(&mut slot["analysis"]);
+                set_type_checking_mode(&mut slot["analysis"], mode);
             }
             _ => {}
         }
@@ -476,17 +488,13 @@ pub fn patch_engine_config(mut result: Value, sections: &[String]) -> Value {
     result
 }
 
-/// Set `settings.typeCheckingMode` to `standard` unless it's already
-/// set to a non-null value.
-fn default_standard_type_checking(settings: &mut Value) {
+/// Force `settings.typeCheckingMode` to `mode`.
+fn set_type_checking_mode(settings: &mut Value, mode: dathon::CheckMode) {
     if !settings.is_object() {
         *settings = json!({});
     }
     let obj = settings.as_object_mut().expect("set to an object above");
-    let unset = obj.get("typeCheckingMode").is_none_or(Value::is_null);
-    if unset {
-        obj.insert("typeCheckingMode".to_string(), json!("standard"));
-    }
+    obj.insert("typeCheckingMode".to_string(), json!(mode.as_str()));
 }
 
 /// Rewrite an editor request's params for the child: the cursor
@@ -1156,6 +1164,7 @@ mod tests {
         Multiplexer {
             child: None,
             diagnostics: DiagnosticStore::default(),
+            type_checking_mode: dathon::CheckMode::Standard,
             child_capabilities: Value::Null,
             pending: HashMap::new(),
             next_request_seq: 0,
@@ -1239,11 +1248,12 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn patch_engine_config_defaults_type_checking_to_standard() {
-        // The editor has no Python config — the `python.analysis` slot
-        // comes back null; it must become `{typeCheckingMode: standard}`.
+    fn patch_engine_config_sets_type_checking_on_analysis_sections() {
+        // The editor has no Python config — both analysis slots come
+        // back null and must carry dathon's mode.
         let sections = vec!["python".to_string(), "python.analysis".to_string()];
-        let patched = patch_engine_config(json!([null, null]), &sections);
+        let patched =
+            patch_engine_config(json!([null, null]), &sections, dathon::CheckMode::Standard);
         assert_eq!(
             patched[0]["analysis"]["typeCheckingMode"],
             json!("standard")
@@ -1252,17 +1262,26 @@ mod tests {
     }
 
     #[test]
-    fn patch_engine_config_leaves_an_explicit_user_mode_alone() {
+    fn patch_engine_config_makes_dathons_mode_authoritative() {
+        // `dathon.typeCheckingMode` drives the engine for `.dpy` files —
+        // it overrides whatever the editor's Python config returned.
         let sections = vec!["python.analysis".to_string()];
-        let patched = patch_engine_config(json!([{ "typeCheckingMode": "strict" }]), &sections);
-        // The user chose strict — dathon-lsp must not override it.
+        let patched = patch_engine_config(
+            json!([{ "typeCheckingMode": "recommended" }]),
+            &sections,
+            dathon::CheckMode::Strict,
+        );
         assert_eq!(patched[0]["typeCheckingMode"], json!("strict"));
     }
 
     #[test]
     fn patch_engine_config_ignores_non_analysis_sections() {
         // A non-analysis section (e.g. an editor section) is untouched.
-        let patched = patch_engine_config(json!(["keep-me"]), &["editor".to_string()]);
+        let patched = patch_engine_config(
+            json!(["keep-me"]),
+            &["editor".to_string()],
+            dathon::CheckMode::Off,
+        );
         assert_eq!(patched[0], json!("keep-me"));
     }
 

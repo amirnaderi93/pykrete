@@ -48,6 +48,7 @@ use ruff_source_file::LineIndex;
 use ruff_text_size::Ranged;
 
 use crate::dataframe::{DataFrameAnnotation, SlotLabel, TypedSlot, typed_slots};
+pub use crate::diagnostics::CheckMode;
 use crate::diagnostics::{Diagnostic, Severity};
 use crate::imports::{find_pyproject_root, longest_common_ancestor, parse_imports};
 use crate::operations::{BodyContext, ColumnRefTrace, LocalBindingTrace, check_function_body};
@@ -116,13 +117,19 @@ impl ProjectCheckResult {
     }
 }
 
-/// Run the full checker on a single source file.
+/// Run the full checker on a single source file at the default
+/// [`CheckMode::Standard`].
 ///
 /// Equivalent to calling [`check_project`] with a one-element list. Kept as
 /// a convenience for callers that only have one file (and for backward
 /// compatibility with the existing test suite).
 pub fn check(path: &str, source: &str) -> CheckResult {
-    let project = check_project(&[(path.to_string(), source.to_string())]);
+    check_with_mode(path, source, CheckMode::Standard)
+}
+
+/// Run the full checker on a single source file at `mode`.
+pub fn check_with_mode(path: &str, source: &str, mode: CheckMode) -> CheckResult {
+    let project = check_project_with_mode(&[(path.to_string(), source.to_string())], mode);
     project.files.into_iter().next().unwrap().result
 }
 
@@ -145,7 +152,26 @@ pub fn check(path: &str, source: &str) -> CheckResult {
 /// - Directory walking happens at the CLI layer; this entry point still
 ///   takes `(path, source)` pairs.
 /// - Duplicate top-level names across files: not currently diagnosed.
+///
+/// Runs at the default [`CheckMode::Standard`]; use
+/// [`check_project_with_mode`] to pick a strictness level.
 pub fn check_project(files: &[(String, String)]) -> ProjectCheckResult {
+    check_project_with_mode(files, CheckMode::Standard)
+}
+
+/// Run the project checker at the given [`CheckMode`]. Diagnostics
+/// whose [`Diagnostic::min_mode`] is stricter than `mode` are filtered
+/// out — and `mode` of [`CheckMode::Off`] drops them all.
+pub fn check_project_with_mode(files: &[(String, String)], mode: CheckMode) -> ProjectCheckResult {
+    let mut project = check_project_unfiltered(files);
+    for file in &mut project.files {
+        file.result.diagnostics.retain(|d| mode.shows(d.min_mode));
+    }
+    project
+}
+
+/// The checker proper — every diagnostic, unfiltered by mode.
+fn check_project_unfiltered(files: &[(String, String)]) -> ProjectCheckResult {
     let ctx = ProjectContext::build(files);
     let bundles = ctx.build_bundles();
     let mut file_results = Vec::with_capacity(files.len());
