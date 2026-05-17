@@ -43,14 +43,14 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use ruff_python_ast::ModModule;
+use ruff_python_ast::{ModModule, Stmt};
 use ruff_source_file::LineIndex;
-use ruff_text_size::Ranged;
+use ruff_text_size::{Ranged, TextRange};
 
 use crate::dataframe::{DataFrameAnnotation, SlotLabel, TypedSlot, typed_slots};
 pub use crate::diagnostics::CheckMode;
 use crate::diagnostics::{Diagnostic, Severity};
-use crate::imports::{find_pyproject_root, longest_common_ancestor, parse_imports};
+use crate::imports::{ModulePath, find_pyproject_root, longest_common_ancestor, parse_imports};
 use crate::operations::{BodyContext, ColumnRefTrace, LocalBindingTrace, check_function_body};
 use crate::registry::Registry;
 use crate::schema::{FieldResolution, Schema, discover_schemas};
@@ -293,6 +293,41 @@ impl<'a> ProjectContext<'a> {
         self.parsed[idx].as_ref().ok().map(|p| p.syntax())
     }
 
+    /// For the focus file, every `from .X import …` whose module path
+    /// resolves to a project `.dpy` file — the source range of the
+    /// module-name token paired with that file's index. Powers
+    /// go-to-definition on the module name of a relative import.
+    pub(crate) fn dpy_import_module_targets(&self, focus_idx: usize) -> Vec<(TextRange, usize)> {
+        let Some(focus_module) = self.focus_module(focus_idx) else {
+            return Vec::new();
+        };
+        let importing_path = PathBuf::from(&self.files[focus_idx].0);
+        let mut out = Vec::new();
+        for stmt in &focus_module.body {
+            let Stmt::ImportFrom(import) = stmt else {
+                continue;
+            };
+            let Some(module_ident) = import.module.as_ref() else {
+                continue;
+            };
+            let module_path = ModulePath {
+                level: import.level,
+                segments: module_ident
+                    .id
+                    .as_str()
+                    .split('.')
+                    .map(String::from)
+                    .collect(),
+            };
+            if let Some(target_path) = module_path.resolve(&importing_path, &self.project_root)
+                && let Some(&target_idx) = self.path_to_index.get(&target_path)
+            {
+                out.push((module_ident.range, target_idx));
+            }
+        }
+        out
+    }
+
     /// Resolve the focus file's scope: own schemas + imports + combined
     /// registry + any import-resolution diagnostics. The caller owns
     /// the bundles list so its lifetime ties to the right stack frame.
@@ -528,6 +563,7 @@ pub fn definition_in_project(
     let focus_source = &files[focus_idx].1;
     let line_index = LineIndex::from_source_text(focus_source);
     let scope = ctx.build_file_scope(focus_idx, focus_source, &line_index, &bundles);
+    let import_modules = ctx.dpy_import_module_targets(focus_idx);
     let (target_idx, range) = crate::symbols::definition_with_scope(
         focus_module,
         focus_source,
@@ -535,6 +571,7 @@ pub fn definition_in_project(
         line,
         column,
         focus_idx,
+        &import_modules,
         &scope.visible_schemas,
         &scope.combined_registry,
     )?;
