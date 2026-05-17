@@ -1530,14 +1530,13 @@ fn function_result_type(name: &str, first_arg: Option<ColumnType>) -> Option<Col
         "to_timestamp" | "current_timestamp" | "date_trunc" | "from_utc_timestamp"
         | "to_utc_timestamp" => return Some(Timestamp),
         "isnull" | "isnan" => return Some(Bool),
-        "collect_list" | "collect_set" | "array" | "array_distinct" | "array_sort"
-        | "sort_array" | "array_union" | "array_except" | "array_intersect"
-        | "array_remove" | "array_repeat" | "array_compact" | "arrays_zip" | "slice"
-        | "split" | "sequence" | "flatten" | "shuffle" | "map_keys" | "map_values" => {
-            return Some(Array(None));
-        }
+        "split" => return Some(Array(Some(Box::new(String)))),
         "create_map" | "map_from_arrays" | "map_from_entries" | "map_concat" | "str_to_map"
-        | "transform_keys" | "transform_values" | "map_filter" => return Some(Map(None, None)),
+        | "transform_keys" | "transform_values" | "map_filter" => {
+            return Some(Map(None, None));
+        }
+        // Result not an atomic type dathon models (an array of structs).
+        "arrays_zip" | "map_entries" => return Some(Array(None)),
         _ => {}
     }
     // Functions whose result type depends on the first argument.
@@ -1551,6 +1550,45 @@ fn function_result_type(name: &str, first_arg: Option<ColumnType>) -> Option<Col
             Some(Int | Long) => Some(Long),
             Some(Double) => Some(Double),
             _ => None,
+        },
+        // Collection constructors — wrap the input as the element type.
+        "collect_list" | "collect_set" | "array" | "array_repeat" | "sequence" => {
+            Some(Array(first_arg.map(Box::new)))
+        }
+        // Array → array of the same element type.
+        "array_distinct" | "array_sort" | "sort_array" | "array_union" | "array_except"
+        | "array_intersect" | "array_remove" | "array_compact" | "shuffle" | "slice" => {
+            match first_arg {
+                Some(array @ Array(_)) => Some(array),
+                _ => Some(Array(None)),
+            }
+        }
+        // `flatten` peels one array layer: `array<array<T>>` → `array<T>`.
+        "flatten" => match first_arg {
+            Some(Array(Some(inner))) if inner.is_composite() => Some(*inner),
+            _ => Some(Array(None)),
+        },
+        // `explode` unwraps an array to its element type. (On a map it
+        // yields two columns — not a single type — so it's left `None`.)
+        "explode" | "explode_outer" => match first_arg {
+            Some(Array(elem)) => elem.map(|b| *b),
+            _ => None,
+        },
+        // `element_at` indexes into a collection — array element or map
+        // value type.
+        "element_at" => match first_arg {
+            Some(Array(elem)) => elem.map(|b| *b),
+            Some(Map(_, value)) => value.map(|b| *b),
+            _ => None,
+        },
+        // `map_keys` / `map_values` → an array of the key / value type.
+        "map_keys" => match first_arg {
+            Some(Map(key, _)) => Some(Array(key)),
+            _ => Some(Array(None)),
+        },
+        "map_values" => match first_arg {
+            Some(Map(_, value)) => Some(Array(value)),
+            _ => Some(Array(None)),
         },
         _ => None,
     }
