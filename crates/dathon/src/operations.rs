@@ -30,14 +30,17 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
-use ruff_python_ast::{Expr, ExprAttribute, ExprCall, Stmt, StmtFunctionDef};
+use ruff_python_ast::{Expr, ExprAttribute, ExprCall, Number, Stmt, StmtFunctionDef};
 use ruff_source_file::LineIndex;
 use ruff_text_size::{Ranged, TextRange};
 
 use crate::dataframe::{self, DataFrameAnnotation, SlotLabel, TypedSlot};
 use crate::diagnostics::{Diagnostic, Severity};
 use crate::registry::Registry;
-use crate::schema::{FieldPathResult, Schema, SchemaView, resolve_path, suggest_field_name};
+use crate::schema::{
+    DerivedField, FieldPathResult, Schema, SchemaView, resolve_path, suggest_field_name,
+};
+use crate::types::ColumnType;
 use crate::walk::DiscoveredFunction;
 
 // ---------------------------------------------------------------------------
@@ -381,6 +384,7 @@ pub fn check_function_body<'a>(
                     check_return_type(
                         declared,
                         actual,
+                        ctx.schemas(),
                         value.range(),
                         source,
                         line_index,
@@ -492,9 +496,24 @@ fn class_instance_from_call<'a>(expr: &'a Expr, ctx: &BodyContext<'a>) -> Option
     }
 }
 
-fn check_return_type(
-    declared: &Schema<'_>,
-    actual: &SchemaView<'_>,
+/// Conservative type compatibility for the return-type contract check.
+/// Two known types count as compatible when equal, or when both are
+/// numeric — `int`/`long`/`double` widening is something Spark does
+/// freely and dathon infers imprecisely (`lit(5)` could be either int
+/// or long), so a numeric-to-numeric difference is not flagged.
+fn types_compatible(a: ColumnType, b: ColumnType) -> bool {
+    if a == b {
+        return true;
+    }
+    let numeric =
+        |t| matches!(t, ColumnType::Int | ColumnType::Long | ColumnType::Double);
+    numeric(a) && numeric(b)
+}
+
+fn check_return_type<'a>(
+    declared: &Schema<'a>,
+    actual: &SchemaView<'a>,
+    schemas: &'a [Schema<'a>],
     range: TextRange,
     source: &str,
     line_index: &LineIndex,
@@ -502,6 +521,35 @@ fn check_return_type(
 ) {
     let declared_names: HashSet<&str> = declared.fields().iter().map(|f| f.name).collect();
     let actual_names: HashSet<&str> = actual.field_names().into_iter().collect();
+
+    // Type check — a column present in both, with confidently-known but
+    // incompatible types, is a real schema-contract mismatch regardless
+    // of any missing/extra columns. Both types must be known: an unknown
+    // (`None`) type is permissive and never flagged.
+    let mut shared: Vec<&str> = declared_names.intersection(&actual_names).copied().collect();
+    shared.sort();
+    for name in shared {
+        if let (Some(declared_ty), Some(actual_ty)) = (
+            declared.field_type(name, schemas),
+            actual.field_type(name, schemas),
+        ) {
+            if !types_compatible(declared_ty, actual_ty) {
+                diagnostics.push(Diagnostic::at_range(
+                    Severity::Error,
+                    "D0080",
+                    format!(
+                        "Return type mismatch: column '{name}' is declared {declared_ty} \
+                         in schema '{}', but the body produces {actual_ty}.",
+                        declared.name(),
+                    ),
+                    range,
+                    source,
+                    line_index,
+                ));
+            }
+        }
+    }
+
     if declared_names == actual_names {
         return;
     }
@@ -781,7 +829,7 @@ fn analyze_method_call<'a>(
                 }
             }
         }
-        return apply_column_method(method, &receiver, call);
+        return apply_column_method(method, &receiver, call, ctx.schemas());
     }
     if let Some(kind) = two_df_method(method) {
         return handle_two_df_method(kind, call, &receiver, ctx, source, line_index, diagnostics);
@@ -1270,14 +1318,136 @@ fn report_column_refs<'a>(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Column-expression type inference
+// ---------------------------------------------------------------------------
+
+/// Infer the atomic type of a column expression evaluated against
+/// `schema`. `None` means "couldn't determine" — a function result
+/// dathon doesn't model, a column off an un-inferred schema, an
+/// unmodeled literal. `None` is permissive: it is never itself a type
+/// error, only the absence of information.
+fn infer_expr_type<'a>(
+    expr: &Expr,
+    schema: &SchemaView<'a>,
+    schemas: &'a [Schema<'a>],
+) -> Option<ColumnType> {
+    // `col("x")` / `column("x")` — the column's declared/inferred type.
+    if let Some((name, _)) = col_reference(expr) {
+        return schema.field_type(name, schemas);
+    }
+    match expr {
+        Expr::Call(call) => {
+            if let Some(attr) = call.func.as_attribute_expr() {
+                match attr.attr.id.as_str() {
+                    // `<expr>.alias("y")` / `.name("y")` — type unchanged.
+                    "alias" | "name" => {
+                        return infer_expr_type(&attr.value, schema, schemas);
+                    }
+                    // `<expr>.cast("int")` / `.cast(IntegerType())`.
+                    "cast" => {
+                        return call.arguments.args.first().and_then(cast_target_type);
+                    }
+                    _ => {}
+                }
+            }
+            // `F.lit(value)` — the literal's own type.
+            let fname = match call.func.as_ref() {
+                Expr::Name(n) => Some(n.id.as_str()),
+                Expr::Attribute(a) => Some(a.attr.id.as_str()),
+                _ => None,
+            };
+            if fname == Some("lit") {
+                return call.arguments.args.first().and_then(python_literal_type);
+            }
+            None
+        }
+        // A bare Python literal in column position acts as `lit(...)`.
+        _ => python_literal_type(expr),
+    }
+}
+
+/// The type of a `select` output column, given its argument. A bare
+/// string literal is a column *name* there (not a string value), so it
+/// is resolved against the receiver before falling back to
+/// [`infer_expr_type`].
+fn select_arg_type<'a>(
+    arg: &Expr,
+    recv: &SchemaView<'a>,
+    schemas: &'a [Schema<'a>],
+) -> Option<ColumnType> {
+    if let Some(s) = arg.as_string_literal_expr() {
+        return recv.field_type(s.value.to_str(), schemas);
+    }
+    infer_expr_type(arg, recv, schemas)
+}
+
+/// The dathon [`ColumnType`] a `.cast(...)` targets — its argument is
+/// either a Spark type string (`"int"`, `"bigint"`, …) or a type-object
+/// call (`IntegerType()`). Unrecognized forms give `None`.
+fn cast_target_type(arg: &Expr) -> Option<ColumnType> {
+    if let Some(s) = arg.as_string_literal_expr() {
+        return spark_cast_type_name(s.value.to_str());
+    }
+    if let Some(call) = arg.as_call_expr() {
+        let name = match call.func.as_ref() {
+            Expr::Name(n) => n.id.as_str(),
+            Expr::Attribute(a) => a.attr.id.as_str(),
+            _ => return None,
+        };
+        return match name {
+            "IntegerType" => Some(ColumnType::Int),
+            "LongType" => Some(ColumnType::Long),
+            "DoubleType" | "FloatType" => Some(ColumnType::Double),
+            "StringType" => Some(ColumnType::String),
+            "BooleanType" => Some(ColumnType::Bool),
+            "DateType" => Some(ColumnType::Date),
+            "TimestampType" => Some(ColumnType::Timestamp),
+            _ => None,
+        };
+    }
+    None
+}
+
+/// Map a Spark SQL cast type-name to a dathon [`ColumnType`]. Spark's
+/// cast vocabulary is wider than dathon's annotation vocabulary (it has
+/// `bigint`, `integer`, `float`, …), so this is its own mapping.
+fn spark_cast_type_name(name: &str) -> Option<ColumnType> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "int" | "integer" => Some(ColumnType::Int),
+        "long" | "bigint" => Some(ColumnType::Long),
+        "double" | "float" | "real" => Some(ColumnType::Double),
+        "string" => Some(ColumnType::String),
+        "boolean" | "bool" => Some(ColumnType::Bool),
+        "date" => Some(ColumnType::Date),
+        "timestamp" => Some(ColumnType::Timestamp),
+        _ => None,
+    }
+}
+
+/// The dathon type of a Python literal used as a column value.
+fn python_literal_type(expr: &Expr) -> Option<ColumnType> {
+    match expr {
+        Expr::StringLiteral(_) => Some(ColumnType::String),
+        Expr::BooleanLiteral(_) => Some(ColumnType::Bool),
+        Expr::NumberLiteral(n) => match n.value {
+            Number::Int(_) => Some(ColumnType::Int),
+            Number::Float(_) => Some(ColumnType::Double),
+            Number::Complex { .. } => None,
+        },
+        _ => None,
+    }
+}
+
 fn apply_column_method<'a>(
     method: &str,
     recv: &SchemaView<'a>,
     call: &'a ExprCall,
+    schemas: &'a [Schema<'a>],
 ) -> Option<SchemaView<'a>> {
     match method {
         "select" => {
-            let mut fields: Vec<&'a str> = Vec::new();
+            let mut fields: Vec<DerivedField<'a>> = Vec::new();
             for arg in &call.arguments.args {
                 // `select("*")` — the star expands to every column of the
                 // receiver, rather than naming a literal column `*`.
@@ -1285,14 +1455,17 @@ fn apply_column_method<'a>(
                     .as_string_literal_expr()
                     .is_some_and(|s| s.value.to_str() == "*")
                 {
-                    fields.extend(recv.field_names());
+                    fields.extend(recv.typed_fields(schemas));
                     continue;
                 }
                 if let Some(name) = select_output_name(arg) {
-                    fields.push(name);
+                    fields.push(DerivedField {
+                        name,
+                        ty: select_arg_type(arg, recv, schemas),
+                    });
                 }
             }
-            Some(SchemaView::derived_untyped(fields))
+            Some(SchemaView::Derived(fields))
         }
         "filter" | "where" | "dropDuplicates" | "dropna" => Some(recv.clone()),
         "drop" => {
@@ -1302,12 +1475,12 @@ fn apply_column_method<'a>(
                 .iter()
                 .filter_map(column_name_arg)
                 .collect();
-            let remaining: Vec<&'a str> = recv
-                .field_names()
+            let remaining: Vec<DerivedField<'a>> = recv
+                .typed_fields(schemas)
                 .into_iter()
-                .filter(|n| !drop_set.contains(n))
+                .filter(|f| !drop_set.contains(f.name))
                 .collect();
-            Some(SchemaView::derived_untyped(remaining))
+            Some(SchemaView::Derived(remaining))
         }
         "withColumn" => {
             let new_name = call
@@ -1316,11 +1489,24 @@ fn apply_column_method<'a>(
                 .first()
                 .and_then(|a| a.as_string_literal_expr())
                 .map(|s| s.value.to_str())?;
-            let mut fields: Vec<&'a str> = recv.field_names();
-            if !fields.contains(&new_name) {
-                fields.push(new_name);
+            // The new column's type is inferred from the value
+            // expression; if `new_name` already exists, `withColumn`
+            // *replaces* it, so its type is updated rather than kept.
+            let ty = call
+                .arguments
+                .args
+                .get(1)
+                .and_then(|v| infer_expr_type(v, recv, schemas));
+            let mut fields: Vec<DerivedField<'a>> = recv.typed_fields(schemas);
+            if let Some(existing) = fields.iter_mut().find(|f| f.name == new_name) {
+                existing.ty = ty;
+            } else {
+                fields.push(DerivedField {
+                    name: new_name,
+                    ty,
+                });
             }
-            Some(SchemaView::derived_untyped(fields))
+            Some(SchemaView::Derived(fields))
         }
         "withColumnRenamed" => {
             let old = call
@@ -1335,12 +1521,17 @@ fn apply_column_method<'a>(
                 .get(1)
                 .and_then(|a| a.as_string_literal_expr())
                 .map(|s| s.value.to_str())?;
-            let fields: Vec<&'a str> = recv
-                .field_names()
+            let fields: Vec<DerivedField<'a>> = recv
+                .typed_fields(schemas)
                 .into_iter()
-                .map(|n| if n == old { new } else { n })
+                .map(|mut f| {
+                    if f.name == old {
+                        f.name = new;
+                    }
+                    f
+                })
                 .collect();
-            Some(SchemaView::derived_untyped(fields))
+            Some(SchemaView::Derived(fields))
         }
         "groupBy" | "cube" | "rollup" => {
             // None of these return a DataFrame; they return a GroupedData

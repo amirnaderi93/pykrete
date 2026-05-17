@@ -230,6 +230,19 @@ impl<'a> SchemaView<'a> {
         }
     }
 
+    /// Every column of this view as a [`DerivedField`] — its name paired
+    /// with its type (where known). The shared basis for operations that
+    /// carry columns through: `drop`, `withColumn`, `select("*")`, etc.
+    pub fn typed_fields(&self, schemas: &'a [Schema<'a>]) -> Vec<DerivedField<'a>> {
+        self.field_names()
+            .into_iter()
+            .map(|name| DerivedField {
+                name,
+                ty: self.field_type(name, schemas),
+            })
+            .collect()
+    }
+
     /// Human-readable phrase to embed in diagnostics.
     pub fn display_name(&self) -> String {
         match self {
