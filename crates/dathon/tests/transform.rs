@@ -18,6 +18,9 @@ class Enriched(Schema):
 
 def enrich(df: DataFrame[Raw]) -> DataFrame[Enriched]:
     return df.withColumn(\"bonus\", col(\"amount\"))
+
+def add_bonus(df):
+    return df.withColumn(\"bonus\", col(\"amount\"))
 ";
 
 #[test]
@@ -64,6 +67,30 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 "
     );
     assert_does_not_have_code(&check(&src), "D0070");
+}
+
+#[test]
+fn undeclared_return_is_inferred_from_the_function_body() {
+    // `add_bonus` has no return annotation — its output schema is
+    // inferred by walking the body (`withColumn` adds `bonus`).
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Raw]) -> DataFrame:
+    return raw.transform(add_bonus).select(col(\"bonus\"))
+"
+    );
+    assert_no_diagnostics(&check(&src));
+}
+
+#[test]
+fn bad_column_after_inferred_transform_is_caught() {
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Raw]) -> DataFrame:
+    return raw.transform(add_bonus).select(col(\"nonexistent\"))
+"
+    );
+    assert_has_code(&check(&src), "D0030");
 }
 
 #[test]

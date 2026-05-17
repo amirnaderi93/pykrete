@@ -30,7 +30,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
-use ruff_python_ast::{Expr, ExprAttribute, ExprCall, Stmt};
+use ruff_python_ast::{Expr, ExprAttribute, ExprCall, Stmt, StmtFunctionDef};
 use ruff_source_file::LineIndex;
 use ruff_text_size::{Ranged, TextRange};
 
@@ -129,7 +129,16 @@ pub struct BodyContext<'a> {
     /// hover on the LHS of `x = raw.select(...)` and on uses of `x`
     /// elsewhere in the function body, plus completion on `x.<cursor>`.
     local_bindings: RefCell<Vec<LocalBindingTrace<'a>>>,
+    /// How many nested `transform`-body inferences deep this context is.
+    /// `0` for a context built to analyze a function directly; bumped by
+    /// one each time [`infer_transform_output`] recurses into a transform
+    /// function's body. Caps runaway recursion on a `transform` cycle.
+    infer_depth: u32,
 }
+
+/// Recursion ceiling for `transform`-body inference — deep enough for any
+/// realistic pipeline-step nesting, shallow enough to stop a cycle.
+const MAX_INFER_DEPTH: u32 = 8;
 
 /// One `col("name")` (or string-arg) site captured during body analysis,
 /// with the schema that was active at the time the column was resolved.
@@ -167,6 +176,7 @@ impl<'a> BodyContext<'a> {
             registry,
             column_refs: RefCell::new(Vec::new()),
             local_bindings: RefCell::new(Vec::new()),
+            infer_depth: 0,
         }
     }
 
@@ -315,14 +325,21 @@ impl<'a> BodyContext<'a> {
 // Driver
 // ---------------------------------------------------------------------------
 
+/// Walk a function body, checking calls and validating the return type.
+///
+/// Returns the inferred schema of the function's *first* `return`
+/// statement, if one could be determined — used by [`infer_transform_output`]
+/// to type a `transform` function whose return isn't declared. Callers
+/// that only want the diagnostics can ignore the result.
 pub fn check_function_body<'a>(
-    func: &'a DiscoveredFunction<'a>,
+    func: &DiscoveredFunction<'a>,
     declared_return: Option<&'a Schema<'a>>,
     ctx: &mut BodyContext<'a>,
     source: &str,
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
-) {
+) -> Option<SchemaView<'a>> {
+    let mut inferred_return: Option<SchemaView<'a>> = None;
     for stmt in &func.def.body {
         match stmt {
             Stmt::Assign(a) => {
@@ -355,6 +372,9 @@ pub fn check_function_body<'a>(
                     continue;
                 };
                 let actual = analyze_expr(value, ctx, source, line_index, diagnostics);
+                if inferred_return.is_none() {
+                    inferred_return = actual.clone();
+                }
                 if let (Some(declared), Some(actual)) = (declared_return, actual.as_ref()) {
                     check_return_type(
                         declared,
@@ -372,6 +392,7 @@ pub fn check_function_body<'a>(
             _ => {}
         }
     }
+    inferred_return
 }
 
 /// Handle `name: DataFrame[Schema] = …` (and the no-value form).
@@ -870,7 +891,7 @@ fn handle_transform<'a>(
         }
     }
 
-    // Result schema — fn's declared `-> DataFrame[Schema]`.
+    // Result schema — fn's declared `-> DataFrame[Schema]` if it has one…
     if let Some(DataFrameAnnotation::Typed(rname)) =
         sig.return_annotation.and_then(|r| dataframe::recognize(r))
     {
@@ -878,7 +899,42 @@ fn handle_transform<'a>(
             return Some(SchemaView::Declared(schema));
         }
     }
-    None
+    // …otherwise infer it by analyzing fn's body with the receiver bound
+    // to fn's parameter. Needs a known receiver to feed in.
+    infer_transform_output(sig.def, receiver?, ctx, source, line_index)
+}
+
+/// Infer the output schema of a `transform` function whose return type
+/// isn't declared, by walking its body with the parameter bound to the
+/// actual input schema — the TypeScript-style "infer the return" path.
+///
+/// Recursion through nested `transform` calls is bounded by
+/// [`MAX_INFER_DEPTH`]. Diagnostics raised while walking the body are
+/// discarded: an annotated function gets its real diagnostics from the
+/// standalone analysis pass; a fully un-annotated one reached only here
+/// goes unchecked, an accepted v1 gap.
+fn infer_transform_output<'a>(
+    func_def: &'a StmtFunctionDef,
+    input: SchemaView<'a>,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+) -> Option<SchemaView<'a>> {
+    if ctx.infer_depth >= MAX_INFER_DEPTH {
+        return None;
+    }
+    // fn's first positional parameter — the DataFrame it transforms.
+    let params = &func_def.parameters;
+    let first = params.posonlyargs.iter().chain(&params.args).next()?;
+    let param_name = first.parameter.name.id.as_str();
+
+    let mut child = BodyContext::new(ctx.schemas(), ctx.registry());
+    child.infer_depth = ctx.infer_depth + 1;
+    child.bind_df(param_name, input);
+
+    let discovered = DiscoveredFunction { def: func_def };
+    let mut sink: Vec<Diagnostic> = Vec::new();
+    check_function_body(&discovered, None, &mut child, source, line_index, &mut sink)
 }
 
 /// Check that the DataFrame fed into `df.transform(fn)` matches `fn`'s
