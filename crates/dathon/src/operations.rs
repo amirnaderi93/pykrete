@@ -618,7 +618,11 @@ fn analyze_method_call<'a>(
     if matches!(method, "fill" | "drop" | "replace") {
         if let Some(inner) = attr.value.as_attribute_expr() {
             if inner.attr.id.as_str() == "na" {
-                return analyze_expr(&inner.value, ctx, source, line_index, diagnostics);
+                let recv = analyze_expr(&inner.value, ctx, source, line_index, diagnostics);
+                if let Some(schema) = &recv {
+                    check_subset_kwarg(call, schema, ctx, source, line_index, diagnostics);
+                }
+                return recv;
             }
         }
     }
@@ -645,6 +649,15 @@ fn analyze_method_call<'a>(
     }
 
     let receiver = analyze_expr(&attr.value, ctx, source, line_index, diagnostics)?;
+
+    // Several methods take a `subset=` of column names — check it
+    // uniformly, before the per-method dispatch.
+    if matches!(
+        method,
+        "fillna" | "dropna" | "dropDuplicates" | "drop_duplicates" | "replace"
+    ) {
+        check_subset_kwarg(call, &receiver, ctx, source, line_index, diagnostics);
+    }
 
     if method == "agg" {
         return Some(handle_agg(
@@ -1178,6 +1191,48 @@ fn apply_with_columns_renamed<'a>(
     SchemaView::Derived(fields)
 }
 
+/// Check the `subset=` keyword argument against the receiver schema.
+/// `subset` — present on `fillna`, `dropna`, `dropDuplicates`,
+/// `replace`, and the `df.na.*` methods — names the columns the
+/// operation applies to, as a single string or a list/tuple of them.
+fn check_subset_kwarg<'a>(
+    call: &'a ExprCall,
+    schema: &SchemaView<'a>,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(kw) = call
+        .arguments
+        .keywords
+        .iter()
+        .find(|k| k.arg.as_ref().is_some_and(|n| n.id.as_str() == "subset"))
+    else {
+        return;
+    };
+    let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
+    match &kw.value {
+        Expr::StringLiteral(s) => refs.push((s.value.to_str(), s.range())),
+        Expr::List(l) => {
+            for elt in &l.elts {
+                if let Some(s) = elt.as_string_literal_expr() {
+                    refs.push((s.value.to_str(), s.range()));
+                }
+            }
+        }
+        Expr::Tuple(t) => {
+            for elt in &t.elts {
+                if let Some(s) = elt.as_string_literal_expr() {
+                    refs.push((s.value.to_str(), s.range()));
+                }
+            }
+        }
+        _ => {}
+    }
+    report_column_refs(&refs, schema, ctx, source, line_index, diagnostics);
+}
+
 /// Resolve each collected `(name, range)` column reference against
 /// `schema`: record it for the LSP layer, and emit a `D0030` (with a
 /// "did you mean" suggestion) for any that doesn't resolve. The shared
@@ -1521,6 +1576,16 @@ fn select_output_name<'a>(arg: &'a Expr) -> Option<&'a str> {
             if attr.attr.id.as_str() == "cast" {
                 return select_output_name(&attr.value);
             }
+        }
+        // `F.explode("arr")` / `explode_outer(...)` — Spark names the
+        // unnested column `col` when no `.alias(...)` is given.
+        let fname = match call.func.as_ref() {
+            Expr::Name(n) => Some(n.id.as_str()),
+            Expr::Attribute(a) => Some(a.attr.id.as_str()),
+            _ => None,
+        };
+        if matches!(fname, Some("explode" | "explode_outer")) {
+            return Some("col");
         }
     }
     None
