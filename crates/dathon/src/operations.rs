@@ -1470,7 +1470,7 @@ fn select_arg_type<'a>(
 /// whose result isn't an atomic type (`collect_list` → array, …) —
 /// permissive, never a type error.
 fn function_result_type(name: &str, first_arg: Option<ColumnType>) -> Option<ColumnType> {
-    use ColumnType::{Bool, Date, Double, Int, Long, String, Timestamp};
+    use ColumnType::{Array, Bool, Date, Double, Int, Long, Map, String, Timestamp};
     // Functions with a fixed result type, regardless of input.
     match name {
         "count" | "countDistinct" | "count_distinct" | "approx_count_distinct"
@@ -1495,6 +1495,14 @@ fn function_result_type(name: &str, first_arg: Option<ColumnType>) -> Option<Col
         "to_timestamp" | "current_timestamp" | "date_trunc" | "from_utc_timestamp"
         | "to_utc_timestamp" => return Some(Timestamp),
         "isnull" | "isnan" => return Some(Bool),
+        "collect_list" | "collect_set" | "array" | "array_distinct" | "array_sort"
+        | "sort_array" | "array_union" | "array_except" | "array_intersect"
+        | "array_remove" | "array_repeat" | "array_compact" | "arrays_zip" | "slice"
+        | "split" | "sequence" | "flatten" | "shuffle" | "map_keys" | "map_values" => {
+            return Some(Array);
+        }
+        "create_map" | "map_from_arrays" | "map_from_entries" | "map_concat" | "str_to_map"
+        | "transform_keys" | "transform_values" | "map_filter" => return Some(Map),
         _ => {}
     }
     // Functions whose result type depends on the first argument.
@@ -1536,13 +1544,15 @@ fn python_literal_type(expr: &Expr) -> Option<ColumnType> {
 // driver only surfaces them under `typeCheckingMode: "strict"`.
 // ---------------------------------------------------------------------------
 
-/// Family of atomic types that behave alike under operators.
+/// Family of types that behave alike under operators.
 #[derive(PartialEq, Clone, Copy)]
 enum TypeFamily {
     Numeric,
     Textual,
     Boolean,
     Temporal,
+    /// `array` / `map` — collections; they don't combine with atomics.
+    Collection,
 }
 
 fn type_family(t: ColumnType) -> TypeFamily {
@@ -1551,6 +1561,7 @@ fn type_family(t: ColumnType) -> TypeFamily {
         ColumnType::String => TypeFamily::Textual,
         ColumnType::Bool => TypeFamily::Boolean,
         ColumnType::Date | ColumnType::Timestamp => TypeFamily::Temporal,
+        ColumnType::Array | ColumnType::Map => TypeFamily::Collection,
     }
 }
 
@@ -1602,18 +1613,27 @@ fn report_expr_type_errors<'a>(
     match expr {
         Expr::BinOp(b) => {
             if is_arithmetic_op(b.op) {
-                let operands = [
+                // A string / array / map operand can't take part in
+                // arithmetic — Spark coerces a string (often to null) and
+                // errors on a collection.
+                let bad = [
                     infer_expr_type(&b.left, schema, tcx),
                     infer_expr_type(&b.right, schema, tcx),
-                ];
-                if operands.contains(&Some(ColumnType::String)) {
+                ]
+                .into_iter()
+                .flatten()
+                .find(|t| {
+                    matches!(t, ColumnType::String | ColumnType::Array | ColumnType::Map)
+                });
+                if let Some(bad) = bad {
                     diagnostics.push(
                         Diagnostic::at_range(
                             Severity::Warning,
                             "D0081",
-                            "Arithmetic operator applied to a string column. Spark coerces \
-                             the string (often to null); cast it explicitly if intended."
-                                .to_string(),
+                            format!(
+                                "Arithmetic operator applied to a non-numeric ({bad}) column. \
+                                 Spark coerces or errors here; cast it explicitly if intended.",
+                            ),
                             b.range(),
                             source,
                             line_index,
