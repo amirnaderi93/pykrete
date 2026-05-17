@@ -1,9 +1,12 @@
 //! Virtual-document transform for the LSP multiplexer.
 //!
-//! `.dpy` files are valid Python, but dathon's magic names (`Schema`,
-//! `DataFrame`, `col`) aren't defined anywhere the embedded Python
-//! engine can see. So before forwarding a document to the child LSP,
-//! dathon-lsp prepends a fixed **preamble** that defines those names.
+//! `.dpy` files are valid Python, but dathon's own syntax — the
+//! `Schema` base class, `DataFrame[X]` parametrized annotations, the
+//! string-literal column-type vocabulary — isn't defined anywhere the
+//! embedded Python engine can see. So before forwarding a document to
+//! the child LSP, dathon-lsp prepends a fixed **preamble** that defines
+//! it. (Ordinary Python imports like `col` are the user's to write;
+//! the preamble covers only dathon-specific names.)
 //!
 //! The user's real `.dpy` file keeps zero imports; the virtual document
 //! the child analyzes is fully resolvable Python.
@@ -24,16 +27,25 @@
 /// dathon's magic names as ordinary Python so the embedded engine
 /// resolves them.
 ///
-/// Two groups of names:
-/// - `Schema` / `DataFrame` / `col` — dathon's magic identifiers.
+/// Two groups of names — both are dathon's *own* syntax:
+/// - `Schema` (the schema base class) and `DataFrame`. `DataFrame` is
+///   defined generic so the dathon-specific `DataFrame[X]` annotation
+///   resolves — plain PySpark's `DataFrame` isn't subscriptable. Its
+///   `__getattr__` / `__getitem__` make every attribute and `df["col"]`
+///   access type as `Any`: dataframe *operations* (`.select`, `.filter`,
+///   …) are dathon's to check, so the embedded engine must not flag
+///   them as unknown members of this stand-in class.
 /// - `string` / `date` / `timestamp` / `double` / `long` — dathon's
 ///   column-type keywords. They appear as *string literals* in schema
 ///   bodies (`EventDate: "date"`), which the embedded engine reads as
 ///   forward-reference type annotations; aliasing each to `object`
 ///   makes it resolve them cleanly instead of flagging them as
-///   undefined. (`int` / `bool` are Python builtins and need no alias;
-///   `object` rather than `Any` keeps the engine's no-explicit-`Any`
-///   rule quiet on schema bodies.)
+///   undefined. (`int` / `bool` are Python builtins and need no alias.)
+///
+/// Ordinary Python names like `col` are deliberately NOT defined here:
+/// `col` is `pyspark.sql.functions.col`, an import the user writes — a
+/// `.dpy` file that uses it without importing it should get the same
+/// missing-import error any Python file would.
 ///
 /// The test `preamble_line_count_matches_constant` keeps
 /// [`PREFIX_LINE_COUNT`] honest if this string is edited.
@@ -42,12 +54,13 @@ from typing import Any as _DathonAny, Generic as _DathonGeneric, TypeVar as _Dat
 _DT = _DathonT('_DT')
 string = date = timestamp = double = long = object
 class Schema: ...
-class DataFrame(_DathonGeneric[_DT]): ...
-def col(name: str) -> _DathonAny: ...
+class DataFrame(_DathonGeneric[_DT]):
+    def __getattr__(self, _name: str) -> _DathonAny: ...
+    def __getitem__(self, _key: _DathonAny) -> _DathonAny: ...
 ";
 
 /// Newline-terminated line count of [`PREAMBLE`].
-const PREAMBLE_LINE_COUNT: u32 = 6;
+const PREAMBLE_LINE_COUNT: u32 = 7;
 
 /// Lines the virtual document injects ahead of the user's source: one
 /// hoisted `from __future__` line plus the [`PREAMBLE`]. A real
