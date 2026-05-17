@@ -189,6 +189,50 @@ def f(x: DataFrame[In]) -> DataFrame[Out]:
 }
 
 #[test]
+fn nested_struct_field_type_is_resolved_through_the_dotted_path() {
+    // `col("address.zipcode")` resolves through the nested `Address`
+    // struct; `zipcode` is an int, declared `string` in Out.
+    let src = "\
+class Address(Schema):
+    zipcode: \"int\"
+    street: \"string\"
+
+class Person(Schema):
+    name: \"string\"
+    address: Address
+
+class Out(Schema):
+    name: \"string\"
+    zip: \"string\"
+
+def f(p: DataFrame[Person]) -> DataFrame[Out]:
+    return p.select(col(\"name\"), col(\"address.zipcode\").alias(\"zip\"))
+";
+    assert_has_code(&check(src), "D0080");
+}
+
+#[test]
+fn nested_struct_field_type_matching_declaration_passes() {
+    let src = "\
+class Address(Schema):
+    zipcode: \"int\"
+    street: \"string\"
+
+class Person(Schema):
+    name: \"string\"
+    address: Address
+
+class Out(Schema):
+    name: \"string\"
+    zip: \"int\"
+
+def f(p: DataFrame[Person]) -> DataFrame[Out]:
+    return p.select(col(\"name\"), col(\"address.zipcode\").alias(\"zip\"))
+";
+    assert_does_not_have_code(&check(src), "D0080");
+}
+
+#[test]
 fn lit_value_type_flows_into_the_return_check() {
     // `withColumn("city", F.lit(1))` overwrites `city` with an int —
     // but Out declares it `string`.
