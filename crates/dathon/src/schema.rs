@@ -221,10 +221,26 @@ impl<'a> SchemaView<'a> {
 
     /// The atomic type of column `name` on this view, if known. `None`
     /// for an unknown column, an un-inferred Derived field, or a field
-    /// whose declared type is a nested struct.
+    /// whose declared type is itself a nested struct.
+    ///
+    /// `name` may be a dotted path (`"address.zipcode"`); on a declared
+    /// schema each non-final segment is walked through its nested
+    /// struct, and the leaf segment's atomic type is returned.
     pub fn field_type(&self, name: &str, schemas: &'a [Schema<'a>]) -> Option<ColumnType> {
         match self {
-            Self::Declared(s) => s.field_type(name, schemas),
+            Self::Declared(s) => {
+                if let Some((head, rest)) = name.split_once('.') {
+                    // Walk into the nested struct named by `head`.
+                    let nested = s.fields().iter().find(|f| f.name == head).and_then(|f| {
+                        match f.resolve(schemas) {
+                            FieldResolution::ResolvedNested(n) => Some(n),
+                            _ => None,
+                        }
+                    })?;
+                    return Self::Declared(nested).field_type(rest, schemas);
+                }
+                s.field_type(name, schemas)
+            }
             Self::Derived(fields) => fields.iter().find(|f| f.name == name).and_then(|f| f.ty),
             Self::Grouped { underlying, .. } => underlying.field_type(name, schemas),
         }
