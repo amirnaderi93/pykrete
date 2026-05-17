@@ -729,6 +729,16 @@ fn analyze_method_call<'a>(
         }
         return None;
     }
+    if method == "withColumns" {
+        return Some(apply_with_columns(
+            call, &receiver, ctx, source, line_index, diagnostics,
+        ));
+    }
+    if method == "withColumnsRenamed" {
+        return Some(apply_with_columns_renamed(
+            call, &receiver, ctx, source, line_index, diagnostics,
+        ));
+    }
     if let Some(shape) = column_method_shape(method) {
         check_column_method_args(
             call,
@@ -928,7 +938,7 @@ fn handle_transform<'a>(
     // Input-compatibility check: receiver schema vs. fn's first parameter.
     if let (Some(recv), Some(first_param)) = (&receiver, sig.params.first()) {
         if let Some(DataFrameAnnotation::Typed(pname)) =
-            first_param.annotation.and_then(|a| dataframe::recognize(a))
+            first_param.annotation.and_then(dataframe::recognize)
         {
             if let Some(param_schema) = ctx.find_schema(pname) {
                 check_transform_input(
@@ -946,7 +956,7 @@ fn handle_transform<'a>(
 
     // Result schema — fn's declared `-> DataFrame[Schema]` if it has one…
     if let Some(DataFrameAnnotation::Typed(rname)) =
-        sig.return_annotation.and_then(|r| dataframe::recognize(r))
+        sig.return_annotation.and_then(dataframe::recognize)
     {
         if let Some(schema) = ctx.find_schema(rname) {
             return Some(SchemaView::Declared(schema));
@@ -1058,29 +1068,7 @@ fn handle_agg<'a>(
             outputs.push(name);
         }
     }
-    for (col_name, col_range) in refs {
-        ctx.record_column_ref(col_range, col_name, underlying.clone());
-        if let FieldPathResult::Missing { field, on } =
-            resolve_path(&underlying, col_name, ctx.schemas())
-        {
-            let suggestion = suggest_field_name(field, &on);
-            let mut message = format!("Column '{field}' does not exist on {}.", on.display_name());
-            if let Some(s) = &suggestion {
-                message.push_str(&format!(" Did you mean '{s}'?"));
-            }
-            diagnostics.push(
-                Diagnostic::at_range(
-                    Severity::Error,
-                    "D0030",
-                    message,
-                    col_range,
-                    source,
-                    line_index,
-                )
-                .with_suggestion(suggestion),
-            );
-        }
-    }
+    report_column_refs(&refs, &underlying, ctx, source, line_index, diagnostics);
 
     let mut fields: Vec<&'a str> = keys;
     for name in outputs {
@@ -1112,7 +1100,97 @@ fn check_column_method_args<'a>(
         // its identifiers are checked against the same schema.
         report_expr_sql_refs(arg, schema, source, line_index, diagnostics);
     }
-    for (col_name, col_range) in refs {
+    report_column_refs(&refs, schema, ctx, source, line_index, diagnostics);
+}
+
+/// Model `df.withColumns({"a": expr, "b": expr})` (Spark 3.3+) — adds
+/// one column per dict entry. The keys are the new column names; the
+/// values are column expressions whose own references are checked
+/// against the receiver. Result schema = receiver columns + new keys.
+///
+/// If the argument isn't a dict literal the added names are unknown —
+/// the receiver schema is returned so the chain at least stays alive.
+fn apply_with_columns<'a>(
+    call: &'a ExprCall,
+    recv: &SchemaView<'a>,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> SchemaView<'a> {
+    let Some(dict) = call.arguments.args.first().and_then(Expr::as_dict_expr) else {
+        return recv.clone();
+    };
+    let mut fields: Vec<&'a str> = recv.field_names();
+    let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
+    for item in &dict.items {
+        if let Some(key) = item.key.as_ref().and_then(|k| k.as_string_literal_expr()) {
+            let name = key.value.to_str();
+            if !fields.contains(&name) {
+                fields.push(name);
+            }
+        }
+        collect_col_refs(&item.value, ctx, &mut refs);
+        report_expr_sql_refs(&item.value, recv, source, line_index, diagnostics);
+    }
+    report_column_refs(&refs, recv, ctx, source, line_index, diagnostics);
+    SchemaView::Derived(fields)
+}
+
+/// Model `df.withColumnsRenamed({"old": "new", …})` (Spark 3.4+). Each
+/// key is an existing column (checked against the receiver) renamed to
+/// its value. Result schema = receiver columns with the renames applied.
+fn apply_with_columns_renamed<'a>(
+    call: &'a ExprCall,
+    recv: &SchemaView<'a>,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> SchemaView<'a> {
+    let Some(dict) = call.arguments.args.first().and_then(Expr::as_dict_expr) else {
+        return recv.clone();
+    };
+    let mut renames: Vec<(&'a str, &'a str)> = Vec::new();
+    let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
+    for item in &dict.items {
+        let (Some(key), Some(val)) = (
+            item.key.as_ref().and_then(|k| k.as_string_literal_expr()),
+            item.value.as_string_literal_expr(),
+        ) else {
+            continue;
+        };
+        // The old name must exist — check it like any column reference.
+        refs.push((key.value.to_str(), key.range()));
+        renames.push((key.value.to_str(), val.value.to_str()));
+    }
+    report_column_refs(&refs, recv, ctx, source, line_index, diagnostics);
+    let fields: Vec<&'a str> = recv
+        .field_names()
+        .into_iter()
+        .map(|n| {
+            renames
+                .iter()
+                .find(|(old, _)| *old == n)
+                .map_or(n, |(_, new)| *new)
+        })
+        .collect();
+    SchemaView::Derived(fields)
+}
+
+/// Resolve each collected `(name, range)` column reference against
+/// `schema`: record it for the LSP layer, and emit a `D0030` (with a
+/// "did you mean" suggestion) for any that doesn't resolve. The shared
+/// tail of every `col(...)`-style column-existence check.
+fn report_column_refs<'a>(
+    refs: &[(&'a str, TextRange)],
+    schema: &SchemaView<'a>,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for &(col_name, col_range) in refs {
         ctx.record_column_ref(col_range, col_name, schema.clone());
         if let FieldPathResult::Missing { field, on } =
             resolve_path(schema, col_name, ctx.schemas())
