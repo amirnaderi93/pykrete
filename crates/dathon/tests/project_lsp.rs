@@ -89,7 +89,7 @@ def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
 }
 
 #[test]
-fn goto_definition_on_imported_schema_returns_span_in_focus_file() {
+fn goto_definition_on_imported_schema_jumps_to_the_declaring_file() {
     let files = project(&[
         (
             "/proj/schemas.dpy",
@@ -110,11 +110,48 @@ def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     ]);
     let line = 4;
     let column = "def f(raw: DataFrame[".len() + 1;
-    let span = definition_in_project(&files, "/proj/pipeline.dpy", line, column)
-        .expect("expected a definition span");
-    // The span points at the `Orders` class declaration. Today the
-    // span is anchored against the focus file's source coordinates
-    // (we don't yet return a cross-file URI), so we just confirm a
-    // span was returned at all — it indicates the lookup succeeded.
-    assert!(span.start_line > 0);
+    let (path, span) = definition_in_project(&files, "/proj/pipeline.dpy", line, column)
+        .expect("expected a definition");
+    // Resolves across files: the `Orders` class is declared in
+    // schemas.dpy, so the definition points there — not at the focus
+    // file — at `class Orders` on line 2.
+    assert_eq!(path, "/proj/schemas.dpy");
+    assert_eq!(span.start_line, 2);
+    assert_eq!(span.start_column, "class ".len() + 1);
+}
+
+#[test]
+fn goto_definition_on_column_ref_jumps_to_the_imported_schemas_field() {
+    // The schema is imported, not declared locally. Clicking the
+    // column literal must jump to the field in the *schemas* file —
+    // regression test for the column ref landing at a stray position
+    // in the focus file (its byte range read against the wrong text).
+    let files = project(&[
+        (
+            "/proj/schemas.dpy",
+            r#"
+class Orders(Schema):
+    place_code: "int"
+    price: "int"
+"#,
+        ),
+        (
+            "/proj/pipeline.dpy",
+            r#"
+from .schemas import Orders
+
+def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw.select(col("price"))
+"#,
+        ),
+    ]);
+    // Cursor inside `col("price")` on line 5 of pipeline.dpy.
+    let line = 5;
+    let column = "    return raw.select(col(\"pr".len() + 1;
+    let (path, span) = definition_in_project(&files, "/proj/pipeline.dpy", line, column)
+        .expect("expected a definition");
+    // `price` is declared on line 4 of schemas.dpy.
+    assert_eq!(path, "/proj/schemas.dpy");
+    assert_eq!(span.start_line, 4);
+    assert_eq!(span.start_column, "    ".len() + 1);
 }

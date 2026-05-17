@@ -9,10 +9,9 @@
 //!   view in VS Code's editor breadcrumb / file explorer panel).
 //! - [`definition`] resolves the symbol at a `(line, column)` cursor to
 //!   the source range of its declaration. Used by
-//!   `textDocument/definition`.
-//!
-//! Both work on a single parsed module — cross-file go-to-definition
-//! is a follow-up.
+//!   `textDocument/definition`. The project-aware path
+//!   ([`crate::definition_in_project`]) resolves cross-file: a column
+//!   or schema reference jumps to the imported module that declares it.
 //!
 //! Span coordinates are 1-indexed `(line, column)` pairs to match the
 //! convention used by [`crate::hover`] and [`crate::diagnostics`]. The
@@ -245,68 +244,88 @@ pub fn definition(source: &str, line: usize, column: usize) -> Option<Span> {
     let classes = discover_top_level_classes(module);
     let schemas = discover_schemas(&classes);
     let registry = Registry::build(module);
-    definition_with_scope(
+    // Single file → the only file is index 0, and the target is in it.
+    let (_file, range) = definition_with_scope(
         module,
         source,
         &line_index,
         line,
         column,
+        0,
         &schemas,
         &registry,
-    )
+    )?;
+    Some(span_from_range(range, source, &line_index))
 }
 
 /// Project-aware go-to-definition: takes the focus file's parsed
 /// module plus pre-resolved visible schemas + registry. Used by the
-/// LSP layer so cross-file `DataFrame[X]` references jump to the
-/// class declaration even when `X` lives in a sibling file.
+/// LSP layer so cross-file `DataFrame[X]` / column references jump to
+/// the right file even when the schema lives in a sibling module.
+///
+/// Returns `(file_index, range)` — the range is a byte range in the
+/// file at `file_index`, which the caller converts to a [`Span`]
+/// against that file's text. `focus_idx` is the file the cursor is in,
+/// used to keep declaration/field lookups from matching a same-named
+/// schema imported from elsewhere.
+#[allow(clippy::too_many_arguments)] // focus file context + cursor + scope
 pub(crate) fn definition_with_scope<'a>(
     module: &'a ruff_python_ast::ModModule,
     source: &str,
     line_index: &LineIndex,
     line: usize,
     column: usize,
+    focus_idx: usize,
     schemas: &[Schema<'a>],
     registry: &Registry<'a>,
-) -> Option<Span> {
+) -> Option<(usize, TextRange)> {
     let offset = offset_from_line_column(line_index, source, line, column)?;
     let functions = discover_top_level_functions(module);
 
-    if let Some(target) = definition_on_schema_declaration(offset, schemas) {
-        return Some(span_from_range(target, source, line_index));
+    if let Some(target) = definition_on_schema_declaration(offset, schemas, focus_idx) {
+        return Some(target);
     }
     if let Some(target) =
         definition_on_schema_reference_in_function_signature(offset, &functions, schemas)
     {
-        return Some(span_from_range(target, source, line_index));
+        return Some(target);
     }
-    if let Some(target) = definition_on_schema_reference_in_schema_field(offset, schemas) {
-        return Some(span_from_range(target, source, line_index));
+    if let Some(target) = definition_on_schema_reference_in_schema_field(offset, schemas, focus_idx)
+    {
+        return Some(target);
     }
     let traces =
         crate::collect_module_column_refs(&functions, source, line_index, schemas, registry);
     if let Some(target) = definition_on_column_ref(offset, &traces) {
-        return Some(span_from_range(target, source, line_index));
+        return Some(target);
     }
     None
 }
 
-fn definition_on_schema_declaration(offset: TextSize, schemas: &[Schema<'_>]) -> Option<TextRange> {
+/// Cursor on a `class X(Schema)` declaration → its name token. Only
+/// declarations in the focus file can be under the cursor.
+fn definition_on_schema_declaration(
+    offset: TextSize,
+    schemas: &[Schema<'_>],
+    focus_idx: usize,
+) -> Option<(usize, TextRange)> {
     for schema in schemas {
-        if schema.class.def.name.range.contains_inclusive(offset) {
-            return Some(schema.class.def.name.range);
+        if schema.file_index == focus_idx && schema.class.def.name.range.contains_inclusive(offset)
+        {
+            return Some((schema.file_index, schema.class.def.name.range));
         }
     }
     None
 }
 
 /// Cursor on the `X` inside a `DataFrame[X]` slot of a typed function
-/// signature → return the range of `class X`'s name token.
+/// signature → the range of `class X`'s name token, in whatever file
+/// `X` is declared.
 fn definition_on_schema_reference_in_function_signature(
     offset: TextSize,
     functions: &[DiscoveredFunction<'_>],
     schemas: &[Schema<'_>],
-) -> Option<TextRange> {
+) -> Option<(usize, TextRange)> {
     for func in functions {
         for slot in typed_slots(func) {
             let Some(sub) = slot.annotation.as_subscript_expr() else {
@@ -317,7 +336,7 @@ fn definition_on_schema_reference_in_function_signature(
             };
             if inner.range.contains_inclusive(offset) {
                 if let Some(target) = schemas.iter().find(|s| s.name() == inner.id.as_str()) {
-                    return Some(target.class.def.name.range);
+                    return Some((target.file_index, target.class.def.name.range));
                 }
             }
         }
@@ -326,17 +345,23 @@ fn definition_on_schema_reference_in_function_signature(
 }
 
 /// Cursor on the bare-name annotation of a nested-struct Schema field
-/// (`address: Address`) → return the range of `class Address`'s name.
+/// (`address: Address`) → the range of `class Address`'s name. The
+/// field being pointed at is in the focus file; the target class may
+/// be imported.
 fn definition_on_schema_reference_in_schema_field(
     offset: TextSize,
     schemas: &[Schema<'_>],
-) -> Option<TextRange> {
+    focus_idx: usize,
+) -> Option<(usize, TextRange)> {
     for schema in schemas {
+        if schema.file_index != focus_idx {
+            continue;
+        }
         for field in schema.fields() {
             if let Expr::Name(name) = field.annotation {
                 if name.range.contains_inclusive(offset) {
                     if let Some(target) = schemas.iter().find(|s| s.name() == name.id.as_str()) {
-                        return Some(target.class.def.name.range);
+                        return Some((target.file_index, target.class.def.name.range));
                     }
                 }
             }
@@ -346,10 +371,14 @@ fn definition_on_schema_reference_in_schema_field(
 }
 
 /// Cursor on a `col("foo")` string literal whose schema and field both
-/// resolve → return the range of the field's `name: type` annotation in
-/// the Schema class body. Only `Declared` views point at a real source
-/// location; derived/grouped views drop AST provenance, so no jump.
-fn definition_on_column_ref(offset: TextSize, traces: &[ColumnRefTrace<'_>]) -> Option<TextRange> {
+/// resolve → the range of the field's `name: type` annotation in the
+/// Schema class body, in the file that schema is declared in. Only
+/// `Declared` views point at a real source location; derived/grouped
+/// views drop AST provenance, so no jump.
+fn definition_on_column_ref(
+    offset: TextSize,
+    traces: &[ColumnRefTrace<'_>],
+) -> Option<(usize, TextRange)> {
     let trace = traces.iter().find(|t| t.range.contains_inclusive(offset))?;
     let schema = match &trace.schema {
         SchemaView::Declared(s) => *s,
@@ -367,10 +396,10 @@ fn definition_on_column_ref(offset: TextSize, traces: &[ColumnRefTrace<'_>]) -> 
             continue;
         };
         if target.id.as_str() == field.name {
-            return Some(target.range);
+            return Some((schema.file_index, target.range));
         }
     }
-    Some(field.annotation.range())
+    Some((schema.file_index, field.annotation.range()))
 }
 
 // ---------------------------------------------------------------------------
@@ -392,7 +421,7 @@ fn offset_from_line_column(
     Some(line_start + column_offset)
 }
 
-fn span_from_range(range: TextRange, source: &str, line_index: &LineIndex) -> Span {
+pub(crate) fn span_from_range(range: TextRange, source: &str, line_index: &LineIndex) -> Span {
     let start = line_index.line_column(range.start(), source);
     let end = line_index.line_column(range.end(), source);
     Span {

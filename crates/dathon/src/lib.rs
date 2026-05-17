@@ -307,6 +307,11 @@ impl<'a> ProjectContext<'a> {
             .as_ref()
             .map(|b| discover_schemas(&b.local_classes))
             .unwrap_or_default();
+        // Schemas declared in the focus file itself — tag them so
+        // go-to-definition reports the right file.
+        for schema in &mut visible_schemas {
+            schema.file_index = focus_idx;
+        }
         let mut combined_registry: Registry<'scope> = bundles[focus_idx]
             .as_ref()
             .map(|b| b.local_registry.clone())
@@ -369,6 +374,9 @@ impl<'a> ProjectContext<'a> {
                     Schema {
                         class: s.class,
                         alias,
+                        // The schema lives in the imported module's file;
+                        // go-to-definition must point there, not here.
+                        file_index: target_idx,
                     }
                 });
             let found_class = target_bundle.local_registry.classes.get(imp.source_name);
@@ -502,12 +510,17 @@ pub fn completions_in_project(
 /// file — the returned `Span` still anchors against `focus_path`
 /// today, since the LSP layer can match the span to the correct URI.
 /// Cross-file location reporting is a follow-up.
+/// Project-aware go-to-definition. Returns `(path, span)` — the file
+/// the definition lives in and its position there. The target file may
+/// differ from `focus_path` when the cursor points at something
+/// declared in an imported module (a `col("…")` reference, a
+/// `DataFrame[X]` schema, …).
 pub fn definition_in_project(
     files: &[(String, String)],
     focus_path: &str,
     line: usize,
     column: usize,
-) -> Option<Span> {
+) -> Option<(String, Span)> {
     let ctx = ProjectContext::build(files);
     let bundles = ctx.build_bundles();
     let focus_idx = ctx.focus_idx(focus_path)?;
@@ -515,15 +528,22 @@ pub fn definition_in_project(
     let focus_source = &files[focus_idx].1;
     let line_index = LineIndex::from_source_text(focus_source);
     let scope = ctx.build_file_scope(focus_idx, focus_source, &line_index, &bundles);
-    crate::symbols::definition_with_scope(
+    let (target_idx, range) = crate::symbols::definition_with_scope(
         focus_module,
         focus_source,
         &line_index,
         line,
         column,
+        focus_idx,
         &scope.visible_schemas,
         &scope.combined_registry,
-    )
+    )?;
+    // The range is a byte range in `files[target_idx]` — convert it to
+    // line/column against *that* file's text, not the focus file's.
+    let (target_path, target_source) = &files[target_idx];
+    let target_line_index = LineIndex::from_source_text(target_source);
+    let span = crate::symbols::span_from_range(range, target_source, &target_line_index);
+    Some((target_path.clone(), span))
 }
 
 /// Pick the project root: deepest `pyproject.toml`-bearing dir above the
