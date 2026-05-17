@@ -244,7 +244,7 @@ pub fn definition(source: &str, line: usize, column: usize) -> Option<Span> {
     let classes = discover_top_level_classes(module);
     let schemas = discover_schemas(&classes);
     let registry = Registry::build(module);
-    // Single file → the only file is index 0, and the target is in it.
+    // Single file → the only file is index 0, no cross-file imports.
     let (_file, range) = definition_with_scope(
         module,
         source,
@@ -252,6 +252,7 @@ pub fn definition(source: &str, line: usize, column: usize) -> Option<Span> {
         line,
         column,
         0,
+        &[],
         &schemas,
         &registry,
     )?;
@@ -276,10 +277,20 @@ pub(crate) fn definition_with_scope<'a>(
     line: usize,
     column: usize,
     focus_idx: usize,
+    dpy_import_modules: &[(TextRange, usize)],
     schemas: &[Schema<'a>],
     registry: &Registry<'a>,
 ) -> Option<(usize, TextRange)> {
     let offset = offset_from_line_column(line_index, source, line, column)?;
+
+    // Cursor on the module name of a `from .X import …` whose module is
+    // a project `.dpy` file → jump to the top of that file.
+    for (range, target_idx) in dpy_import_modules {
+        if range.contains_inclusive(offset) {
+            return Some((*target_idx, TextRange::default()));
+        }
+    }
+
     let functions = discover_top_level_functions(module);
 
     if let Some(target) = definition_on_schema_declaration(offset, schemas, focus_idx) {

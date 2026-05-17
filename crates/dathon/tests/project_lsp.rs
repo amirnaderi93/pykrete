@@ -155,3 +155,35 @@ def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     assert_eq!(span.start_line, 4);
     assert_eq!(span.start_column, "    ".len() + 1);
 }
+
+#[test]
+fn goto_definition_on_import_module_jumps_to_the_module_file() {
+    // Clicking the module name of `from .schemas import …` jumps to
+    // the schemas file itself.
+    let files = project(&[
+        (
+            "/proj/schemas.dpy",
+            r#"
+class Orders(Schema):
+    x: "int"
+"#,
+        ),
+        (
+            "/proj/pipeline.dpy",
+            r#"
+from .schemas import Orders
+
+def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+    return raw
+"#,
+        ),
+    ]);
+    // Cursor inside `schemas` of `from .schemas import Orders` (line 2).
+    let line = 2;
+    let column = "from .sch".len() + 1;
+    let (path, span) = definition_in_project(&files, "/proj/pipeline.dpy", line, column)
+        .expect("expected a definition");
+    assert_eq!(path, "/proj/schemas.dpy");
+    // Jumps to the top of the module file.
+    assert_eq!(span.start_line, 1);
+}
