@@ -1366,7 +1366,9 @@ fn infer_expr_type<'a>(
             if let Some(attr) = call.func.as_attribute_expr() {
                 match attr.attr.id.as_str() {
                     // `<expr>.alias("y")` / `.name("y")` — type unchanged.
-                    "alias" | "name" => {
+                    // `<windowed>.over(w)` likewise carries the windowed
+                    // expression's type through.
+                    "alias" | "name" | "over" => {
                         return infer_expr_type(&attr.value, schema, schemas);
                     }
                     // `<expr>.cast("int")` / `.cast(IntegerType())`.
@@ -1376,16 +1378,24 @@ fn infer_expr_type<'a>(
                     _ => {}
                 }
             }
-            // `F.lit(value)` — the literal's own type.
             let fname = match call.func.as_ref() {
-                Expr::Name(n) => Some(n.id.as_str()),
-                Expr::Attribute(a) => Some(a.attr.id.as_str()),
-                _ => None,
+                Expr::Name(n) => n.id.as_str(),
+                Expr::Attribute(a) => a.attr.id.as_str(),
+                _ => return None,
             };
-            if fname == Some("lit") {
+            // `F.lit(value)` — the literal's own type.
+            if fname == "lit" {
                 return call.arguments.args.first().and_then(python_literal_type);
             }
-            None
+            // Any other recognized `pyspark.sql.functions` call — look its
+            // result type up in the catalog, resolving the first argument
+            // (a column name or expression) for the input-dependent ones.
+            let first_arg = call
+                .arguments
+                .args
+                .first()
+                .and_then(|a| select_arg_type(a, schema, schemas));
+            function_result_type(fname, first_arg)
         }
         // A bare Python literal in column position acts as `lit(...)`.
         _ => python_literal_type(expr),
@@ -1432,6 +1442,55 @@ fn cast_target_type(arg: &Expr) -> Option<ColumnType> {
         };
     }
     None
+}
+
+/// The result [`ColumnType`] of a `pyspark.sql.functions` call, given
+/// the function name and (for input-dependent functions) the type of
+/// its first argument. `None` for functions dathon doesn't model or
+/// whose result isn't an atomic type (`collect_list` → array, …) —
+/// permissive, never a type error.
+fn function_result_type(name: &str, first_arg: Option<ColumnType>) -> Option<ColumnType> {
+    use ColumnType::{Bool, Date, Double, Int, Long, String, Timestamp};
+    // Functions with a fixed result type, regardless of input.
+    match name {
+        "count" | "countDistinct" | "count_distinct" | "approx_count_distinct"
+        | "unix_timestamp" | "monotonically_increasing_id" | "factorial" => return Some(Long),
+        "avg" | "mean" | "stddev" | "stddev_pop" | "stddev_samp" | "variance" | "var_pop"
+        | "var_samp" | "skewness" | "kurtosis" | "corr" | "covar_pop" | "covar_samp"
+        | "percent_rank" | "cume_dist" | "rand" | "randn" | "sqrt" | "exp" | "expm1" | "ln"
+        | "log" | "log2" | "log10" | "log1p" | "sin" | "cos" | "tan" | "asin" | "acos"
+        | "atan" | "atan2" | "sinh" | "cosh" | "tanh" | "degrees" | "radians" | "cbrt"
+        | "pow" | "power" | "hypot" | "signum" | "months_between" => return Some(Double),
+        "length" | "char_length" | "character_length" | "ascii" | "instr" | "locate"
+        | "levenshtein" | "year" | "month" | "dayofmonth" | "day" | "dayofweek"
+        | "dayofyear" | "hour" | "minute" | "second" | "weekofyear" | "quarter"
+        | "datediff" | "row_number" | "rank" | "dense_rank" | "ntile"
+        | "spark_partition_id" | "size" => return Some(Int),
+        "lower" | "upper" | "initcap" | "trim" | "ltrim" | "rtrim" | "reverse" | "concat_ws"
+        | "substring" | "substring_index" | "regexp_replace" | "regexp_extract" | "lpad"
+        | "rpad" | "translate" | "repeat" | "soundex" | "base64" | "format_string"
+        | "format_number" | "hex" | "sha1" | "sha2" | "md5" => return Some(String),
+        "to_date" | "current_date" | "last_day" | "next_day" | "date_add" | "date_sub"
+        | "add_months" | "trunc" => return Some(Date),
+        "to_timestamp" | "current_timestamp" | "date_trunc" | "from_utc_timestamp"
+        | "to_utc_timestamp" => return Some(Timestamp),
+        "isnull" | "isnan" => return Some(Bool),
+        _ => {}
+    }
+    // Functions whose result type depends on the first argument.
+    match name {
+        "min" | "max" | "first" | "last" | "first_value" | "last_value" | "greatest"
+        | "least" | "coalesce" | "nvl" | "ifnull" | "nanvl" | "abs" | "round" | "bround"
+        | "negative" | "positive" => first_arg,
+        "ceil" | "ceiling" | "floor" => Some(Long),
+        // `sum` widens an integral input to long; a double stays double.
+        "sum" | "sumDistinct" | "sum_distinct" => match first_arg {
+            Some(Int | Long) => Some(Long),
+            Some(Double) => Some(Double),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Map a Spark SQL cast type-name to a dathon [`ColumnType`]. Spark's
