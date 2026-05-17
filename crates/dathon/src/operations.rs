@@ -578,6 +578,13 @@ fn analyze_method_call<'a>(
             diagnostics,
         ));
     }
+    if method == "selectExpr" {
+        // Args are SQL expression strings, not column names — checking
+        // the column references *inside* them needs a SQL parse (a
+        // follow-up); for now model the output schema so the chain
+        // doesn't break here.
+        return apply_select_expr(call, &receiver);
+    }
     if let Some(shape) = column_method_shape(method) {
         check_column_method_args(
             call,
@@ -905,6 +912,53 @@ fn apply_column_method<'a>(
         }
         _ => None,
     }
+}
+
+/// Model the result schema of a `df.selectExpr("…", "…")` call. Each
+/// argument is a SQL expression string; the output schema is the list
+/// of their result column names. `*` expands to the receiver's columns.
+///
+/// Returns `None` only when an argument isn't a string literal (a
+/// computed expression list) — there the result schema is genuinely
+/// unknowable. Checking the column references *inside* the SQL is a
+/// follow-up (needs a SQL parse); this only recovers the output shape
+/// so a chain doesn't die at `.selectExpr(...)`.
+fn apply_select_expr<'a>(call: &'a ExprCall, recv: &SchemaView<'a>) -> Option<SchemaView<'a>> {
+    let mut fields: Vec<&'a str> = Vec::new();
+    for arg in &call.arguments.args {
+        let item = arg.as_string_literal_expr()?.value.to_str().trim();
+        if item == "*" {
+            fields.extend(recv.field_names());
+        } else {
+            fields.push(select_expr_output_name(item));
+        }
+    }
+    Some(SchemaView::Derived(fields))
+}
+
+/// The result column name of one `selectExpr` item: the `AS` alias if
+/// present, else the last segment of a bare (dotted) identifier, else
+/// the expression text verbatim (Spark auto-names it after the expr).
+fn select_expr_output_name(item: &str) -> &str {
+    if let Some(alias) = split_sql_alias(item) {
+        return alias;
+    }
+    if !item.is_empty()
+        && item
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+    {
+        return item.rsplit('.').next().unwrap_or(item);
+    }
+    item
+}
+
+/// The alias of a SQL `expr AS name` item, if it has one. Matches the
+/// last ` as ` case-insensitively and strips quoting around the name.
+fn split_sql_alias(item: &str) -> Option<&str> {
+    let idx = item.to_ascii_lowercase().rfind(" as ")?;
+    let alias = item[idx + 4..].trim().trim_matches(['`', '"', '\'']);
+    (!alias.is_empty()).then_some(alias)
 }
 
 fn select_output_name<'a>(arg: &'a Expr) -> Option<&'a str> {
