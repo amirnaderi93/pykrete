@@ -241,7 +241,9 @@ impl<'a> SchemaView<'a> {
                 }
                 s.field_type(name, schemas)
             }
-            Self::Derived(fields) => fields.iter().find(|f| f.name == name).and_then(|f| f.ty),
+            Self::Derived(fields) => {
+                fields.iter().find(|f| f.name == name).and_then(|f| f.ty.clone())
+            }
             Self::Grouped { underlying, .. } => underlying.field_type(name, schemas),
         }
     }
