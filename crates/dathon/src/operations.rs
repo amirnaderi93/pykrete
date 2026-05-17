@@ -701,7 +701,7 @@ fn analyze_method_call<'a>(
         if names.is_empty() {
             return Some(receiver);
         }
-        return Some(SchemaView::Derived(names));
+        return Some(SchemaView::derived_untyped(names));
     }
     if method == "pivot" {
         // `groupBy(keys).pivot("col")` — verify the pivot column exists
@@ -1089,7 +1089,7 @@ fn handle_agg<'a>(
             fields.push(name);
         }
     }
-    SchemaView::Derived(fields)
+    SchemaView::derived_untyped(fields)
 }
 
 // ---------------------------------------------------------------------------
@@ -1147,7 +1147,7 @@ fn apply_with_columns<'a>(
         report_expr_sql_refs(&item.value, recv, source, line_index, diagnostics);
     }
     report_column_refs(&refs, recv, ctx, source, line_index, diagnostics);
-    SchemaView::Derived(fields)
+    SchemaView::derived_untyped(fields)
 }
 
 /// Model `df.withColumnsRenamed({"old": "new", …})` (Spark 3.4+). Each
@@ -1188,7 +1188,7 @@ fn apply_with_columns_renamed<'a>(
                 .map_or(n, |(_, new)| *new)
         })
         .collect();
-    SchemaView::Derived(fields)
+    SchemaView::derived_untyped(fields)
 }
 
 /// Check the `subset=` keyword argument against the receiver schema.
@@ -1292,7 +1292,7 @@ fn apply_column_method<'a>(
                     fields.push(name);
                 }
             }
-            Some(SchemaView::Derived(fields))
+            Some(SchemaView::derived_untyped(fields))
         }
         "filter" | "where" | "dropDuplicates" | "dropna" => Some(recv.clone()),
         "drop" => {
@@ -1307,7 +1307,7 @@ fn apply_column_method<'a>(
                 .into_iter()
                 .filter(|n| !drop_set.contains(n))
                 .collect();
-            Some(SchemaView::Derived(remaining))
+            Some(SchemaView::derived_untyped(remaining))
         }
         "withColumn" => {
             let new_name = call
@@ -1320,7 +1320,7 @@ fn apply_column_method<'a>(
             if !fields.contains(&new_name) {
                 fields.push(new_name);
             }
-            Some(SchemaView::Derived(fields))
+            Some(SchemaView::derived_untyped(fields))
         }
         "withColumnRenamed" => {
             let old = call
@@ -1340,7 +1340,7 @@ fn apply_column_method<'a>(
                 .into_iter()
                 .map(|n| if n == old { new } else { n })
                 .collect();
-            Some(SchemaView::Derived(fields))
+            Some(SchemaView::derived_untyped(fields))
         }
         "groupBy" | "cube" | "rollup" => {
             // None of these return a DataFrame; they return a GroupedData
@@ -1383,7 +1383,7 @@ fn apply_select_expr<'a>(call: &'a ExprCall, recv: &SchemaView<'a>) -> Option<Sc
             fields.push(select_expr_output_name(item));
         }
     }
-    Some(SchemaView::Derived(fields))
+    Some(SchemaView::derived_untyped(fields))
 }
 
 /// The result column name of one `selectExpr` item: the `AS` alias if
@@ -1823,7 +1823,7 @@ fn apply_join<'a>(
             result.push(f);
         }
     }
-    SchemaView::Derived(result)
+    SchemaView::derived_untyped(result)
 }
 
 /// Schema concatenation for crossJoin: every field from both sides; shared
@@ -1835,7 +1835,7 @@ fn apply_concat<'a>(left: &SchemaView<'a>, right: &SchemaView<'a>) -> SchemaView
             result.push(f);
         }
     }
-    SchemaView::Derived(result)
+    SchemaView::derived_untyped(result)
 }
 
 // ---------------------------------------------------------------------------
