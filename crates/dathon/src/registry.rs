@@ -85,6 +85,13 @@ pub struct Registry<'a> {
     /// analyzer can resolve `Attribute(Name("DataSources"), "RAW_ORDERS")`
     /// the same way it resolves a bare module-level constant.
     pub class_constants: HashMap<(&'a str, &'a str), ConstantInfo<'a>>,
+    /// Top-level `def` functions, keyed by name. Captured as [`MethodInfo`]
+    /// (the same signature shape used for class methods — a free function
+    /// is just a method with no `self`). Used to resolve the function
+    /// argument of `df.transform(some_function)`: its declared parameter
+    /// and return annotations tell us the input schema to check against
+    /// and the result schema the transform produces.
+    pub functions: HashMap<&'a str, MethodInfo<'a>>,
 }
 
 impl<'a> Registry<'a> {
@@ -92,9 +99,14 @@ impl<'a> Registry<'a> {
         let mut classes = HashMap::new();
         let mut constants = HashMap::new();
         let mut class_constants = HashMap::new();
+        let mut functions = HashMap::new();
 
         for stmt in &module.body {
             match stmt {
+                Stmt::FunctionDef(def) => {
+                    let info = build_method_info(def);
+                    functions.insert(info.name, info);
+                }
                 Stmt::ClassDef(def) => {
                     let info = build_class_info(def);
                     let class_name = info.name;
@@ -124,6 +136,7 @@ impl<'a> Registry<'a> {
             classes,
             constants,
             class_constants,
+            functions,
         }
     }
 
@@ -133,6 +146,12 @@ impl<'a> Registry<'a> {
 
     pub fn find_constant(&self, name: &str) -> Option<&ConstantInfo<'a>> {
         self.constants.get(name)
+    }
+
+    /// Look up a top-level `def` function by name. Used to resolve the
+    /// function argument of `df.transform(...)`.
+    pub fn find_function(&self, name: &str) -> Option<&MethodInfo<'a>> {
+        self.functions.get(name)
     }
 
     /// Look up a class-qualified annotated constant — `ClassName.NAME`.

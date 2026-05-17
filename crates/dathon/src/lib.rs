@@ -355,6 +355,7 @@ impl<'a> ProjectContext<'a> {
                 classes: HashMap::new(),
                 constants: HashMap::new(),
                 class_constants: HashMap::new(),
+                functions: HashMap::new(),
             });
         let mut import_diagnostics: Vec<Diagnostic> = Vec::new();
 

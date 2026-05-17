@@ -30,7 +30,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
-use ruff_python_ast::{Expr, ExprCall, Stmt};
+use ruff_python_ast::{Expr, ExprAttribute, ExprCall, Stmt};
 use ruff_source_file::LineIndex;
 use ruff_text_size::{Ranged, TextRange};
 
@@ -545,6 +545,49 @@ fn analyze_method_call<'a>(
     let attr = call.func.as_attribute_expr()?;
     let method = attr.attr.id.as_str();
 
+    // dathon schema-cast — `<chain>.cast(DataFrame[Schema])` re-anchors a
+    // chain whose schema dathon has lost (after a pivot, an un-modeled
+    // op, …) to an explicit `Schema`. Handled before the receiver is
+    // resolved on purpose: the receiver is *expected* to be unknown —
+    // that's the whole reason the cast is there. The `DataFrame[…]`
+    // argument shape is what distinguishes this from `Column.cast("int")`
+    // (whose argument is a type string, and whose receiver is a `Column`).
+    if method == "cast" {
+        if let Some(arg) = call.arguments.args.first() {
+            if let Some(DataFrameAnnotation::Typed(name)) = dataframe::recognize(arg) {
+                // Analyze the receiver for its own diagnostics; its schema
+                // is discarded — the cast overrides whatever it was.
+                let _ = analyze_expr(&attr.value, ctx, source, line_index, diagnostics);
+                return match ctx.find_schema(name) {
+                    Some(schema) => Some(SchemaView::Declared(schema)),
+                    None => {
+                        diagnostics.push(Diagnostic::at_range(
+                            Severity::Error,
+                            "D0020",
+                            format!(
+                                "Unknown schema '{name}' in .cast(DataFrame[…]). \
+                                 Declare it as a class extending Schema.",
+                            ),
+                            arg.range(),
+                            source,
+                            line_index,
+                        ));
+                        None
+                    }
+                };
+            }
+        }
+        // Not a `DataFrame[Schema]` argument — ordinary `Column.cast`, or
+        // a form dathon doesn't model. Fall through to the default path.
+    }
+    // `df.transform(fn)` — Spark's chaining sugar; equivalent to `fn(df)`.
+    // The result schema is `fn`'s declared return; the receiver is checked
+    // against `fn`'s parameter. Reachable on an unknown receiver too (the
+    // function's annotation re-types the chain regardless).
+    if method == "transform" {
+        return handle_transform(call, attr, ctx, source, line_index, diagnostics);
+    }
+
     // Class-instance receiver: `dal.read(...)` where `dal` is bound as an
     // instance of a known class. Look the method up on the class and do
     // generic substitution. We try this BEFORE the DataFrame-receiver
@@ -779,6 +822,102 @@ fn arg_schema<'a>(
         Some(SchemaView::Declared(s)) => Some(s),
         _ => None,
     }
+}
+
+/// Model `df.transform(fn)` — Spark's chaining sugar, equivalent to
+/// `fn(df)`. `fn` is an ordinary `DataFrame -> DataFrame` function (not a
+/// UDF). The result schema is `fn`'s declared `-> DataFrame[Schema]`
+/// return; inferring it from `fn`'s body when the return is undeclared
+/// is a follow-up.
+///
+/// As a bonus, the receiver's schema is checked against `fn`'s first
+/// parameter — feeding the wrong DataFrame into a named pipeline step is
+/// exactly the mistake `transform`-as-a-named-step is meant to catch.
+fn handle_transform<'a>(
+    call: &'a ExprCall,
+    attr: &'a ExprAttribute,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<SchemaView<'a>> {
+    // Analyze the receiver for its own diagnostics and the input check.
+    // It may be unknown (`None`) — transform re-types the chain anyway.
+    let receiver = analyze_expr(&attr.value, ctx, source, line_index, diagnostics);
+
+    // The transform function — `df.transform(add_features)`. Only a bare
+    // name referring to a top-level `def` is resolved; lambdas and
+    // imported callables are left unmodeled.
+    let func_name = call.arguments.args.first()?.as_name_expr()?.id.as_str();
+    let sig = ctx.registry().find_function(func_name)?;
+
+    // Input-compatibility check: receiver schema vs. fn's first parameter.
+    if let (Some(recv), Some(first_param)) = (&receiver, sig.params.first()) {
+        if let Some(DataFrameAnnotation::Typed(pname)) =
+            first_param.annotation.and_then(|a| dataframe::recognize(a))
+        {
+            if let Some(param_schema) = ctx.find_schema(pname) {
+                check_transform_input(
+                    recv,
+                    param_schema,
+                    func_name,
+                    attr.value.range(),
+                    source,
+                    line_index,
+                    diagnostics,
+                );
+            }
+        }
+    }
+
+    // Result schema — fn's declared `-> DataFrame[Schema]`.
+    if let Some(DataFrameAnnotation::Typed(rname)) =
+        sig.return_annotation.and_then(|r| dataframe::recognize(r))
+    {
+        if let Some(schema) = ctx.find_schema(rname) {
+            return Some(SchemaView::Declared(schema));
+        }
+    }
+    None
+}
+
+/// Check that the DataFrame fed into `df.transform(fn)` matches `fn`'s
+/// declared parameter schema. Compares column-name sets; a mismatch
+/// emits `D0070`.
+fn check_transform_input(
+    receiver: &SchemaView<'_>,
+    param: &Schema<'_>,
+    func_name: &str,
+    range: TextRange,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let recv_names: HashSet<&str> = receiver.field_names().into_iter().collect();
+    let param_names: HashSet<&str> = param.fields().iter().map(|f| f.name).collect();
+    if recv_names == param_names {
+        return;
+    }
+    let mut missing: Vec<&str> = param_names.difference(&recv_names).copied().collect();
+    let mut extra: Vec<&str> = recv_names.difference(&param_names).copied().collect();
+    missing.sort();
+    extra.sort();
+    let message = format!(
+        "transform('{func_name}') expects a DataFrame matching schema '{}', \
+         but the receiver ({}) does not. Missing: [{}]; extra: [{}].",
+        param.name(),
+        receiver.display_name(),
+        missing.join(", "),
+        extra.join(", "),
+    );
+    diagnostics.push(Diagnostic::at_range(
+        Severity::Error,
+        "D0070",
+        message,
+        range,
+        source,
+        line_index,
+    ));
 }
 
 /// Handle `.agg(...)` on either a `Grouped` or a regular DataFrame receiver.
