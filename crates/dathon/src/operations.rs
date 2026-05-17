@@ -30,12 +30,12 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
-use ruff_python_ast::{Expr, ExprAttribute, ExprCall, Number, Stmt, StmtFunctionDef};
+use ruff_python_ast::{CmpOp, Expr, ExprAttribute, ExprCall, Number, Operator, Stmt, StmtFunctionDef};
 use ruff_source_file::LineIndex;
 use ruff_text_size::{Ranged, TextRange};
 
 use crate::dataframe::{self, DataFrameAnnotation, SlotLabel, TypedSlot};
-use crate::diagnostics::{Diagnostic, Severity};
+use crate::diagnostics::{CheckMode, Diagnostic, Severity};
 use crate::registry::Registry;
 use crate::schema::{
     DerivedField, FieldPathResult, Schema, SchemaView, resolve_path, suggest_field_name,
@@ -1145,6 +1145,7 @@ fn handle_agg<'a>(
     for arg in &call.arguments.args {
         collect_col_refs(arg, ctx, &mut refs);
         report_expr_sql_refs(arg, &underlying, source, line_index, diagnostics);
+        report_expr_type_errors(arg, &underlying, ctx.schemas(), source, line_index, diagnostics);
         if let Some(name) = select_output_name(arg) {
             if !fields.iter().any(|f| f.name == name) {
                 fields.push(DerivedField {
@@ -1178,6 +1179,7 @@ fn check_column_method_args<'a>(
         // `F.expr("…")` anywhere in the argument carries a SQL fragment;
         // its identifiers are checked against the same schema.
         report_expr_sql_refs(arg, schema, source, line_index, diagnostics);
+        report_expr_type_errors(arg, schema, ctx.schemas(), source, line_index, diagnostics);
     }
     report_column_refs(&refs, schema, ctx, source, line_index, diagnostics);
 }
@@ -1215,6 +1217,7 @@ fn apply_with_columns<'a>(
         }
         collect_col_refs(&item.value, ctx, &mut refs);
         report_expr_sql_refs(&item.value, recv, source, line_index, diagnostics);
+        report_expr_type_errors(&item.value, recv, ctx.schemas(), source, line_index, diagnostics);
     }
     report_column_refs(&refs, recv, ctx, source, line_index, diagnostics);
     SchemaView::Derived(fields)
@@ -1458,6 +1461,189 @@ fn python_literal_type(expr: &Expr) -> Option<ColumnType> {
             Number::Complex { .. } => None,
         },
         _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Strict-mode operator type checks (D0081 / D0082)
+//
+// These flag type combinations that Spark *coerces* rather than rejects —
+// legal, but usually a mistake. Because the coercion is legal, they would
+// be too noisy on by default; they are tagged `min_mode: Strict` so the
+// driver only surfaces them under `typeCheckingMode: "strict"`.
+// ---------------------------------------------------------------------------
+
+/// Family of atomic types that behave alike under operators.
+#[derive(PartialEq, Clone, Copy)]
+enum TypeFamily {
+    Numeric,
+    Textual,
+    Boolean,
+    Temporal,
+}
+
+fn type_family(t: ColumnType) -> TypeFamily {
+    match t {
+        ColumnType::Int | ColumnType::Long | ColumnType::Double => TypeFamily::Numeric,
+        ColumnType::String => TypeFamily::Textual,
+        ColumnType::Bool => TypeFamily::Boolean,
+        ColumnType::Date | ColumnType::Timestamp => TypeFamily::Temporal,
+    }
+}
+
+/// Whether two atomic types may sensibly be compared. Same family is
+/// always fine; a string-vs-temporal comparison is allowed because Spark
+/// idiomatically casts the string (`col("date") > "2024-01-01"`).
+fn comparable(a: ColumnType, b: ColumnType) -> bool {
+    let (fa, fb) = (type_family(a), type_family(b));
+    fa == fb
+        || matches!(
+            (fa, fb),
+            (TypeFamily::Textual, TypeFamily::Temporal)
+                | (TypeFamily::Temporal, TypeFamily::Textual)
+        )
+}
+
+fn is_arithmetic_op(op: Operator) -> bool {
+    matches!(
+        op,
+        Operator::Add
+            | Operator::Sub
+            | Operator::Mult
+            | Operator::Div
+            | Operator::FloorDiv
+            | Operator::Mod
+            | Operator::Pow
+    )
+}
+
+fn is_value_comparison(op: CmpOp) -> bool {
+    matches!(
+        op,
+        CmpOp::Eq | CmpOp::NotEq | CmpOp::Lt | CmpOp::LtE | CmpOp::Gt | CmpOp::GtE
+    )
+}
+
+/// Walk a column expression for strict-mode operator type errors:
+/// arithmetic on a string column (`D0081`) and comparisons between
+/// unrelated atomic types (`D0082`). Both are emitted at
+/// [`CheckMode::Strict`] — only surfaced under `typeCheckingMode: strict`.
+fn report_expr_type_errors<'a>(
+    expr: &Expr,
+    schema: &SchemaView<'a>,
+    schemas: &'a [Schema<'a>],
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match expr {
+        Expr::BinOp(b) => {
+            if is_arithmetic_op(b.op) {
+                let operands = [
+                    infer_expr_type(&b.left, schema, schemas),
+                    infer_expr_type(&b.right, schema, schemas),
+                ];
+                if operands.contains(&Some(ColumnType::String)) {
+                    diagnostics.push(
+                        Diagnostic::at_range(
+                            Severity::Warning,
+                            "D0081",
+                            "Arithmetic operator applied to a string column. Spark coerces \
+                             the string (often to null); cast it explicitly if intended."
+                                .to_string(),
+                            b.range(),
+                            source,
+                            line_index,
+                        )
+                        .with_min_mode(CheckMode::Strict),
+                    );
+                }
+            }
+            report_expr_type_errors(&b.left, schema, schemas, source, line_index, diagnostics);
+            report_expr_type_errors(&b.right, schema, schemas, source, line_index, diagnostics);
+        }
+        Expr::Compare(c) => {
+            let mut left = c.left.as_ref();
+            for (op, right) in c.ops.iter().zip(&c.comparators) {
+                if is_value_comparison(*op) {
+                    if let (Some(lt), Some(rt)) = (
+                        infer_expr_type(left, schema, schemas),
+                        infer_expr_type(right, schema, schemas),
+                    ) {
+                        if !comparable(lt, rt) {
+                            diagnostics.push(
+                                Diagnostic::at_range(
+                                    Severity::Warning,
+                                    "D0082",
+                                    format!(
+                                        "Comparison between unrelated types {lt} and {rt}. \
+                                         Spark coerces them; cast explicitly if intended.",
+                                    ),
+                                    c.range(),
+                                    source,
+                                    line_index,
+                                )
+                                .with_min_mode(CheckMode::Strict),
+                            );
+                        }
+                    }
+                }
+                left = right;
+            }
+            report_expr_type_errors(&c.left, schema, schemas, source, line_index, diagnostics);
+            for cmp in &c.comparators {
+                report_expr_type_errors(cmp, schema, schemas, source, line_index, diagnostics);
+            }
+        }
+        Expr::Call(call) => {
+            report_expr_type_errors(&call.func, schema, schemas, source, line_index, diagnostics);
+            for arg in &call.arguments.args {
+                report_expr_type_errors(arg, schema, schemas, source, line_index, diagnostics);
+            }
+            for kw in &call.arguments.keywords {
+                report_expr_type_errors(&kw.value, schema, schemas, source, line_index, diagnostics);
+            }
+        }
+        Expr::Attribute(a) => {
+            report_expr_type_errors(&a.value, schema, schemas, source, line_index, diagnostics);
+        }
+        Expr::UnaryOp(u) => {
+            report_expr_type_errors(&u.operand, schema, schemas, source, line_index, diagnostics);
+        }
+        Expr::BoolOp(b) => {
+            for v in &b.values {
+                report_expr_type_errors(v, schema, schemas, source, line_index, diagnostics);
+            }
+        }
+        Expr::If(if_exp) => {
+            report_expr_type_errors(&if_exp.test, schema, schemas, source, line_index, diagnostics);
+            report_expr_type_errors(&if_exp.body, schema, schemas, source, line_index, diagnostics);
+            report_expr_type_errors(
+                &if_exp.orelse,
+                schema,
+                schemas,
+                source,
+                line_index,
+                diagnostics,
+            );
+        }
+        Expr::Tuple(t) => {
+            for e in &t.elts {
+                report_expr_type_errors(e, schema, schemas, source, line_index, diagnostics);
+            }
+        }
+        Expr::List(l) => {
+            for e in &l.elts {
+                report_expr_type_errors(e, schema, schemas, source, line_index, diagnostics);
+            }
+        }
+        Expr::Subscript(s) => {
+            report_expr_type_errors(&s.value, schema, schemas, source, line_index, diagnostics);
+        }
+        Expr::Starred(s) => {
+            report_expr_type_errors(&s.value, schema, schemas, source, line_index, diagnostics);
+        }
+        _ => {}
     }
 }
 

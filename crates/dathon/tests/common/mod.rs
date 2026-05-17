@@ -17,6 +17,13 @@ pub fn check(source: &str) -> CheckResult {
     dathon::check("<test>.dpy", source)
 }
 
+/// Run dathon's analysis at `strict` checking mode — surfaces the
+/// `min_mode: Strict` diagnostics (the advisory type checks) on top of
+/// everything the default mode reports.
+pub fn check_strict(source: &str) -> CheckResult {
+    dathon::check_with_mode("<test>.dpy", source, dathon::CheckMode::Strict)
+}
+
 /// Assert that the analysis produced **no** diagnostics. On failure the
 /// panic message lists every diagnostic that *was* produced.
 pub fn assert_no_diagnostics(result: &CheckResult) {
