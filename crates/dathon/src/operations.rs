@@ -596,6 +596,22 @@ fn analyze_method_call<'a>(
         }
         return apply_select_expr(call, &receiver);
     }
+    if method == "toDF" {
+        // `df.toDF("a", "b", …)` renames every column to the given names;
+        // `df.toDF()` keeps the receiver's columns. With a splatted
+        // `*cols` argument the names aren't statically known — fall back
+        // to the receiver so the chain at least stays alive.
+        let names: Vec<&'a str> = call
+            .arguments
+            .args
+            .iter()
+            .filter_map(|a| a.as_string_literal_expr().map(|s| s.value.to_str()))
+            .collect();
+        if names.is_empty() {
+            return Some(receiver);
+        }
+        return Some(SchemaView::Derived(names));
+    }
     if let Some(shape) = column_method_shape(method) {
         check_column_method_args(
             call,
@@ -662,9 +678,17 @@ fn is_pass_through_method(method: &str) -> bool {
             | "orderBy"
             | "sort"
             | "limit"
+            | "offset"
             | "distinct"
             | "sample"
             | "alias"
+            // Null-handling methods reshape rows, never columns — the
+            // output schema is exactly the receiver's. Their arguments
+            // are fill values / subsets, not column expressions, so
+            // there's nothing to check (and treating them as
+            // pass-throughs keeps the chain alive for what follows).
+            | "fillna"
+            | "replace"
     )
 }
 
