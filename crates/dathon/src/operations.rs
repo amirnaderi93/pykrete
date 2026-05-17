@@ -610,6 +610,18 @@ fn analyze_method_call<'a>(
     if method == "transform" {
         return handle_transform(call, attr, ctx, source, line_index, diagnostics);
     }
+    // `df.na.fill/drop/replace(...)` — the DataFrameNaFunctions methods.
+    // All three reshape rows only, never columns, so the result is the
+    // schema of `df` unchanged. Intercepted here, against the `.na`
+    // receiver shape, so `df.na.drop("all")` isn't mistaken for
+    // `df.drop("col")` (the `"all"` would be a bogus column reference).
+    if matches!(method, "fill" | "drop" | "replace") {
+        if let Some(inner) = attr.value.as_attribute_expr() {
+            if inner.attr.id.as_str() == "na" {
+                return analyze_expr(&inner.value, ctx, source, line_index, diagnostics);
+            }
+        }
+    }
 
     // Class-instance receiver: `dal.read(...)` where `dal` is bound as an
     // instance of a known class. Look the method up on the class and do
