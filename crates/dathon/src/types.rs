@@ -15,6 +15,12 @@ pub enum ColumnType {
     Bool,
     Date,
     Timestamp,
+    /// A Spark `ArrayType` column. The element type isn't tracked — v1
+    /// distinguishes collection-vs-atomic, not `array<int>` vs
+    /// `array<string>`.
+    Array,
+    /// A Spark `MapType` column. Key/value types aren't tracked.
+    Map,
 }
 
 impl ColumnType {
@@ -27,7 +33,17 @@ impl ColumnType {
             "bool" => Some(Self::Bool),
             "date" => Some(Self::Date),
             "timestamp" => Some(Self::Timestamp),
-            _ => None,
+            "array" => Some(Self::Array),
+            "map" => Some(Self::Map),
+            _ => {
+                // `array<…>` / `map<…>` — the element and key/value types
+                // aren't modeled in v1, only the collection kind.
+                match name.split_once('<').map(|(base, _)| base.trim_end())? {
+                    "array" => Some(Self::Array),
+                    "map" => Some(Self::Map),
+                    _ => None,
+                }
+            }
         }
     }
 
@@ -36,7 +52,15 @@ impl ColumnType {
     /// `integer`, `float`, … — so this is its own mapping, used for
     /// `.cast("…")` targets and string-form UDF return types.
     pub fn from_spark_name(name: &str) -> Option<Self> {
-        match name.trim().to_ascii_lowercase().as_str() {
+        let name = name.trim().to_ascii_lowercase();
+        // `array<…>` / `map<…>` — match on the collection kind.
+        if name.starts_with("array") {
+            return Some(Self::Array);
+        }
+        if name.starts_with("map") {
+            return Some(Self::Map);
+        }
+        match name.as_str() {
             "int" | "integer" => Some(Self::Int),
             "long" | "bigint" => Some(Self::Long),
             "double" | "float" | "real" => Some(Self::Double),
@@ -60,6 +84,8 @@ impl ColumnType {
             "BooleanType" => Some(Self::Bool),
             "DateType" => Some(Self::Date),
             "TimestampType" => Some(Self::Timestamp),
+            "ArrayType" => Some(Self::Array),
+            "MapType" => Some(Self::Map),
             _ => None,
         }
     }
@@ -73,6 +99,8 @@ impl ColumnType {
             Self::Bool => "Bool",
             Self::Date => "Date",
             Self::Timestamp => "Timestamp",
+            Self::Array => "Array",
+            Self::Map => "Map",
         }
     }
 }
@@ -85,7 +113,8 @@ impl fmt::Display for ColumnType {
 
 /// Comma-separated list of the source-form names users can write in a
 /// `.dpy` file. Used inside error messages.
-pub const COLUMN_TYPE_NAMES: &str = "int, long, double, string, bool, date, timestamp";
+pub const COLUMN_TYPE_NAMES: &str =
+    "int, long, double, string, bool, date, timestamp, array, map";
 
 /// Same vocabulary as [`COLUMN_TYPE_NAMES`] but as a slice — fed to the
 /// completion engine when the cursor sits inside a `name: "<cursor>"`
@@ -98,6 +127,8 @@ pub const COLUMN_TYPE_NAMES_LIST: &[&str] = &[
     "bool",
     "date",
     "timestamp",
+    "array",
+    "map",
 ];
 
 // ---------------------------------------------------------------------------
@@ -121,6 +152,24 @@ mod tests {
             ColumnType::from_name("timestamp"),
             Some(ColumnType::Timestamp)
         );
+    }
+
+    #[test]
+    fn from_name_recognizes_array_and_map_collections() {
+        // Bare and parameterized forms both resolve; the element /
+        // key-value types inside `<…>` are not modeled in v1.
+        assert_eq!(ColumnType::from_name("array"), Some(ColumnType::Array));
+        assert_eq!(ColumnType::from_name("map"), Some(ColumnType::Map));
+        assert_eq!(
+            ColumnType::from_name("array<string>"),
+            Some(ColumnType::Array)
+        );
+        assert_eq!(
+            ColumnType::from_name("map<string, int>"),
+            Some(ColumnType::Map)
+        );
+        // A parameterized atomic is still nonsense.
+        assert_eq!(ColumnType::from_name("int<x>"), None);
     }
 
     #[test]
