@@ -67,7 +67,9 @@ enum TwoDfMethod {
 
 fn column_method_shape(method: &str) -> Option<ColumnMethodShape> {
     match method {
-        "select" | "drop" | "dropDuplicates" | "groupBy" => Some(ColumnMethodShape::AllColumnName),
+        "select" | "drop" | "dropDuplicates" | "groupBy" | "cube" | "rollup" => {
+            Some(ColumnMethodShape::AllColumnName)
+        }
         "filter" | "where" | "dropna" => Some(ColumnMethodShape::AllExpression),
         "withColumn" => Some(ColumnMethodShape::Positional(&[
             ArgRole::NewName,
@@ -676,6 +678,45 @@ fn analyze_method_call<'a>(
         }
         return Some(SchemaView::Derived(names));
     }
+    if method == "pivot" {
+        // `groupBy(keys).pivot("col")` — verify the pivot column exists
+        // on the grouped input, then bail: the pivoted output has one
+        // column per distinct value of `col`, so the result schema is
+        // genuinely data-dependent. The user re-anchors the chain with
+        // `.cast(DataFrame[…])`.
+        if let SchemaView::Grouped { underlying, .. } = &receiver {
+            if let Some(lit) = call
+                .arguments
+                .args
+                .first()
+                .and_then(|a| a.as_string_literal_expr())
+            {
+                let name = lit.value.to_str();
+                if let FieldPathResult::Missing { field, on } =
+                    resolve_path(underlying.as_ref(), name, ctx.schemas())
+                {
+                    let suggestion = suggest_field_name(field, &on);
+                    let mut message =
+                        format!("Column '{field}' does not exist on {}.", on.display_name());
+                    if let Some(s) = &suggestion {
+                        message.push_str(&format!(" Did you mean '{s}'?"));
+                    }
+                    diagnostics.push(
+                        Diagnostic::at_range(
+                            Severity::Error,
+                            "D0030",
+                            message,
+                            lit.range(),
+                            source,
+                            line_index,
+                        )
+                        .with_suggestion(suggestion),
+                    );
+                }
+            }
+        }
+        return None;
+    }
     if let Some(shape) = column_method_shape(method) {
         check_column_method_args(
             call,
@@ -1093,6 +1134,15 @@ fn apply_column_method<'a>(
         "select" => {
             let mut fields: Vec<&'a str> = Vec::new();
             for arg in &call.arguments.args {
+                // `select("*")` — the star expands to every column of the
+                // receiver, rather than naming a literal column `*`.
+                if arg
+                    .as_string_literal_expr()
+                    .is_some_and(|s| s.value.to_str() == "*")
+                {
+                    fields.extend(recv.field_names());
+                    continue;
+                }
                 if let Some(name) = select_output_name(arg) {
                     fields.push(name);
                 }
@@ -1147,11 +1197,13 @@ fn apply_column_method<'a>(
                 .collect();
             Some(SchemaView::Derived(fields))
         }
-        "groupBy" => {
-            // groupBy doesn't return a DataFrame; it returns a GroupedData
+        "groupBy" | "cube" | "rollup" => {
+            // None of these return a DataFrame; they return a GroupedData
             // that captures the group keys and remembers the input schema.
             // The follow-up .agg(...) call uses that to check its column
-            // references and produce the final DataFrame schema.
+            // references and produce the final DataFrame schema. `cube`
+            // and `rollup` differ from `groupBy` only in which subtotal
+            // rows they emit — irrelevant to the column schema.
             let mut keys: Vec<&'a str> = Vec::new();
             for arg in &call.arguments.args {
                 if let Some(name) = column_name_arg(arg) {
@@ -1403,14 +1455,20 @@ fn collect_arg_column_refs<'a>(
     match role {
         ArgRole::NewName => {}
         ArgRole::ColumnName => {
+            // `"*"` is the all-columns wildcard, not a literal column
+            // name — never check or collect it as a reference.
             if let Some(s) = arg.as_string_literal_expr() {
-                out.push((s.value.to_str(), s.range()));
+                if s.value.to_str() != "*" {
+                    out.push((s.value.to_str(), s.range()));
+                }
                 return;
             }
             if let Some(list) = arg.as_list_expr() {
                 for elt in &list.elts {
                     if let Some(s) = elt.as_string_literal_expr() {
-                        out.push((s.value.to_str(), s.range()));
+                        if s.value.to_str() != "*" {
+                            out.push((s.value.to_str(), s.range()));
+                        }
                     } else {
                         collect_col_refs(elt, ctx, out);
                     }
