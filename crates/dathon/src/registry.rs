@@ -133,7 +133,7 @@ impl<'a> Registry<'a> {
                     if let Some(rt) = functional_udf_return_type(&a.value) {
                         for target in &a.targets {
                             if let Some(n) = target.as_name_expr() {
-                                udfs.insert(n.id.as_str(), rt);
+                                udfs.insert(n.id.as_str(), rt.clone());
                             }
                         }
                     }
@@ -188,7 +188,7 @@ impl<'a> Registry<'a> {
 
     /// The column type a registered UDF returns, if `name` is one.
     pub fn find_udf(&self, name: &str) -> Option<ColumnType> {
-        self.udfs.get(name).copied()
+        self.udfs.get(name).cloned()
     }
 
     /// Look up a class-qualified annotated constant — `ClassName.NAME`.

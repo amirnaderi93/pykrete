@@ -510,13 +510,25 @@ fn class_instance_from_call<'a>(expr: &'a Expr, ctx: &BodyContext<'a>) -> Option
 /// numeric — `int`/`long`/`double` widening is something Spark does
 /// freely and dathon infers imprecisely (`lit(5)` could be either int
 /// or long), so a numeric-to-numeric difference is not flagged.
-fn types_compatible(a: ColumnType, b: ColumnType) -> bool {
-    if a == b {
-        return true;
+fn types_compatible(a: &ColumnType, b: &ColumnType) -> bool {
+    fn is_numeric(t: &ColumnType) -> bool {
+        matches!(t, ColumnType::Int | ColumnType::Long | ColumnType::Double)
     }
-    let numeric =
-        |t| matches!(t, ColumnType::Int | ColumnType::Long | ColumnType::Double);
-    numeric(a) && numeric(b)
+    // An unknown element/key/value type is permissive — like an unknown
+    // column type, it is never itself a mismatch.
+    fn element_ok(a: &Option<Box<ColumnType>>, b: &Option<Box<ColumnType>>) -> bool {
+        match (a, b) {
+            (Some(x), Some(y)) => types_compatible(x, y),
+            _ => true,
+        }
+    }
+    match (a, b) {
+        (ColumnType::Array(x), ColumnType::Array(y)) => element_ok(x, y),
+        (ColumnType::Map(k1, v1), ColumnType::Map(k2, v2)) => {
+            element_ok(k1, k2) && element_ok(v1, v2)
+        }
+        _ => a == b || (is_numeric(a) && is_numeric(b)),
+    }
 }
 
 fn check_return_type<'a>(
@@ -542,7 +554,7 @@ fn check_return_type<'a>(
             declared.field_type(name, schemas),
             actual.field_type(name, schemas),
         ) {
-            if !types_compatible(declared_ty, actual_ty) {
+            if !types_compatible(&declared_ty, &actual_ty) {
                 diagnostics.push(Diagnostic::at_range(
                     Severity::Error,
                     "D0080",
@@ -786,7 +798,7 @@ fn analyze_method_call<'a>(
             .enumerate()
             .map(|(i, name)| DerivedField {
                 name,
-                ty: recv_fields.get(i).and_then(|f| f.ty),
+                ty: recv_fields.get(i).and_then(|f| f.ty.clone()),
             })
             .collect();
         return Some(SchemaView::Derived(fields));
@@ -1499,10 +1511,10 @@ fn function_result_type(name: &str, first_arg: Option<ColumnType>) -> Option<Col
         | "sort_array" | "array_union" | "array_except" | "array_intersect"
         | "array_remove" | "array_repeat" | "array_compact" | "arrays_zip" | "slice"
         | "split" | "sequence" | "flatten" | "shuffle" | "map_keys" | "map_values" => {
-            return Some(Array);
+            return Some(Array(None));
         }
         "create_map" | "map_from_arrays" | "map_from_entries" | "map_concat" | "str_to_map"
-        | "transform_keys" | "transform_values" | "map_filter" => return Some(Map),
+        | "transform_keys" | "transform_values" | "map_filter" => return Some(Map(None, None)),
         _ => {}
     }
     // Functions whose result type depends on the first argument.
@@ -1555,20 +1567,20 @@ enum TypeFamily {
     Collection,
 }
 
-fn type_family(t: ColumnType) -> TypeFamily {
+fn type_family(t: &ColumnType) -> TypeFamily {
     match t {
         ColumnType::Int | ColumnType::Long | ColumnType::Double => TypeFamily::Numeric,
         ColumnType::String => TypeFamily::Textual,
         ColumnType::Bool => TypeFamily::Boolean,
         ColumnType::Date | ColumnType::Timestamp => TypeFamily::Temporal,
-        ColumnType::Array | ColumnType::Map => TypeFamily::Collection,
+        ColumnType::Array(_) | ColumnType::Map(..) => TypeFamily::Collection,
     }
 }
 
 /// Whether two atomic types may sensibly be compared. Same family is
 /// always fine; a string-vs-temporal comparison is allowed because Spark
 /// idiomatically casts the string (`col("date") > "2024-01-01"`).
-fn comparable(a: ColumnType, b: ColumnType) -> bool {
+fn comparable(a: &ColumnType, b: &ColumnType) -> bool {
     let (fa, fb) = (type_family(a), type_family(b));
     fa == fb
         || matches!(
@@ -1623,7 +1635,10 @@ fn report_expr_type_errors<'a>(
                 .into_iter()
                 .flatten()
                 .find(|t| {
-                    matches!(t, ColumnType::String | ColumnType::Array | ColumnType::Map)
+                    matches!(
+                        t,
+                        ColumnType::String | ColumnType::Array(_) | ColumnType::Map(..)
+                    )
                 });
                 if let Some(bad) = bad {
                     diagnostics.push(
@@ -1653,7 +1668,7 @@ fn report_expr_type_errors<'a>(
                         infer_expr_type(left, schema, tcx),
                         infer_expr_type(right, schema, tcx),
                     ) {
-                        if !comparable(lt, rt) {
+                        if !comparable(&lt, &rt) {
                             diagnostics.push(
                                 Diagnostic::at_range(
                                     Severity::Warning,
