@@ -410,7 +410,7 @@ fn fields_of(view: &SchemaView<'_>, schemas: &[Schema<'_>]) -> Vec<CompletionIte
                 })
                 .collect();
         }
-        SchemaView::Derived(names) => names.clone(),
+        SchemaView::Derived(fields) => fields.iter().map(|f| f.name).collect(),
         SchemaView::Grouped { keys, .. } => keys.clone(),
     };
     let mut seen: HashSet<&str> = HashSet::new();

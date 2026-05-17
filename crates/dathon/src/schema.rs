@@ -134,6 +134,19 @@ impl<'ast> Schema<'ast> {
     pub fn has_field(&self, name: &str) -> bool {
         self.fields().iter().any(|f| f.name == name)
     }
+
+    /// The atomic [`ColumnType`] of field `name`, if it has one. Fields
+    /// whose annotation is a nested struct or doesn't resolve return
+    /// `None` — dathon doesn't type-check those.
+    pub fn field_type(&self, name: &str, schemas: &'ast [Schema<'ast>]) -> Option<ColumnType> {
+        self.fields()
+            .iter()
+            .find(|f| f.name == name)
+            .and_then(|f| match f.resolve(schemas) {
+                FieldResolution::Resolved(ct) => Some(ct),
+                _ => None,
+            })
+    }
 }
 
 pub fn discover_schemas<'ast>(classes: &'ast [DiscoveredClass<'ast>]) -> Vec<Schema<'ast>> {
@@ -143,6 +156,19 @@ pub fn discover_schemas<'ast>(classes: &'ast [DiscoveredClass<'ast>]) -> Vec<Sch
 // ---------------------------------------------------------------------------
 // SchemaView — unified view over declared and derived schemas
 // ---------------------------------------------------------------------------
+
+/// One column of an inferred ([`SchemaView::Derived`]) schema: its name
+/// and, when dathon could work it out, its atomic type.
+///
+/// `ty` is `None` when the type couldn't be inferred (a function result
+/// dathon doesn't model, a column off another Derived schema, …). An
+/// unknown type is treated permissively — like TypeScript `any` — and is
+/// never itself the source of a type error.
+#[derive(Debug, Clone)]
+pub struct DerivedField<'a> {
+    pub name: &'a str,
+    pub ty: Option<ColumnType>,
+}
 
 /// Either a user-declared `Schema` class, or a schema *inferred* from the
 /// result of an operation chain.
@@ -154,7 +180,7 @@ pub fn discover_schemas<'ast>(classes: &'ast [DiscoveredClass<'ast>]) -> Vec<Sch
 #[derive(Debug, Clone)]
 pub enum SchemaView<'a> {
     Declared(&'a Schema<'a>),
-    Derived(Vec<&'a str>),
+    Derived(Vec<DerivedField<'a>>),
     Grouped {
         keys: Vec<&'a str>,
         underlying: Box<SchemaView<'a>>,
@@ -162,10 +188,21 @@ pub enum SchemaView<'a> {
 }
 
 impl<'a> SchemaView<'a> {
+    /// Build a Derived view from column names whose types aren't (yet)
+    /// inferred — every field gets `ty: None`.
+    pub fn derived_untyped(names: Vec<&'a str>) -> Self {
+        Self::Derived(
+            names
+                .into_iter()
+                .map(|name| DerivedField { name, ty: None })
+                .collect(),
+        )
+    }
+
     pub fn has_field(&self, name: &str) -> bool {
         match self {
             Self::Declared(s) => s.has_field(name),
-            Self::Derived(fields) => fields.iter().any(|f| *f == name),
+            Self::Derived(fields) => fields.iter().any(|f| f.name == name),
             // GroupedData isn't field-queryable directly. Operations apart
             // from .agg (filter, select, etc.) on a Grouped receiver will
             // collect col-ref diagnostics — that's fine since those calls
@@ -177,8 +214,19 @@ impl<'a> SchemaView<'a> {
     pub fn field_names(&self) -> Vec<&'a str> {
         match self {
             Self::Declared(s) => s.fields().iter().map(|f| f.name).collect(),
-            Self::Derived(fields) => fields.clone(),
+            Self::Derived(fields) => fields.iter().map(|f| f.name).collect(),
             Self::Grouped { keys, .. } => keys.clone(),
+        }
+    }
+
+    /// The atomic type of column `name` on this view, if known. `None`
+    /// for an unknown column, an un-inferred Derived field, or a field
+    /// whose declared type is a nested struct.
+    pub fn field_type(&self, name: &str, schemas: &'a [Schema<'a>]) -> Option<ColumnType> {
+        match self {
+            Self::Declared(s) => s.field_type(name, schemas),
+            Self::Derived(fields) => fields.iter().find(|f| f.name == name).and_then(|f| f.ty),
+            Self::Grouped { underlying, .. } => underlying.field_type(name, schemas),
         }
     }
 
@@ -186,7 +234,10 @@ impl<'a> SchemaView<'a> {
     pub fn display_name(&self) -> String {
         match self {
             Self::Declared(s) => format!("schema '{}'", s.name()),
-            Self::Derived(fields) => format!("inferred schema [{}]", fields.join(", ")),
+            Self::Derived(fields) => {
+                let names: Vec<&str> = fields.iter().map(|f| f.name).collect();
+                format!("inferred schema [{}]", names.join(", "))
+            }
             Self::Grouped { keys, .. } => {
                 format!("grouped data with keys [{}]", keys.join(", "))
             }
@@ -348,10 +399,36 @@ mod tests {
 
     #[test]
     fn derived_schema_has_field_returns_true_for_known_columns() {
-        let view = SchemaView::Derived(vec!["a", "b", "c"]);
+        let view = SchemaView::derived_untyped(vec!["a", "b", "c"]);
         assert!(view.has_field("a"));
         assert!(view.has_field("b"));
         assert!(view.has_field("c"));
+    }
+
+    #[test]
+    fn derived_field_type_returns_the_inferred_type() {
+        // A Derived view carries a type per column; `field_type` reads
+        // it back. Unknown columns and un-inferred fields give `None`.
+        let view = SchemaView::Derived(vec![
+            DerivedField {
+                name: "amount",
+                ty: Some(ColumnType::Int),
+            },
+            DerivedField {
+                name: "label",
+                ty: None,
+            },
+        ]);
+        assert_eq!(view.field_type("amount", &[]), Some(ColumnType::Int));
+        assert_eq!(view.field_type("label", &[]), None);
+        assert_eq!(view.field_type("missing", &[]), None);
+    }
+
+    #[test]
+    fn derived_untyped_leaves_every_field_type_unknown() {
+        let view = SchemaView::derived_untyped(vec!["a", "b"]);
+        assert_eq!(view.field_type("a", &[]), None);
+        assert_eq!(view.field_type("b", &[]), None);
     }
 
     #[test]
@@ -366,7 +443,7 @@ mod tests {
 
     #[test]
     fn suggest_field_name_returns_closest_within_threshold() {
-        let view = SchemaView::Derived(vec!["price", "place_code", "quantity"]);
+        let view = SchemaView::derived_untyped(vec!["price", "place_code", "quantity"]);
         // priec → price (transposition, distance 2 ≤ floor(5/3)=1 fails;
         // but ceil-style max(1, 5/3) gives 1, so 2 is over threshold).
         // Use a one-character typo so it's clearly within threshold.
@@ -375,13 +452,13 @@ mod tests {
 
     #[test]
     fn suggest_field_name_returns_none_when_nothing_is_close() {
-        let view = SchemaView::Derived(vec!["price", "place_code"]);
+        let view = SchemaView::derived_untyped(vec!["price", "place_code"]);
         assert_eq!(suggest_field_name("totally_unrelated_name", &view), None);
     }
 
     #[test]
     fn derived_schema_has_field_returns_false_for_unknown_columns() {
-        let view = SchemaView::Derived(vec!["a", "b"]);
+        let view = SchemaView::derived_untyped(vec!["a", "b"]);
         assert!(!view.has_field("c"));
         assert!(!view.has_field(""));
     }
@@ -391,7 +468,7 @@ mod tests {
         // Column names are matched exactly. Spark itself defaults to
         // case-insensitive matching, but dathon is stricter; this keeps
         // typos like 'PRICE' vs 'price' detectable.
-        let view = SchemaView::Derived(vec!["price"]);
+        let view = SchemaView::derived_untyped(vec!["price"]);
         assert!(view.has_field("price"));
         assert!(!view.has_field("Price"));
         assert!(!view.has_field("PRICE"));
@@ -401,7 +478,7 @@ mod tests {
     fn derived_schema_field_names_preserves_order() {
         // Column order matters for `union` (vs `unionByName`); preserve the
         // insertion order from the operation that produced this schema.
-        let view = SchemaView::Derived(vec!["x", "y", "z"]);
+        let view = SchemaView::derived_untyped(vec!["x", "y", "z"]);
         assert_eq!(view.field_names(), vec!["x", "y", "z"]);
     }
 
@@ -409,14 +486,14 @@ mod tests {
     fn derived_display_name_lists_fields_in_brackets() {
         // The format embedded in D0030 / D0040 messages when the schema
         // doesn't have a user-facing name.
-        let view = SchemaView::Derived(vec!["a", "b"]);
+        let view = SchemaView::derived_untyped(vec!["a", "b"]);
         assert_eq!(view.display_name(), "inferred schema [a, b]");
     }
 
     #[test]
     fn derived_display_name_handles_empty_field_list() {
         // Can happen after `select` with all aliasless complex expressions.
-        let view = SchemaView::Derived(vec![]);
+        let view = SchemaView::derived_untyped(vec![]);
         assert_eq!(view.display_name(), "inferred schema []");
     }
 
@@ -425,7 +502,7 @@ mod tests {
         // GroupedData isn't field-queryable; only .agg(...) produces a real
         // DataFrame. has_field uniformly returns false so accidental
         // non-agg operations on a Grouped receiver get caught.
-        let underlying = SchemaView::Derived(vec!["k", "a", "b"]);
+        let underlying = SchemaView::derived_untyped(vec!["k", "a", "b"]);
         let grouped = SchemaView::Grouped {
             keys: vec!["k"],
             underlying: Box::new(underlying),
@@ -437,7 +514,7 @@ mod tests {
     #[test]
     fn grouped_field_names_returns_just_the_keys() {
         // Used by the agg result-inference path: keys ∪ aliased aggregates.
-        let underlying = SchemaView::Derived(vec!["k1", "k2", "v"]);
+        let underlying = SchemaView::derived_untyped(vec!["k1", "k2", "v"]);
         let grouped = SchemaView::Grouped {
             keys: vec!["k1", "k2"],
             underlying: Box::new(underlying),
@@ -447,7 +524,7 @@ mod tests {
 
     #[test]
     fn grouped_display_name_describes_the_keys() {
-        let underlying = SchemaView::Derived(vec!["k", "v"]);
+        let underlying = SchemaView::derived_untyped(vec!["k", "v"]);
         let grouped = SchemaView::Grouped {
             keys: vec!["k"],
             underlying: Box::new(underlying),

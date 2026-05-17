@@ -179,14 +179,14 @@ mod resolve_path_unit {
         // Derived schemas (results of select / agg / etc.) don't carry
         // nested-struct info — their fields are just names. Any dotted
         // path on a Derived view fails at the first segment.
-        let view = SchemaView::Derived(vec!["a", "b"]);
+        let view = SchemaView::derived_untyped(vec!["a", "b"]);
         let result = resolve_path(&view, "a.b", &[]);
         assert!(matches!(result, FieldPathResult::Missing { .. }));
     }
 
     #[test]
     fn derived_schema_with_flat_path_resolves_normally() {
-        let view = SchemaView::Derived(vec!["a", "b"]);
+        let view = SchemaView::derived_untyped(vec!["a", "b"]);
         let result = resolve_path(&view, "a", &[]);
         assert!(matches!(result, FieldPathResult::Resolved));
     }
