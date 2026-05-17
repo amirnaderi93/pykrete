@@ -16,3 +16,8 @@ ruff_python_parser = { git = "https://github.com/astral-sh/ruff", tag = "0.15.12
 ruff_python_ast = { git = "https://github.com/astral-sh/ruff", tag = "0.15.12" }
 ruff_source_file = { git = "https://github.com/astral-sh/ruff", tag = "0.15.12" }
 ruff_text_size = { git = "https://github.com/astral-sh/ruff", tag = "0.15.12" }
+
+# Parses the SQL strings embedded in `F.expr(...)`, `selectExpr(...)`,
+# and string-form `filter(...)` so their column references can be
+# checked against the dataframe schema. `visitor` enables AST traversal.
+sqlparser = { version = "0.62", features = ["visitor"] }

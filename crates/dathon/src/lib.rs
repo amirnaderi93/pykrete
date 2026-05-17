@@ -29,6 +29,7 @@ pub mod imports;
 pub mod operations;
 pub mod registry;
 pub mod schema;
+pub mod sql;
 pub mod symbols;
 pub mod transpiler;
 pub mod types;

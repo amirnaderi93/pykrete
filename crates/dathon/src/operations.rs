@@ -579,10 +579,21 @@ fn analyze_method_call<'a>(
         ));
     }
     if method == "selectExpr" {
-        // Args are SQL expression strings, not column names — checking
-        // the column references *inside* them needs a SQL parse (a
-        // follow-up); for now model the output schema so the chain
-        // doesn't break here.
+        // Args are SQL expression strings, not column names. Check the
+        // column references *inside* each fragment against the receiver,
+        // then model the output schema so the chain keeps its shape.
+        for arg in &call.arguments.args {
+            if let Some(lit) = arg.as_string_literal_expr() {
+                report_sql_column_refs(
+                    lit.value.to_str(),
+                    lit.range(),
+                    &receiver,
+                    source,
+                    line_index,
+                    diagnostics,
+                );
+            }
+        }
         return apply_select_expr(call, &receiver);
     }
     if let Some(shape) = column_method_shape(method) {
@@ -595,6 +606,25 @@ fn analyze_method_call<'a>(
             line_index,
             diagnostics,
         );
+        // `filter("age > 21")` / `where("city = 'x'")` accept a SQL
+        // predicate string. A string-literal arg isn't a column name —
+        // it's a SQL fragment whose identifiers are checked here.
+        // (`collect_col_refs` skips bare string literals, so without this
+        // those references would go unchecked.)
+        if matches!(method, "filter" | "where") {
+            for arg in &call.arguments.args {
+                if let Some(lit) = arg.as_string_literal_expr() {
+                    report_sql_column_refs(
+                        lit.value.to_str(),
+                        lit.range(),
+                        &receiver,
+                        source,
+                        line_index,
+                        diagnostics,
+                    );
+                }
+            }
+        }
         return apply_column_method(method, &receiver, call);
     }
     if let Some(kind) = two_df_method(method) {
@@ -751,6 +781,7 @@ fn handle_agg<'a>(
     let mut outputs: Vec<&'a str> = Vec::new();
     for arg in &call.arguments.args {
         collect_col_refs(arg, ctx, &mut refs);
+        report_expr_sql_refs(arg, &underlying, source, line_index, diagnostics);
         if let Some(name) = select_output_name(arg) {
             outputs.push(name);
         }
@@ -805,6 +836,9 @@ fn check_column_method_args<'a>(
     for (i, arg) in call.arguments.args.iter().enumerate() {
         let role = role_at(shape, i);
         collect_arg_column_refs(arg, role, ctx, &mut refs);
+        // `F.expr("…")` anywhere in the argument carries a SQL fragment;
+        // its identifiers are checked against the same schema.
+        report_expr_sql_refs(arg, schema, source, line_index, diagnostics);
     }
     for (col_name, col_range) in refs {
         ctx.record_column_ref(col_range, col_name, schema.clone());
@@ -959,6 +993,145 @@ fn split_sql_alias(item: &str) -> Option<&str> {
     let idx = item.to_ascii_lowercase().rfind(" as ")?;
     let alias = item[idx + 4..].trim().trim_matches(['`', '"', '\'']);
     (!alias.is_empty()).then_some(alias)
+}
+
+/// Check the column identifiers inside a SQL expression string against
+/// `schema`, emitting a `D0030` for every name that doesn't resolve.
+///
+/// Used for `selectExpr("…")` items and string-form `filter("…")` /
+/// `where("…")` predicates — the places where Spark accepts a SQL
+/// fragment in lieu of a `Column` expression. The fragment is parsed
+/// best-effort by [`crate::sql::column_refs`]; an unparseable one yields
+/// no references rather than a spurious error.
+///
+/// Diagnostics anchor on `range` — the whole string literal — rather
+/// than the offset of the offending identifier: the parsed names are
+/// owned `String`s with no span back into the original source.
+fn report_sql_column_refs(
+    sql: &str,
+    range: TextRange,
+    schema: &SchemaView<'_>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for name in crate::sql::column_refs(sql) {
+        if schema.has_field(&name) {
+            continue;
+        }
+        let suggestion = suggest_field_name(&name, schema);
+        let mut message = format!(
+            "Column '{name}' does not exist on {}.",
+            schema.display_name(),
+        );
+        if let Some(s) = &suggestion {
+            message.push_str(&format!(" Did you mean '{s}'?"));
+        }
+        diagnostics.push(
+            Diagnostic::at_range(Severity::Error, "D0030", message, range, source, line_index)
+                .with_suggestion(suggestion),
+        );
+    }
+}
+
+/// Walk a column expression for `F.expr("…")` / `expr("…")` calls and
+/// SQL-check the fragment inside each against `schema`.
+///
+/// `F.expr(...)` wraps a SQL string as a `Column`, so it can appear
+/// anywhere a column expression is expected — `select`, `filter`,
+/// `withColumn`, `agg`, and nested inside `F.when(...)`. The walk mirrors
+/// [`collect_col_refs`] so a deeply nested `expr(...)` is still reached.
+///
+/// This is the sibling of [`collect_col_refs`] for the SQL-string family:
+/// the latter collects borrowed `col("…")` names, but `expr(...)` names
+/// come from a SQL parse as owned `String`s and so are checked (and
+/// reported) on the spot rather than collected.
+fn report_expr_sql_refs(
+    expr: &Expr,
+    schema: &SchemaView<'_>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if let Some(call) = expr.as_call_expr() {
+        let func_name = match call.func.as_ref() {
+            Expr::Name(n) => Some(n.id.as_str()),
+            Expr::Attribute(a) => Some(a.attr.id.as_str()),
+            _ => None,
+        };
+        if func_name == Some("expr") {
+            if let Some(lit) = call
+                .arguments
+                .args
+                .first()
+                .and_then(|a| a.as_string_literal_expr())
+            {
+                report_sql_column_refs(
+                    lit.value.to_str(),
+                    lit.range(),
+                    schema,
+                    source,
+                    line_index,
+                    diagnostics,
+                );
+            }
+        }
+    }
+    match expr {
+        Expr::Call(c) => {
+            report_expr_sql_refs(&c.func, schema, source, line_index, diagnostics);
+            for arg in &c.arguments.args {
+                report_expr_sql_refs(arg, schema, source, line_index, diagnostics);
+            }
+            for kw in &c.arguments.keywords {
+                report_expr_sql_refs(&kw.value, schema, source, line_index, diagnostics);
+            }
+        }
+        Expr::Attribute(a) => {
+            report_expr_sql_refs(&a.value, schema, source, line_index, diagnostics);
+        }
+        Expr::Subscript(s) => {
+            report_expr_sql_refs(&s.value, schema, source, line_index, diagnostics);
+            report_expr_sql_refs(&s.slice, schema, source, line_index, diagnostics);
+        }
+        Expr::BinOp(b) => {
+            report_expr_sql_refs(&b.left, schema, source, line_index, diagnostics);
+            report_expr_sql_refs(&b.right, schema, source, line_index, diagnostics);
+        }
+        Expr::UnaryOp(u) => {
+            report_expr_sql_refs(&u.operand, schema, source, line_index, diagnostics);
+        }
+        Expr::Compare(c) => {
+            report_expr_sql_refs(&c.left, schema, source, line_index, diagnostics);
+            for cmp in &c.comparators {
+                report_expr_sql_refs(cmp, schema, source, line_index, diagnostics);
+            }
+        }
+        Expr::BoolOp(b) => {
+            for v in &b.values {
+                report_expr_sql_refs(v, schema, source, line_index, diagnostics);
+            }
+        }
+        Expr::If(if_exp) => {
+            report_expr_sql_refs(&if_exp.test, schema, source, line_index, diagnostics);
+            report_expr_sql_refs(&if_exp.body, schema, source, line_index, diagnostics);
+            report_expr_sql_refs(&if_exp.orelse, schema, source, line_index, diagnostics);
+        }
+        Expr::Tuple(t) => {
+            for e in &t.elts {
+                report_expr_sql_refs(e, schema, source, line_index, diagnostics);
+            }
+        }
+        Expr::List(l) => {
+            for e in &l.elts {
+                report_expr_sql_refs(e, schema, source, line_index, diagnostics);
+            }
+        }
+        Expr::Starred(s) => {
+            report_expr_sql_refs(&s.value, schema, source, line_index, diagnostics);
+        }
+        _ => {}
+    }
 }
 
 fn select_output_name<'a>(arg: &'a Expr) -> Option<&'a str> {
