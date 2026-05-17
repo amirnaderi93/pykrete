@@ -175,13 +175,21 @@ mod resolve_path_unit {
     use dathon::schema::{FieldPathResult, SchemaView, resolve_path};
 
     #[test]
-    fn derived_schema_with_dotted_path_always_fails() {
+    fn derived_schema_dotted_path_degrades_gracefully() {
         // Derived schemas (results of select / agg / etc.) don't carry
-        // nested-struct info — their fields are just names. Any dotted
-        // path on a Derived view fails at the first segment.
+        // nested-struct info. A dotted path whose first segment *is* a
+        // column degrades to `Resolved` — dathon can't verify the rest,
+        // but must not falsely flag the existing column.
         let view = SchemaView::derived_untyped(vec!["a", "b"]);
-        let result = resolve_path(&view, "a.b", &[]);
-        assert!(matches!(result, FieldPathResult::Missing { .. }));
+        assert!(matches!(
+            resolve_path(&view, "a.b", &[]),
+            FieldPathResult::Resolved
+        ));
+        // …but a first segment that doesn't exist is still a miss.
+        assert!(matches!(
+            resolve_path(&view, "missing.b", &[]),
+            FieldPathResult::Missing { .. }
+        ));
     }
 
     #[test]

@@ -21,6 +21,20 @@ pub enum ColumnType {
     Array(Option<Box<ColumnType>>),
     /// A Spark `MapType`. Key and value types are carried when known.
     Map(Option<Box<ColumnType>>, Option<Box<ColumnType>>),
+    /// A Spark `StructType` — an ordered list of named, typed fields.
+    /// Covers both an inline `struct<…>` and a reference to a declared
+    /// `Schema` class. Compared structurally (field order matters, as
+    /// in Spark).
+    Struct(Vec<StructField>),
+}
+
+/// One field of a [`ColumnType::Struct`] — its name and type. `ty` is
+/// `None` when the field's type couldn't be resolved (permissive, like
+/// any unknown type).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructField {
+    pub name: String,
+    pub ty: Option<ColumnType>,
 }
 
 impl ColumnType {
@@ -29,7 +43,7 @@ impl ColumnType {
     /// vocabulary (`int`, `long`, …); `array` / `map` keywords are
     /// case-insensitive.
     pub fn from_name(name: &str) -> Option<Self> {
-        parse_full(name, atomic_strict)
+        parse_type_expr(name, &atomic_strict)
     }
 
     /// Parse a Spark SQL type name — like [`from_name`](Self::from_name)
@@ -37,7 +51,7 @@ impl ColumnType {
     /// `float`, …). Used for `.cast("…")` targets and string-form UDF
     /// return types.
     pub fn from_spark_name(name: &str) -> Option<Self> {
-        parse_full(name, atomic_lenient)
+        parse_type_expr(name, &atomic_lenient)
     }
 
     /// Map a Spark type-object constructor name (`IntegerType`,
@@ -60,6 +74,12 @@ impl ColumnType {
         }
     }
 
+    /// Whether this is a composite type — `array`, `map`, or `struct` —
+    /// as opposed to an atomic (`int`, `string`, …).
+    pub fn is_composite(&self) -> bool {
+        matches!(self, Self::Array(_) | Self::Map(..) | Self::Struct(_))
+    }
+
     /// The bare kind name — the atomic name, or `array` / `map` without
     /// their element types. For the full nested rendering use `Display`.
     pub fn as_str(&self) -> &'static str {
@@ -73,22 +93,32 @@ impl ColumnType {
             Self::Timestamp => "Timestamp",
             Self::Array(_) => "array",
             Self::Map(..) => "map",
+            Self::Struct(_) => "struct",
         }
     }
 }
 
 /// Parse a complete type string — the whole input must be consumed.
-fn parse_full(s: &str, atomic: fn(&str) -> Option<ColumnType>) -> Option<ColumnType> {
-    let (ty, rest) = parse_type(s.trim(), atomic)?;
+///
+/// `leaf` resolves a leaf identifier (one that isn't an `array` / `map`
+/// / `struct` keyword). [`from_name`](ColumnType::from_name) passes an
+/// atomic-only resolver; [`crate::schema`] passes one that also resolves
+/// declared `Schema` class names to a [`ColumnType::Struct`].
+pub(crate) fn parse_type_expr<F: Fn(&str) -> Option<ColumnType>>(
+    s: &str,
+    leaf: &F,
+) -> Option<ColumnType> {
+    let (ty, rest) = parse_type(s.trim(), leaf)?;
     rest.trim().is_empty().then_some(ty)
 }
 
 /// Parse one type expression off the front of `s`, returning it and the
-/// unconsumed remainder. Recursive for `array<…>` / `map<…>`.
-fn parse_type(
-    s: &str,
-    atomic: fn(&str) -> Option<ColumnType>,
-) -> Option<(ColumnType, &str)> {
+/// unconsumed remainder. Recursive for `array<…>` / `map<…>` /
+/// `struct<…>`.
+fn parse_type<'s, F: Fn(&str) -> Option<ColumnType>>(
+    s: &'s str,
+    leaf: &F,
+) -> Option<(ColumnType, &'s str)> {
     let s = s.trim_start();
     let end = s
         .find(|c: char| !(c.is_alphanumeric() || c == '_'))
@@ -103,7 +133,7 @@ fn parse_type(
             let Some(inner) = after.strip_prefix('<') else {
                 return Some((ColumnType::Array(None), after));
             };
-            let (elem, rest) = parse_type(inner, atomic)?;
+            let (elem, rest) = parse_type(inner, leaf)?;
             let rest = rest.trim_start().strip_prefix('>')?;
             Some((ColumnType::Array(Some(Box::new(elem))), rest))
         }
@@ -111,16 +141,51 @@ fn parse_type(
             let Some(inner) = after.strip_prefix('<') else {
                 return Some((ColumnType::Map(None, None), after));
             };
-            let (key, rest) = parse_type(inner, atomic)?;
+            let (key, rest) = parse_type(inner, leaf)?;
             let rest = rest.trim_start().strip_prefix(',')?;
-            let (value, rest) = parse_type(rest, atomic)?;
+            let (value, rest) = parse_type(rest, leaf)?;
             let rest = rest.trim_start().strip_prefix('>')?;
             Some((
                 ColumnType::Map(Some(Box::new(key)), Some(Box::new(value))),
                 rest,
             ))
         }
-        _ => Some((atomic(word)?, after)),
+        "struct" => {
+            let inner = after.strip_prefix('<')?;
+            parse_struct_fields(inner, leaf)
+        }
+        _ => Some((leaf(word)?, after)),
+    }
+}
+
+/// Parse a `struct<…>` field list — `name: type`, comma-separated — off
+/// the front of `s` (positioned just after the opening `<`), up to the
+/// closing `>`.
+fn parse_struct_fields<'s, F: Fn(&str) -> Option<ColumnType>>(
+    s: &'s str,
+    leaf: &F,
+) -> Option<(ColumnType, &'s str)> {
+    let mut fields: Vec<StructField> = Vec::new();
+    let mut rest = s.trim_start();
+    loop {
+        if let Some(after) = rest.strip_prefix('>') {
+            return Some((ColumnType::Struct(fields), after));
+        }
+        // `name : type`
+        let end = rest
+            .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .unwrap_or(rest.len());
+        if end == 0 {
+            return None;
+        }
+        let name = rest[..end].to_string();
+        rest = rest[end..].trim_start().strip_prefix(':')?;
+        let (ty, after) = parse_type(rest, leaf)?;
+        fields.push(StructField { name, ty: Some(ty) });
+        rest = after.trim_start();
+        if let Some(after) = rest.strip_prefix(',') {
+            rest = after.trim_start();
+        }
     }
 }
 
@@ -159,6 +224,20 @@ impl fmt::Display for ColumnType {
             Self::Array(None) => f.write_str("array"),
             Self::Map(Some(key), Some(value)) => write!(f, "map<{key}, {value}>"),
             Self::Map(..) => f.write_str("map"),
+            Self::Struct(fields) => {
+                f.write_str("struct<")?;
+                for (i, field) in fields.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{}: ", field.name)?;
+                    match &field.ty {
+                        Some(ty) => write!(f, "{ty}")?,
+                        None => f.write_str("?")?,
+                    }
+                }
+                f.write_str(">")
+            }
             atomic => f.write_str(atomic.as_str()),
         }
     }
