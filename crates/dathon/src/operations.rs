@@ -684,6 +684,26 @@ fn analyze_method_call<'a>(
         }
     }
 
+    // `spark.sql("SELECT … FROM …")` — infer the result schema from the
+    // query's projection columns. A query dathon can't read cleanly (a
+    // `WITH` clause, a `*` wildcard, an unaliased computed column)
+    // yields no schema; the user annotates the result in that case.
+    // `.sql(...)` is a SparkSession method, so the receiver isn't a
+    // DataFrame — this is handled before the DataFrame-receiver path.
+    if method == "sql" {
+        if let Some(lit) = call
+            .arguments
+            .args
+            .first()
+            .and_then(|a| a.as_string_literal_expr())
+        {
+            if let Some(cols) = crate::sql::select_projection_columns(lit.value.to_str()) {
+                return Some(SchemaView::derived_untyped(cols));
+            }
+        }
+        return None;
+    }
+
     // Class-instance receiver: `dal.read(...)` where `dal` is bound as an
     // instance of a known class. Look the method up on the class and do
     // generic substitution. We try this BEFORE the DataFrame-receiver
