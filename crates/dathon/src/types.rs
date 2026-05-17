@@ -31,6 +31,39 @@ impl ColumnType {
         }
     }
 
+    /// Map a Spark SQL type name to a [`ColumnType`]. Spark's vocabulary
+    /// is wider than dathon's annotation vocabulary — it has `bigint`,
+    /// `integer`, `float`, … — so this is its own mapping, used for
+    /// `.cast("…")` targets and string-form UDF return types.
+    pub fn from_spark_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "int" | "integer" => Some(Self::Int),
+            "long" | "bigint" => Some(Self::Long),
+            "double" | "float" | "real" => Some(Self::Double),
+            "string" => Some(Self::String),
+            "boolean" | "bool" => Some(Self::Bool),
+            "date" => Some(Self::Date),
+            "timestamp" => Some(Self::Timestamp),
+            _ => None,
+        }
+    }
+
+    /// Map a Spark type-object constructor name (`IntegerType`,
+    /// `StringType`, …) to a [`ColumnType`]. Used where a Spark type is
+    /// written as `IntegerType()` rather than the string `"int"`.
+    pub fn from_type_constructor(name: &str) -> Option<Self> {
+        match name {
+            "IntegerType" => Some(Self::Int),
+            "LongType" => Some(Self::Long),
+            "DoubleType" | "FloatType" => Some(Self::Double),
+            "StringType" => Some(Self::String),
+            "BooleanType" => Some(Self::Bool),
+            "DateType" => Some(Self::Date),
+            "TimestampType" => Some(Self::Timestamp),
+            _ => None,
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Int => "Int",

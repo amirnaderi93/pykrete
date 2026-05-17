@@ -324,6 +324,15 @@ impl<'a> BodyContext<'a> {
     pub fn registry(&self) -> &'a Registry<'a> {
         self.registry
     }
+
+    /// The bundle the type-inference engine needs — declared schemas and
+    /// the UDF/function registry.
+    fn type_ctx(&self) -> TypeCtx<'a> {
+        TypeCtx {
+            schemas: self.schemas,
+            registry: self.registry,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -840,7 +849,7 @@ fn analyze_method_call<'a>(
                 }
             }
         }
-        return apply_column_method(method, &receiver, call, ctx.schemas());
+        return apply_column_method(method, &receiver, call, ctx.type_ctx());
     }
     if let Some(kind) = two_df_method(method) {
         return handle_two_df_method(kind, call, &receiver, ctx, source, line_index, diagnostics);
@@ -1145,12 +1154,12 @@ fn handle_agg<'a>(
     for arg in &call.arguments.args {
         collect_col_refs(arg, ctx, &mut refs);
         report_expr_sql_refs(arg, &underlying, source, line_index, diagnostics);
-        report_expr_type_errors(arg, &underlying, ctx.schemas(), source, line_index, diagnostics);
+        report_expr_type_errors(arg, &underlying, ctx.type_ctx(), source, line_index, diagnostics);
         if let Some(name) = select_output_name(arg) {
             if !fields.iter().any(|f| f.name == name) {
                 fields.push(DerivedField {
                     name,
-                    ty: select_arg_type(arg, &underlying, ctx.schemas()),
+                    ty: select_arg_type(arg, &underlying, ctx.type_ctx()),
                 });
             }
         }
@@ -1179,7 +1188,7 @@ fn check_column_method_args<'a>(
         // `F.expr("…")` anywhere in the argument carries a SQL fragment;
         // its identifiers are checked against the same schema.
         report_expr_sql_refs(arg, schema, source, line_index, diagnostics);
-        report_expr_type_errors(arg, schema, ctx.schemas(), source, line_index, diagnostics);
+        report_expr_type_errors(arg, schema, ctx.type_ctx(), source, line_index, diagnostics);
     }
     report_column_refs(&refs, schema, ctx, source, line_index, diagnostics);
 }
@@ -1207,7 +1216,7 @@ fn apply_with_columns<'a>(
     for item in &dict.items {
         if let Some(key) = item.key.as_ref().and_then(|k| k.as_string_literal_expr()) {
             let name = key.value.to_str();
-            let ty = infer_expr_type(&item.value, recv, ctx.schemas());
+            let ty = infer_expr_type(&item.value, recv, ctx.type_ctx());
             // `withColumns` replaces an existing column or adds a new one.
             if let Some(existing) = fields.iter_mut().find(|f| f.name == name) {
                 existing.ty = ty;
@@ -1217,7 +1226,7 @@ fn apply_with_columns<'a>(
         }
         collect_col_refs(&item.value, ctx, &mut refs);
         report_expr_sql_refs(&item.value, recv, source, line_index, diagnostics);
-        report_expr_type_errors(&item.value, recv, ctx.schemas(), source, line_index, diagnostics);
+        report_expr_type_errors(&item.value, recv, ctx.type_ctx(), source, line_index, diagnostics);
     }
     report_column_refs(&refs, recv, ctx, source, line_index, diagnostics);
     SchemaView::Derived(fields)
@@ -1347,6 +1356,16 @@ fn report_column_refs<'a>(
 // Column-expression type inference
 // ---------------------------------------------------------------------------
 
+/// The project-wide context the type-inference engine needs: every
+/// declared schema (for nested-struct resolution) and the registry (for
+/// UDF return types). Bundled into one `Copy` value so the recursive
+/// inference functions take a single argument instead of threading two.
+#[derive(Clone, Copy)]
+struct TypeCtx<'a> {
+    schemas: &'a [Schema<'a>],
+    registry: &'a Registry<'a>,
+}
+
 /// Infer the atomic type of a column expression evaluated against
 /// `schema`. `None` means "couldn't determine" — a function result
 /// dathon doesn't model, a column off an un-inferred schema, an
@@ -1355,11 +1374,11 @@ fn report_column_refs<'a>(
 fn infer_expr_type<'a>(
     expr: &Expr,
     schema: &SchemaView<'a>,
-    schemas: &'a [Schema<'a>],
+    tcx: TypeCtx<'a>,
 ) -> Option<ColumnType> {
     // `col("x")` / `column("x")` — the column's declared/inferred type.
     if let Some((name, _)) = col_reference(expr) {
-        return schema.field_type(name, schemas);
+        return schema.field_type(name, tcx.schemas);
     }
     match expr {
         Expr::Call(call) => {
@@ -1369,11 +1388,15 @@ fn infer_expr_type<'a>(
                     // `<windowed>.over(w)` likewise carries the windowed
                     // expression's type through.
                     "alias" | "name" | "over" => {
-                        return infer_expr_type(&attr.value, schema, schemas);
+                        return infer_expr_type(&attr.value, schema, tcx);
                     }
                     // `<expr>.cast("int")` / `.cast(IntegerType())`.
                     "cast" => {
-                        return call.arguments.args.first().and_then(cast_target_type);
+                        return call
+                            .arguments
+                            .args
+                            .first()
+                            .and_then(crate::registry::spark_type_from_expr);
                     }
                     _ => {}
                 }
@@ -1387,6 +1410,10 @@ fn infer_expr_type<'a>(
             if fname == "lit" {
                 return call.arguments.args.first().and_then(python_literal_type);
             }
+            // A call to a user-defined UDF — its declared return type.
+            if let Some(udf_ty) = tcx.registry.find_udf(fname) {
+                return Some(udf_ty);
+            }
             // Any other recognized `pyspark.sql.functions` call — look its
             // result type up in the catalog, resolving the first argument
             // (a column name or expression) for the input-dependent ones.
@@ -1394,7 +1421,7 @@ fn infer_expr_type<'a>(
                 .arguments
                 .args
                 .first()
-                .and_then(|a| select_arg_type(a, schema, schemas));
+                .and_then(|a| select_arg_type(a, schema, tcx));
             function_result_type(fname, first_arg)
         }
         // A bare Python literal in column position acts as `lit(...)`.
@@ -1409,39 +1436,12 @@ fn infer_expr_type<'a>(
 fn select_arg_type<'a>(
     arg: &Expr,
     recv: &SchemaView<'a>,
-    schemas: &'a [Schema<'a>],
+    tcx: TypeCtx<'a>,
 ) -> Option<ColumnType> {
     if let Some(s) = arg.as_string_literal_expr() {
-        return recv.field_type(s.value.to_str(), schemas);
+        return recv.field_type(s.value.to_str(), tcx.schemas);
     }
-    infer_expr_type(arg, recv, schemas)
-}
-
-/// The dathon [`ColumnType`] a `.cast(...)` targets — its argument is
-/// either a Spark type string (`"int"`, `"bigint"`, …) or a type-object
-/// call (`IntegerType()`). Unrecognized forms give `None`.
-fn cast_target_type(arg: &Expr) -> Option<ColumnType> {
-    if let Some(s) = arg.as_string_literal_expr() {
-        return spark_cast_type_name(s.value.to_str());
-    }
-    if let Some(call) = arg.as_call_expr() {
-        let name = match call.func.as_ref() {
-            Expr::Name(n) => n.id.as_str(),
-            Expr::Attribute(a) => a.attr.id.as_str(),
-            _ => return None,
-        };
-        return match name {
-            "IntegerType" => Some(ColumnType::Int),
-            "LongType" => Some(ColumnType::Long),
-            "DoubleType" | "FloatType" => Some(ColumnType::Double),
-            "StringType" => Some(ColumnType::String),
-            "BooleanType" => Some(ColumnType::Bool),
-            "DateType" => Some(ColumnType::Date),
-            "TimestampType" => Some(ColumnType::Timestamp),
-            _ => None,
-        };
-    }
-    None
+    infer_expr_type(arg, recv, tcx)
 }
 
 /// The result [`ColumnType`] of a `pyspark.sql.functions` call, given
@@ -1489,22 +1489,6 @@ fn function_result_type(name: &str, first_arg: Option<ColumnType>) -> Option<Col
             Some(Double) => Some(Double),
             _ => None,
         },
-        _ => None,
-    }
-}
-
-/// Map a Spark SQL cast type-name to a dathon [`ColumnType`]. Spark's
-/// cast vocabulary is wider than dathon's annotation vocabulary (it has
-/// `bigint`, `integer`, `float`, …), so this is its own mapping.
-fn spark_cast_type_name(name: &str) -> Option<ColumnType> {
-    match name.trim().to_ascii_lowercase().as_str() {
-        "int" | "integer" => Some(ColumnType::Int),
-        "long" | "bigint" => Some(ColumnType::Long),
-        "double" | "float" | "real" => Some(ColumnType::Double),
-        "string" => Some(ColumnType::String),
-        "boolean" | "bool" => Some(ColumnType::Bool),
-        "date" => Some(ColumnType::Date),
-        "timestamp" => Some(ColumnType::Timestamp),
         _ => None,
     }
 }
@@ -1590,7 +1574,7 @@ fn is_value_comparison(op: CmpOp) -> bool {
 fn report_expr_type_errors<'a>(
     expr: &Expr,
     schema: &SchemaView<'a>,
-    schemas: &'a [Schema<'a>],
+    tcx: TypeCtx<'a>,
     source: &str,
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
@@ -1599,8 +1583,8 @@ fn report_expr_type_errors<'a>(
         Expr::BinOp(b) => {
             if is_arithmetic_op(b.op) {
                 let operands = [
-                    infer_expr_type(&b.left, schema, schemas),
-                    infer_expr_type(&b.right, schema, schemas),
+                    infer_expr_type(&b.left, schema, tcx),
+                    infer_expr_type(&b.right, schema, tcx),
                 ];
                 if operands.contains(&Some(ColumnType::String)) {
                     diagnostics.push(
@@ -1618,16 +1602,16 @@ fn report_expr_type_errors<'a>(
                     );
                 }
             }
-            report_expr_type_errors(&b.left, schema, schemas, source, line_index, diagnostics);
-            report_expr_type_errors(&b.right, schema, schemas, source, line_index, diagnostics);
+            report_expr_type_errors(&b.left, schema, tcx, source, line_index, diagnostics);
+            report_expr_type_errors(&b.right, schema, tcx, source, line_index, diagnostics);
         }
         Expr::Compare(c) => {
             let mut left = c.left.as_ref();
             for (op, right) in c.ops.iter().zip(&c.comparators) {
                 if is_value_comparison(*op) {
                     if let (Some(lt), Some(rt)) = (
-                        infer_expr_type(left, schema, schemas),
-                        infer_expr_type(right, schema, schemas),
+                        infer_expr_type(left, schema, tcx),
+                        infer_expr_type(right, schema, tcx),
                     ) {
                         if !comparable(lt, rt) {
                             diagnostics.push(
@@ -1649,38 +1633,38 @@ fn report_expr_type_errors<'a>(
                 }
                 left = right;
             }
-            report_expr_type_errors(&c.left, schema, schemas, source, line_index, diagnostics);
+            report_expr_type_errors(&c.left, schema, tcx, source, line_index, diagnostics);
             for cmp in &c.comparators {
-                report_expr_type_errors(cmp, schema, schemas, source, line_index, diagnostics);
+                report_expr_type_errors(cmp, schema, tcx, source, line_index, diagnostics);
             }
         }
         Expr::Call(call) => {
-            report_expr_type_errors(&call.func, schema, schemas, source, line_index, diagnostics);
+            report_expr_type_errors(&call.func, schema, tcx, source, line_index, diagnostics);
             for arg in &call.arguments.args {
-                report_expr_type_errors(arg, schema, schemas, source, line_index, diagnostics);
+                report_expr_type_errors(arg, schema, tcx, source, line_index, diagnostics);
             }
             for kw in &call.arguments.keywords {
-                report_expr_type_errors(&kw.value, schema, schemas, source, line_index, diagnostics);
+                report_expr_type_errors(&kw.value, schema, tcx, source, line_index, diagnostics);
             }
         }
         Expr::Attribute(a) => {
-            report_expr_type_errors(&a.value, schema, schemas, source, line_index, diagnostics);
+            report_expr_type_errors(&a.value, schema, tcx, source, line_index, diagnostics);
         }
         Expr::UnaryOp(u) => {
-            report_expr_type_errors(&u.operand, schema, schemas, source, line_index, diagnostics);
+            report_expr_type_errors(&u.operand, schema, tcx, source, line_index, diagnostics);
         }
         Expr::BoolOp(b) => {
             for v in &b.values {
-                report_expr_type_errors(v, schema, schemas, source, line_index, diagnostics);
+                report_expr_type_errors(v, schema, tcx, source, line_index, diagnostics);
             }
         }
         Expr::If(if_exp) => {
-            report_expr_type_errors(&if_exp.test, schema, schemas, source, line_index, diagnostics);
-            report_expr_type_errors(&if_exp.body, schema, schemas, source, line_index, diagnostics);
+            report_expr_type_errors(&if_exp.test, schema, tcx, source, line_index, diagnostics);
+            report_expr_type_errors(&if_exp.body, schema, tcx, source, line_index, diagnostics);
             report_expr_type_errors(
                 &if_exp.orelse,
                 schema,
-                schemas,
+                tcx,
                 source,
                 line_index,
                 diagnostics,
@@ -1688,19 +1672,19 @@ fn report_expr_type_errors<'a>(
         }
         Expr::Tuple(t) => {
             for e in &t.elts {
-                report_expr_type_errors(e, schema, schemas, source, line_index, diagnostics);
+                report_expr_type_errors(e, schema, tcx, source, line_index, diagnostics);
             }
         }
         Expr::List(l) => {
             for e in &l.elts {
-                report_expr_type_errors(e, schema, schemas, source, line_index, diagnostics);
+                report_expr_type_errors(e, schema, tcx, source, line_index, diagnostics);
             }
         }
         Expr::Subscript(s) => {
-            report_expr_type_errors(&s.value, schema, schemas, source, line_index, diagnostics);
+            report_expr_type_errors(&s.value, schema, tcx, source, line_index, diagnostics);
         }
         Expr::Starred(s) => {
-            report_expr_type_errors(&s.value, schema, schemas, source, line_index, diagnostics);
+            report_expr_type_errors(&s.value, schema, tcx, source, line_index, diagnostics);
         }
         _ => {}
     }
@@ -1710,7 +1694,7 @@ fn apply_column_method<'a>(
     method: &str,
     recv: &SchemaView<'a>,
     call: &'a ExprCall,
-    schemas: &'a [Schema<'a>],
+    tcx: TypeCtx<'a>,
 ) -> Option<SchemaView<'a>> {
     match method {
         "select" => {
@@ -1722,13 +1706,13 @@ fn apply_column_method<'a>(
                     .as_string_literal_expr()
                     .is_some_and(|s| s.value.to_str() == "*")
                 {
-                    fields.extend(recv.typed_fields(schemas));
+                    fields.extend(recv.typed_fields(tcx.schemas));
                     continue;
                 }
                 if let Some(name) = select_output_name(arg) {
                     fields.push(DerivedField {
                         name,
-                        ty: select_arg_type(arg, recv, schemas),
+                        ty: select_arg_type(arg, recv, tcx),
                     });
                 }
             }
@@ -1743,7 +1727,7 @@ fn apply_column_method<'a>(
                 .filter_map(column_name_arg)
                 .collect();
             let remaining: Vec<DerivedField<'a>> = recv
-                .typed_fields(schemas)
+                .typed_fields(tcx.schemas)
                 .into_iter()
                 .filter(|f| !drop_set.contains(f.name))
                 .collect();
@@ -1763,8 +1747,8 @@ fn apply_column_method<'a>(
                 .arguments
                 .args
                 .get(1)
-                .and_then(|v| infer_expr_type(v, recv, schemas));
-            let mut fields: Vec<DerivedField<'a>> = recv.typed_fields(schemas);
+                .and_then(|v| infer_expr_type(v, recv, tcx));
+            let mut fields: Vec<DerivedField<'a>> = recv.typed_fields(tcx.schemas);
             if let Some(existing) = fields.iter_mut().find(|f| f.name == new_name) {
                 existing.ty = ty;
             } else {
@@ -1789,7 +1773,7 @@ fn apply_column_method<'a>(
                 .and_then(|a| a.as_string_literal_expr())
                 .map(|s| s.value.to_str())?;
             let fields: Vec<DerivedField<'a>> = recv
-                .typed_fields(schemas)
+                .typed_fields(tcx.schemas)
                 .into_iter()
                 .map(|mut f| {
                     if f.name == old {

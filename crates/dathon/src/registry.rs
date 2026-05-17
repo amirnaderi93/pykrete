@@ -29,9 +29,12 @@
 use std::collections::HashMap;
 
 use ruff_python_ast::{
-    Expr, ModModule, Stmt, StmtAnnAssign, StmtClassDef, StmtFunctionDef, TypeParam, TypeParams,
+    Decorator, Expr, ModModule, Stmt, StmtAnnAssign, StmtClassDef, StmtFunctionDef, TypeParam,
+    TypeParams,
 };
 use ruff_text_size::TextRange;
+
+use crate::types::ColumnType;
 
 /// One method declared on a class. Captures everything needed for generic
 /// substitution: the method's own type parameters (PEP 695 `def m[T]`),
@@ -96,6 +99,11 @@ pub struct Registry<'a> {
     /// and return annotations tell us the input schema to check against
     /// and the result schema the transform produces.
     pub functions: HashMap<&'a str, MethodInfo<'a>>,
+    /// User-defined functions registered as Spark UDFs — via an `@udf` /
+    /// `@pandas_udf` decorator or the functional `name = udf(f, …)` form.
+    /// Maps the UDF's name to the column type it returns, so a call like
+    /// `my_udf(col("x"))` can be typed.
+    pub udfs: HashMap<&'a str, ColumnType>,
 }
 
 impl<'a> Registry<'a> {
@@ -104,12 +112,31 @@ impl<'a> Registry<'a> {
         let mut constants = HashMap::new();
         let mut class_constants = HashMap::new();
         let mut functions = HashMap::new();
+        let mut udfs = HashMap::new();
 
         for stmt in &module.body {
             match stmt {
                 Stmt::FunctionDef(def) => {
                     let info = build_method_info(def);
                     functions.insert(info.name, info);
+                    // A `@udf` / `@pandas_udf` decorator registers the
+                    // function as a Spark UDF with a known return type.
+                    for dec in &def.decorator_list {
+                        if let Some(rt) = udf_decorator_return_type(dec) {
+                            udfs.insert(def.name.id.as_str(), rt);
+                            break;
+                        }
+                    }
+                }
+                // Functional UDF form — `name = udf(func, "int")`.
+                Stmt::Assign(a) => {
+                    if let Some(rt) = functional_udf_return_type(&a.value) {
+                        for target in &a.targets {
+                            if let Some(n) = target.as_name_expr() {
+                                udfs.insert(n.id.as_str(), rt);
+                            }
+                        }
+                    }
                 }
                 Stmt::ClassDef(def) => {
                     let info = build_class_info(def);
@@ -141,6 +168,7 @@ impl<'a> Registry<'a> {
             constants,
             class_constants,
             functions,
+            udfs,
         }
     }
 
@@ -158,6 +186,11 @@ impl<'a> Registry<'a> {
         self.functions.get(name)
     }
 
+    /// The column type a registered UDF returns, if `name` is one.
+    pub fn find_udf(&self, name: &str) -> Option<ColumnType> {
+        self.udfs.get(name).copied()
+    }
+
     /// Look up a class-qualified annotated constant — `ClassName.NAME`.
     /// HashMap lookup against a `(&str, &str)` tuple key doesn't borrow
     /// cleanly against the stored `&'a str` keys, so we scan linearly.
@@ -173,6 +206,86 @@ impl<'a> Registry<'a> {
             .find(|((c, n), _)| *c == class_name && *n == const_name)
             .map(|(_, info)| info)
     }
+}
+
+/// The simple-name callee of an expression — `f` in `f(...)`, or the
+/// attribute `m` in `obj.m(...)` / a bare `obj.m`.
+fn callee_name(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Name(n) => Some(n.id.as_str()),
+        Expr::Attribute(a) => Some(a.attr.id.as_str()),
+        _ => None,
+    }
+}
+
+/// Resolve a Spark type written as a string literal (`"int"`) or a
+/// type-object constructor call (`IntegerType()`) to a [`ColumnType`].
+pub fn spark_type_from_expr(expr: &Expr) -> Option<ColumnType> {
+    match expr {
+        Expr::StringLiteral(s) => ColumnType::from_spark_name(s.value.to_str()),
+        Expr::Call(call) => ColumnType::from_type_constructor(callee_name(&call.func)?),
+        _ => None,
+    }
+}
+
+/// If `decorator` is an `@udf` / `@pandas_udf` decorator, the column
+/// type it declares for the decorated function's result. A bare `@udf`
+/// (or `@udf()` with no return type) defaults to string — Spark's
+/// default UDF return type.
+fn udf_decorator_return_type(decorator: &Decorator) -> Option<ColumnType> {
+    match &decorator.expression {
+        // `@udf` / `@F.udf` — bare, not called.
+        Expr::Name(_) | Expr::Attribute(_) => {
+            matches!(callee_name(&decorator.expression)?, "udf" | "pandas_udf")
+                .then_some(ColumnType::String)
+        }
+        // `@udf("int")` / `@udf(returnType=IntegerType())` / `@udf()`.
+        Expr::Call(call) => {
+            if !matches!(callee_name(&call.func)?, "udf" | "pandas_udf") {
+                return None;
+            }
+            for kw in &call.arguments.keywords {
+                if kw.arg.as_ref().is_some_and(|n| n.id.as_str() == "returnType") {
+                    return spark_type_from_expr(&kw.value);
+                }
+            }
+            // As a decorator, the first positional argument is the
+            // return type; absent one, Spark defaults to string.
+            Some(
+                call.arguments
+                    .args
+                    .first()
+                    .and_then(spark_type_from_expr)
+                    .unwrap_or(ColumnType::String),
+            )
+        }
+        _ => None,
+    }
+}
+
+/// The return type of a functional-form UDF — `udf(func, "int")`. Unlike
+/// the decorator form, the return type is the *second* positional
+/// argument (the first is the wrapped function), or the `returnType`
+/// keyword. Returns `None` if `value` isn't a `udf(...)` call.
+fn functional_udf_return_type(value: &Expr) -> Option<ColumnType> {
+    let Expr::Call(call) = value else {
+        return None;
+    };
+    if !matches!(callee_name(&call.func)?, "udf" | "pandas_udf") {
+        return None;
+    }
+    for kw in &call.arguments.keywords {
+        if kw.arg.as_ref().is_some_and(|n| n.id.as_str() == "returnType") {
+            return spark_type_from_expr(&kw.value);
+        }
+    }
+    Some(
+        call.arguments
+            .args
+            .get(1)
+            .and_then(spark_type_from_expr)
+            .unwrap_or(ColumnType::String),
+    )
 }
 
 fn build_class_info(def: &StmtClassDef) -> ClassInfo<'_> {
