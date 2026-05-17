@@ -733,7 +733,7 @@ fn analyze_method_call<'a>(
                 );
             }
         }
-        return apply_select_expr(call, &receiver);
+        return apply_select_expr(call, &receiver, ctx.schemas());
     }
     if method == "toDF" {
         // `df.toDF("a", "b", …)` renames every column to the given names;
@@ -749,7 +749,18 @@ fn analyze_method_call<'a>(
         if names.is_empty() {
             return Some(receiver);
         }
-        return Some(SchemaView::derived_untyped(names));
+        // `toDF` renames positionally — the i-th new name takes the
+        // i-th receiver column's type.
+        let recv_fields = receiver.typed_fields(ctx.schemas());
+        let fields: Vec<DerivedField<'a>> = names
+            .into_iter()
+            .enumerate()
+            .map(|(i, name)| DerivedField {
+                name,
+                ty: recv_fields.get(i).and_then(|f| f.ty),
+            })
+            .collect();
+        return Some(SchemaView::Derived(fields));
     }
     if method == "pivot" {
         // `groupBy(keys).pivot("col")` — verify the pivot column exists
@@ -1121,23 +1132,30 @@ fn handle_agg<'a>(
     };
 
     let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
-    let mut outputs: Vec<&'a str> = Vec::new();
+    // Group keys keep their type from the underlying schema; aggregate
+    // outputs are typed via `select_arg_type` (a plain column ref is
+    // typed, an aggregate function result is unknown for now).
+    let mut fields: Vec<DerivedField<'a>> = keys
+        .iter()
+        .map(|&name| DerivedField {
+            name,
+            ty: underlying.field_type(name, ctx.schemas()),
+        })
+        .collect();
     for arg in &call.arguments.args {
         collect_col_refs(arg, ctx, &mut refs);
         report_expr_sql_refs(arg, &underlying, source, line_index, diagnostics);
         if let Some(name) = select_output_name(arg) {
-            outputs.push(name);
+            if !fields.iter().any(|f| f.name == name) {
+                fields.push(DerivedField {
+                    name,
+                    ty: select_arg_type(arg, &underlying, ctx.schemas()),
+                });
+            }
         }
     }
     report_column_refs(&refs, &underlying, ctx, source, line_index, diagnostics);
-
-    let mut fields: Vec<&'a str> = keys;
-    for name in outputs {
-        if !fields.contains(&name) {
-            fields.push(name);
-        }
-    }
-    SchemaView::derived_untyped(fields)
+    SchemaView::Derived(fields)
 }
 
 // ---------------------------------------------------------------------------
@@ -1182,20 +1200,24 @@ fn apply_with_columns<'a>(
     let Some(dict) = call.arguments.args.first().and_then(Expr::as_dict_expr) else {
         return recv.clone();
     };
-    let mut fields: Vec<&'a str> = recv.field_names();
+    let mut fields: Vec<DerivedField<'a>> = recv.typed_fields(ctx.schemas());
     let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
     for item in &dict.items {
         if let Some(key) = item.key.as_ref().and_then(|k| k.as_string_literal_expr()) {
             let name = key.value.to_str();
-            if !fields.contains(&name) {
-                fields.push(name);
+            let ty = infer_expr_type(&item.value, recv, ctx.schemas());
+            // `withColumns` replaces an existing column or adds a new one.
+            if let Some(existing) = fields.iter_mut().find(|f| f.name == name) {
+                existing.ty = ty;
+            } else {
+                fields.push(DerivedField { name, ty });
             }
         }
         collect_col_refs(&item.value, ctx, &mut refs);
         report_expr_sql_refs(&item.value, recv, source, line_index, diagnostics);
     }
     report_column_refs(&refs, recv, ctx, source, line_index, diagnostics);
-    SchemaView::derived_untyped(fields)
+    SchemaView::Derived(fields)
 }
 
 /// Model `df.withColumnsRenamed({"old": "new", …})` (Spark 3.4+). Each
@@ -1226,17 +1248,17 @@ fn apply_with_columns_renamed<'a>(
         renames.push((key.value.to_str(), val.value.to_str()));
     }
     report_column_refs(&refs, recv, ctx, source, line_index, diagnostics);
-    let fields: Vec<&'a str> = recv
-        .field_names()
+    let fields: Vec<DerivedField<'a>> = recv
+        .typed_fields(ctx.schemas())
         .into_iter()
-        .map(|n| {
-            renames
-                .iter()
-                .find(|(old, _)| *old == n)
-                .map_or(n, |(_, new)| *new)
+        .map(|mut f| {
+            if let Some((_, new)) = renames.iter().find(|(old, _)| *old == f.name) {
+                f.name = new;
+            }
+            f
         })
         .collect();
-    SchemaView::derived_untyped(fields)
+    SchemaView::Derived(fields)
 }
 
 /// Check the `subset=` keyword argument against the receiver schema.
@@ -1564,17 +1586,33 @@ fn apply_column_method<'a>(
 /// unknowable. Checking the column references *inside* the SQL is a
 /// follow-up (needs a SQL parse); this only recovers the output shape
 /// so a chain doesn't die at `.selectExpr(...)`.
-fn apply_select_expr<'a>(call: &'a ExprCall, recv: &SchemaView<'a>) -> Option<SchemaView<'a>> {
-    let mut fields: Vec<&'a str> = Vec::new();
+fn apply_select_expr<'a>(
+    call: &'a ExprCall,
+    recv: &SchemaView<'a>,
+    schemas: &'a [Schema<'a>],
+) -> Option<SchemaView<'a>> {
+    let mut fields: Vec<DerivedField<'a>> = Vec::new();
     for arg in &call.arguments.args {
         let item = arg.as_string_literal_expr()?.value.to_str().trim();
         if item == "*" {
-            fields.extend(recv.field_names());
+            fields.extend(recv.typed_fields(schemas));
         } else {
-            fields.push(select_expr_output_name(item));
+            let name = select_expr_output_name(item);
+            // A bare identifier item (no `AS`, no operators) is a plain
+            // column reference — typed from the receiver. Anything else
+            // is a computed SQL expression whose type dathon leaves open.
+            let ty = if split_sql_alias(item).is_none()
+                && !item.is_empty()
+                && item.chars().all(|c| c.is_alphanumeric() || c == '_')
+            {
+                recv.field_type(name, schemas)
+            } else {
+                None
+            };
+            fields.push(DerivedField { name, ty });
         }
     }
-    Some(SchemaView::derived_untyped(fields))
+    Some(SchemaView::Derived(fields))
 }
 
 /// The result column name of one `selectExpr` item: the `AS` alias if
@@ -1866,9 +1904,9 @@ fn handle_two_df_method<'a>(
         TwoDfMethod::Join => {
             let on = parse_on_arg(extract_on_arg(call));
             check_join_keys(left, &right, &on, source, line_index, diagnostics);
-            Some(apply_join(left, &right, &on))
+            Some(apply_join(left, &right, &on, ctx.schemas()))
         }
-        TwoDfMethod::CrossJoin => Some(apply_concat(left, &right)),
+        TwoDfMethod::CrossJoin => Some(apply_concat(left, &right, ctx.schemas())),
     }
 }
 
@@ -1998,35 +2036,40 @@ fn apply_join<'a>(
     left: &SchemaView<'a>,
     right: &SchemaView<'a>,
     on: &JoinOn<'_>,
+    schemas: &'a [Schema<'a>],
 ) -> SchemaView<'a> {
     let dedup_set: HashSet<&str> = match on {
         JoinOn::Keys(keys) => keys.iter().map(|(n, _)| *n).collect(),
         _ => HashSet::new(),
     };
-    let mut result: Vec<&'a str> = left.field_names();
-    for f in right.field_names() {
+    let mut result: Vec<DerivedField<'a>> = left.typed_fields(schemas);
+    for f in right.typed_fields(schemas) {
         // The join key(s) are already in result from the left side.
-        if dedup_set.contains(f) {
+        if dedup_set.contains(f.name) {
             continue;
         }
         // Non-key shared names: left wins.
-        if !result.contains(&f) {
+        if !result.iter().any(|r| r.name == f.name) {
             result.push(f);
         }
     }
-    SchemaView::derived_untyped(result)
+    SchemaView::Derived(result)
 }
 
 /// Schema concatenation for crossJoin: every field from both sides; shared
 /// names are kept once (left wins).
-fn apply_concat<'a>(left: &SchemaView<'a>, right: &SchemaView<'a>) -> SchemaView<'a> {
-    let mut result: Vec<&'a str> = left.field_names();
-    for f in right.field_names() {
-        if !result.contains(&f) {
+fn apply_concat<'a>(
+    left: &SchemaView<'a>,
+    right: &SchemaView<'a>,
+    schemas: &'a [Schema<'a>],
+) -> SchemaView<'a> {
+    let mut result: Vec<DerivedField<'a>> = left.typed_fields(schemas);
+    for f in right.typed_fields(schemas) {
+        if !result.iter().any(|r| r.name == f.name) {
             result.push(f);
         }
     }
-    SchemaView::derived_untyped(result)
+    SchemaView::Derived(result)
 }
 
 // ---------------------------------------------------------------------------

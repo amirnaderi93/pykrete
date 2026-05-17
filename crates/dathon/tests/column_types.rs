@@ -114,6 +114,81 @@ def f(x: DataFrame[In]) -> DataFrame[Out]:
 }
 
 #[test]
+fn types_survive_a_group_by_agg() {
+    // The group key keeps its type through `groupBy(...).agg(...)`.
+    let src = format!(
+        "{SCHEMAS}
+class Out(Schema):
+    city: \"int\"
+    total: \"long\"
+
+def f(x: DataFrame[In]) -> DataFrame[Out]:
+    return x.groupBy(\"city\").agg(F.sum(\"amount\").alias(\"total\"))
+"
+    );
+    // `city` is a string key, declared `int` in Out.
+    assert_has_code(&check(&src), "D0080");
+}
+
+#[test]
+fn types_survive_a_join() {
+    let src = "\
+class L(Schema):
+    id: \"int\"
+    amount: \"int\"
+
+class R(Schema):
+    id: \"int\"
+    label: \"string\"
+
+class Out(Schema):
+    id: \"int\"
+    amount: \"string\"
+    label: \"string\"
+
+def f(l: DataFrame[L], r: DataFrame[R]) -> DataFrame[Out]:
+    return l.join(r, on=\"id\")
+";
+    // `amount` comes through the join as `int`, declared `string`.
+    assert_has_code(&check(src), "D0080");
+}
+
+#[test]
+fn types_survive_to_df() {
+    let src = "\
+class In(Schema):
+    a: \"int\"
+    b: \"string\"
+
+class Out(Schema):
+    x: \"string\"
+    y: \"string\"
+
+def f(d: DataFrame[In]) -> DataFrame[Out]:
+    return d.toDF(\"x\", \"y\")
+";
+    // `toDF` renames positionally — `x` takes `a`'s int type.
+    assert_has_code(&check(src), "D0080");
+}
+
+#[test]
+fn types_survive_with_columns() {
+    let src = format!(
+        "{SCHEMAS}
+class Out(Schema):
+    amount: \"int\"
+    city: \"string\"
+    doubled: \"string\"
+
+def f(x: DataFrame[In]) -> DataFrame[Out]:
+    return x.withColumns({{\"doubled\": col(\"amount\")}})
+"
+    );
+    // `doubled` is `col(\"amount\")` — an int — declared `string`.
+    assert_has_code(&check(&src), "D0080");
+}
+
+#[test]
 fn lit_value_type_flows_into_the_return_check() {
     // `withColumn("city", F.lit(1))` overwrites `city` with an int —
     // but Out declares it `string`.
