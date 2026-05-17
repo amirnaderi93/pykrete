@@ -18,6 +18,11 @@ pub struct Schema<'ast> {
     /// though its actual class declaration is `class Y(Schema)`. `None`
     /// for schemas declared locally (which use the class name verbatim).
     pub alias: Option<&'ast str>,
+    /// Index of the project file this schema was declared in. Used by
+    /// go-to-definition to point at the right file when the schema was
+    /// imported from another module. `0` in single-file contexts (the
+    /// only file) and until [`crate::ProjectContext`] tags it.
+    pub file_index: usize,
 }
 
 #[derive(Debug)]
@@ -87,7 +92,11 @@ impl<'ast> SchemaField<'ast> {
 impl<'ast> Schema<'ast> {
     pub fn from_class(class: &'ast DiscoveredClass<'ast>) -> Option<Self> {
         if class.has_base("Schema") {
-            Some(Self { class, alias: None })
+            Some(Self {
+                class,
+                alias: None,
+                file_index: 0,
+            })
         } else {
             None
         }

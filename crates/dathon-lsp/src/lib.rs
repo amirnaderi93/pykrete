@@ -544,19 +544,26 @@ pub fn handle_definition(
     let _ = docs.get(&uri)?;
     let line = (pos.line as usize).checked_add(1)?;
     let column = (pos.character as usize).checked_add(1)?;
-    let span = match project::build_project_snapshot(docs) {
+    // `(target_uri, span)` — the definition may live in a different
+    // file than the cursor (a column declared in an imported schema).
+    let (target_uri, span) = match project::build_project_snapshot(docs) {
         Some(snapshot) => {
             let focus_path = uri.to_file_path().ok()?;
             let focus_path_str = focus_path.to_string_lossy().to_string();
-            dathon::definition_in_project(&snapshot, &focus_path_str, line, column)?
+            let (target_path, span) =
+                dathon::definition_in_project(&snapshot, &focus_path_str, line, column)?;
+            (
+                Url::from_file_path(&target_path).unwrap_or_else(|()| uri.clone()),
+                span,
+            )
         }
         None => {
             let text = docs.get(&uri)?;
-            dathon::definition(text, line, column)?
+            (uri.clone(), dathon::definition(text, line, column)?)
         }
     };
     let location = Location {
-        uri,
+        uri: target_uri,
         range: span_to_range(span),
     };
     Some(GotoDefinitionResponse::Scalar(location))
