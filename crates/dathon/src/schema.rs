@@ -334,100 +334,117 @@ impl<'a> SchemaView<'a> {
 /// Outcome of resolving a possibly-dotted column path against a schema.
 ///
 /// `Resolved` means every segment matched. `Missing { field, on }` means
-/// `field` is the first segment that didn't match, and `on` is the schema
-/// we were searching when the resolution failed. The caller uses both to
-/// produce a diagnostic pointing at the right schema (e.g.
-/// `Column 'street' does not exist on schema 'Address'`, when the user
-/// wrote `col("address.street")` against a `User` where `address` is a
-/// nested `Address` but `Address` has no `street`).
+/// `field` is the segment that didn't match; `on` is the `SchemaView`
+/// being searched (`Some` for a top-level miss — used for the message
+/// and the "did you mean" suggestion), or `None` for a miss inside a
+/// nested `struct`, where there's no `SchemaView` to point at.
 #[derive(Debug)]
 pub enum FieldPathResult<'a> {
     Resolved,
-    Missing { field: &'a str, on: SchemaView<'a> },
+    Missing {
+        field: &'a str,
+        on: Option<SchemaView<'a>>,
+    },
 }
 
-/// Walk a possibly-dotted column path through (potentially nested) schemas.
+/// Walk a possibly-dotted column path through a schema and its nested
+/// types — `struct` fields, and the element type of an `array` (a dotted
+/// access pierces the array, as in Spark: `events.id` where
+/// `events: array<struct<id:int>>`).
 ///
-/// For non-final segments, the field must exist and resolve to a nested
-/// `Schema` — we then recurse into that nested schema with the remaining
-/// path. The final segment is checked with `has_field` against whichever
-/// schema we ended up on.
-///
-/// Returns `Resolved` if every segment matched, or `Missing { … }` with
-/// the failed segment and the schema it was searched on, suitable for
-/// embedding directly in a diagnostic message.
+/// `Resolved` if every segment matched. `Missing` names the failed
+/// segment. A path dathon can't verify — through an unknown type, or an
+/// `array` of unknown element / a `map` — degrades to `Resolved` rather
+/// than risking a false positive.
 pub fn resolve_path<'a>(
     view: &SchemaView<'a>,
     path: &'a str,
     schemas: &'a [Schema<'a>],
 ) -> FieldPathResult<'a> {
-    // Fast path: no dots → ordinary has_field check.
-    if !path.contains('.') {
-        if view.has_field(path) {
-            return FieldPathResult::Resolved;
-        }
-        return FieldPathResult::Missing {
-            field: path,
-            on: view.clone(),
-        };
-    }
-
     let segments: Vec<&str> = path.split('.').collect();
-    let last_idx = segments.len() - 1;
     let mut current = view.clone();
 
-    for (i, segment) in segments.iter().enumerate() {
-        if i == last_idx {
-            if current.has_field(segment) {
-                return FieldPathResult::Resolved;
-            }
+    for (i, &segment) in segments.iter().enumerate() {
+        let is_last = i + 1 == segments.len();
+        if !current.has_field(segment) {
             return FieldPathResult::Missing {
                 field: segment,
-                on: current,
+                on: Some(current),
             };
         }
-        // Non-final segment: must be a nested-schema field on a Declared view.
-        // Derived/Grouped views can't carry nested-struct field types (their
-        // fields are just names, not typed annotations).
+        if is_last {
+            return FieldPathResult::Resolved;
+        }
+        // Prefer descending as a bare-name nested `Schema` — that keeps a
+        // named schema to point at in any later diagnostic.
         let nested = match &current {
-            SchemaView::Declared(s) => {
-                s.fields()
-                    .iter()
-                    .find(|f| f.name == *segment)
-                    .and_then(|f| match f.resolve(schemas) {
-                        FieldResolution::ResolvedNested(nested) => Some(nested),
-                        _ => None,
-                    })
-            }
+            SchemaView::Declared(s) => s
+                .fields()
+                .iter()
+                .find(|f| f.name == segment)
+                .and_then(|f| match f.resolve(schemas) {
+                    FieldResolution::ResolvedNested(nested) => Some(nested),
+                    _ => None,
+                }),
             _ => None,
         };
-        let Some(nested) = nested else {
-            // Couldn't descend as a bare-name nested schema. Tell apart a
-            // genuine error from a path dathon just can't verify:
-            return match current.field_type(segment, schemas) {
-                // The segment is an atomic column — `.<next>` on it is a
-                // real mistake.
-                Some(t) if !t.is_composite() => FieldPathResult::Missing {
-                    field: segment,
-                    on: current,
-                },
-                // A known composite (`array<…>` / `map<…>` / string-form
-                // `struct<…>`) — navigating into it isn't modeled here
-                // yet, so stop without flagging.
-                Some(_) => FieldPathResult::Resolved,
-                // An existing but un-typed field — likewise unverifiable.
-                None if current.has_field(segment) => FieldPathResult::Resolved,
-                // Not a field at all.
-                None => FieldPathResult::Missing {
-                    field: segment,
-                    on: current,
-                },
-            };
+        if let Some(nested) = nested {
+            current = SchemaView::Declared(nested);
+            continue;
+        }
+        // Otherwise descend through the field's resolved `ColumnType` —
+        // `array<struct<…>>`, a string-form `struct<…>`, etc.
+        return match current.field_type(segment, schemas) {
+            // Descending past an atomic column is a genuine mistake —
+            // point the diagnostic at that column.
+            Some(ty) if !ty.is_composite() => FieldPathResult::Missing {
+                field: segment,
+                on: Some(current),
+            },
+            Some(ty) => resolve_in_type(&ty, &segments[i + 1..]),
+            // The field exists but its type is unknown — can't verify the
+            // rest of the path; degrade rather than false-flag.
+            None => FieldPathResult::Resolved,
         };
-        current = SchemaView::Declared(nested);
     }
-    // Unreachable: the last-segment branch above always returns.
     FieldPathResult::Resolved
+}
+
+/// Walk the remaining dotted segments through a resolved composite
+/// [`ColumnType`].
+fn resolve_in_type<'a>(ty: &ColumnType, segments: &[&'a str]) -> FieldPathResult<'a> {
+    let Some((&seg, rest)) = segments.split_first() else {
+        return FieldPathResult::Resolved;
+    };
+    match ty {
+        // A dotted access on an array pierces to the element type.
+        ColumnType::Array(Some(elem)) => resolve_in_type(elem, segments),
+        ColumnType::Struct(fields) => match fields.iter().find(|f| f.name == seg) {
+            None => FieldPathResult::Missing {
+                field: seg,
+                on: None,
+            },
+            Some(_) if rest.is_empty() => FieldPathResult::Resolved,
+            Some(field) => match &field.ty {
+                Some(inner) if inner.is_composite() => resolve_in_type(inner, rest),
+                // The path continues past an atomic struct field.
+                Some(_) => FieldPathResult::Missing {
+                    field: seg,
+                    on: None,
+                },
+                // An untyped struct field — can't verify further.
+                None => FieldPathResult::Resolved,
+            },
+        },
+        // An array of unknown element, or a map — can't navigate further;
+        // degrade rather than false-flag.
+        ColumnType::Array(None) | ColumnType::Map(..) => FieldPathResult::Resolved,
+        // An atomic column — a dotted access on it is a genuine mistake.
+        _ => FieldPathResult::Missing {
+            field: seg,
+            on: None,
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -221,13 +221,15 @@ fn render_column_ref_hover(trace: &ColumnRefTrace<'_>, schemas: &[Schema<'_>]) -
 
     match resolve_path(&trace.schema, trace.name, schemas) {
         FieldPathResult::Missing { field, on } => {
+            let on_phrase = on
+                .as_ref()
+                .map_or_else(|| "the nested struct".to_string(), SchemaView::display_name);
             writeln!(
                 md,
-                "_Column `{field}` does not exist on {} — see D0030._",
-                on.display_name(),
+                "_Column `{field}` does not exist on {on_phrase} — see D0030._",
             )
             .unwrap();
-            if let Some(suggestion) = suggest_field_name(field, &on) {
+            if let Some(suggestion) = on.as_ref().and_then(|v| suggest_field_name(field, v)) {
                 writeln!(md, "Did you mean `{suggestion}`?").unwrap();
             }
         }

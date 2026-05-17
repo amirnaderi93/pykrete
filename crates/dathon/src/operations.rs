@@ -836,9 +836,13 @@ fn analyze_method_call<'a>(
                 if let FieldPathResult::Missing { field, on } =
                     resolve_path(underlying.as_ref(), name, ctx.schemas())
                 {
-                    let suggestion = suggest_field_name(field, &on);
+                    let suggestion = on.as_ref().and_then(|v| suggest_field_name(field, v));
+                    let on_phrase = on.as_ref().map_or_else(
+                        || "the nested struct".to_string(),
+                        SchemaView::display_name,
+                    );
                     let mut message =
-                        format!("Column '{field}' does not exist on {}.", on.display_name());
+                        format!("Column '{field}' does not exist on {on_phrase}.");
                     if let Some(s) = &suggestion {
                         message.push_str(&format!(" Did you mean '{s}'?"));
                     }
@@ -1380,8 +1384,11 @@ fn report_column_refs<'a>(
         if let FieldPathResult::Missing { field, on } =
             resolve_path(schema, col_name, ctx.schemas())
         {
-            let suggestion = suggest_field_name(field, &on);
-            let mut message = format!("Column '{field}' does not exist on {}.", on.display_name());
+            let suggestion = on.as_ref().and_then(|v| suggest_field_name(field, v));
+            let on_phrase = on
+                .as_ref()
+                .map_or_else(|| "the nested struct".to_string(), SchemaView::display_name);
+            let mut message = format!("Column '{field}' does not exist on {on_phrase}.");
             if let Some(s) = &suggestion {
                 message.push_str(&format!(" Did you mean '{s}'?"));
             }
