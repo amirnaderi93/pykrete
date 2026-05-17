@@ -44,6 +44,10 @@ pub struct MethodInfo<'a> {
     pub params: Vec<MethodParam<'a>>,
     pub return_annotation: Option<&'a Expr>,
     pub range: TextRange,
+    /// The function's own definition node. Carried so a caller can walk
+    /// the body — used to *infer* a transform function's output schema
+    /// when its return type isn't declared.
+    pub def: &'a StmtFunctionDef,
 }
 
 #[derive(Debug, Clone)]
@@ -215,6 +219,7 @@ fn build_method_info(def: &StmtFunctionDef) -> MethodInfo<'_> {
         params,
         return_annotation: def.returns.as_deref(),
         range: def.range,
+        def,
     }
 }
 
