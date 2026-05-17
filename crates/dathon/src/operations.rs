@@ -522,10 +522,26 @@ fn types_compatible(a: &ColumnType, b: &ColumnType) -> bool {
             _ => true,
         }
     }
+    // A struct field whose type is unknown is permissive, as elsewhere.
+    fn field_ok(a: &Option<ColumnType>, b: &Option<ColumnType>) -> bool {
+        match (a, b) {
+            (Some(x), Some(y)) => types_compatible(x, y),
+            _ => true,
+        }
+    }
     match (a, b) {
         (ColumnType::Array(x), ColumnType::Array(y)) => element_ok(x, y),
         (ColumnType::Map(k1, v1), ColumnType::Map(k2, v2)) => {
             element_ok(k1, k2) && element_ok(v1, v2)
+        }
+        // Structs compare structurally — same field names in the same
+        // order, each field type compatible.
+        (ColumnType::Struct(xs), ColumnType::Struct(ys)) => {
+            xs.len() == ys.len()
+                && xs
+                    .iter()
+                    .zip(ys)
+                    .all(|(x, y)| x.name == y.name && field_ok(&x.ty, &y.ty))
         }
         _ => a == b || (is_numeric(a) && is_numeric(b)),
     }
@@ -1573,7 +1589,9 @@ fn type_family(t: &ColumnType) -> TypeFamily {
         ColumnType::String => TypeFamily::Textual,
         ColumnType::Bool => TypeFamily::Boolean,
         ColumnType::Date | ColumnType::Timestamp => TypeFamily::Temporal,
-        ColumnType::Array(_) | ColumnType::Map(..) => TypeFamily::Collection,
+        ColumnType::Array(_) | ColumnType::Map(..) | ColumnType::Struct(_) => {
+            TypeFamily::Collection
+        }
     }
 }
 
@@ -1637,7 +1655,10 @@ fn report_expr_type_errors<'a>(
                 .find(|t| {
                     matches!(
                         t,
-                        ColumnType::String | ColumnType::Array(_) | ColumnType::Map(..)
+                        ColumnType::String
+                            | ColumnType::Array(_)
+                            | ColumnType::Map(..)
+                            | ColumnType::Struct(_)
                     )
                 });
                 if let Some(bad) = bad {

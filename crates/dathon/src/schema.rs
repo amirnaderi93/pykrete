@@ -7,8 +7,13 @@
 
 use ruff_python_ast::Expr;
 
-use crate::types::ColumnType;
+use crate::types::{ColumnType, StructField, parse_type_expr};
 use crate::walk::DiscoveredClass;
+
+/// Recursion ceiling for resolving a (possibly self-referential) schema
+/// into a nested [`ColumnType`]. Spark types are finite — a cyclic
+/// schema is a user error; this just stops the resolver looping.
+const MAX_TYPE_DEPTH: usize = 24;
 
 #[derive(Debug)]
 pub struct Schema<'ast> {
@@ -65,11 +70,14 @@ impl<'ast> SchemaField<'ast> {
             // forward-reference annotation that, paired with the
             // bundled-typeshed in iteration 42, resolves globally).
             Expr::StringLiteral(s) => {
-                let name = s.value.to_str();
-                if let Some(ct) = ColumnType::from_name(name) {
-                    FieldResolution::Resolved(ct)
-                } else {
-                    FieldResolution::UnknownType { name }
+                // The string may name a nested type — `array<EventLog>`,
+                // `struct<id:int>` — whose leaf identifiers can be
+                // declared `Schema` classes, so resolution is schema-aware.
+                match resolve_field_column_type(self, schemas, 0) {
+                    Some(ct) => FieldResolution::Resolved(ct),
+                    None => FieldResolution::UnknownType {
+                        name: s.value.to_str(),
+                    },
                 }
             }
             // Bare-name annotation: `address: Address`. Used only for
@@ -135,18 +143,65 @@ impl<'ast> Schema<'ast> {
         self.fields().iter().any(|f| f.name == name)
     }
 
-    /// The atomic [`ColumnType`] of field `name`, if it has one. Fields
-    /// whose annotation is a nested struct or doesn't resolve return
-    /// `None` — dathon doesn't type-check those.
+    /// The full [`ColumnType`] of field `name`, resolved recursively —
+    /// nested `array` / `map` element types and struct fields included.
+    /// `None` for an unknown field or one whose type doesn't resolve.
     pub fn field_type(&self, name: &str, schemas: &'ast [Schema<'ast>]) -> Option<ColumnType> {
         self.fields()
             .iter()
             .find(|f| f.name == name)
-            .and_then(|f| match f.resolve(schemas) {
-                FieldResolution::Resolved(ct) => Some(ct),
-                _ => None,
-            })
+            .and_then(|f| resolve_field_column_type(f, schemas, 0))
     }
+}
+
+/// Resolve a schema field's annotation to its full [`ColumnType`],
+/// descending recursively through `array<…>` / `map<…>` / `struct<…>`
+/// and into referenced `Schema` classes.
+fn resolve_field_column_type(
+    field: &SchemaField<'_>,
+    schemas: &[Schema<'_>],
+    depth: usize,
+) -> Option<ColumnType> {
+    match field.annotation {
+        // A string annotation may name a nested type whose leaf
+        // identifiers can be declared `Schema` classes.
+        Expr::StringLiteral(s) => {
+            let leaf = |word: &str| -> Option<ColumnType> {
+                ColumnType::from_name(word).or_else(|| {
+                    schemas
+                        .iter()
+                        .find(|sc| sc.name() == word)
+                        .map(|sc| schema_as_struct(sc, schemas, depth + 1))
+                })
+            };
+            parse_type_expr(s.value.to_str(), &leaf)
+        }
+        // A bare-name annotation references another declared `Schema`.
+        Expr::Name(n) => schemas
+            .iter()
+            .find(|sc| sc.name() == n.id.as_str())
+            .map(|sc| schema_as_struct(sc, schemas, depth)),
+        _ => None,
+    }
+}
+
+/// Resolve a declared `Schema` class to a [`ColumnType::Struct`] — each
+/// field resolved recursively. `depth` guards against a self-referential
+/// schema (Spark types are finite; a cycle is a user error, and beyond
+/// the ceiling the struct is truncated rather than looping forever).
+fn schema_as_struct(schema: &Schema<'_>, schemas: &[Schema<'_>], depth: usize) -> ColumnType {
+    if depth >= MAX_TYPE_DEPTH {
+        return ColumnType::Struct(Vec::new());
+    }
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|f| StructField {
+            name: f.name.to_string(),
+            ty: resolve_field_column_type(f, schemas, depth + 1),
+        })
+        .collect();
+    ColumnType::Struct(fields)
 }
 
 pub fn discover_schemas<'ast>(classes: &'ast [DiscoveredClass<'ast>]) -> Vec<Schema<'ast>> {
@@ -347,9 +402,26 @@ pub fn resolve_path<'a>(
             _ => None,
         };
         let Some(nested) = nested else {
-            return FieldPathResult::Missing {
-                field: segment,
-                on: current,
+            // Couldn't descend as a bare-name nested schema. Tell apart a
+            // genuine error from a path dathon just can't verify:
+            return match current.field_type(segment, schemas) {
+                // The segment is an atomic column — `.<next>` on it is a
+                // real mistake.
+                Some(t) if !t.is_composite() => FieldPathResult::Missing {
+                    field: segment,
+                    on: current,
+                },
+                // A known composite (`array<…>` / `map<…>` / string-form
+                // `struct<…>`) — navigating into it isn't modeled here
+                // yet, so stop without flagging.
+                Some(_) => FieldPathResult::Resolved,
+                // An existing but un-typed field — likewise unverifiable.
+                None if current.has_field(segment) => FieldPathResult::Resolved,
+                // Not a field at all.
+                None => FieldPathResult::Missing {
+                    field: segment,
+                    on: current,
+                },
             };
         };
         current = SchemaView::Declared(nested);
