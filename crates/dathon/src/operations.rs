@@ -1485,6 +1485,13 @@ const COLUMN_REF_FUNCTIONS: &[&str] = &[
     "lag",
     "lead",
     "nth_value",
+    // Window-spec builders — `Window.partitionBy("city").orderBy("amount")`.
+    // Every string arg is a column name; the spec is checked against the
+    // schema of the DataFrame the surrounding `.over(...)` is applied to.
+    // (`orderBy` is also a DataFrame method, but that form is a method
+    // call routed through `analyze_method_call`, never seen here.)
+    "partitionBy",
+    "orderBy",
     // Date / time — single-column extractors and arithmetic helpers
     // where any non-column arg is an int (not a string).
     "year",
@@ -1651,6 +1658,11 @@ fn collect_col_refs<'a>(
                 for kw in &call.arguments.keywords {
                     collect_col_refs(&kw.value, ctx, out);
                 }
+                // Descend into the callee too, so an *earlier* link in a
+                // builder chain is still reached — e.g. the `partitionBy`
+                // in `Window.partitionBy("city").orderBy("amount")`, which
+                // lives in this call's `func`, not its arguments.
+                collect_col_refs(&call.func, ctx, out);
                 return;
             }
         }
