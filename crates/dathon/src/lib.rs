@@ -416,6 +416,11 @@ impl<'a> ProjectContext<'a> {
                     };
                     Schema {
                         class: s.class,
+                        // Carry the resolved ancestor chain so an imported
+                        // schema's inherited columns still resolve. The
+                        // bases were resolved against the target file's
+                        // classes, where this schema and its bases live.
+                        bases: s.bases.clone(),
                         alias,
                         // The schema lives in the imported module's file;
                         // go-to-definition must point there, not here.

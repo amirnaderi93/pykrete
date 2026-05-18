@@ -21,11 +21,18 @@ impl<'ast> DiscoveredClass<'ast> {
     /// Subscripts (`Foo[T]`) and attribute access (`mod.Foo`) are not matched —
     /// we can broaden this later if/when import resolution lands.
     pub fn has_base(&self, name: &str) -> bool {
-        self.def.bases().iter().any(|expr| {
-            expr.as_name_expr()
-                .map(|n| n.id.as_str() == name)
-                .unwrap_or(false)
-        })
+        self.base_names().iter().any(|&n| n == name)
+    }
+
+    /// The bare-name bases of this class, in declaration order. Subscript
+    /// bases (`Generic[T]`) and attribute bases (`mod.Base`) are skipped —
+    /// the same limitation as [`DiscoveredClass::has_base`].
+    pub fn base_names(&self) -> Vec<&'ast str> {
+        self.def
+            .bases()
+            .iter()
+            .filter_map(|expr| expr.as_name_expr().map(|n| n.id.as_str()))
+            .collect()
     }
 }
 
