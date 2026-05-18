@@ -30,8 +30,8 @@ fn with_dal(body: &str) -> String {
     format!(
         r#"
 class RawOrders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 
 class DataSource[T]:
     def __init__(self, path):
@@ -79,7 +79,7 @@ fn top_level_typed_constant_resolves_to_its_inner_schema() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: "int"
+    place_code: int
 
 RAW_ORDERS: DataSource[Orders] = DataSource("/path")
 
@@ -96,7 +96,7 @@ fn d0030_fires_on_unknown_column_against_a_constant_resolved_schema() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: "int"
+    place_code: int
 
 RAW_ORDERS: DataSource[Orders] = DataSource("/path")
 
@@ -175,11 +175,11 @@ fn dal_read_result_with_wrong_declared_return_fires_D0050() {
     let result = check(
         r#"
 class RawOrders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 
 class Other(Schema):
-    x: "int"
+    x: int
 
 class DataSource[T]:
     def __init__(self, path): pass
@@ -208,7 +208,7 @@ fn untyped_top_level_assignment_is_not_treated_as_a_schema_carrier() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: "int"
+    place_code: int
 
 whatever = some_loader()
 
@@ -228,7 +228,7 @@ fn non_generic_method_call_on_class_instance_returns_no_inference() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: "int"
+    place_code: int
 
 class DataAccessLayer:
     def read(self, path: str) -> DataFrame:

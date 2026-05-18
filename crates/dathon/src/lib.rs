@@ -803,9 +803,9 @@ fn render_schema<'a>(
                     Severity::Error,
                     "D0011",
                     format!(
-                        "Column type '{raw_text}' is not a bare name. \
-                         Subscripted/complex column types are not yet \
-                         supported in v0.1. Use one of: {COLUMN_TYPE_NAMES}.",
+                        "Column type '{raw_text}' is not a recognized dathon type. \
+                         Use a bare atomic ({COLUMN_TYPE_NAMES}), a declared Schema, \
+                         or an `Array[…]` / `Map[…, …]` collection.",
                     ),
                     ann_range,
                     source,

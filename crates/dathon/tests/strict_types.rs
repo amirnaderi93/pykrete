@@ -9,10 +9,10 @@ use common::{assert_does_not_have_code, assert_has_code, check, check_strict};
 
 const SCHEMA: &str = "\
 class Raw(Schema):
-    city: \"string\"
-    amount: \"int\"
-    amount2: \"int\"
-    when_date: \"date\"
+    city: string
+    amount: int
+    amount2: int
+    when_date: date
 ";
 
 #[test]

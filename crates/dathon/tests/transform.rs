@@ -8,13 +8,13 @@ use common::{assert_does_not_have_code, assert_has_code, assert_no_diagnostics, 
 
 const SCHEMA: &str = "\
 class Raw(Schema):
-    city: \"string\"
-    amount: \"int\"
+    city: string
+    amount: int
 
 class Enriched(Schema):
-    city: \"string\"
-    amount: \"int\"
-    bonus: \"int\"
+    city: string
+    amount: int
+    bonus: int
 
 def enrich(df: DataFrame[Raw]) -> DataFrame[Enriched]:
     return df.withColumn(\"bonus\", col(\"amount\"))

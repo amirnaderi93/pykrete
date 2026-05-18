@@ -7,9 +7,9 @@ use common::{assert_has_code, assert_no_diagnostics, check};
 
 const SCHEMA: &str = "\
 class Raw(Schema):
-    city: \"string\"
-    amount: \"int\"
-    tags: \"string\"
+    city: string
+    amount: int
+    tags: string
 ";
 
 #[test]

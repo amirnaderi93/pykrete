@@ -27,8 +27,8 @@ use common::check;
 fn class_level_dataSource_constant_routes_through_generic_inference() {
     let src = r#"
 class RawOrders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 
 class DataSource[T]:
     def __init__(self, path: string):
@@ -66,7 +66,7 @@ fn typo_off_a_class_level_constant_chain_now_fires_D0030() {
     // constant chain should fire when the constant is class-level too.
     let src = r#"
 class RawOrders(Schema):
-    place_code: "int"
+    place_code: int
 
 class DataSource[T]:
     def __init__(self, path: string):
@@ -107,7 +107,7 @@ fn unknown_class_level_constant_returns_no_binding() {
     // analyzer doesn't panic and doesn't make things up.)
     let src = r#"
 class RawOrders(Schema):
-    place_code: "int"
+    place_code: int
 
 class DataSource[T]:
     def __init__(self, path: string):

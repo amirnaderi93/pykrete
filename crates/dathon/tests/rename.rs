@@ -19,8 +19,8 @@ fn span_text(source: &str, span: Span) -> String {
 
 const SRC: &str = "\
 class Orders(Schema):
-    amount: \"int\"
-    city: \"string\"
+    amount: int
+    city: string
 
 def f(raw: DataFrame[Orders]) -> DataFrame:
     a = raw.select(col(\"amount\"), \"city\")

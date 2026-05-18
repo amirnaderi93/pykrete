@@ -12,8 +12,8 @@ fn cursor_at(source: &str, needle: &str) -> (usize, usize) {
 
 const SRC: &str = "\
 class Orders(Schema):
-    amount: \"int\"
-    city: \"string\"
+    amount: int
+    city: string
 
 def f(raw: DataFrame[Orders]) -> DataFrame:
     a = raw.select(col(\"amount\"), \"city\")
@@ -31,8 +31,8 @@ fn references_from_a_col_literal_finds_all_uses_and_the_declaration() {
 
 #[test]
 fn references_from_the_field_declaration_finds_the_uses() {
-    // Cursor on the `amount` token of the `amount: "int"` declaration.
-    let (line, col) = cursor_at(SRC, "amount: \"int\"");
+    // Cursor on the `amount` token of the `amount: int` declaration.
+    let (line, col) = cursor_at(SRC, "amount: int");
     let refs = references(SRC, line, col + 1);
     assert_eq!(refs.len(), 3);
 }
@@ -42,8 +42,8 @@ fn references_from_a_bare_string_column_argument() {
     // `"city"` — declared once, used once as a bare-string `select` arg.
     let src = "\
 class Orders(Schema):
-    amount: \"int\"
-    city: \"string\"
+    amount: int
+    city: string
 
 def f(raw: DataFrame[Orders]) -> DataFrame:
     return raw.select(\"city\")

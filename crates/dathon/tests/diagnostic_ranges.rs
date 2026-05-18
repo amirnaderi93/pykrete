@@ -15,8 +15,8 @@ use common::check;
 fn column_name_error_range_covers_the_full_string_literal() {
     let src = r#"
 class Orders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.select(col("BadName"))
@@ -69,10 +69,10 @@ def f(raw: DataFrame[Missing]) -> DataFrame[Missing]:
 fn join_key_error_range_covers_the_full_string_literal() {
     let src = r#"
 class A(Schema):
-    a: "int"
+    a: int
 
 class B(Schema):
-    b: "int"
+    b: int
 
 def f(left: DataFrame[A], right: DataFrame[B]) -> DataFrame[A]:
     return left.join(right, on="missing")

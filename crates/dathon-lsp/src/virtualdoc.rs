@@ -35,12 +35,12 @@
 ///   access type as `Any`: dataframe *operations* (`.select`, `.filter`,
 ///   …) are dathon's to check, so the embedded engine must not flag
 ///   them as unknown members of this stand-in class.
-/// - `string` / `date` / `timestamp` / `double` / `long` — dathon's
-///   column-type keywords. They appear as *string literals* in schema
-///   bodies (`EventDate: "date"`), which the embedded engine reads as
-///   forward-reference type annotations; aliasing each to `object`
-///   makes it resolve them cleanly instead of flagging them as
-///   undefined. (`int` / `bool` are Python builtins and need no alias.)
+/// - The column-type vocabulary — `string` / `double` / `long` / `date`
+///   / `timestamp` and the collection generics `Array` / `Map`. Schema
+///   fields name these as bare type annotations (`checkin: date`,
+///   `tags: Array[string]`); defining each as a *class* makes the
+///   embedded engine both resolve them and theme them as types.
+///   (`int` / `bool` are Python builtins and need no definition.)
 ///
 /// Ordinary Python names like `col` are deliberately NOT defined here:
 /// `col` is `pyspark.sql.functions.col`, an import the user writes — a
@@ -52,7 +52,14 @@
 pub const PREAMBLE: &str = "\
 from typing import Any as _DathonAny, Generic as _DathonGeneric, TypeVar as _DathonT
 _DT = _DathonT('_DT')
-string = date = timestamp = double = long = object
+_DT2 = _DathonT('_DT2')
+class string: ...
+class double: ...
+class long: ...
+class date: ...
+class timestamp: ...
+class Array(_DathonGeneric[_DT]): ...
+class Map(_DathonGeneric[_DT, _DT2]): ...
 class Schema: ...
 class DataFrame(_DathonGeneric[_DT]):
     def __getattr__(self, _name: str) -> _DathonAny: ...
@@ -60,7 +67,7 @@ class DataFrame(_DathonGeneric[_DT]):
 ";
 
 /// Newline-terminated line count of [`PREAMBLE`].
-const PREAMBLE_LINE_COUNT: u32 = 7;
+const PREAMBLE_LINE_COUNT: u32 = 14;
 
 /// Lines the virtual document injects ahead of the user's source: one
 /// hoisted `from __future__` line plus the [`PREAMBLE`]. A real

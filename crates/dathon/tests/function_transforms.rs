@@ -9,10 +9,10 @@ use common::{assert_does_not_have_code, assert_has_code, check};
 
 const IN: &str = "\
 class In(Schema):
-    name: \"string\"
-    tags: \"array<int>\"
-    score: \"int\"
-    meta: \"map<string, int>\"
+    name: string
+    tags: Array[int]
+    score: int
+    meta: Map[string, int]
 ";
 
 #[test]
@@ -20,8 +20,8 @@ fn collect_list_wraps_the_element_type() {
     let src = format!(
         "{IN}
 class Out(Schema):
-    name: \"string\"
-    scores: \"array<int>\"
+    name: string
+    scores: Array[int]
 
 def f(d: DataFrame[In]) -> DataFrame[Out]:
     return d.groupBy(\"name\").agg(F.collect_list(\"score\").alias(\"scores\"))
@@ -36,8 +36,8 @@ fn collect_list_element_type_mismatch_is_caught() {
     let src = format!(
         "{IN}
 class Out(Schema):
-    name: \"string\"
-    scores: \"array<string>\"
+    name: string
+    scores: Array[string]
 
 def f(d: DataFrame[In]) -> DataFrame[Out]:
     return d.groupBy(\"name\").agg(F.collect_list(\"score\").alias(\"scores\"))
@@ -52,7 +52,7 @@ fn explode_unwraps_the_array_element() {
     let src = format!(
         "{IN}
 class Out(Schema):
-    t: \"int\"
+    t: int
 
 def f(d: DataFrame[In]) -> DataFrame[Out]:
     return d.select(F.explode(col(\"tags\")).alias(\"t\"))
@@ -67,7 +67,7 @@ fn explode_element_type_mismatch_is_caught() {
     let src = format!(
         "{IN}
 class Out(Schema):
-    t: \"string\"
+    t: string
 
 def f(d: DataFrame[In]) -> DataFrame[Out]:
     return d.select(F.explode(col(\"tags\")).alias(\"t\"))
@@ -81,7 +81,7 @@ fn map_keys_yields_an_array_of_the_key_type() {
     let src = format!(
         "{IN}
 class Out(Schema):
-    ks: \"array<string>\"
+    ks: Array[string]
 
 def f(d: DataFrame[In]) -> DataFrame[Out]:
     return d.select(F.map_keys(col(\"meta\")).alias(\"ks\"))
@@ -95,7 +95,7 @@ fn map_keys_key_type_mismatch_is_caught() {
     let src = format!(
         "{IN}
 class Out(Schema):
-    ks: \"array<int>\"
+    ks: Array[int]
 
 def f(d: DataFrame[In]) -> DataFrame[Out]:
     return d.select(F.map_keys(col(\"meta\")).alias(\"ks\"))
@@ -110,11 +110,11 @@ fn split_yields_an_array_of_strings() {
     let src = format!(
         "{IN}
 class Out(Schema):
-    name: \"string\"
-    tags: \"array<int>\"
-    score: \"int\"
-    meta: \"map<string, int>\"
-    parts: \"array<string>\"
+    name: string
+    tags: Array[int]
+    score: int
+    meta: Map[string, int]
+    parts: Array[string]
 
 def f(d: DataFrame[In]) -> DataFrame[Out]:
     return d.withColumn(\"parts\", F.split(col(\"name\"), \",\"))

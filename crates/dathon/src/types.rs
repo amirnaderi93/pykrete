@@ -246,7 +246,7 @@ impl fmt::Display for ColumnType {
 /// Comma-separated list of the source-form names users can write in a
 /// `.dpy` file. Used inside error messages.
 pub const COLUMN_TYPE_NAMES: &str =
-    "int, long, double, string, bool, date, timestamp, array, map";
+    "int, long, double, string, bool, date, timestamp, Array, Map";
 
 /// Same vocabulary as [`COLUMN_TYPE_NAMES`] but as a slice — fed to the
 /// completion engine when the cursor sits inside a `name: "<cursor>"`
@@ -259,8 +259,8 @@ pub const COLUMN_TYPE_NAMES_LIST: &[&str] = &[
     "bool",
     "date",
     "timestamp",
-    "array",
-    "map",
+    "Array",
+    "Map",
 ];
 
 // ---------------------------------------------------------------------------
@@ -345,7 +345,7 @@ mod tests {
     #[test]
     fn column_type_names_constant_lists_every_type_name() {
         for name in [
-            "int", "long", "double", "string", "bool", "date", "timestamp", "array", "map",
+            "int", "long", "double", "string", "bool", "date", "timestamp", "Array", "Map",
         ] {
             assert!(
                 COLUMN_TYPE_NAMES.contains(name),

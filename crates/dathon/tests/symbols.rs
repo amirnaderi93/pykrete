@@ -29,8 +29,8 @@ fn cursor_at(source: &str, needle: &str) -> (usize, usize) {
 fn document_symbols_lists_top_level_schemas_and_functions() {
     let src = r#"
 class Orders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 
 def prepare_orders(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw
@@ -44,8 +44,8 @@ def prepare_orders(raw: DataFrame[Orders]) -> DataFrame[Orders]:
 fn document_symbols_schema_class_carries_fields_as_children() {
     let src = r#"
 class Orders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 "#;
     let syms = document_symbols(src);
     let orders = syms.first().expect("expected a symbol");
@@ -62,7 +62,7 @@ class Orders(Schema):
 fn document_symbols_schema_field_detail_shows_column_type() {
     let src = r#"
 class Orders(Schema):
-    place_code: "int"
+    place_code: int
 "#;
     let syms = document_symbols(src);
     let field = &syms[0].children[0];
@@ -85,7 +85,7 @@ class Orders(Schema):
 fn document_symbols_typed_function_detail_shows_signature() {
     let src = r#"
 class Orders(Schema):
-    x: "int"
+    x: int
 
 def prepare_orders(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw
@@ -124,7 +124,7 @@ fn document_symbols_non_schema_class_has_no_field_children() {
     // schema — outline shows it but doesn't expand fields.
     let src = r#"
 class Helper:
-    x: "int"
+    x: int
 "#;
     let syms = document_symbols(src);
     let class = &syms[0];
@@ -146,7 +146,7 @@ fn document_symbols_returns_empty_on_parse_error() {
 fn document_symbols_class_selection_range_covers_only_the_name() {
     let src = r#"
 class Orders(Schema):
-    x: "int"
+    x: int
 "#;
     let syms = document_symbols(src);
     let cls = &syms[0];
@@ -176,7 +176,7 @@ fn assert_span_points_to(span: Span, source: &str, needle: &str) {
 fn definition_on_DataFrame_inner_schema_jumps_to_its_class() {
     let src = r#"
 class Orders(Schema):
-    place_code: "int"
+    place_code: int
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw
@@ -198,10 +198,10 @@ def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
 fn definition_on_nested_schema_field_annotation_jumps_to_that_class() {
     let src = r#"
 class Address(Schema):
-    street: "string"
+    street: string
 
 class User(Schema):
-    name: "string"
+    name: string
     address: Address
 "#;
     // Cursor on the `Address` after `address: ` (the field annotation,
@@ -218,10 +218,29 @@ class User(Schema):
 }
 
 #[test]
+fn definition_on_a_schema_nested_in_an_array_subscript_jumps_to_that_class() {
+    let src = r#"
+class Event(Schema):
+    id: int
+
+class Log(Schema):
+    events: Array[Event]
+"#;
+    // Cursor on the `Event` inside `Array[Event]`.
+    let idx = src.find("Array[Event]").unwrap() + "Array[".len();
+    let prefix = &src[..idx];
+    let line = prefix.matches('\n').count() + 1;
+    let col = idx - prefix.rfind('\n').map(|p| p + 1).unwrap_or(0) + 1;
+
+    let span = definition(src, line, col).expect("expected a definition");
+    assert_span_points_to(span, src, "Event");
+}
+
+#[test]
 fn definition_on_schema_class_declaration_name_returns_itself() {
     let src = r#"
 class Orders(Schema):
-    x: "int"
+    x: int
 "#;
     let (line, col) = cursor_at(src, "Orders");
     let span = definition(src, line, col).expect("expected a definition");
@@ -232,7 +251,7 @@ class Orders(Schema):
 fn definition_on_whitespace_returns_none() {
     let src = r#"
 class Orders(Schema):
-    x: "int"
+    x: int
 "#;
     assert!(definition(src, 1, 1).is_none());
 }
@@ -263,8 +282,8 @@ fn definition_on_unparseable_source_returns_none() {
 fn definition_on_col_literal_jumps_to_field_name_in_schema_class() {
     let src = r#"
 class Orders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.select(col("price"))
@@ -278,10 +297,10 @@ def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
 
     let span = definition(src, line, col).expect("expected a definition");
 
-    // The expected target: the `price` token in `price: "int"` inside the
+    // The expected target: the `price` token in `price: int` inside the
     // class body — the *first* occurrence of "price" (the field's
     // target name).
-    let target_idx = src.find("price: \"int\"").unwrap();
+    let target_idx = src.find("price: int").unwrap();
     let tprefix = &src[..target_idx];
     let expected_line = tprefix.matches('\n').count() + 1;
     let expected_col = target_idx - tprefix.rfind('\n').map(|p| p + 1).unwrap_or(0) + 1;
@@ -296,7 +315,7 @@ def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
 fn definition_on_col_literal_for_missing_column_returns_none() {
     let src = r#"
 class Orders(Schema):
-    price: "int"
+    price: int
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.select(col("priec"))

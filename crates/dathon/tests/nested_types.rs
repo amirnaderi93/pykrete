@@ -9,9 +9,9 @@ use common::{assert_does_not_have_code, assert_has_code, check};
 
 const IN: &str = "\
 class In(Schema):
-    tags: \"array<int>\"
-    grid: \"array<array<int>>\"
-    meta: \"map<string, int>\"
+    tags: Array[int]
+    grid: Array[Array[int]]
+    meta: Map[string, int]
 ";
 
 #[test]
@@ -19,7 +19,7 @@ fn array_element_type_mismatch_is_caught() {
     let src = format!(
         "{IN}
 class Out(Schema):
-    tags: \"array<string>\"
+    tags: Array[string]
 
 def f(d: DataFrame[In]) -> DataFrame[Out]:
     return d.select(col(\"tags\"))
@@ -34,7 +34,7 @@ fn matching_array_element_type_passes() {
     let src = format!(
         "{IN}
 class Out(Schema):
-    tags: \"array<int>\"
+    tags: Array[int]
 
 def f(d: DataFrame[In]) -> DataFrame[Out]:
     return d.select(col(\"tags\"))
@@ -50,7 +50,7 @@ fn numeric_widening_applies_inside_collections() {
     let src = format!(
         "{IN}
 class Out(Schema):
-    tags: \"array<long>\"
+    tags: Array[long]
 
 def f(d: DataFrame[In]) -> DataFrame[Out]:
     return d.select(col(\"tags\"))
@@ -64,7 +64,7 @@ fn deeply_nested_array_mismatch_is_caught() {
     let src = format!(
         "{IN}
 class Out(Schema):
-    grid: \"array<array<string>>\"
+    grid: Array[Array[string]]
 
 def f(d: DataFrame[In]) -> DataFrame[Out]:
     return d.select(col(\"grid\"))
@@ -79,7 +79,7 @@ fn map_value_type_mismatch_is_caught() {
     let src = format!(
         "{IN}
 class Out(Schema):
-    meta: \"map<string, string>\"
+    meta: Map[string, string]
 
 def f(d: DataFrame[In]) -> DataFrame[Out]:
     return d.select(col(\"meta\"))
@@ -96,7 +96,7 @@ fn unknown_element_type_is_permissive() {
     let src = format!(
         "{IN}
 class Out(Schema):
-    tags: \"array\"
+    tags: Array
 
 def f(d: DataFrame[In]) -> DataFrame[Out]:
     return d.select(col(\"tags\"))

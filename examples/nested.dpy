@@ -10,26 +10,26 @@
 #     "does not exist on schema 'Address'") — closer to where the bug is.
 
 class Address(Schema):
-    street: "string"
-    city: "string"
+    street: string
+    city: string
 
 
 class GeoPoint(Schema):
-    lat: "double"
-    lon: "double"
+    lat: double
+    lon: double
 
 
 # Three-deep nesting works the same way — each level resolves
 # independently.
 class Place(Schema):
-    name: "string"
+    name: string
     address: Address
     coordinates: GeoPoint
 
 
 class User(Schema):
-    user_id: "int"
-    name: "string"
+    user_id: int
+    name: string
     home: Place
 
 

@@ -8,8 +8,8 @@ use common::{assert_does_not_have_code, assert_has_code, assert_no_diagnostics, 
 
 const SCHEMA: &str = "\
 class Raw(Schema):
-    city: \"string\"
-    amount: \"int\"
+    city: string
+    amount: int
 ";
 
 #[test]

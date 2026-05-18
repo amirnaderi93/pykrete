@@ -508,10 +508,11 @@ fn definition_on_schema_reference_in_function_signature(
     None
 }
 
-/// Cursor on the bare-name annotation of a nested-struct Schema field
-/// (`address: Address`) → the range of `class Address`'s name. The
-/// field being pointed at is in the focus file; the target class may
-/// be imported.
+/// Cursor on a schema-class reference inside a Schema field's type
+/// annotation — a bare `address: Address`, or a name nested inside a
+/// collection (`events: Array[Event]`, `by_id: Map[string, Event]`) →
+/// the range of that class's name. The field being pointed at is in the
+/// focus file; the target class may be imported.
 fn definition_on_schema_reference_in_schema_field(
     offset: TextSize,
     schemas: &[Schema<'_>],
@@ -522,16 +523,35 @@ fn definition_on_schema_reference_in_schema_field(
             continue;
         }
         for field in schema.fields() {
-            if let Expr::Name(name) = field.annotation {
-                if name.range.contains_inclusive(offset) {
-                    if let Some(target) = schemas.iter().find(|s| s.name() == name.id.as_str()) {
-                        return Some((target.file_index, target.class.def.name.range));
-                    }
-                }
+            if let Some(target) = schema_reference_at(field.annotation, offset, schemas) {
+                return Some((target.file_index, target.class.def.name.range));
             }
         }
     }
     None
+}
+
+/// Find the declared `Schema` class referenced at `offset` within a type
+/// annotation — a bare `Name`, or one nested in an `Array[…]` / `Map[…]`
+/// subscript. `None` if the cursor isn't on a schema name.
+fn schema_reference_at<'a>(
+    expr: &Expr,
+    offset: TextSize,
+    schemas: &'a [Schema<'a>],
+) -> Option<&'a Schema<'a>> {
+    match expr {
+        Expr::Name(name) if name.range.contains_inclusive(offset) => {
+            schemas.iter().find(|s| s.name() == name.id.as_str())
+        }
+        // The subscript base (`Array` / `Map`) is a built-in, never a
+        // schema — only the type arguments can reference one.
+        Expr::Subscript(sub) => schema_reference_at(&sub.slice, offset, schemas),
+        Expr::Tuple(tuple) => tuple
+            .elts
+            .iter()
+            .find_map(|elt| schema_reference_at(elt, offset, schemas)),
+        _ => None,
+    }
 }
 
 /// Cursor on a `col("foo")` string literal whose schema and field both

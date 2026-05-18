@@ -73,10 +73,12 @@ powers the "did you mean?" hints.
 
 `ColumnType` — dathon's type system. The atomic vocabulary (`int`, `long`,
 `double`, `string`, `bool`, `date`, `timestamp`) plus the composites
-`Array`, `Map`, and `Struct`, which nest arbitrarily (`array<map<string,
-array<int>>>`, `array<struct<id: int>>`). A recursive type-string parser
-reads the annotation forms; `from_spark_name` handles Spark's wider cast
-vocabulary.
+`Array`, `Map`, and `Struct`, which nest arbitrarily. Schema fields are
+written as ordinary Python type annotations — a bare name for an atomic
+type or a referenced `Schema` class, a subscript for a collection
+(`Array[int]`, `Map[string, Event]`) — which `schema` resolves off the
+AST. `from_spark_name` parses the string form Spark's `.cast("…")` and
+UDF `returnType` still use.
 
 ### `registry`
 
