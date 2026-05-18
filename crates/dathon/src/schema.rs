@@ -248,13 +248,17 @@ fn push_or_override<'ast>(fields: &mut Vec<SchemaField<'ast>>, field: SchemaFiel
 }
 
 /// The ancestor classes a schema inherits fields from — every class
-/// reachable through its base list, nearest base first. The bare
-/// `Schema` marker has no class declaration and simply isn't found; a
-/// base imported from another module isn't found either (cross-file
-/// inheritance is not resolved yet). Guards against an inheritance cycle.
-fn resolve_schema_bases<'ast>(
+/// reachable through its base list, nearest base first. A base name is
+/// resolved against `classes` (the local file) and then `external`
+/// (schemas imported into scope), so cross-file inheritance — a
+/// `class Premium(Orders)` extending an imported `Orders` — resolves to
+/// `Orders`' class in the module it was declared in. The bare `Schema`
+/// marker has no class declaration and is simply not found. Guards
+/// against an inheritance cycle.
+pub(crate) fn schema_base_chain<'ast>(
     class: &'ast DiscoveredClass<'ast>,
     classes: &'ast [DiscoveredClass<'ast>],
+    external: &[Schema<'ast>],
 ) -> Vec<&'ast DiscoveredClass<'ast>> {
     let mut chain: Vec<&'ast DiscoveredClass<'ast>> = Vec::new();
     let mut frontier: Vec<&'ast str> = class.base_names();
@@ -264,7 +268,11 @@ fn resolve_schema_bases<'ast>(
         if steps > MAX_TYPE_DEPTH {
             break;
         }
-        let Some(base_class) = classes.iter().find(|c| c.name() == base) else {
+        let base_class = classes
+            .iter()
+            .find(|c| c.name() == base)
+            .or_else(|| external.iter().find(|s| s.name() == base).map(|s| s.class));
+        let Some(base_class) = base_class else {
             continue;
         };
         if chain.iter().any(|c| std::ptr::eq(*c, base_class)) {
@@ -313,7 +321,7 @@ pub fn discover_schemas<'ast>(classes: &'ast [DiscoveredClass<'ast>]) -> Vec<Sch
         .filter(|&(i, _)| is_schema[i])
         .map(|(_, class)| Schema {
             class,
-            bases: resolve_schema_bases(class, classes),
+            bases: schema_base_chain(class, classes, &[]),
             alias: None,
             file_index: 0,
         })
