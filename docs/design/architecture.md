@@ -73,10 +73,11 @@ field carrying its name and inferred type), or `Grouped { keys, underlying }`
 nested structs, piercing `array<struct>` as Spark does. `suggest_field_name`
 powers the "did you mean?" hints.
 
-`resolve_pick_omit` resolves the `Pick` / `Omit` schema operators —
-`DataFrame[Pick[Orders, "a", "b"]]` is `Orders` narrowed to those
-columns, `Omit[Orders, "x"]` is `Orders` without them — to a `Derived`
-view; a picked/omitted column absent from the base schema is a `D0030`.
+`resolve_derived_schema` resolves the `Pick` / `Omit` / `Merge` schema
+operators — `Pick[Orders, "a", "b"]` narrows `Orders` to those columns,
+`Omit[Orders, "x"]` drops them, `Merge[A, B]` combines two schemas'
+columns — to a `Derived` view; `derived_schema_errors` reports a bad
+column (`D0030`) or an unknown schema (`D0020`).
 
 ### `types`
 

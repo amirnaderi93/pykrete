@@ -60,8 +60,8 @@ use crate::operations::{
 };
 use crate::registry::Registry;
 use crate::schema::{
-    FieldResolution, Schema, SchemaView, discover_schemas, pick_omit_base_name,
-    pick_omit_invalid_columns, resolve_pick_omit,
+    FieldResolution, Schema, SchemaView, derived_schema_errors, discover_schemas,
+    resolve_derived_schema,
 };
 use crate::types::COLUMN_TYPE_NAMES;
 use crate::walk::{DiscoveredFunction, discover_top_level_classes, discover_top_level_functions};
@@ -702,7 +702,7 @@ fn declared_return_schema<'a>(
                 DataFrameAnnotation::Typed(name) => {
                     schemas.iter().find(|s| s.name() == name).map(SchemaView::Declared)
                 }
-                DataFrameAnnotation::Derived(expr) => resolve_pick_omit(expr, schemas),
+                DataFrameAnnotation::Derived(expr) => resolve_derived_schema(expr, schemas),
                 _ => None,
             };
         }
@@ -878,40 +878,23 @@ fn render_function(
                     ));
                 }
             }
-            DataFrameAnnotation::Derived(expr) => match resolve_pick_omit(expr, schemas) {
-                Some(_) => {
+            DataFrameAnnotation::Derived(expr) => {
+                if resolve_derived_schema(expr, schemas).is_some() {
                     writeln!(out, "{prefix}{raw_text}").unwrap();
-                    // Picked / omitted columns absent from the base schema.
-                    for (col, col_range) in pick_omit_invalid_columns(expr, schemas) {
-                        diagnostics.push(Diagnostic::at_range(
-                            Severity::Error,
-                            "D0030",
-                            format!(
-                                "Column '{col}' does not exist on schema '{}'.",
-                                pick_omit_base_name(expr).unwrap_or("?"),
-                            ),
-                            col_range,
-                            source,
-                            line_index,
-                        ));
-                    }
-                }
-                None => {
+                } else {
                     writeln!(out, "{prefix}{raw_text}  (unresolved)").unwrap();
+                }
+                for (code, message, range) in derived_schema_errors(expr, schemas) {
                     diagnostics.push(Diagnostic::at_range(
                         Severity::Error,
-                        "D0020",
-                        format!(
-                            "Unknown schema '{}' in {raw_text}. \
-                             Declare it as a class extending Schema.",
-                            pick_omit_base_name(expr).unwrap_or(raw_text),
-                        ),
-                        ann_range,
+                        code,
+                        message,
+                        range,
                         source,
                         line_index,
                     ));
                 }
-            },
+            }
             DataFrameAnnotation::Untyped => {
                 writeln!(out, "{prefix}DataFrame  (untyped)").unwrap();
             }

@@ -41,14 +41,14 @@ pub fn recognize<'ast>(expr: &'ast Expr) -> Option<DataFrameAnnotation<'ast>> {
             }
             match sub.slice.as_ref() {
                 Expr::Name(inner) => Some(DataFrameAnnotation::Typed(inner.id.as_str())),
-                // `DataFrame[Pick[…]]` / `DataFrame[Omit[…]]` — a
+                // `DataFrame[Pick[…]]` / `Omit[…]` / `Merge[…]` — a
                 // derived-schema operator. Recognized loosely here (the
-                // base is `Pick`/`Omit`); the inner shape is validated
-                // when the expression is resolved against schemas.
+                // base names a known operator); the inner shape is
+                // validated when resolved against schemas.
                 inner @ Expr::Subscript(s)
                     if s.value
                         .as_name_expr()
-                        .is_some_and(|n| matches!(n.id.as_str(), "Pick" | "Omit")) =>
+                        .is_some_and(|n| matches!(n.id.as_str(), "Pick" | "Omit" | "Merge")) =>
                 {
                     Some(DataFrameAnnotation::Derived(inner))
                 }
