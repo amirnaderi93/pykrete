@@ -35,8 +35,8 @@ use lsp_types::{
     DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
     GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
     HoverProviderCapability, Location, MarkupContent, MarkupKind, NumberOrString, OneOf, Position,
-    PublishDiagnosticsParams, Range, ServerCapabilities, SymbolKind, TextDocumentSyncCapability,
-    TextDocumentSyncKind, TextEdit, Url, WorkspaceEdit,
+    PublishDiagnosticsParams, Range, ReferenceParams, ServerCapabilities, SymbolKind,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url, WorkspaceEdit,
 };
 
 pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
@@ -49,6 +49,7 @@ pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
         definition_provider: Some(OneOf::Left(true)),
+        references_provider: Some(OneOf::Left(true)),
         completion_provider: Some(CompletionOptions {
             // Editors invoke completion automatically after the user types
             // one of these characters. `"` for `col("…")`, `.` for `df.…`,
@@ -392,13 +393,25 @@ fn handle_request(
             let dathon_result = serde_json::to_value(handle_completion(docs, params))?;
             fanout_request(connection, multiplexer, docs, req, dathon_result)?;
         }
+        "textDocument/references" => {
+            let params: ReferenceParams = serde_json::from_value(req.params.clone())?;
+            let refs = handle_references(docs, params);
+            // An empty list would merge as "dathon found nothing"; send
+            // `null` instead so `merge_locations` falls back cleanly to
+            // the child engine's references.
+            let dathon_result = if refs.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::to_value(refs)?
+            };
+            fanout_request(connection, multiplexer, docs, req, dathon_result)?;
+        }
         // These are pure passthrough — dathon has no schema-specific
         // answer, so dathon's result is `null` and the merge just
         // returns the (remapped) child result. They're only advertised
         // to the editor when the embedded engine provides them (see
         // `merge_capabilities`).
         "textDocument/signatureHelp"
-        | "textDocument/references"
         | "textDocument/documentHighlight"
         | "textDocument/rename"
         | "textDocument/prepareRename"
@@ -567,6 +580,30 @@ pub fn handle_definition(
         range: span_to_range(span),
     };
     Some(GotoDefinitionResponse::Scalar(location))
+}
+
+/// Handle a `textDocument/references` request by routing through
+/// `dathon::references` — every use of the column under the cursor.
+/// Single-file in v0.1; all results carry the request's document URI.
+pub fn handle_references(docs: &HashMap<Url, String>, params: ReferenceParams) -> Vec<Location> {
+    let uri = params.text_document_position.text_document.uri.clone();
+    let pos = params.text_document_position.position;
+    let Some(text) = docs.get(&uri) else {
+        return Vec::new();
+    };
+    let (Some(line), Some(column)) = (
+        (pos.line as usize).checked_add(1),
+        (pos.character as usize).checked_add(1),
+    ) else {
+        return Vec::new();
+    };
+    dathon::references(text, line, column)
+        .into_iter()
+        .map(|span| Location {
+            uri: uri.clone(),
+            range: span_to_range(span),
+        })
+        .collect()
 }
 
 /// Handle a `textDocument/completion` request by routing through
