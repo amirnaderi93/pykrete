@@ -1538,6 +1538,27 @@ struct TypeCtx<'a> {
 /// dathon doesn't model, a column off an un-inferred schema, an
 /// unmodeled literal. `None` is permissive: it is never itself a type
 /// error, only the absence of information.
+/// True if `expr` is `lit(None)` / `F.lit(None)` — an explicit null
+/// literal. An untyped null is rarely useful on its own; it is usually
+/// `.cast(...)` to a concrete type, and the cast carries the type while
+/// this carries the nullability.
+fn expr_is_null_literal(expr: &Expr) -> bool {
+    let Some(call) = expr.as_call_expr() else {
+        return false;
+    };
+    let fname = match call.func.as_ref() {
+        Expr::Name(n) => n.id.as_str(),
+        Expr::Attribute(a) => a.attr.id.as_str(),
+        _ => return false,
+    };
+    fname == "lit"
+        && call
+            .arguments
+            .args
+            .first()
+            .is_some_and(|a| a.is_none_literal_expr())
+}
+
 fn infer_expr_type<'a>(
     expr: &Expr,
     schema: &SchemaView<'a>,
@@ -1558,12 +1579,23 @@ fn infer_expr_type<'a>(
                         return infer_expr_type(&attr.value, schema, tcx);
                     }
                     // `<expr>.cast("int")` / `.cast(IntegerType())`.
+                    // A cast carries nullability through: a nullable
+                    // input — or a `lit(None)` — casts to a nullable
+                    // column of the target type.
                     "cast" => {
-                        return call
+                        let target = call
                             .arguments
                             .args
                             .first()
-                            .and_then(crate::registry::spark_type_from_expr);
+                            .and_then(crate::registry::spark_type_from_expr)?;
+                        let nullable = expr_is_null_literal(&attr.value)
+                            || infer_expr_type(&attr.value, schema, tcx)
+                                .is_some_and(|t| t.is_nullable());
+                        return Some(if nullable {
+                            ColumnType::Nullable(Box::new(target))
+                        } else {
+                            target
+                        });
                     }
                     _ => {}
                 }
