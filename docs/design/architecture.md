@@ -85,13 +85,16 @@ inline-schema type (`D0010` / `D0011`).
 ### `types`
 
 `ColumnType` — dathon's type system. The atomic vocabulary (`int`, `long`,
-`double`, `string`, `bool`, `date`, `timestamp`) plus the composites
-`Array`, `Map`, and `Struct`, which nest arbitrarily. Schema fields are
+`double`, `string`, `bool`, `date`, `timestamp`), the composites `Array`,
+`Map`, and `Struct`, which nest arbitrarily, and `Nullable` — an
+`Optional[T]` column, Spark's per-column nullable flag. Schema fields are
 written as ordinary Python type annotations — a bare name for an atomic
 type or a referenced `Schema` class, a subscript for a collection
-(`Array[int]`, `Map[string, Event]`) — which `schema` resolves off the
-AST. `from_spark_name` parses the string form Spark's `.cast("…")` and
-UDF `returnType` still use.
+(`Array[int]`, `Map[string, Event]`) or a nullable column
+(`Optional[int]`) — which `schema` resolves off the AST. `Nullable` is
+transparent to the default-mode checks and flagged by the strict mode.
+`from_spark_name` parses the string form Spark's `.cast("…")` and UDF
+`returnType` still use.
 
 ### `registry`
 
@@ -190,6 +193,7 @@ CLI — `dathon check <files…>` and `dathon transpile <file>`.
 | `D0070` / `D0071` | Unresolved import / name not exported by a module. |
 | `D0080` | Return type mismatch — a column's *type* differs (conservative; on by default). |
 | `D0081` / `D0082` | Arithmetic on a non-numeric column / comparison of unrelated types (advisory; `typeCheckingMode: strict` only). |
+| `D0083` | A nullable column declared non-nullable by the return type (advisory; `typeCheckingMode: strict` only). |
 
 ## Column-type checking
 
@@ -199,11 +203,13 @@ Type checking is split by strictness:
 - **Conservative** (default) — `D0080` flags a declared-return type
   mismatch only when both types are confidently known and genuinely
   incompatible. Unknown types are permissive; numeric widening
-  (`int`/`long`/`double`) is accepted.
+  (`int`/`long`/`double`) is accepted, and nullability is transparent
+  (`Optional[int]` behaves as `int`).
 - **Strict** (`typeCheckingMode: strict`) — `D0081`/`D0082` additionally
-  flag type combinations Spark *coerces* rather than rejects. They are
-  emitted at `min_mode: Strict`, so the driver surfaces them only in
-  strict mode.
+  flag type combinations Spark *coerces* rather than rejects, and
+  `D0083` flags a nullable value flowing into a column the return type
+  declares non-nullable. They are emitted at `min_mode: Strict`, so the
+  driver surfaces them only in strict mode.
 
 ## Multi-file analysis
 
