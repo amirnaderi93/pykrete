@@ -884,7 +884,7 @@ fn render_function(
                 } else {
                     writeln!(out, "{prefix}{raw_text}  (unresolved)").unwrap();
                 }
-                for (code, message, range) in derived_schema_errors(expr, schemas) {
+                for (code, message, range) in derived_schema_errors(expr, schemas, source) {
                     diagnostics.push(Diagnostic::at_range(
                         Severity::Error,
                         code,

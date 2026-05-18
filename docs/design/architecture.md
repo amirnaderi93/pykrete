@@ -73,11 +73,14 @@ field carrying its name and inferred type), or `Grouped { keys, underlying }`
 nested structs, piercing `array<struct>` as Spark does. `suggest_field_name`
 powers the "did you mean?" hints.
 
-`resolve_derived_schema` resolves the `Pick` / `Omit` / `Merge` schema
-operators — `Pick[Orders, "a", "b"]` narrows `Orders` to those columns,
+`resolve_derived_schema` resolves a derived-schema expression to a
+`Derived` view — the `Pick` / `Omit` / `Merge` operators
+(`Pick[Orders, "a", "b"]` narrows `Orders` to those columns,
 `Omit[Orders, "x"]` drops them, `Merge[A, B]` combines two schemas'
-columns — to a `Derived` view; `derived_schema_errors` reports a bad
-column (`D0030`) or an unknown schema (`D0020`).
+columns), and the inline structural schema `{col: type, …}` (an
+anonymous schema, no `class` needed). `derived_schema_errors` reports a
+bad column (`D0030`), an unknown schema (`D0020`), or an unresolvable
+inline-schema type (`D0010` / `D0011`).
 
 ### `types`
 
@@ -101,9 +104,9 @@ constants), and UDFs (`@udf` / `@pandas_udf` decorators and the functional
 ### `dataframe`
 
 Recognizes `DataFrame[X]` annotations on function signatures —
-`Untyped` / `Typed("Foo")` / `Derived` (a `Pick` / `Omit` operator,
-resolved by `schema`) / `NonBareName` — and the typed parameter /
-return slots.
+`Untyped` / `Typed("Foo")` / `Derived` (a `Pick` / `Omit` / `Merge`
+operator or an inline `{…}` schema, resolved by `schema`) /
+`NonBareName` — and the typed parameter / return slots.
 
 ### `imports`
 
