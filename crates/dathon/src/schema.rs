@@ -18,6 +18,13 @@ const MAX_TYPE_DEPTH: usize = 24;
 #[derive(Debug)]
 pub struct Schema<'ast> {
     pub class: &'ast DiscoveredClass<'ast>,
+    /// Ancestor classes this schema inherits fields from, nearest base
+    /// first — resolved from the class hierarchy at discovery. Empty for
+    /// a schema that extends only the bare `Schema` marker; a subclass
+    /// `class Premium(Orders)` carries `[Orders]` here, so `fields()`
+    /// surfaces `Orders`' columns too. Same-file bases only — a base
+    /// imported from another module is not resolved.
+    pub bases: Vec<&'ast DiscoveredClass<'ast>>,
     /// Set when this schema was pulled in via `from X import Y as Z` —
     /// the importing file should see it under the local name `Z`, even
     /// though its actual class declaration is `class Y(Schema)`. `None`
@@ -90,18 +97,6 @@ impl<'ast> SchemaField<'ast> {
 }
 
 impl<'ast> Schema<'ast> {
-    pub fn from_class(class: &'ast DiscoveredClass<'ast>) -> Option<Self> {
-        if class.has_base("Schema") {
-            Some(Self {
-                class,
-                alias: None,
-                file_index: 0,
-            })
-        } else {
-            None
-        }
-    }
-
     /// The name this schema should resolve under in the current scope —
     /// the alias if one is set, otherwise the class's declared name.
     pub fn name(&self) -> &'ast str {
@@ -115,20 +110,21 @@ impl<'ast> Schema<'ast> {
         self.class.name()
     }
 
+    /// Every column of this schema — inherited columns first (farthest
+    /// ancestor to nearest), then this class's own. A column redeclared
+    /// in a subclass overrides the inherited one: it keeps the inherited
+    /// position but takes the subclass's annotation.
     pub fn fields(&self) -> Vec<SchemaField<'ast>> {
-        self.class
-            .def
-            .body
-            .iter()
-            .filter_map(|stmt| {
-                let ann = stmt.as_ann_assign_stmt()?;
-                let name = ann.target.as_name_expr()?.id.as_str();
-                Some(SchemaField {
-                    name,
-                    annotation: &ann.annotation,
-                })
-            })
-            .collect()
+        let mut fields: Vec<SchemaField<'ast>> = Vec::new();
+        for base in self.bases.iter().rev() {
+            for field in class_body_fields(base) {
+                push_or_override(&mut fields, field);
+            }
+        }
+        for field in class_body_fields(self.class) {
+            push_or_override(&mut fields, field);
+        }
+        fields
     }
 
     pub fn has_field(&self, name: &str) -> bool {
@@ -218,8 +214,105 @@ fn schema_as_struct(schema: &Schema<'_>, schemas: &[Schema<'_>], depth: usize) -
     ColumnType::Struct(fields)
 }
 
+/// The `name: type` annotated assignments in a class body, in order.
+/// Methods, plain assignments, docstrings and nested classes are skipped.
+fn class_body_fields<'ast>(class: &'ast DiscoveredClass<'ast>) -> Vec<SchemaField<'ast>> {
+    class
+        .def
+        .body
+        .iter()
+        .filter_map(|stmt| {
+            let ann = stmt.as_ann_assign_stmt()?;
+            let name = ann.target.as_name_expr()?.id.as_str();
+            Some(SchemaField {
+                name,
+                annotation: &ann.annotation,
+            })
+        })
+        .collect()
+}
+
+/// Append `field`, or — if a field of the same name is already present —
+/// overwrite it in place. A subclass redeclaration wins over the
+/// inherited column while keeping that column's position.
+fn push_or_override<'ast>(fields: &mut Vec<SchemaField<'ast>>, field: SchemaField<'ast>) {
+    match fields.iter_mut().find(|f| f.name == field.name) {
+        Some(existing) => *existing = field,
+        None => fields.push(field),
+    }
+}
+
+/// The ancestor classes a schema inherits fields from — every class
+/// reachable through its base list, nearest base first. The bare
+/// `Schema` marker has no class declaration and simply isn't found; a
+/// base imported from another module isn't found either (cross-file
+/// inheritance is not resolved yet). Guards against an inheritance cycle.
+fn resolve_schema_bases<'ast>(
+    class: &'ast DiscoveredClass<'ast>,
+    classes: &'ast [DiscoveredClass<'ast>],
+) -> Vec<&'ast DiscoveredClass<'ast>> {
+    let mut chain: Vec<&'ast DiscoveredClass<'ast>> = Vec::new();
+    let mut frontier: Vec<&'ast str> = class.base_names();
+    let mut steps = 0;
+    while let Some(base) = frontier.pop() {
+        steps += 1;
+        if steps > MAX_TYPE_DEPTH {
+            break;
+        }
+        let Some(base_class) = classes.iter().find(|c| c.name() == base) else {
+            continue;
+        };
+        if chain.iter().any(|c| std::ptr::eq(*c, base_class)) {
+            continue;
+        }
+        chain.push(base_class);
+        frontier.extend(base_class.base_names());
+    }
+    chain
+}
+
+/// Discover every `Schema` class in `classes`.
+///
+/// A class is a schema if one of its bases is the bare `Schema` marker,
+/// or another class that is itself a schema — `class Premium(Orders)`
+/// inherits Schema-ness, to any depth. The set is resolved as a fixpoint
+/// over the class list. Each resulting [`Schema`] carries its ancestor
+/// chain in [`Schema::bases`], so `fields()` surfaces inherited columns.
 pub fn discover_schemas<'ast>(classes: &'ast [DiscoveredClass<'ast>]) -> Vec<Schema<'ast>> {
-    classes.iter().filter_map(Schema::from_class).collect()
+    let mut is_schema: Vec<bool> = classes.iter().map(|c| c.has_base("Schema")).collect();
+    loop {
+        let mut changed = false;
+        for i in 0..classes.len() {
+            if is_schema[i] {
+                continue;
+            }
+            let extends_a_schema = classes[i].base_names().iter().any(|&base| {
+                classes
+                    .iter()
+                    .position(|c| c.name() == base)
+                    .is_some_and(|j| is_schema[j])
+            });
+            if extends_a_schema {
+                is_schema[i] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    classes
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| is_schema[i])
+        .map(|(_, class)| Schema {
+            class,
+            bases: resolve_schema_bases(class, classes),
+            alias: None,
+            file_index: 0,
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

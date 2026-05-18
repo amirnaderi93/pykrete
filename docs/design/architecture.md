@@ -54,11 +54,15 @@ Read-only AST discovery — `discover_top_level_classes`,
 
 ### `schema`
 
-Schema classes (a Python class whose bases include `Schema`) and field
-resolution. `SchemaField::resolve` produces a `FieldResolution`;
-`field_type` resolves a field's full [`ColumnType`], recursively — nested
-`array` / `map` element types and `struct` fields included, descending
-into referenced `Schema` classes (depth-guarded against a cyclic schema).
+Schema classes and field resolution. A class is a schema if its bases
+include `Schema`, or another schema class — `class Premium(Orders)`
+inherits Schema-ness, to any depth (`discover_schemas` resolves the set
+as a fixpoint). An inheriting schema's columns are its bases' columns
+followed by its own; a redeclared column takes the subclass's type.
+`SchemaField::resolve` produces a `FieldResolution`; `field_type`
+resolves a field's full [`ColumnType`], recursively — nested `array` /
+`map` element types and `struct` fields included, descending into
+referenced `Schema` classes (depth-guarded against a cyclic schema).
 
 `SchemaView` is the unified view used during analysis — `Declared(&Schema)`,
 `Derived(Vec<DerivedField>)` (a schema inferred from an operation, each
