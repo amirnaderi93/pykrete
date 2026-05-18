@@ -142,6 +142,13 @@ column expression (`col(...)`, `.cast(...)`, `F.lit(...)`, literals, and a
 `collect_list(T) → array<T>` and `explode(array<T>) → T`). Result builders
 carry inferred types into `Derived` schemas.
 
+**Nullability tracking** — an outer join leaves the other side's columns
+null on an unmatched row, so `apply_join` marks them `Nullable` (a `left`
+join → the right side, `right` → the left, `outer` → both; join keys
+stay non-null). `coalesce` / `fillna` / `dropna` / `na.fill` / `na.drop`
+clear it again. The strict-mode `D0083` flags a column the body produces
+nullable that the return type declares non-null.
+
 **Embedded SQL** — column references inside `F.expr("…")`, `selectExpr("…")`,
 and string-form `filter("…")` are parsed (see `sql`) and checked.
 
