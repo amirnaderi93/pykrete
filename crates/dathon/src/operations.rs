@@ -808,11 +808,15 @@ fn analyze_method_call<'a>(
     if matches!(method, "fill" | "drop" | "replace") {
         if let Some(inner) = attr.value.as_attribute_expr() {
             if inner.attr.id.as_str() == "na" {
-                let recv = analyze_expr(&inner.value, ctx, source, line_index, diagnostics);
-                if let Some(schema) = &recv {
-                    check_subset_kwarg(call, schema, ctx, source, line_index, diagnostics);
-                }
-                return recv;
+                let recv = analyze_expr(&inner.value, ctx, source, line_index, diagnostics)?;
+                check_subset_kwarg(call, &recv, ctx, source, line_index, diagnostics);
+                // `na.fill` / `na.drop` clear nulls from the affected
+                // columns; `na.replace` doesn't.
+                return Some(if matches!(method, "fill" | "drop") {
+                    strip_nullability(&recv, ctx.schemas())
+                } else {
+                    recv
+                });
             }
         }
     }
@@ -1016,6 +1020,11 @@ fn analyze_method_call<'a>(
     // points. Treat them as pass-throughs so a chain like
     // `raw.persist().filter(col("x"))` keeps tracking the schema
     // instead of dying at `.persist()`.
+    // `fillna` substitutes a value for nulls — the filled columns are no
+    // longer nullable. (`dropna` is a column method, handled there.)
+    if method == "fillna" {
+        return Some(strip_nullability(&receiver, ctx.schemas()));
+    }
     if is_pass_through_method(method) {
         return Some(receiver);
     }
@@ -1047,12 +1056,10 @@ fn is_pass_through_method(method: &str) -> bool {
             | "distinct"
             | "sample"
             | "alias"
-            // Null-handling methods reshape rows, never columns — the
-            // output schema is exactly the receiver's. Their arguments
-            // are fill values / subsets, not column expressions, so
-            // there's nothing to check (and treating them as
-            // pass-throughs keeps the chain alive for what follows).
-            | "fillna"
+            // `replace` swaps values but doesn't specifically clear
+            // nulls, so the schema — nullability included — is the
+            // receiver's. (`fillna` / `dropna` *do* clear nulls; they
+            // are handled explicitly, not as pass-throughs.)
             | "replace"
     )
 }
@@ -1646,8 +1653,11 @@ fn function_result_type(name: &str, first_arg: Option<ColumnType>) -> Option<Col
     }
     // Functions whose result type depends on the first argument.
     match name {
+        // Null-coalescing — the result is non-null when *any* argument
+        // is. Conservatively drop nullability (this only under-reports).
+        "coalesce" | "nvl" | "ifnull" => first_arg.map(|t| t.base().clone()),
         "min" | "max" | "first" | "last" | "first_value" | "last_value" | "greatest"
-        | "least" | "coalesce" | "nvl" | "ifnull" | "nanvl" | "abs" | "round" | "bround"
+        | "least" | "nanvl" | "abs" | "round" | "bround"
         | "negative" | "positive" => first_arg,
         "ceil" | "ceiling" | "floor" => Some(Long),
         // `sum` widens an integral input to long; a double stays double.
@@ -1947,7 +1957,10 @@ fn apply_column_method<'a>(
             }
             Some(SchemaView::Derived(fields))
         }
-        "filter" | "where" | "dropDuplicates" | "dropna" => Some(recv.clone()),
+        "filter" | "where" | "dropDuplicates" => Some(recv.clone()),
+        // `dropna` drops rows containing nulls — the surviving rows have
+        // none, so the columns are no longer nullable.
+        "dropna" => Some(strip_nullability(recv, tcx.schemas)),
         "drop" => {
             let drop_set: HashSet<&str> = call
                 .arguments
@@ -2381,7 +2394,13 @@ fn handle_two_df_method<'a>(
                     ctx.record_column_ref(range, name, left.clone());
                 }
             }
-            Some(apply_join(left, &right, &on, ctx.schemas()))
+            Some(apply_join(
+                left,
+                &right,
+                &on,
+                extract_how_arg(call),
+                ctx.schemas(),
+            ))
         }
         TwoDfMethod::CrossJoin => Some(apply_concat(left, &right, ctx.schemas())),
     }
@@ -2435,6 +2454,47 @@ fn extract_on_arg<'a>(call: &'a ExprCall) -> Option<&'a Expr> {
         }
     }
     call.arguments.args.get(1)
+}
+
+/// The join strategy — which side, if any, an unmatched row leaves null.
+#[derive(Clone, Copy)]
+enum JoinHow {
+    /// `inner` (the default), `cross`, `semi`, `anti` — no new nulls.
+    Inner,
+    /// `left` / `left_outer` — unmatched left rows null the right side.
+    Left,
+    /// `right` / `right_outer` — unmatched right rows null the left side.
+    Right,
+    /// `outer` / `full` / `full_outer` — either side can be null.
+    Outer,
+}
+
+/// Map a Spark `how=` string to a [`JoinHow`]. Unknown / inner-like
+/// strategies (`inner`, `cross`, `semi`, `anti`) all map to `Inner` —
+/// none introduce nulls.
+fn join_how(s: &str) -> JoinHow {
+    match s.to_ascii_lowercase().replace('_', "").as_str() {
+        "left" | "leftouter" => JoinHow::Left,
+        "right" | "rightouter" => JoinHow::Right,
+        "outer" | "full" | "fullouter" => JoinHow::Outer,
+        _ => JoinHow::Inner,
+    }
+}
+
+/// The join strategy of a `.join(...)` call — the `how=` keyword, or the
+/// third positional argument. Absent / non-string → `Inner`.
+fn extract_how_arg(call: &ExprCall) -> JoinHow {
+    let how_expr = call
+        .arguments
+        .keywords
+        .iter()
+        .find(|kw| kw.arg.as_ref().is_some_and(|n| n.id.as_str() == "how"))
+        .map(|kw| &kw.value)
+        .or_else(|| call.arguments.args.get(2));
+    match how_expr.and_then(|e| e.as_string_literal_expr()) {
+        Some(s) => join_how(s.value.to_str()),
+        None => JoinHow::Inner,
+    }
 }
 
 fn parse_on_arg<'a>(expr: Option<&'a Expr>) -> JoinOn<'a> {
@@ -2513,13 +2573,30 @@ fn apply_join<'a>(
     left: &SchemaView<'a>,
     right: &SchemaView<'a>,
     on: &JoinOn<'_>,
+    how: JoinHow,
     schemas: &'a [Schema<'a>],
 ) -> SchemaView<'a> {
     let dedup_set: HashSet<&str> = match on {
         JoinOn::Keys(keys) => keys.iter().map(|(n, _)| *n).collect(),
         _ => HashSet::new(),
     };
-    let mut result: Vec<DerivedField<'a>> = left.typed_fields(schemas);
+    // An outer join leaves the other side's columns null on an unmatched
+    // row: a `left` join makes the right side nullable, `right` the left,
+    // `outer` both. The join keys are coalesced and stay non-null.
+    let (left_nullable, right_nullable) = match how {
+        JoinHow::Inner => (false, false),
+        JoinHow::Left => (false, true),
+        JoinHow::Right => (true, false),
+        JoinHow::Outer => (true, true),
+    };
+    let mut result: Vec<DerivedField<'a>> = left
+        .typed_fields(schemas)
+        .into_iter()
+        .map(|f| {
+            let nullable = left_nullable && !dedup_set.contains(f.name);
+            with_nullability(f, nullable)
+        })
+        .collect();
     for f in right.typed_fields(schemas) {
         // The join key(s) are already in result from the left side.
         if dedup_set.contains(f.name) {
@@ -2527,10 +2604,43 @@ fn apply_join<'a>(
         }
         // Non-key shared names: left wins.
         if !result.iter().any(|r| r.name == f.name) {
-            result.push(f);
+            result.push(with_nullability(f, right_nullable));
         }
     }
     SchemaView::Derived(result)
+}
+
+/// Wrap a field's type in `Nullable` when `nullable` and a type is
+/// known. A no-op when `nullable` is false or the type is unknown, and
+/// idempotent — an already-nullable type isn't double-wrapped.
+fn with_nullability(mut f: DerivedField<'_>, nullable: bool) -> DerivedField<'_> {
+    if nullable {
+        if let Some(ty) = f.ty {
+            f.ty = Some(match ty {
+                ColumnType::Nullable(_) => ty,
+                other => ColumnType::Nullable(Box::new(other)),
+            });
+        }
+    }
+    f
+}
+
+/// Every column of `view` with any `Nullable` wrapper peeled off — the
+/// effect of a null-clearing operation (`fillna`, `dropna`, `na.fill`,
+/// `na.drop`). Conservative: it clears nullability from the whole
+/// schema, which can only under-report (never false-flag).
+fn strip_nullability<'a>(view: &SchemaView<'a>, schemas: &'a [Schema<'a>]) -> SchemaView<'a> {
+    let fields = view
+        .typed_fields(schemas)
+        .into_iter()
+        .map(|mut f| {
+            if let Some(ty) = &f.ty {
+                f.ty = Some(ty.base().clone());
+            }
+            f
+        })
+        .collect();
+    SchemaView::Derived(fields)
 }
 
 /// Schema concatenation for crossJoin: every field from both sides; shared
