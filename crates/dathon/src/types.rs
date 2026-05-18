@@ -26,6 +26,11 @@ pub enum ColumnType {
     /// `Schema` class. Compared structurally (field order matters, as
     /// in Spark).
     Struct(Vec<StructField>),
+    /// A nullable column — written `Optional[T]`. Wraps the underlying
+    /// type; mirrors Spark's per-column `nullable` flag. Nullability is
+    /// transparent to the conservative checks (`Nullable(T)` behaves as
+    /// `T`); the strict mode flags a nullable value declared non-null.
+    Nullable(Box<ColumnType>),
 }
 
 /// One field of a [`ColumnType::Struct`] — its name and type. `ty` is
@@ -75,13 +80,32 @@ impl ColumnType {
     }
 
     /// Whether this is a composite type — `array`, `map`, or `struct` —
-    /// as opposed to an atomic (`int`, `string`, …).
+    /// as opposed to an atomic (`int`, `string`, …). A `Nullable`
+    /// wrapper is transparent: `Optional[Array[int]]` is still composite.
     pub fn is_composite(&self) -> bool {
-        matches!(self, Self::Array(_) | Self::Map(..) | Self::Struct(_))
+        match self {
+            Self::Array(_) | Self::Map(..) | Self::Struct(_) => true,
+            Self::Nullable(inner) => inner.is_composite(),
+            _ => false,
+        }
+    }
+
+    /// True if this is a `Nullable(…)` — an `Optional[T]` column.
+    pub fn is_nullable(&self) -> bool {
+        matches!(self, Self::Nullable(_))
+    }
+
+    /// The underlying type with any `Nullable` wrapper peeled off.
+    pub fn base(&self) -> &ColumnType {
+        match self {
+            Self::Nullable(inner) => inner.base(),
+            other => other,
+        }
     }
 
     /// The bare kind name — the atomic name, or `array` / `map` without
     /// their element types. For the full nested rendering use `Display`.
+    /// A `Nullable` wrapper is peeled — it isn't itself a "kind".
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Int => "Int",
@@ -94,6 +118,7 @@ impl ColumnType {
             Self::Array(_) => "array",
             Self::Map(..) => "map",
             Self::Struct(_) => "struct",
+            Self::Nullable(inner) => inner.as_str(),
         }
     }
 }
@@ -238,6 +263,7 @@ impl fmt::Display for ColumnType {
                 }
                 f.write_str(">")
             }
+            Self::Nullable(inner) => write!(f, "{inner}?"),
             atomic => f.write_str(atomic.as_str()),
         }
     }

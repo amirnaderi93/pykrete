@@ -179,6 +179,10 @@ fn resolve_annotation_type(
                 "Array" | "array" => Some(ColumnType::Array(Some(Box::new(
                     resolve_annotation_type(&sub.slice, schemas, depth)?,
                 )))),
+                // `Optional[T]` — a nullable column.
+                "Optional" => Some(ColumnType::Nullable(Box::new(resolve_annotation_type(
+                    &sub.slice, schemas, depth,
+                )?))),
                 "Map" | "map" => {
                     let tuple = sub.slice.as_tuple_expr()?;
                     let [key, value] = tuple.elts.as_slice() else {
@@ -544,6 +548,8 @@ fn resolve_in_type<'a>(ty: &ColumnType, segments: &[&'a str]) -> FieldPathResult
                 None => FieldPathResult::Resolved,
             },
         },
+        // A nullable column navigates as its underlying type.
+        ColumnType::Nullable(inner) => resolve_in_type(inner, segments),
         // An array of unknown element, or a map — can't navigate further;
         // degrade rather than false-flag.
         ColumnType::Array(None) | ColumnType::Map(..) => FieldPathResult::Resolved,

@@ -589,6 +589,11 @@ fn types_compatible(a: &ColumnType, b: &ColumnType) -> bool {
         }
     }
     match (a, b) {
+        // Nullability is transparent to the conservative check —
+        // `Optional[T]` behaves as `T`. The strict mode flags a nullable
+        // value declared non-null separately (`D0083`).
+        (ColumnType::Nullable(x), _) => types_compatible(x, b),
+        (_, ColumnType::Nullable(y)) => types_compatible(a, y),
         (ColumnType::Array(x), ColumnType::Array(y)) => element_ok(x, y),
         (ColumnType::Map(k1, v1), ColumnType::Map(k2, v2)) => {
             element_ok(k1, k2) && element_ok(v1, v2)
@@ -647,6 +652,26 @@ fn check_return_type<'a>(
                     source,
                     line_index,
                 ));
+            }
+            // Strict: a nullable value flowing into a column the return
+            // type declares non-nullable. Conservative mode stays quiet
+            // — Spark's nullable flag is loose — so this is `min_mode:
+            // Strict`, like the other strict type checks.
+            if actual_ty.is_nullable() && !declared_ty.is_nullable() {
+                diagnostics.push(
+                    Diagnostic::at_range(
+                        Severity::Warning,
+                        "D0083",
+                        format!(
+                            "Column '{name}' is nullable in the body, but {declared_label} \
+                             declares it non-nullable."
+                        ),
+                        range,
+                        source,
+                        line_index,
+                    )
+                    .with_min_mode(CheckMode::Strict),
+                );
             }
         }
     }
@@ -1717,6 +1742,9 @@ fn type_family(t: &ColumnType) -> TypeFamily {
         ColumnType::Array(_) | ColumnType::Map(..) | ColumnType::Struct(_) => {
             TypeFamily::Collection
         }
+        // Nullability doesn't change the family — `Optional[int]` is
+        // still numeric.
+        ColumnType::Nullable(inner) => type_family(inner),
     }
 }
 
