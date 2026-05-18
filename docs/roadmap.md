@@ -23,28 +23,18 @@ The **PySpark static checker is feature-complete**:
 - A `pyspark.sql.functions` result catalog and UDF return types.
 - Cross-file imports and shared-schema modules.
 
-The **LSP server** delivers live diagnostics, hover, completion, document
-symbols, and go-to-definition, and embeds a Python language server (an
-LSP multiplexer — see [design/multiplexer.md](design/multiplexer.md)). The
-**VS Code extension** ([../editors/vscode/](../editors/vscode/)) wraps it.
+The **LSP server** delivers live diagnostics, hover, completion (column
+names in bare-string arguments and on chain results), document symbols,
+go-to-definition, find-references, rename, and semantic tokens, and embeds
+a Python language server (an LSP multiplexer — see
+[design/multiplexer.md](design/multiplexer.md)). The **VS Code extension**
+([../editors/vscode/](../editors/vscode/)) wraps it.
 
-## Next: editor features
-
-- **Autocomplete completeness** — column-name completion in bare-string
-  arguments (`.select("…")`, `.groupBy("…")`, `.join(on="…")`,
-  `.drop("…")`, `.withColumnRenamed("…")`), and on chain results
-  (`raw.select(...).<cursor>`).
-- **Find references**, **rename**, **semantic tokens** — broader LSP
-  coverage.
-
-## Transpiler
-
-`.dpy` → `.py` is nearly an identity transform — it prepends
-`from __future__ import annotations` so dathon's atomic type names and
-`DataFrame[X]` annotations don't evaluate at runtime. Remaining: strip the
-dathon-only constructs the Python runtime doesn't have — notably the
-fluent schema-cast `.cast(DataFrame[Schema])`, which the transpiler must
-remove from the call chain.
+The **`.dpy` → `.py` transpiler** is complete: it prepends
+`from __future__ import annotations` (so dathon's atomic type names and
+`DataFrame[X]` annotations don't evaluate at runtime) and strips the
+schema-cast `.cast(DataFrame[Schema])` — the one dathon-only construct in
+expression position, which the Python runtime has no `.cast` method for.
 
 ## PyCharm support
 

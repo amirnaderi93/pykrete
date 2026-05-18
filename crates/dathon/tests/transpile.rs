@@ -87,3 +87,41 @@ fn orders_example_dpy_transpiles_to_parseable_python() {
 fn events_example_dpy_transpiles_to_parseable_python() {
     transpile_and_reparse("events_example.dpy").expect("events_example.dpy");
 }
+
+// ===========================================================================
+// Schema-cast stripping
+// ===========================================================================
+
+#[test]
+fn fluent_schema_cast_is_stripped_from_the_chain() {
+    // `<chain>.cast(DataFrame[Schema])` is a dathon-only re-anchoring hint
+    // — `DataFrame` has no `.cast` method — so the transpiler removes the
+    // `.cast(…)` segment and leaves the receiver wired straight through.
+    let src = "\
+class Raw(Schema):
+    city: string
+
+class Pivoted(Schema):
+    city: string
+
+def f(raw: DataFrame[Raw]) -> DataFrame:
+    return raw.cast(DataFrame[Pivoted]).select(col(\"city\"))
+";
+    let output = dathon::transpile(src);
+    assert!(
+        !output.contains(".cast("),
+        "schema-cast should be stripped, got:\n{output}",
+    );
+    assert!(output.contains("raw.select(col(\"city\"))"));
+    ruff_python_parser::parse_module(&output).expect("transpiled output must parse");
+}
+
+#[test]
+fn column_cast_survives_the_transpile() {
+    // The ordinary `Column.cast("int")` is real PySpark and must not be
+    // touched — only the `DataFrame[…]`-argument form is dathon-only.
+    let src = "def f(raw):\n    return raw.select(col(\"amount\").cast(\"int\"))\n";
+    let output = dathon::transpile(src);
+    assert!(output.contains("cast(\"int\")"));
+    ruff_python_parser::parse_module(&output).expect("transpiled output must parse");
+}

@@ -145,7 +145,11 @@ LSP payload.
 `.dpy` → `.py`. `.dpy` is a strict superset of Python, so this is nearly
 an identity transform — it prepends `from __future__ import annotations`
 (so dathon's atomic type names and `DataFrame[X]` annotations don't
-evaluate at runtime).
+evaluate at runtime) and strips the schema-cast `.cast(DataFrame[Schema])`
+— the one dathon-only construct in *expression* position, which the
+Python runtime has no `.cast` method for. Stripping is AST-located but
+byte-surgical: only the `.cast(…)` slice is deleted, line numbers are
+preserved, everything else is copied verbatim.
 
 ### `lib`
 
