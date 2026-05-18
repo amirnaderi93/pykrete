@@ -259,6 +259,81 @@ pub fn definition(source: &str, line: usize, column: usize) -> Option<Span> {
     Some(span_from_range(range, source, &line_index))
 }
 
+/// Every reference to the column under the cursor — its declaration in
+/// the Schema class body plus every `col("…")`, bare-string-argument,
+/// and `df.X` use of it. Empty when the cursor isn't on a column.
+///
+/// References are matched by column *name* across the file (the v1
+/// scope) — schema-precise scoping is a follow-up.
+pub fn references(source: &str, line: usize, column: usize) -> Vec<Span> {
+    let Ok(parsed) = ruff_python_parser::parse_module(source) else {
+        return Vec::new();
+    };
+    let module = parsed.syntax();
+    let line_index = LineIndex::from_source_text(source);
+    let classes = discover_top_level_classes(module);
+    let schemas = discover_schemas(&classes);
+    let registry = Registry::build(module);
+    let functions = discover_top_level_functions(module);
+    let Some(offset) = offset_from_line_column(&line_index, source, line, column) else {
+        return Vec::new();
+    };
+    let traces =
+        crate::collect_module_column_refs(&functions, source, &line_index, &schemas, &registry);
+
+    let Some(target) = column_name_at(offset, &traces, &schemas) else {
+        return Vec::new();
+    };
+
+    let mut ranges: Vec<TextRange> = Vec::new();
+    for schema in &schemas {
+        for stmt in &schema.class.def.body {
+            if let Some(ann) = stmt.as_ann_assign_stmt() {
+                if let Some(t) = ann.target.as_name_expr() {
+                    if t.id.as_str() == target {
+                        ranges.push(t.range);
+                    }
+                }
+            }
+        }
+    }
+    for trace in &traces {
+        if trace.name == target {
+            ranges.push(trace.range);
+        }
+    }
+    ranges.sort_by_key(|r| r.start());
+    ranges.dedup();
+    ranges
+        .into_iter()
+        .map(|r| span_from_range(r, source, &line_index))
+        .collect()
+}
+
+/// The column name the cursor sits on — from a column-reference trace,
+/// or a Schema field declaration's target name.
+fn column_name_at<'a>(
+    offset: TextSize,
+    traces: &[ColumnRefTrace<'a>],
+    schemas: &[Schema<'a>],
+) -> Option<&'a str> {
+    if let Some(trace) = traces.iter().find(|t| t.range.contains_inclusive(offset)) {
+        return Some(trace.name);
+    }
+    for schema in schemas {
+        for stmt in &schema.class.def.body {
+            if let Some(ann) = stmt.as_ann_assign_stmt() {
+                if let Some(t) = ann.target.as_name_expr() {
+                    if t.range.contains_inclusive(offset) {
+                        return Some(t.id.as_str());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Project-aware go-to-definition: takes the focus file's parsed
 /// module plus pre-resolved visible schemas + registry. Used by the
 /// LSP layer so cross-file `DataFrame[X]` / column references jump to
