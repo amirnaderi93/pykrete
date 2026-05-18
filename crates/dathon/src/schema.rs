@@ -556,96 +556,157 @@ fn resolve_in_type<'a>(ty: &ColumnType, segments: &[&'a str]) -> FieldPathResult
 }
 
 // ---------------------------------------------------------------------------
-// Pick / Omit — derived-schema type operators
+// Pick / Omit / Merge — derived-schema type operators
 // ---------------------------------------------------------------------------
 
-/// Which derived-schema operator a subscript names.
-#[derive(Clone, Copy)]
-enum PickOmit {
+/// A derived-schema operator inside a `DataFrame[…]` annotation:
+/// `Pick[S, "a", …]`, `Omit[S, "a", …]`, or `Merge[A, B, …]`.
+#[derive(Clone, Copy, PartialEq)]
+enum DerivedOp {
     /// `Pick[S, "a", "b"]` — keep only the named columns.
     Pick,
     /// `Omit[S, "a", "b"]` — keep every column except the named ones.
     Omit,
+    /// `Merge[A, B, …]` — every column of two or more schemas combined.
+    Merge,
 }
 
-/// The pieces of a `Pick[Schema, "a", …]` / `Omit[Schema, "a", …]`
-/// subscript: the operator, the base-schema name, and the named columns
-/// paired with their source ranges. `None` if `expr` isn't a Pick/Omit
-/// subscript of the expected `Operator[Schema, "col", …]` shape.
-fn pick_omit_parts(expr: &Expr) -> Option<(PickOmit, &str, Vec<(&str, TextRange)>)> {
+/// The operator and raw subscript arguments of a derived-schema
+/// expression. The arguments are the tuple elements — or the single
+/// element for a one-argument subscript. `None` if `expr` isn't a
+/// `Pick` / `Omit` / `Merge` subscript.
+fn derived_parts(expr: &Expr) -> Option<(DerivedOp, &[Expr])> {
     let sub = expr.as_subscript_expr()?;
     let op = match sub.value.as_name_expr()?.id.as_str() {
-        "Pick" => PickOmit::Pick,
-        "Omit" => PickOmit::Omit,
+        "Pick" => DerivedOp::Pick,
+        "Omit" => DerivedOp::Omit,
+        "Merge" => DerivedOp::Merge,
         _ => return None,
     };
-    // `Operator[Schema, "a", …]` — the slice is a tuple of the base
-    // schema followed by one or more column-name string literals.
-    let tuple = sub.slice.as_tuple_expr()?;
-    let (schema_expr, col_exprs) = tuple.elts.split_first()?;
-    let schema_name = schema_expr.as_name_expr()?.id.as_str();
-    let columns: Vec<(&str, TextRange)> = col_exprs
-        .iter()
-        .filter_map(|e| {
-            e.as_string_literal_expr()
-                .map(|s| (s.value.to_str(), s.range()))
-        })
-        .collect();
-    if columns.is_empty() {
-        return None;
-    }
-    Some((op, schema_name, columns))
-}
-
-/// Resolve a `Pick` / `Omit` subscript to a derived schema view.
-///
-/// `Pick` keeps the named columns, in the order listed; `Omit` keeps
-/// every other column, in the base schema's order. Columns not on the
-/// base schema are skipped — [`pick_omit_invalid_columns`] reports them.
-/// `None` if `expr` isn't a Pick/Omit subscript or the base schema name
-/// doesn't resolve.
-pub fn resolve_pick_omit<'a>(expr: &'a Expr, schemas: &'a [Schema<'a>]) -> Option<SchemaView<'a>> {
-    let (op, schema_name, columns) = pick_omit_parts(expr)?;
-    let schema = schemas.iter().find(|s| s.name() == schema_name)?;
-    let all = SchemaView::Declared(schema).typed_fields(schemas);
-    let names: Vec<&str> = columns.iter().map(|(c, _)| *c).collect();
-    let fields: Vec<DerivedField<'a>> = match op {
-        PickOmit::Pick => names
-            .iter()
-            .filter_map(|c| all.iter().find(|f| f.name == *c).cloned())
-            .collect(),
-        PickOmit::Omit => all
-            .into_iter()
-            .filter(|f| !names.contains(&f.name))
-            .collect(),
+    let args: &[Expr] = match sub.slice.as_ref() {
+        Expr::Tuple(tuple) => &tuple.elts,
+        single => std::slice::from_ref(single),
     };
-    Some(SchemaView::Derived(fields))
+    Some((op, args))
 }
 
-/// The columns named in a `Pick` / `Omit` subscript that don't exist on
-/// its base schema, each paired with its source range. Empty if `expr`
-/// isn't a Pick/Omit subscript, or its base schema doesn't resolve (an
-/// unknown base is reported separately).
-pub fn pick_omit_invalid_columns<'a>(
+/// Resolve a `Pick` / `Omit` / `Merge` subscript to a derived schema view.
+///
+/// `Pick` keeps the named columns in the order listed; `Omit` keeps every
+/// other column in the base schema's order; `Merge` concatenates the
+/// columns of every named schema, de-duplicated by name (first occurrence
+/// wins). Columns / schemas that don't resolve are skipped —
+/// [`derived_schema_errors`] reports them. `None` if `expr` isn't a
+/// derived-schema subscript, or nothing in it resolved.
+pub fn resolve_derived_schema<'a>(
     expr: &'a Expr,
     schemas: &'a [Schema<'a>],
-) -> Vec<(&'a str, TextRange)> {
-    let Some((_, schema_name, columns)) = pick_omit_parts(expr) else {
-        return Vec::new();
-    };
-    let Some(schema) = schemas.iter().find(|s| s.name() == schema_name) else {
-        return Vec::new();
-    };
-    columns
-        .into_iter()
-        .filter(|(c, _)| !schema.has_field(c))
-        .collect()
+) -> Option<SchemaView<'a>> {
+    let (op, args) = derived_parts(expr)?;
+    match op {
+        DerivedOp::Pick | DerivedOp::Omit => {
+            let (base, col_exprs) = args.split_first()?;
+            let base_name = base.as_name_expr()?.id.as_str();
+            let schema = schemas.iter().find(|s| s.name() == base_name)?;
+            let cols: Vec<&str> = col_exprs
+                .iter()
+                .filter_map(|e| e.as_string_literal_expr().map(|s| s.value.to_str()))
+                .collect();
+            if cols.is_empty() {
+                return None;
+            }
+            let all = SchemaView::Declared(schema).typed_fields(schemas);
+            let fields: Vec<DerivedField<'a>> = if op == DerivedOp::Pick {
+                cols.iter()
+                    .filter_map(|c| all.iter().find(|f| f.name == *c).cloned())
+                    .collect()
+            } else {
+                all.into_iter().filter(|f| !cols.contains(&f.name)).collect()
+            };
+            Some(SchemaView::Derived(fields))
+        }
+        DerivedOp::Merge => {
+            let mut fields: Vec<DerivedField<'a>> = Vec::new();
+            let mut resolved_any = false;
+            for arg in args {
+                let Some(name) = arg.as_name_expr() else {
+                    continue;
+                };
+                let Some(schema) = schemas.iter().find(|s| s.name() == name.id.as_str()) else {
+                    continue;
+                };
+                resolved_any = true;
+                for field in SchemaView::Declared(schema).typed_fields(schemas) {
+                    if !fields.iter().any(|f| f.name == field.name) {
+                        fields.push(field);
+                    }
+                }
+            }
+            resolved_any.then_some(SchemaView::Derived(fields))
+        }
+    }
 }
 
-/// The base-schema name of a `Pick` / `Omit` subscript — used to report
-/// an unknown base. `None` if `expr` isn't a Pick/Omit subscript.
-pub fn pick_omit_base_name(expr: &Expr) -> Option<&str> {
-    pick_omit_parts(expr).map(|(_, name, _)| name)
+/// Validation errors for a derived-schema subscript — each a
+/// `(code, message, range)` triple ready to become a `Diagnostic`: a
+/// `Pick` / `Omit` column not on its base schema (`D0030`), and an
+/// unknown base or merged schema (`D0020`). Empty if `expr` isn't a
+/// derived-schema subscript or is error-free.
+pub fn derived_schema_errors<'a>(
+    expr: &'a Expr,
+    schemas: &'a [Schema<'a>],
+) -> Vec<(&'static str, String, TextRange)> {
+    let mut errors: Vec<(&'static str, String, TextRange)> = Vec::new();
+    let Some((op, args)) = derived_parts(expr) else {
+        return errors;
+    };
+    let unknown_schema = |name: &str, range: TextRange| {
+        (
+            "D0020",
+            format!("Unknown schema '{name}'. Declare it as a class extending Schema."),
+            range,
+        )
+    };
+    match op {
+        DerivedOp::Pick | DerivedOp::Omit => {
+            let Some((base, col_exprs)) = args.split_first() else {
+                return errors;
+            };
+            let Some(base_name) = base.as_name_expr().map(|n| n.id.as_str()) else {
+                return errors;
+            };
+            match schemas.iter().find(|s| s.name() == base_name) {
+                None => errors.push(unknown_schema(base_name, base.range())),
+                Some(schema) => {
+                    for e in col_exprs {
+                        if let Some(lit) = e.as_string_literal_expr() {
+                            let col = lit.value.to_str();
+                            if !schema.has_field(col) {
+                                errors.push((
+                                    "D0030",
+                                    format!(
+                                        "Column '{col}' does not exist on schema '{base_name}'."
+                                    ),
+                                    lit.range(),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        DerivedOp::Merge => {
+            for arg in args {
+                if let Some(n) = arg.as_name_expr() {
+                    let name = n.id.as_str();
+                    if !schemas.iter().any(|s| s.name() == name) {
+                        errors.push(unknown_schema(name, arg.range()));
+                    }
+                }
+            }
+        }
+    }
+    errors
 }
 
 // ---------------------------------------------------------------------------

@@ -272,10 +272,10 @@ impl<'a> BodyContext<'a> {
                 DataFrameAnnotation::Typed(schema_name) => {
                     ctx.find_schema(schema_name).map(SchemaView::Declared)
                 }
-                // `DataFrame[Pick[…]]` / `DataFrame[Omit[…]]` — resolve
-                // the derived-schema expression to a `Derived` view.
+                // `DataFrame[Pick[…]]` / `Omit[…]` / `Merge[…]` —
+                // resolve the derived-schema expression to a view.
                 DataFrameAnnotation::Derived(expr) => {
-                    crate::schema::resolve_pick_omit(expr, ctx.schemas())
+                    crate::schema::resolve_derived_schema(expr, ctx.schemas())
                 }
                 DataFrameAnnotation::Untyped | DataFrameAnnotation::NonBareName => None,
             };
@@ -498,41 +498,22 @@ fn handle_ann_assign<'a>(
         }
         Some(DataFrameAnnotation::Derived(expr)) => {
             // `x: DataFrame[Pick[…]] = …` — a local derived-schema
-            // re-annotation. Flag any picked/omitted column that isn't
-            // on the base schema, then bind the resolved view.
-            for (col, col_range) in crate::schema::pick_omit_invalid_columns(expr, ctx.schemas()) {
+            // re-annotation. Surface its validation errors, then bind
+            // the resolved view.
+            for (code, message, range) in crate::schema::derived_schema_errors(expr, ctx.schemas())
+            {
                 diagnostics.push(Diagnostic::at_range(
                     Severity::Error,
-                    "D0030",
-                    format!(
-                        "Column '{col}' does not exist on schema '{}'.",
-                        crate::schema::pick_omit_base_name(expr).unwrap_or("?"),
-                    ),
-                    col_range,
+                    code,
+                    message,
+                    range,
                     source,
                     line_index,
                 ));
             }
-            match crate::schema::resolve_pick_omit(expr, ctx.schemas()) {
-                Some(view) => {
-                    ctx.bind_df(target_name, view.clone());
-                    ctx.record_local_binding(target_name, target_range, view);
-                }
-                None => {
-                    diagnostics.push(Diagnostic::at_range(
-                        Severity::Error,
-                        "D0020",
-                        format!(
-                            "Unknown schema '{}' in {}. \
-                             Declare it as a class extending Schema.",
-                            crate::schema::pick_omit_base_name(expr).unwrap_or("?"),
-                            &source[ann.annotation.range()],
-                        ),
-                        ann.annotation.range(),
-                        source,
-                        line_index,
-                    ));
-                }
+            if let Some(view) = crate::schema::resolve_derived_schema(expr, ctx.schemas()) {
+                ctx.bind_df(target_name, view.clone());
+                ctx.record_local_binding(target_name, target_range, view);
             }
         }
         Some(DataFrameAnnotation::NonBareName) => {
