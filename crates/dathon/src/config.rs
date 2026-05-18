@@ -60,9 +60,14 @@ impl Config {
 
     /// The configured analysis strictness — `Standard` if unset.
     pub fn check_mode(&self) -> CheckMode {
-        self.type_checking_mode
-            .as_deref()
-            .map_or(CheckMode::Standard, CheckMode::parse)
+        self.check_mode_override().unwrap_or(CheckMode::Standard)
+    }
+
+    /// The configured strictness *only if* `typeCheckingMode` was set,
+    /// else `None` — lets a caller keep its own default (the LSP keeps
+    /// the editor's `typeCheckingMode` when `dathon.json` is silent).
+    pub fn check_mode_override(&self) -> Option<CheckMode> {
+        self.type_checking_mode.as_deref().map(CheckMode::parse)
     }
 
     /// Whether `path` should be skipped — it contains a configured
@@ -134,9 +139,13 @@ mod tests {
     fn type_checking_mode_is_parsed() {
         let config = Config::parse(r#"{"typeCheckingMode": "strict"}"#).unwrap();
         assert_eq!(config.check_mode(), CheckMode::Strict);
+        assert_eq!(config.check_mode_override(), Some(CheckMode::Strict));
         // An unrecognized value falls back to standard.
         let config = Config::parse(r#"{"typeCheckingMode": "ultra"}"#).unwrap();
         assert_eq!(config.check_mode(), CheckMode::Standard);
+        // Absent — no override, so a caller keeps its own default.
+        let config = Config::parse("{}").unwrap();
+        assert_eq!(config.check_mode_override(), None);
     }
 
     #[test]

@@ -181,8 +181,9 @@ preserved, everything else is copied verbatim.
 
 `dathon.json` — the project config: `typeCheckingMode` (the `CheckMode`),
 `exclude` (path substrings whose files are skipped), and `rules`
-(per-diagnostic-code overrides — `off` / `warning` / `error`). `Config`
-owns the parse and the lookups; the CLI finds the file and applies them.
+(per-rule overrides — `off` / `warning` / `error`, keyed by readable
+rule name). `Config` owns the parse and the lookups; the CLI and the
+LSP both find the file (working directory / project root) and apply it.
 
 ### `lib`
 

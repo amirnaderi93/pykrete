@@ -826,7 +826,17 @@ fn publish_project_diagnostics(
         return Ok(());
     };
 
-    let result = dathon::check_project_with_mode(&snapshot, multiplexer.type_checking_mode);
+    // Project config — `dathon.json` at or above the project root. Its
+    // `typeCheckingMode` overrides the editor's setting; `rules`
+    // re-levels or drops codes; `exclude` silences whole files.
+    let config = project::load_config(docs);
+    let mode = config
+        .check_mode_override()
+        .unwrap_or(multiplexer.type_checking_mode);
+    let mut result = dathon::check_project_with_mode(&snapshot, mode);
+    for file in &mut result.files {
+        config.apply_rules(&mut file.result.diagnostics);
+    }
     // Map each file in the project back to a Url for diagnostic
     // delivery. Only publish for URIs that are actually open in the
     // editor — closed files' diagnostics would be invisible.
@@ -839,12 +849,17 @@ fn publish_project_diagnostics(
         let Some(uri) = open_paths.get(&path) else {
             continue;
         };
-        let diagnostics: Vec<Diagnostic> = file
-            .result
-            .diagnostics
-            .iter()
-            .map(to_lsp_diagnostic)
-            .collect();
+        // A `dathon.json` `exclude`d file: dathon stays silent on it
+        // (an empty list still clears any stale underlines).
+        let diagnostics: Vec<Diagnostic> = if config.is_excluded(&file.path) {
+            Vec::new()
+        } else {
+            file.result
+                .diagnostics
+                .iter()
+                .map(to_lsp_diagnostic)
+                .collect()
+        };
         // Route dathon's diagnostics through the merge store so they're
         // published alongside whatever the embedded Python engine last
         // reported for the same file.

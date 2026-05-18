@@ -31,17 +31,7 @@ use dathon::imports::find_pyproject_root;
 /// Returns `None` if no open document has a usable filesystem path —
 /// the caller falls back to single-file analysis in that case.
 pub fn build_project_snapshot(docs: &HashMap<Url, String>) -> Option<Vec<(String, String)>> {
-    let anchor = docs
-        .keys()
-        .find_map(|uri| uri.to_file_path().ok())
-        .map(PathBuf::from)?;
-
-    let project_root = find_pyproject_root(&anchor).unwrap_or_else(|| {
-        anchor
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."))
-    });
+    let project_root = derive_project_root(docs)?;
 
     let open_by_path: HashMap<PathBuf, &String> = docs
         .iter()
@@ -78,6 +68,41 @@ pub fn build_project_snapshot(docs: &HashMap<Url, String>) -> Option<Vec<(String
         out.push((path.to_string_lossy().into_owned(), source));
     }
     Some(out)
+}
+
+/// The project root for the open documents: the deepest
+/// `pyproject.toml`-bearing directory above the first reachable open
+/// document, or that document's parent when none is found. `None` when
+/// no open document has a filesystem path.
+fn derive_project_root(docs: &HashMap<Url, String>) -> Option<PathBuf> {
+    let anchor = docs.keys().find_map(|uri| uri.to_file_path().ok())?;
+    Some(find_pyproject_root(&anchor).unwrap_or_else(|| {
+        anchor
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."))
+    }))
+}
+
+/// Load the project's `dathon.json` — searched for at the project root
+/// and every ancestor. Absent or malformed → defaults, so the LSP keeps
+/// working regardless.
+pub fn load_config(docs: &HashMap<Url, String>) -> dathon::Config {
+    let Some(mut dir) = derive_project_root(docs) else {
+        return dathon::Config::default();
+    };
+    loop {
+        let candidate = dir.join("dathon.json");
+        if candidate.is_file() {
+            return fs::read_to_string(&candidate)
+                .ok()
+                .and_then(|content| dathon::Config::parse(&content).ok())
+                .unwrap_or_default();
+        }
+        if !dir.pop() {
+            return dathon::Config::default();
+        }
+    }
 }
 
 /// Recursively collect every `.dpy` file under `dir`. Mirrors the CLI's
@@ -179,6 +204,37 @@ mod tests {
         let snapshot = build_project_snapshot(&docs).expect("snapshot");
         assert!(snapshot.iter().any(|(p, _)| p.ends_with("a.dpy")));
         assert!(snapshot.iter().any(|(p, _)| p.ends_with("b.dpy")));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    fn docs_with(root: &Path) -> HashMap<Url, String> {
+        write(&root.join("a.dpy"), "class A(Schema):\n    x: int\n");
+        let uri = Url::from_file_path(root.join("a.dpy")).unwrap();
+        let mut docs = HashMap::new();
+        docs.insert(uri, "class A(Schema):\n    x: int\n".to_string());
+        docs
+    }
+
+    #[test]
+    fn load_config_reads_dathon_json_from_the_project_root() {
+        let root = tmpdir();
+        write(&root.join("dathon.json"), r#"{"typeCheckingMode": "strict"}"#);
+        let docs = docs_with(&root);
+
+        let config = load_config(&docs);
+        assert_eq!(config.check_mode_override(), Some(dathon::CheckMode::Strict));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn load_config_defaults_when_no_dathon_json_is_present() {
+        let root = tmpdir();
+        let docs = docs_with(&root);
+
+        let config = load_config(&docs);
+        assert_eq!(config.check_mode_override(), None);
 
         std::fs::remove_dir_all(&root).ok();
     }
