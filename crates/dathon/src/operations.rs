@@ -134,6 +134,10 @@ pub struct BodyContext<'a> {
     /// hover on the LHS of `x = raw.select(...)` and on uses of `x`
     /// elsewhere in the function body, plus completion on `x.<cursor>`.
     local_bindings: RefCell<Vec<LocalBindingTrace<'a>>>,
+    /// Method-call sites and the schema each one evaluates to. Powers
+    /// completion on a chain result — `raw.select(...).<cursor>` — where
+    /// the receiver is a call rather than a bound name.
+    call_results: RefCell<Vec<CallResultTrace<'a>>>,
     /// How many nested `transform`-body inferences deep this context is.
     /// `0` for a context built to analyze a function directly; bumped by
     /// one each time [`infer_transform_output`] recurses into a transform
@@ -159,6 +163,16 @@ pub struct ColumnRefTrace<'a> {
     pub schema: SchemaView<'a>,
 }
 
+/// One method-call site and the schema it evaluates to. `range` is the
+/// whole call expression's range — the receiver of a following `.<attr>`
+/// access, which the completion layer matches against to offer the
+/// chain result's columns.
+#[derive(Debug, Clone)]
+pub struct CallResultTrace<'a> {
+    pub range: TextRange,
+    pub schema: SchemaView<'a>,
+}
+
 /// One local-variable DataFrame binding captured during body analysis.
 ///
 /// `name_range` is the source range of the assignment target on the LHS
@@ -181,8 +195,22 @@ impl<'a> BodyContext<'a> {
             registry,
             column_refs: RefCell::new(Vec::new()),
             local_bindings: RefCell::new(Vec::new()),
+            call_results: RefCell::new(Vec::new()),
             infer_depth: 0,
         }
+    }
+
+    /// Record a method-call site and the schema it produced. Drained by
+    /// the LSP layer to power chain-result completion.
+    pub fn record_call_result(&self, range: TextRange, schema: SchemaView<'a>) {
+        self.call_results
+            .borrow_mut()
+            .push(CallResultTrace { range, schema });
+    }
+
+    /// Drain all call-result traces captured during analysis.
+    pub fn take_call_results(&self) -> Vec<CallResultTrace<'a>> {
+        std::mem::take(&mut self.call_results.borrow_mut())
     }
 
     /// Record a `col(...)`-style column reference and the schema it was
@@ -625,19 +653,36 @@ fn analyze_expr<'a>(
 ) -> Option<SchemaView<'a>> {
     match expr {
         Expr::Name(n) => ctx.lookup(n.id.as_str()),
-        Expr::Call(call) => analyze_method_call(call, ctx, source, line_index, diagnostics),
-        // `DataSources.RAW_ORDERS` — class-qualified annotated
-        // constant. Real codebases declare every data source inside a
-        // `@dataclass(frozen=True) class DataSources:` body, so this
-        // shape needs to resolve to the same `SchemaView::Declared`
-        // that a module-level `RAW_ORDERS: DataSource[X] = ...` would.
+        Expr::Call(call) => {
+            let result = analyze_method_call(call, ctx, source, line_index, diagnostics);
+            // Record the call's result schema so completion can offer
+            // the chain's columns at `<call>.<cursor>`.
+            if let Some(schema) = &result {
+                ctx.record_call_result(call.range(), schema.clone());
+            }
+            result
+        }
         Expr::Attribute(a) => {
-            let class_name = a.value.as_name_expr()?.id.as_str();
-            let constant = ctx
-                .registry()
-                .find_class_constant(class_name, a.attr.id.as_str())?;
-            let schema = ctx.find_schema(constant.schema_name)?;
-            Some(SchemaView::Declared(schema))
+            // `DataSources.RAW_ORDERS` — class-qualified annotated
+            // constant. Real codebases declare every data source inside a
+            // `@dataclass(frozen=True) class DataSources:` body, so this
+            // shape resolves to the same `SchemaView::Declared` a
+            // module-level `RAW_ORDERS: DataSource[X] = ...` would.
+            if let Some(class) = a.value.as_name_expr() {
+                if let Some(constant) = ctx
+                    .registry()
+                    .find_class_constant(class.id.as_str(), a.attr.id.as_str())
+                {
+                    if let Some(schema) = ctx.find_schema(constant.schema_name) {
+                        return Some(SchemaView::Declared(schema));
+                    }
+                }
+            }
+            // Otherwise this is a column access (`<chain>.colname`) — not
+            // a DataFrame itself, but analyze the receiver so a call in
+            // it still records its result trace for completion.
+            let _ = analyze_expr(&a.value, ctx, source, line_index, diagnostics);
+            None
         }
         _ => None,
     }

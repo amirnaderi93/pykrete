@@ -251,6 +251,48 @@ def f(a: DataFrame[Orders], b: DataFrame[Orders]) -> DataFrame:
 }
 
 // ===========================================================================
+// Surface 5: chain-result dot — <call>.<cursor>
+// ===========================================================================
+
+#[test]
+fn completions_after_chain_result_dot_resolve_through_the_call() {
+    // `raw.filter(...).<cursor>` — filter preserves the schema, so the
+    // chain result offers Orders' columns.
+    let src = format!(
+        "{ORDERS}
+def f(raw: DataFrame[Orders]) -> int:
+    return raw.filter(col(\"price\") > 0).place_code
+"
+    );
+    let idx = src.find("> 0).place_code").unwrap() + "> 0).".len();
+    let prefix = &src[..idx];
+    let line = prefix.matches('\n').count() + 1;
+    let col = idx - prefix.rfind('\n').map(|p| p + 1).unwrap_or(0) + 1;
+    let items = completions(&src, line, col);
+    let mut names = labels(&items);
+    names.sort();
+    assert_eq!(names, vec!["place_code", "price"]);
+}
+
+#[test]
+fn completions_after_chain_result_dot_use_the_derived_schema() {
+    // `raw.select("price").<cursor>` — the select narrows the schema, so
+    // only `price` is offered.
+    let src = format!(
+        "{ORDERS}
+def f(raw: DataFrame[Orders]) -> DataFrame:
+    return raw.select(\"price\").xyz
+"
+    );
+    let idx = src.find("\"price\").xyz").unwrap() + "\"price\").".len();
+    let prefix = &src[..idx];
+    let line = prefix.matches('\n').count() + 1;
+    let col = idx - prefix.rfind('\n').map(|p| p + 1).unwrap_or(0) + 1;
+    let items = completions(&src, line, col);
+    assert_eq!(labels(&items), vec!["price"]);
+}
+
+// ===========================================================================
 // Negative space
 // ===========================================================================
 
