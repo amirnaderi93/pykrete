@@ -23,16 +23,22 @@ fn main() -> ExitCode {
 }
 
 fn run_check(paths: &[String]) -> ExitCode {
+    // Project config — `dathon.json`, found at or above the working
+    // directory. Absent or malformed → defaults.
+    let config = load_config();
+
     // Phase 1: expand directories to .dpy files, then read every file.
     // If any path fails to expand or read, abort early with a usage-
     // style error rather than analyzing a partial project.
-    let expanded: Vec<PathBuf> = match expand_paths(paths) {
+    let mut expanded: Vec<PathBuf> = match expand_paths(paths) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("{e}");
             return ExitCode::from(2);
         }
     };
+    // Drop files matched by a `dathon.json` `exclude` entry.
+    expanded.retain(|p| !config.is_excluded(&p.to_string_lossy()));
     let mut sources: Vec<(String, String)> = Vec::with_capacity(expanded.len());
     for path in &expanded {
         match fs::read_to_string(path) {
@@ -44,7 +50,12 @@ fn run_check(paths: &[String]) -> ExitCode {
         }
     }
 
-    let project = dathon::check_project(&sources);
+    let mut project = dathon::check_project_with_mode(&sources, config.check_mode());
+    // Apply `dathon.json` `rules` overrides — drop suppressed codes,
+    // re-level the rest — before anything is counted or printed.
+    for file in &mut project.files {
+        config.apply_rules(&mut file.result.diagnostics);
+    }
 
     // Print per-file summary + body to stdout, in input order. Then dump
     // all diagnostics across all files to stderr at the end (TS-style).
@@ -141,4 +152,40 @@ fn run_transpile(path: &str) -> ExitCode {
         return ExitCode::from(2);
     }
     ExitCode::SUCCESS
+}
+
+/// Load `dathon.json` from the working directory or an ancestor.
+/// Absent → defaults; present but malformed → a warning and defaults
+/// (a config typo shouldn't block the whole check).
+fn load_config() -> dathon::Config {
+    let Some(path) = find_dathon_json() else {
+        return dathon::Config::default();
+    };
+    match fs::read_to_string(&path) {
+        Ok(content) => match dathon::Config::parse(&content) {
+            Ok(config) => config,
+            Err(err) => {
+                eprintln!("warning: ignoring {}: {err}", path.display());
+                dathon::Config::default()
+            }
+        },
+        Err(err) => {
+            eprintln!("warning: could not read {}: {err}", path.display());
+            dathon::Config::default()
+        }
+    }
+}
+
+/// Walk up from the working directory looking for a `dathon.json`.
+fn find_dathon_json() -> Option<PathBuf> {
+    let mut dir = env::current_dir().ok()?;
+    loop {
+        let candidate = dir.join("dathon.json");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
 }

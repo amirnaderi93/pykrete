@@ -21,3 +21,7 @@ ruff_text_size = { git = "https://github.com/astral-sh/ruff", tag = "0.15.12" }
 # and string-form `filter(...)` so their column references can be
 # checked against the dataframe schema. `visitor` enables AST traversal.
 sqlparser = { version = "0.62", features = ["visitor"] }
+
+# `dathon.json` project-config parsing.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

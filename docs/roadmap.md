@@ -41,12 +41,14 @@ expression position, which the Python runtime has no `.cast` method for.
 A JetBrains integration via PyCharm's LSP client. Deferred well past
 pandas (v2) and polars (v3) — VS Code is the only supported editor for now.
 
-## Strictness configuration
+## Configuration
 
-`typeCheckingMode` (`off` / `basic` / `standard` / `strict`) is wired and
-drives both dathon's checks and the embedded Python engine. A fuller
-`dathon.json` — file/dir excludes, per-rule severity overrides — is a
-follow-up.
+A `dathon.json` at (or above) the working directory configures a
+`dathon check` run — `typeCheckingMode` (`off` / `basic` / `standard` /
+`strict`), `exclude` (path substrings to skip), and `rules` (per-code
+overrides — `off` / `warning` / `error`). `typeCheckingMode` also drives
+the embedded Python engine. Remaining: have the LSP read `dathon.json`
+too (it currently takes `typeCheckingMode` from the editor).
 
 ## Generic-inference extensions
 
