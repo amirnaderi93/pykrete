@@ -9,7 +9,7 @@
 //! {
 //!   "typeCheckingMode": "strict",
 //!   "exclude": ["legacy/", "generated/"],
-//!   "rules": { "D0080": "off", "D0030": "warning" }
+//!   "rules": { "returnTypeMismatch": "off", "unknownColumn": "warning" }
 //! }
 //! ```
 //!
@@ -20,7 +20,7 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
-use crate::diagnostics::{CheckMode, Diagnostic, Severity};
+use crate::diagnostics::{CheckMode, Diagnostic, Severity, rule_name};
 
 /// Parsed `dathon.json`. Unknown keys are ignored, so a config written
 /// for a newer dathon still loads.
@@ -33,7 +33,8 @@ pub struct Config {
     /// Path substrings; a file whose path contains any of them is not
     /// checked — `"tests/"` skips everything under a `tests` directory.
     exclude: Vec<String>,
-    /// Per-diagnostic-code overrides, keyed by code (`"D0080"`).
+    /// Per-diagnostic overrides, keyed by the readable rule name
+    /// (`"returnTypeMismatch"`); the raw code (`"D0080"`) is also accepted.
     rules: HashMap<String, RuleSetting>,
 }
 
@@ -73,22 +74,30 @@ impl Config {
     }
 
     /// Apply the `rules` overrides to one file's diagnostics in place:
-    /// drop every code set to `off`, re-level the rest.
+    /// drop every rule set to `off`, re-level the rest. A `rules` entry
+    /// keys on the readable rule name (`returnTypeMismatch`); the raw
+    /// code (`D0080`) is accepted too.
     pub fn apply_rules(&self, diagnostics: &mut Vec<Diagnostic>) {
         if self.rules.is_empty() {
             return;
         }
-        diagnostics.retain_mut(|d| match self.rules.get(d.code) {
-            Some(RuleSetting::Off) => false,
-            Some(RuleSetting::Warning) => {
-                d.severity = Severity::Warning;
-                true
+        diagnostics.retain_mut(|d| {
+            let setting = self
+                .rules
+                .get(rule_name(d.code))
+                .or_else(|| self.rules.get(d.code));
+            match setting {
+                Some(RuleSetting::Off) => false,
+                Some(RuleSetting::Warning) => {
+                    d.severity = Severity::Warning;
+                    true
+                }
+                Some(RuleSetting::Error) => {
+                    d.severity = Severity::Error;
+                    true
+                }
+                None => true,
             }
-            Some(RuleSetting::Error) => {
-                d.severity = Severity::Error;
-                true
-            }
-            None => true,
         });
     }
 }
@@ -139,8 +148,8 @@ mod tests {
     }
 
     #[test]
-    fn rules_off_drops_the_code() {
-        let config = Config::parse(r#"{"rules": {"D0080": "off"}}"#).unwrap();
+    fn rules_off_drops_the_rule_by_readable_name() {
+        let config = Config::parse(r#"{"rules": {"returnTypeMismatch": "off"}}"#).unwrap();
         let mut diags = vec![
             diag("D0080", Severity::Error),
             diag("D0030", Severity::Error),
@@ -151,12 +160,21 @@ mod tests {
     }
 
     #[test]
-    fn rules_can_re_level_a_code() {
-        let config = Config::parse(r#"{"rules": {"D0080": "warning"}}"#).unwrap();
+    fn rules_can_re_level_a_rule() {
+        let config = Config::parse(r#"{"rules": {"returnTypeMismatch": "warning"}}"#).unwrap();
         let mut diags = vec![diag("D0080", Severity::Error)];
         config.apply_rules(&mut diags);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].severity, Severity::Warning);
+    }
+
+    #[test]
+    fn rules_also_accept_the_raw_code() {
+        // The `D00xx` code still works as a `rules` key, beside the name.
+        let config = Config::parse(r#"{"rules": {"D0080": "off"}}"#).unwrap();
+        let mut diags = vec![diag("D0080", Severity::Error)];
+        config.apply_rules(&mut diags);
+        assert!(diags.is_empty());
     }
 
     #[test]

@@ -199,19 +199,28 @@ mode, excludes, and rule overrides.
 
 ## Diagnostic codes
 
-| Code | Meaning |
-| --- | --- |
-| `D0001` | Parse error. |
-| `D0010` / `D0011` | Unknown column type / type is not a bare name. |
-| `D0020` / `D0021` | Unknown schema in `DataFrame[…]` / schema is not a bare name. |
-| `D0030` | Column does not exist on the schema. |
-| `D0040` | `union` / `unionByName` schema mismatch. |
-| `D0050` | Return type mismatch — column *set* differs from the declared schema. |
-| `D0060` | Join key missing on one side. |
-| `D0070` / `D0071` | Unresolved import / name not exported by a module. |
-| `D0080` | Return type mismatch — a column's *type* differs (conservative; on by default). |
-| `D0081` / `D0082` | Arithmetic on a non-numeric column / comparison of unrelated types (advisory; `typeCheckingMode: strict` only). |
-| `D0083` | A nullable column declared non-nullable by the return type (advisory; `typeCheckingMode: strict` only). |
+The `D00xx` code is the stable internal identifier; the **name** is what
+the CLI and editor show and what `dathon.json`'s `rules` block keys on
+(`rule_name` in `diagnostics` maps between them — the `rules` block
+accepts either).
+
+| Code | Name | Meaning |
+| --- | --- | --- |
+| `D0001` | `parseError` | Parse error. |
+| `D0010` | `unknownColumnType` | Unknown column type. |
+| `D0011` | `invalidColumnType` | Column type is not a recognized type expression. |
+| `D0020` | `unknownSchema` | Unknown schema in `DataFrame[…]`. |
+| `D0021` | `invalidSchemaExpression` | Schema is not a bare name / valid operator. |
+| `D0030` | `unknownColumn` | Column does not exist on the schema. |
+| `D0040` | `unionSchemaMismatch` | `union` / `unionByName` schema mismatch. |
+| `D0050` | `returnColumnsMismatch` | Return type mismatch — column *set* differs from the declared schema. |
+| `D0060` | `missingJoinKey` | Join key missing on one side. |
+| `D0070` | `unresolvedImport` | Unresolved import. |
+| `D0071` | `unexportedName` | Name not exported by a module. |
+| `D0080` | `returnTypeMismatch` | Return type mismatch — a column's *type* differs (conservative; on by default). |
+| `D0081` | `nonNumericArithmetic` | Arithmetic on a non-numeric column (advisory; `typeCheckingMode: strict` only). |
+| `D0082` | `crossTypeComparison` | Comparison of unrelated types (advisory; `strict` only). |
+| `D0083` | `nullabilityMismatch` | A nullable column declared non-nullable by the return type (advisory; `strict` only). |
 
 ## Column-type checking
 

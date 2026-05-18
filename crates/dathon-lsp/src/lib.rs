@@ -933,7 +933,9 @@ pub fn to_lsp_diagnostic(d: &dathon::diagnostics::Diagnostic) -> Diagnostic {
             dathon::diagnostics::Severity::Error => DiagnosticSeverity::ERROR,
             dathon::diagnostics::Severity::Warning => DiagnosticSeverity::WARNING,
         }),
-        code: Some(NumberOrString::String(d.code.to_string())),
+        code: Some(NumberOrString::String(
+            dathon::diagnostics::rule_name(d.code).to_string(),
+        )),
         code_description: None,
         source: Some("dathon".to_string()),
         message: d.message.clone(),
@@ -954,11 +956,11 @@ pub fn handle_code_action(params: CodeActionParams) -> CodeActionResponse {
     let uri = params.text_document.uri;
     let mut actions: Vec<CodeActionOrCommand> = Vec::new();
     for diag in params.context.diagnostics {
-        // Only D0030 carries a suggestion today.
+        // Only the unknown-column rule (D0030) carries a suggestion today.
         let Some(NumberOrString::String(code)) = &diag.code else {
             continue;
         };
-        if code != "D0030" {
+        if code != dathon::diagnostics::rule_name("D0030") {
             continue;
         }
         let Some(suggestion) = diag
@@ -1049,9 +1051,8 @@ mod tests {
 
     #[test]
     fn dathon_code_becomes_lsp_string_code() {
-        // The code shows up alongside the diagnostic in the editor's UI;
-        // it must be the exact dathon code string (D0030, etc.) so users
-        // can grep the docs for it.
+        // The editor shows the readable rule name (`unknownColumn`) — the
+        // same identifier `dathon.json`'s `rules` block and the CLI use.
         let d = dathon_diag(
             (1, 1),
             (1, 1),
@@ -1059,7 +1060,10 @@ mod tests {
             "Column 'X' does not exist on schema 'Orders'.",
         );
         let lsp = to_lsp_diagnostic(&d);
-        assert_eq!(lsp.code, Some(NumberOrString::String("D0030".to_string())));
+        assert_eq!(
+            lsp.code,
+            Some(NumberOrString::String("unknownColumn".to_string())),
+        );
     }
 
     #[test]
@@ -1302,7 +1306,7 @@ mod tests {
                 },
             },
             severity: Some(DiagnosticSeverity::ERROR),
-            code: Some(NumberOrString::String("D0030".to_string())),
+            code: Some(NumberOrString::String("unknownColumn".to_string())),
             code_description: None,
             source: Some("dathon".to_string()),
             message: format!("Column does not exist. Did you mean '{suggestion}'?"),
@@ -1369,7 +1373,7 @@ mod tests {
     fn code_action_skips_non_d0030_diagnostics() {
         let uri = Url::parse("file:///t.dpy").unwrap();
         let mut diag = lsp_diag_with_suggestion((1, 18), (1, 25), "price");
-        diag.code = Some(NumberOrString::String("D0020".to_string()));
+        diag.code = Some(NumberOrString::String("unknownSchema".to_string()));
         let params = code_action_params(&uri, vec![diag]);
         let result = handle_code_action(params);
         assert!(result.is_empty());
