@@ -146,8 +146,10 @@ carry inferred types into `Derived` schemas.
 null on an unmatched row, so `apply_join` marks them `Nullable` (a `left`
 join → the right side, `right` → the left, `outer` → both; join keys
 stay non-null). `coalesce` / `fillna` / `dropna` / `na.fill` / `na.drop`
-clear it again. The strict-mode `D0083` flags a column the body produces
-nullable that the return type declares non-null.
+clear it again. `.cast(…)` carries nullability through — a nullable
+input, or a `F.lit(None)`, casts to a nullable column of the target
+type. The strict-mode `D0083` flags a column the body produces nullable
+that the return type declares non-null.
 
 **Embedded SQL** — column references inside `F.expr("…")`, `selectExpr("…")`,
 and string-form `filter("…")` are parsed (see `sql`) and checked.
