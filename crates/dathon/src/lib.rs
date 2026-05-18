@@ -61,10 +61,12 @@ use crate::operations::{
 use crate::registry::Registry;
 use crate::schema::{
     FieldResolution, Schema, SchemaView, derived_schema_errors, discover_schemas,
-    resolve_derived_schema,
+    resolve_derived_schema, schema_base_chain,
 };
 use crate::types::COLUMN_TYPE_NAMES;
-use crate::walk::{DiscoveredFunction, discover_top_level_classes, discover_top_level_functions};
+use crate::walk::{
+    DiscoveredClass, DiscoveredFunction, discover_top_level_classes, discover_top_level_functions,
+};
 
 /// Outcome of running the checker on a single source file.
 ///
@@ -469,6 +471,40 @@ impl<'a> ProjectContext<'a> {
                     source,
                     line_index,
                 ));
+            }
+        }
+
+        // Cross-file schema inheritance. The local-only `discover_schemas`
+        // above ran before imports were resolved, so a local
+        // `class Premium(Orders)` extending a schema *imported* into this
+        // file was not recognized. Now that the imported schemas are in
+        // `visible_schemas`, promote any local class that extends one —
+        // to any depth (a promoted schema can itself be a base).
+        if let Some(bundle) = bundles[focus_idx].as_ref() {
+            loop {
+                let promote: Vec<&DiscoveredClass> = bundle
+                    .local_classes
+                    .iter()
+                    .filter(|class| {
+                        !visible_schemas.iter().any(|s| std::ptr::eq(s.class, *class))
+                            && class
+                                .base_names()
+                                .iter()
+                                .any(|base| visible_schemas.iter().any(|s| s.name() == *base))
+                    })
+                    .collect();
+                if promote.is_empty() {
+                    break;
+                }
+                for class in promote {
+                    let bases = schema_base_chain(class, &bundle.local_classes, &visible_schemas);
+                    visible_schemas.push(Schema {
+                        class,
+                        bases,
+                        alias: None,
+                        file_index: focus_idx,
+                    });
+                }
             }
         }
 
