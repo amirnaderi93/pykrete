@@ -59,7 +59,10 @@ use crate::operations::{
     BodyContext, CallResultTrace, ColumnRefTrace, LocalBindingTrace, check_function_body,
 };
 use crate::registry::Registry;
-use crate::schema::{FieldResolution, Schema, discover_schemas};
+use crate::schema::{
+    FieldResolution, Schema, SchemaView, discover_schemas, pick_omit_base_name,
+    pick_omit_invalid_columns, resolve_pick_omit,
+};
 use crate::types::COLUMN_TYPE_NAMES;
 use crate::walk::{DiscoveredFunction, discover_top_level_classes, discover_top_level_functions};
 
@@ -685,15 +688,23 @@ fn analyze_module<'a>(
     }
 }
 
+/// Resolve a function's `-> DataFrame[…]` return slot to a schema view:
+/// a bare name to the declared schema, a `Pick`/`Omit` expression to its
+/// derived view. `None` when there's no return slot, or it doesn't
+/// resolve (the unresolved case is reported by the signature renderer).
 fn declared_return_schema<'a>(
     slots: &[TypedSlot<'a>],
     schemas: &'a [Schema<'a>],
-) -> Option<&'a Schema<'a>> {
+) -> Option<SchemaView<'a>> {
     for slot in slots {
         if matches!(slot.label, SlotLabel::Return) {
-            if let DataFrameAnnotation::Typed(name) = slot.kind {
-                return schemas.iter().find(|s| s.name() == name);
-            }
+            return match slot.kind {
+                DataFrameAnnotation::Typed(name) => {
+                    schemas.iter().find(|s| s.name() == name).map(SchemaView::Declared)
+                }
+                DataFrameAnnotation::Derived(expr) => resolve_pick_omit(expr, schemas),
+                _ => None,
+            };
         }
     }
     None
@@ -867,6 +878,40 @@ fn render_function(
                     ));
                 }
             }
+            DataFrameAnnotation::Derived(expr) => match resolve_pick_omit(expr, schemas) {
+                Some(_) => {
+                    writeln!(out, "{prefix}{raw_text}").unwrap();
+                    // Picked / omitted columns absent from the base schema.
+                    for (col, col_range) in pick_omit_invalid_columns(expr, schemas) {
+                        diagnostics.push(Diagnostic::at_range(
+                            Severity::Error,
+                            "D0030",
+                            format!(
+                                "Column '{col}' does not exist on schema '{}'.",
+                                pick_omit_base_name(expr).unwrap_or("?"),
+                            ),
+                            col_range,
+                            source,
+                            line_index,
+                        ));
+                    }
+                }
+                None => {
+                    writeln!(out, "{prefix}{raw_text}  (unresolved)").unwrap();
+                    diagnostics.push(Diagnostic::at_range(
+                        Severity::Error,
+                        "D0020",
+                        format!(
+                            "Unknown schema '{}' in {raw_text}. \
+                             Declare it as a class extending Schema.",
+                            pick_omit_base_name(expr).unwrap_or(raw_text),
+                        ),
+                        ann_range,
+                        source,
+                        line_index,
+                    ));
+                }
+            },
             DataFrameAnnotation::Untyped => {
                 writeln!(out, "{prefix}DataFrame  (untyped)").unwrap();
             }

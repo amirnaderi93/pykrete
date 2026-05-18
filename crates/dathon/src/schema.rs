@@ -6,6 +6,7 @@
 //! annotations, and nested classes are ignored.
 
 use ruff_python_ast::Expr;
+use ruff_text_size::{Ranged, TextRange};
 
 use crate::types::{ColumnType, StructField};
 use crate::walk::DiscoveredClass;
@@ -552,6 +553,99 @@ fn resolve_in_type<'a>(ty: &ColumnType, segments: &[&'a str]) -> FieldPathResult
             on: None,
         },
     }
+}
+
+// ---------------------------------------------------------------------------
+// Pick / Omit — derived-schema type operators
+// ---------------------------------------------------------------------------
+
+/// Which derived-schema operator a subscript names.
+#[derive(Clone, Copy)]
+enum PickOmit {
+    /// `Pick[S, "a", "b"]` — keep only the named columns.
+    Pick,
+    /// `Omit[S, "a", "b"]` — keep every column except the named ones.
+    Omit,
+}
+
+/// The pieces of a `Pick[Schema, "a", …]` / `Omit[Schema, "a", …]`
+/// subscript: the operator, the base-schema name, and the named columns
+/// paired with their source ranges. `None` if `expr` isn't a Pick/Omit
+/// subscript of the expected `Operator[Schema, "col", …]` shape.
+fn pick_omit_parts(expr: &Expr) -> Option<(PickOmit, &str, Vec<(&str, TextRange)>)> {
+    let sub = expr.as_subscript_expr()?;
+    let op = match sub.value.as_name_expr()?.id.as_str() {
+        "Pick" => PickOmit::Pick,
+        "Omit" => PickOmit::Omit,
+        _ => return None,
+    };
+    // `Operator[Schema, "a", …]` — the slice is a tuple of the base
+    // schema followed by one or more column-name string literals.
+    let tuple = sub.slice.as_tuple_expr()?;
+    let (schema_expr, col_exprs) = tuple.elts.split_first()?;
+    let schema_name = schema_expr.as_name_expr()?.id.as_str();
+    let columns: Vec<(&str, TextRange)> = col_exprs
+        .iter()
+        .filter_map(|e| {
+            e.as_string_literal_expr()
+                .map(|s| (s.value.to_str(), s.range()))
+        })
+        .collect();
+    if columns.is_empty() {
+        return None;
+    }
+    Some((op, schema_name, columns))
+}
+
+/// Resolve a `Pick` / `Omit` subscript to a derived schema view.
+///
+/// `Pick` keeps the named columns, in the order listed; `Omit` keeps
+/// every other column, in the base schema's order. Columns not on the
+/// base schema are skipped — [`pick_omit_invalid_columns`] reports them.
+/// `None` if `expr` isn't a Pick/Omit subscript or the base schema name
+/// doesn't resolve.
+pub fn resolve_pick_omit<'a>(expr: &'a Expr, schemas: &'a [Schema<'a>]) -> Option<SchemaView<'a>> {
+    let (op, schema_name, columns) = pick_omit_parts(expr)?;
+    let schema = schemas.iter().find(|s| s.name() == schema_name)?;
+    let all = SchemaView::Declared(schema).typed_fields(schemas);
+    let names: Vec<&str> = columns.iter().map(|(c, _)| *c).collect();
+    let fields: Vec<DerivedField<'a>> = match op {
+        PickOmit::Pick => names
+            .iter()
+            .filter_map(|c| all.iter().find(|f| f.name == *c).cloned())
+            .collect(),
+        PickOmit::Omit => all
+            .into_iter()
+            .filter(|f| !names.contains(&f.name))
+            .collect(),
+    };
+    Some(SchemaView::Derived(fields))
+}
+
+/// The columns named in a `Pick` / `Omit` subscript that don't exist on
+/// its base schema, each paired with its source range. Empty if `expr`
+/// isn't a Pick/Omit subscript, or its base schema doesn't resolve (an
+/// unknown base is reported separately).
+pub fn pick_omit_invalid_columns<'a>(
+    expr: &'a Expr,
+    schemas: &'a [Schema<'a>],
+) -> Vec<(&'a str, TextRange)> {
+    let Some((_, schema_name, columns)) = pick_omit_parts(expr) else {
+        return Vec::new();
+    };
+    let Some(schema) = schemas.iter().find(|s| s.name() == schema_name) else {
+        return Vec::new();
+    };
+    columns
+        .into_iter()
+        .filter(|(c, _)| !schema.has_field(c))
+        .collect()
+}
+
+/// The base-schema name of a `Pick` / `Omit` subscript — used to report
+/// an unknown base. `None` if `expr` isn't a Pick/Omit subscript.
+pub fn pick_omit_base_name(expr: &Expr) -> Option<&str> {
+    pick_omit_parts(expr).map(|(_, name, _)| name)
 }
 
 // ---------------------------------------------------------------------------

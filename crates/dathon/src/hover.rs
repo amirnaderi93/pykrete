@@ -457,6 +457,7 @@ fn render_function_hover(
 fn render_annotation(kind: &DataFrameAnnotation<'_>) -> String {
     match kind {
         DataFrameAnnotation::Typed(name) => format!("DataFrame[{name}]"),
+        DataFrameAnnotation::Derived(_) => "DataFrame[…]".to_string(),
         DataFrameAnnotation::Untyped => "DataFrame".to_string(),
         DataFrameAnnotation::NonBareName => "DataFrame[?]".to_string(),
     }
