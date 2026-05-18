@@ -2222,6 +2222,18 @@ fn column_name_arg<'a>(arg: &'a Expr) -> Option<&'a str> {
     if let Some((name, _)) = col_reference(arg) {
         return Some(name);
     }
+    // `df.colname` attribute access — `groupBy(df.key, ...)` and
+    // `drop(df.col)` both accept Column objects, not just name strings,
+    // and grouping by a column carried in from a joined DataFrame is
+    // idiomatic. The key is the attribute name; which DataFrame it came
+    // from is irrelevant to the resulting column. Restricted to a bare
+    // `Name` base so a called `F.func(...)` or a chained `a.b.c` can't be
+    // mistaken for a column reference.
+    if let Some(attr) = arg.as_attribute_expr() {
+        if attr.value.is_name_expr() {
+            return Some(attr.attr.id.as_str());
+        }
+    }
     None
 }
 

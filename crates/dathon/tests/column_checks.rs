@@ -172,6 +172,17 @@ fn drop_accepts_col_references_in_addition_to_bare_strings() {
 }
 
 #[test]
+fn drop_accepts_an_attribute_access_column() {
+    // `df.drop(df.col)` must actually remove the column — selecting it
+    // afterwards then fails, exactly as `drop("col")` would. Before the
+    // attribute-access key was recognized, `price` was silently kept.
+    let result = check(&with_orders(
+        r#"return raw.drop(raw.price).select(col("price"))"#,
+    ));
+    assert_has_code(&result, "D0030");
+}
+
+#[test]
 fn d0030_fires_on_typo_inside_dropDuplicates_list_argument() {
     // The list literal is unpacked; each string element is treated as a
     // column name.
