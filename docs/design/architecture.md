@@ -177,6 +177,13 @@ Python runtime has no `.cast` method for. Stripping is AST-located but
 byte-surgical: only the `.cast(…)` slice is deleted, line numbers are
 preserved, everything else is copied verbatim.
 
+### `config`
+
+`dathon.json` — the project config: `typeCheckingMode` (the `CheckMode`),
+`exclude` (path substrings whose files are skipped), and `rules`
+(per-diagnostic-code overrides — `off` / `warning` / `error`). `Config`
+owns the parse and the lookups; the CLI finds the file and applies them.
+
 ### `lib`
 
 The driver. `check` / `check_project` parse, build the pooled cross-file
@@ -186,7 +193,9 @@ completion, definition, and symbols.
 
 ### `main`
 
-CLI — `dathon check <files…>` and `dathon transpile <file>`.
+CLI — `dathon check <files…>` and `dathon transpile <file>`. `check`
+loads `dathon.json` (working directory or an ancestor) and applies its
+mode, excludes, and rule overrides.
 
 ## Diagnostic codes
 

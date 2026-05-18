@@ -22,6 +22,7 @@
 //!    `return` value against the declared return type.
 
 pub mod completion;
+pub mod config;
 pub mod dataframe;
 pub mod diagnostics;
 pub mod hover;
@@ -36,6 +37,7 @@ pub mod types;
 pub mod walk;
 
 pub use completion::{CompletionItem, CompletionItemKind, completions};
+pub use config::Config;
 pub use hover::{HoverInfo, hover};
 pub use symbols::{
     DocumentSymbol, Span, SymbolKind, definition, document_symbols, prepare_rename, references,
