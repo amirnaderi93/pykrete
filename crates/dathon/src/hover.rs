@@ -106,12 +106,13 @@ pub(crate) fn hover_with_scope<'a>(
     // Body-context-aware cases: col() literal, `x = raw.select(...)`
     // assignment target, or a use of `x` elsewhere in the body. Build
     // the body traces once and feed both consumers.
-    let (col_traces, local_bindings) =
-        crate::collect_module_traces(&functions, source, line_index, schemas, registry);
-    if let Some(info) = hover_on_column_ref(offset, &col_traces, schemas) {
+    let traces = crate::collect_module_traces(&functions, source, line_index, schemas, registry);
+    if let Some(info) = hover_on_column_ref(offset, &traces.column_refs, schemas) {
         return Some(info);
     }
-    if let Some(info) = hover_on_local_binding(offset, &local_bindings, &functions, schemas) {
+    if let Some(info) =
+        hover_on_local_binding(offset, &traces.local_bindings, &functions, schemas)
+    {
         return Some(info);
     }
     None

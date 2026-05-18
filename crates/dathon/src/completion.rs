@@ -109,15 +109,22 @@ pub(crate) fn completions_with_scope<'a>(
         return column_type_completions();
     }
 
-    let (col_traces, local_bindings) =
-        crate::collect_module_traces(&functions, source, line_index, schemas, registry);
+    let traces = crate::collect_module_traces(&functions, source, line_index, schemas, registry);
 
-    if let Some(items) = column_completions_in_col_literal(offset, &col_traces, schemas) {
+    if let Some(items) = column_completions_in_col_literal(offset, &traces.column_refs, schemas) {
         return items;
     }
 
     if let Some(items) =
-        column_completions_after_df_dot(offset, &functions, schemas, &local_bindings)
+        column_completions_after_df_dot(offset, &functions, schemas, &traces.local_bindings)
+    {
+        return items;
+    }
+
+    // `raw.select(...).<cursor>` — the receiver of the `.attr` is a call;
+    // offer the chain result's columns.
+    if let Some(items) =
+        column_completions_after_chain_dot(offset, &functions, &traces.call_results, schemas)
     {
         return items;
     }
@@ -256,7 +263,13 @@ fn column_completions_after_df_dot(
     //    name in the function, which is the right answer for the
     //    common single-assignment case.
     for func in functions {
-        let Some((df_name, _attr_range)) = find_attribute_access_at(offset, &func.def.body) else {
+        let Some((receiver, _attr_range)) = find_attribute_access_at(offset, &func.def.body)
+        else {
+            continue;
+        };
+        // Only a bare-name receiver is a parameter / local binding —
+        // a call receiver is the chain-result surface's job.
+        let Some(df_name) = receiver.as_name_expr().map(|n| n.id.as_str()) else {
             continue;
         };
         if let Some(schema) = df_param_schema(func, df_name, schemas) {
@@ -264,6 +277,30 @@ fn column_completions_after_df_dot(
         }
         if let Some(view) = latest_binding_for(df_name, local_bindings) {
             return Some(fields_of(view, schemas));
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// Surface 4: <call>.<cursor> — column names from the chain result schema
+// ---------------------------------------------------------------------------
+
+fn column_completions_after_chain_dot(
+    offset: TextSize,
+    functions: &[DiscoveredFunction<'_>],
+    call_results: &[crate::operations::CallResultTrace<'_>],
+    schemas: &[Schema<'_>],
+) -> Option<Vec<CompletionItem>> {
+    for func in functions {
+        let Some((receiver, _attr_range)) = find_attribute_access_at(offset, &func.def.body)
+        else {
+            continue;
+        };
+        // Match the receiver expression against a recorded call result —
+        // `raw.select(...)` in `raw.select(...).<cursor>`.
+        if let Some(trace) = call_results.iter().find(|t| t.range == receiver.range()) {
+            return Some(fields_of(&trace.schema, schemas));
         }
     }
     None
@@ -280,13 +317,13 @@ fn latest_binding_for<'a>(
         .map(|b| &b.schema)
 }
 
-/// Walk a list of statements looking for an `Attribute(Name(df_name), attr)`
+/// Walk a list of statements looking for an `Attribute(receiver, attr)`
 /// expression where `offset` sits on the `attr` token. Returns the
-/// receiver name and the attr range.
+/// receiver expression and the attr range.
 fn find_attribute_access_at<'a>(
     offset: TextSize,
     body: &'a [ruff_python_ast::Stmt],
-) -> Option<(&'a str, ruff_text_size::TextRange)> {
+) -> Option<(&'a Expr, ruff_text_size::TextRange)> {
     for stmt in body {
         if let Some(hit) = stmt_attribute_at(offset, stmt) {
             return Some(hit);
@@ -298,7 +335,7 @@ fn find_attribute_access_at<'a>(
 fn stmt_attribute_at<'a>(
     offset: TextSize,
     stmt: &'a ruff_python_ast::Stmt,
-) -> Option<(&'a str, ruff_text_size::TextRange)> {
+) -> Option<(&'a Expr, ruff_text_size::TextRange)> {
     use ruff_python_ast::Stmt;
     match stmt {
         Stmt::Expr(e) => expr_attribute_at(offset, &e.value),
@@ -318,17 +355,15 @@ fn stmt_attribute_at<'a>(
 fn expr_attribute_at<'a>(
     offset: TextSize,
     expr: &'a Expr,
-) -> Option<(&'a str, ruff_text_size::TextRange)> {
+) -> Option<(&'a Expr, ruff_text_size::TextRange)> {
     if !expr.range().contains_inclusive(offset) {
         return None;
     }
     match expr {
         Expr::Attribute(a) => {
-            // Cursor on the attr identifier itself?
+            // Cursor on the attr identifier itself? Return the receiver.
             if a.attr.range.contains_inclusive(offset) {
-                if let Some(name) = a.value.as_name_expr() {
-                    return Some((name.id.as_str(), a.attr.range));
-                }
+                return Some((a.value.as_ref(), a.attr.range));
             }
             // Otherwise descend.
             expr_attribute_at(offset, &a.value)

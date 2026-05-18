@@ -52,7 +52,9 @@ use crate::dataframe::{DataFrameAnnotation, SlotLabel, TypedSlot, typed_slots};
 pub use crate::diagnostics::CheckMode;
 use crate::diagnostics::{Diagnostic, Severity};
 use crate::imports::{ModulePath, find_pyproject_root, longest_common_ancestor, parse_imports};
-use crate::operations::{BodyContext, ColumnRefTrace, LocalBindingTrace, check_function_body};
+use crate::operations::{
+    BodyContext, CallResultTrace, ColumnRefTrace, LocalBindingTrace, check_function_body,
+};
 use crate::registry::Registry;
 use crate::schema::{FieldResolution, Schema, discover_schemas};
 use crate::types::COLUMN_TYPE_NAMES;
@@ -706,7 +708,7 @@ pub(crate) fn collect_module_column_refs<'a>(
     schemas: &'a [Schema<'a>],
     registry: &'a Registry<'a>,
 ) -> Vec<ColumnRefTrace<'a>> {
-    collect_module_traces(functions, source, line_index, schemas, registry).0
+    collect_module_traces(functions, source, line_index, schemas, registry).column_refs
 }
 
 /// Internal: run body analysis once and return both trace flavors. The
@@ -719,9 +721,8 @@ pub(crate) fn collect_module_traces<'a>(
     line_index: &LineIndex,
     schemas: &'a [Schema<'a>],
     registry: &'a Registry<'a>,
-) -> (Vec<ColumnRefTrace<'a>>, Vec<LocalBindingTrace<'a>>) {
-    let mut col_refs = Vec::new();
-    let mut bindings = Vec::new();
+) -> ModuleTraces<'a> {
+    let mut traces = ModuleTraces::default();
     for func in functions {
         let slots = typed_slots(func);
         if slots.is_empty() {
@@ -738,10 +739,21 @@ pub(crate) fn collect_module_traces<'a>(
             line_index,
             &mut throwaway,
         );
-        col_refs.extend(ctx.take_column_refs());
-        bindings.extend(ctx.take_local_bindings());
+        traces.column_refs.extend(ctx.take_column_refs());
+        traces.local_bindings.extend(ctx.take_local_bindings());
+        traces.call_results.extend(ctx.take_call_results());
     }
-    (col_refs, bindings)
+    traces
+}
+
+/// The three flavors of trace body analysis collects for the LSP layer:
+/// `col(...)`-style column references, local `x = …` bindings, and
+/// method-call result schemas.
+#[derive(Default)]
+pub(crate) struct ModuleTraces<'a> {
+    pub column_refs: Vec<ColumnRefTrace<'a>>,
+    pub local_bindings: Vec<LocalBindingTrace<'a>>,
+    pub call_results: Vec<CallResultTrace<'a>>,
 }
 
 fn render_schema<'a>(
