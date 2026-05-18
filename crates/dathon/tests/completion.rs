@@ -182,6 +182,75 @@ def f(raw: DataFrame[Orders]) -> int:
 }
 
 // ===========================================================================
+// Surface 4: bare-string column arguments
+// ===========================================================================
+
+const ORDERS: &str = "\
+class Orders(Schema):
+    place_code: \"int\"
+    price: \"int\"
+";
+
+fn bare_arg_labels(body: &str, needle: &str) -> Vec<String> {
+    let src = format!("{ORDERS}\ndef f(raw: DataFrame[Orders]) -> DataFrame:\n    {body}\n");
+    let (line, col) = cursor_at(&src, needle);
+    let items = completions(&src, line, col + 1);
+    let mut names: Vec<String> = items.into_iter().map(|i| i.label).collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn completions_in_select_bare_string_arg() {
+    assert_eq!(
+        bare_arg_labels("return raw.select(\"place_code\")", "\"place_code\""),
+        vec!["place_code", "price"],
+    );
+}
+
+#[test]
+fn completions_in_group_by_bare_string_arg() {
+    assert_eq!(
+        bare_arg_labels("return raw.groupBy(\"place_code\")", "\"place_code\""),
+        vec!["place_code", "price"],
+    );
+}
+
+#[test]
+fn completions_in_drop_bare_string_arg() {
+    assert_eq!(
+        bare_arg_labels("return raw.drop(\"place_code\")", "\"place_code\""),
+        vec!["place_code", "price"],
+    );
+}
+
+#[test]
+fn completions_in_with_column_renamed_bare_string_arg() {
+    assert_eq!(
+        bare_arg_labels(
+            "return raw.withColumnRenamed(\"place_code\", \"pc\")",
+            "\"place_code\"",
+        ),
+        vec!["place_code", "price"],
+    );
+}
+
+#[test]
+fn completions_in_join_on_keyword_arg() {
+    let src = format!(
+        "{ORDERS}
+def f(a: DataFrame[Orders], b: DataFrame[Orders]) -> DataFrame:
+    return a.join(b, on=\"place_code\")
+"
+    );
+    let (line, col) = cursor_at(&src, "on=\"place_code\"");
+    let items = completions(&src, line, col + 4);
+    let mut names: Vec<String> = items.into_iter().map(|i| i.label).collect();
+    names.sort();
+    assert_eq!(names, vec!["place_code", "price"]);
+}
+
+// ===========================================================================
 // Negative space
 // ===========================================================================
 
