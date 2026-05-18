@@ -500,7 +500,8 @@ fn handle_ann_assign<'a>(
             // `x: DataFrame[Pick[…]] = …` — a local derived-schema
             // re-annotation. Surface its validation errors, then bind
             // the resolved view.
-            for (code, message, range) in crate::schema::derived_schema_errors(expr, ctx.schemas())
+            for (code, message, range) in
+                crate::schema::derived_schema_errors(expr, ctx.schemas(), source)
             {
                 diagnostics.push(Diagnostic::at_range(
                     Severity::Error,

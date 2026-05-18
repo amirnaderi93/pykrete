@@ -52,6 +52,9 @@ pub fn recognize<'ast>(expr: &'ast Expr) -> Option<DataFrameAnnotation<'ast>> {
                 {
                     Some(DataFrameAnnotation::Derived(inner))
                 }
+                // `DataFrame[{col: type, …}]` — an inline structural
+                // schema (a dict literal).
+                inner @ Expr::Dict(_) => Some(DataFrameAnnotation::Derived(inner)),
                 _ => Some(DataFrameAnnotation::NonBareName),
             }
         }

@@ -8,7 +8,7 @@
 use ruff_python_ast::Expr;
 use ruff_text_size::{Ranged, TextRange};
 
-use crate::types::{ColumnType, StructField};
+use crate::types::{COLUMN_TYPE_NAMES, ColumnType, StructField};
 use crate::walk::DiscoveredClass;
 
 /// Recursion ceiling for resolving a (possibly self-referential) schema
@@ -590,18 +590,47 @@ fn derived_parts(expr: &Expr) -> Option<(DerivedOp, &[Expr])> {
     Some((op, args))
 }
 
-/// Resolve a `Pick` / `Omit` / `Merge` subscript to a derived schema view.
+/// The column-name string of an inline-schema dict key — a bare name
+/// (`{checkin: date}`) or a string literal (`{"checkin": date}`).
+fn dict_key_name(key: Option<&Expr>) -> Option<&str> {
+    match key? {
+        Expr::Name(n) => Some(n.id.as_str()),
+        Expr::StringLiteral(s) => Some(s.value.to_str()),
+        _ => None,
+    }
+}
+
+/// Resolve a derived-schema expression to a `SchemaView::Derived`: a
+/// `Pick` / `Omit` / `Merge` subscript, or an inline structural schema
+/// `{col: type, …}`.
 ///
 /// `Pick` keeps the named columns in the order listed; `Omit` keeps every
 /// other column in the base schema's order; `Merge` concatenates the
 /// columns of every named schema, de-duplicated by name (first occurrence
-/// wins). Columns / schemas that don't resolve are skipped —
+/// wins); an inline dict becomes a column per `name: type` pair. Columns
+/// / schemas / types that don't resolve are skipped or left untyped —
 /// [`derived_schema_errors`] reports them. `None` if `expr` isn't a
-/// derived-schema subscript, or nothing in it resolved.
+/// derived-schema expression, or nothing in it resolved.
 pub fn resolve_derived_schema<'a>(
     expr: &'a Expr,
     schemas: &'a [Schema<'a>],
 ) -> Option<SchemaView<'a>> {
+    // `DataFrame[{col: type, …}]` — an inline structural schema. Each
+    // `name: type` pair becomes a column; an unresolvable type is left
+    // `None` (permissive) — `derived_schema_errors` flags it.
+    if let Some(dict) = expr.as_dict_expr() {
+        let fields = dict
+            .items
+            .iter()
+            .filter_map(|item| {
+                Some(DerivedField {
+                    name: dict_key_name(item.key.as_ref())?,
+                    ty: resolve_annotation_type(&item.value, schemas, 0),
+                })
+            })
+            .collect();
+        return Some(SchemaView::Derived(fields));
+    }
     let (op, args) = derived_parts(expr)?;
     match op {
         DerivedOp::Pick | DerivedOp::Omit => {
@@ -647,16 +676,50 @@ pub fn resolve_derived_schema<'a>(
     }
 }
 
-/// Validation errors for a derived-schema subscript — each a
+/// Validation errors for a derived-schema expression — each a
 /// `(code, message, range)` triple ready to become a `Diagnostic`: a
-/// `Pick` / `Omit` column not on its base schema (`D0030`), and an
-/// unknown base or merged schema (`D0020`). Empty if `expr` isn't a
-/// derived-schema subscript or is error-free.
+/// `Pick` / `Omit` column not on its base schema (`D0030`), an unknown
+/// base or merged schema (`D0020`), and an unresolvable type in an
+/// inline structural schema (`D0010` / `D0011`). Empty if `expr` isn't
+/// a derived-schema expression or is error-free.
 pub fn derived_schema_errors<'a>(
     expr: &'a Expr,
     schemas: &'a [Schema<'a>],
+    source: &str,
 ) -> Vec<(&'static str, String, TextRange)> {
     let mut errors: Vec<(&'static str, String, TextRange)> = Vec::new();
+    // `DataFrame[{col: type, …}]` — every value must resolve to a type;
+    // reuse `SchemaField::resolve` so the messages match a class field's.
+    if let Some(dict) = expr.as_dict_expr() {
+        for item in &dict.items {
+            let Some(name) = dict_key_name(item.key.as_ref()) else {
+                continue;
+            };
+            let field = SchemaField {
+                name,
+                annotation: &item.value,
+            };
+            match field.resolve(schemas) {
+                FieldResolution::Resolved(_) | FieldResolution::ResolvedNested(_) => {}
+                FieldResolution::UnknownType { name: ty } => errors.push((
+                    "D0010",
+                    format!("Unknown column type '{ty}'. Expected one of: {COLUMN_TYPE_NAMES}."),
+                    item.value.range(),
+                )),
+                FieldResolution::NotABareName => errors.push((
+                    "D0011",
+                    format!(
+                        "Column type '{}' is not a recognized dathon type. \
+                         Use a bare atomic ({COLUMN_TYPE_NAMES}), a declared Schema, \
+                         or an `Array[…]` / `Map[…, …]` collection.",
+                        &source[item.value.range()],
+                    ),
+                    item.value.range(),
+                )),
+            }
+        }
+        return errors;
+    }
     let Some((op, args)) = derived_parts(expr) else {
         return errors;
     };
