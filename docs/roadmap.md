@@ -1,111 +1,107 @@
 # Roadmap
 
-What's planned beyond v0.1, in rough priority order. This document is a living plan; it's updated as the project moves.
+What's planned, in rough priority order. A living document — updated as the
+project moves.
 
-## After v0.1
+## Where dathon is now
 
-Items the v0.1 spec defers, in the order we'll likely tackle them after the v0.1 release tag:
+The **PySpark static checker is feature-complete**:
 
-### Real import-statement support
+- The full DataFrame operation surface — `select` / `filter` / `join` /
+  `groupBy`+`agg` / `withColumn(s)` / `drop` / `union` / `cube` / `rollup` /
+  `pivot` / `transform` / `cast` / `toDF` / `df.na.*` / … — with
+  result-schema inference through whole transformation chains.
+- Inline SQL (`F.expr`, `selectExpr`, string-`filter`) and raw
+  `spark.sql("SELECT …")`.
+- `Window` partition/order key checking.
+- Column-**existence** checking (`D0030`) and column-**type** checking —
+  conservative (`D0080`, on by default) and strict (`D0081`/`D0082`, under
+  `typeCheckingMode: strict`).
+- Arbitrarily-nested `array` / `map` / `struct` column types — declared,
+  structurally type-checked, and navigated field-by-field
+  (`col("orders.line.sku")`).
+- A `pyspark.sql.functions` result catalog and UDF return types.
+- Cross-file imports and shared-schema modules.
 
-Iteration 31 shipped strict per-file scoping driven by `from X import Y [as Z]` clauses (relative `from .X import Y`, absolute `from pkg.X import Y`, and `as` aliases). Project root is detected via `pyproject.toml` (longest-common-ancestor fallback). `dathon check` accepts directory paths and walks them recursively for `.dpy` files. Missing imports surface as `D0020`; unresolved module paths as `D0070`; names not exported by a module as `D0071`. Still pending:
+The **LSP server** delivers live diagnostics, hover, completion, document
+symbols, and go-to-definition, and embeds a Python language server (an
+LSP multiplexer — see [design/multiplexer.md](design/multiplexer.md)). The
+**VS Code extension** ([../editors/vscode/](../editors/vscode/)) wraps it.
 
-- `import X` and qualified access (`X.Y`) — currently parsed but `X.Y` references don't resolve.
-- Wildcard imports (`from X import *`) — parsed but no-op; consider emitting a warning or expanding.
-- Duplicate-name detection / warnings across files.
-- Incremental rechecking — today every `dathon check` re-reads and reparses every file in the project.
+## Next: editor features
 
-### LSP — features beyond skeleton + hover
+- **Autocomplete completeness** — column-name completion in bare-string
+  arguments (`.select("…")`, `.groupBy("…")`, `.join(on="…")`,
+  `.drop("…")`, `.withColumnRenamed("…")`), and on chain results
+  (`raw.select(...).<cursor>`).
+- **Find references**, **rename**, **semantic tokens** — broader LSP
+  coverage.
 
-Iterations 24–32 shipped the LSP skeleton (live diagnostics via `textDocument/publishDiagnostics`), hover (Schema declarations, typed function declarations, Schema references in annotations, `col("foo")` literals, and `x = raw.select(...)` local-variable bindings on both their LHS and uses elsewhere), document symbols, go-to-definition for Schema references in `DataFrame[X]` / nested-struct annotations and for `col("foo")` literals, completion at three surfaces (`col("…")`, `df.` for typed params *and* local-variable bindings, `DataFrame[…]`), and "Did you mean?" suggestions on `D0030` — surfaced both in the diagnostic message and as a `textDocument/codeAction` quick-fix that replaces the literal in place. Still pending:
+## Transpiler
 
-- **Completion / hover on chain results** — `raw.select(...).<>` doesn't yet trigger column-name completion. Needs the same logic that backs `x.<>` for locals, but applied to the smallest enclosing call's result schema rather than a name lookup.
-- **Find references**, **rename**, **semantic tokens** as further iterations.
+`.dpy` → `.py` is nearly an identity transform — it prepends
+`from __future__ import annotations` so dathon's atomic type names and
+`DataFrame[X]` annotations don't evaluate at runtime. Remaining: strip the
+dathon-only constructs the Python runtime doesn't have — notably the
+fluent schema-cast `.cast(DataFrame[Schema])`, which the transpiler must
+remove from the call chain.
 
-### VS Code extension
+## PyCharm support
 
-Shipped (iteration 27) — TypeScript wrapper at [editors/vscode/](../editors/vscode/) that launches `dathon-lsp` and routes `.dpy` files to it. Currently distributed as a local `.vsix` (`npx vsce package`); marketplace publishing is still pending.
+A JetBrains integration via PyCharm's LSP client. Deferred well past
+pandas (v2) and polars (v3) — VS Code is the only supported editor for now.
 
-### Editor-agnostic LSP docs
+## Strictness configuration
 
-Setup snippets for Neovim, Helix, Zed, Emacs to plug `dathon-lsp` into their LSP clients.
+`typeCheckingMode` (`off` / `basic` / `standard` / `strict`) is wired and
+drives both dathon's checks and the embedded Python engine. A fuller
+`dathon.json` — file/dir excludes, per-rule severity overrides — is a
+follow-up.
 
 ## Generic-inference extensions
 
-Iteration 21 introduced generic-function inference for the simplest shape: a single type variable `T` appearing in both a parameter slot `GenericClass[T]` and a return slot `GenericClass[T]`. Real-world generic patterns often want more. Listed here so they're not forgotten:
+dathon infers generic-function results for the simplest shape: one type
+variable in both a parameter slot `GenericClass[T]` and a return slot
+`GenericClass[T]`. Larger patterns, listed so they're not forgotten:
 
-### Multiple type parameters
+- **Multiple type parameters** — `def join[A, B](left: DataFrame[A], right: DataFrame[B]) -> DataFrame[Joined[A, B]]`.
+- **Nested generics** — `List[DataSource[T]]`; the matcher handles one subscript level only.
+- **Chained class-method calls** — `builder.with_path("/x").read(SOURCE)`; only direct calls on a class-instance name dispatch through generic inference.
+- **Generic methods that aren't `[T] -> G[T]`-shaped** — e.g. `def cast_to[T](self, _: type[T]) -> DataFrame[T]`, where `T` is bound from a value of static type `type[T]`.
 
-```python
-def join[A, B](left: DataFrame[A], right: DataFrame[B]) -> DataFrame[Joined[A, B]]: ...
-```
+## Quality-of-life
 
-Today: only one type variable per generic-method call is bound. Two-param methods don't infer at all.
+- **Packaging** — `cargo install` + a Homebrew tap; marketplace publishing
+  for the VS Code extension (distributed as a local `.vsix` today).
+- **Editor-agnostic LSP docs** — setup snippets for Neovim, Helix, Zed,
+  Emacs.
+- **Performance pass** — benchmark on large codebases; today every
+  `dathon check` reparses the whole project.
+- **Duplicate-name detection** across files.
 
-### Nested generics
+## Strategic direction
 
-```python
-def lift[T](xs: List[DataSource[T]]) -> List[DataFrame[T]]: ...
-```
-
-Today: dathon's matcher only handles one level of subscript (`G[T]`). Nested forms (`List[DataSource[T]]`) aren't recognized.
-
-### Chained class-method calls
-
-```python
-return builder.with_path("/x").read[T](RAW_ORDERS)
-```
-
-Today: only direct method calls on a class-instance name are dispatched through the generic-inference path. A method call whose receiver is itself a call result (the `builder.with_path(...)` here) isn't treated as a class instance, so the outer `.read(...)` is skipped.
-
-### Class-level constants — *shipped in iteration 35*
-
-```python
-class DataSources:
-    RAW_ORDERS: DataSource[RawOrders] = DataSource("/path")
-```
-
-The registry now walks class bodies for `AnnAssign` and indexes the constants under `(class_name, const_name)` keys; `Attribute(Name("DataSources"), "RAW_ORDERS")` resolves the same way a bare module-level constant does. Cross-file imports also surface the class's constants in the importing file.
-
-### Generic methods that aren't `[T] -> G[T]`-shaped
-
-```python
-def cast_to[T](self, _: type[T]) -> DataFrame[T]: ...
-```
-
-Methods that take a *type* as a value-level argument (e.g. `df.cast_to(RawOrders)`) need a different inference path — the type variable is bound from a value whose static type is `type[T]`, not from a `G[T]`-shaped slot.
-
-## Quality-of-life items
-
-- **Better error messages with hints** — "Did you mean 'X'?" suggestions on `D0030` via Levenshtein distance over the schema's field names.
-- **`dathon.json` config file** — strictness modes, file/dir excludes, per-rule severity overrides.
-- **`cargo install` packaging + Homebrew tap** — easier local install than `cargo run --`.
-- **Performance pass** — benchmark on large codebases; explore parallel file checks once multi-file support lands.
-
-## Beyond v0.1 — strategic direction
-
-These are larger structural moves, not iterations. They shape what dathon becomes once the v0.1 surface is solid.
-
-### Full Python LSP feature parity
-
-Because `.dpy` is a strict superset of Python, the LSP should offer **everything a regular Python LSP does** — syntax highlighting, completions on standard library symbols, references, go-to-definition for non-dataframe code, formatting, etc. dathon-specific checks (`DataFrame[X]`, `col(...)`, `Schema` classes) sit on top of that base.
-
-**Iteration 39 shipped phase 1 — co-activation.** The VS Code extension now activates on `onLanguage:python` plus the dathon language, and dathon-lsp's document selector accepts both `dathon` and `python` files matching `**/*.dpy`. Adding `"files.associations": {"*.dpy": "python"}` to the user's `settings.json` makes `.dpy` files run through a Python LSP (basedpyright recommended) alongside dathon-lsp — full Python feature parity at the cost of installing a second extension. See [`editors/vscode/README.md`](../editors/vscode/README.md) for the setup.
-
-**Iteration 40 closed the two co-activation rough edges that first-contact surfaced:** (1) dathon was emitting `D0070` on external Python imports (`from pyspark.sql.functions import col`, `from datetime import datetime`); it now skips unresolvable imports silently and only fires `D0070` for malformed relative paths (too many leading dots). (2) Pylance was flagging every Schema class as "undefined name" because `Schema`, `string`, `date`, `timestamp`, `double`, `long`, `DataFrame`, `col` aren't real Python identifiers. [`python_stubs/dathon.py`](../python_stubs/dathon.py) ships a stub module the user drops in their project; a one-line `from dathon import Schema, …` at the top of each `.dpy` file makes Pylance happy, and dathon ignores the import.
-
-**Phase 2 — multiplex inside dathon-lsp.** Eventually we'd embed/proxy an existing Python LSP behind dathon's stdio interface and merge responses, so users only install one extension. Deferred until friction shows up — co-activation is good enough for now.
+These are larger structural moves, not increments.
 
 ### Multi-dataframe support (pandas, polars, …)
 
-PySpark is the v0.1 target, but every popular dataframe library has the same fundamental shape: a value carries a schema, methods narrow or widen that schema, column names must exist on the schema when referenced. Real data engineering work mixes Spark with pandas in the same job (the [example `example_job.py`](design-notes.md) does `.toPandas()` → process → `spark.createDataFrame()`); polars is rising fast. Schema checking is valuable for *every* dataframe library.
+PySpark is the v1 target, but every dataframe library has the same shape:
+a value carries a schema, methods narrow or widen it, column names must
+exist when referenced. Schema checking is valuable for every one.
 
-Priority order: **PySpark → pandas → polars** → others (DuckDB, Dask, …) as they show up.
+Priority: **PySpark → pandas → polars** → others (DuckDB, Dask, …).
 
-The core type model — `DataFrame[Schema]`, `Schema` class, column reference checks, return-type validation — should generalize across libraries. The library-specific layer handles method dispatch:
+The core type model — `DataFrame[Schema]`, the `Schema` class, column
+checks, return-type validation — generalizes. The library-specific layer
+is method dispatch (`raw.select(col("x"))` vs `raw[["x"]]` vs
+`raw.select(pl.col("x"))`). This argues for a plugin/dispatch model for
+operation handling **before** pandas support accumulates more
+PySpark-specific code in `operations`.
 
-- Spark: `raw.select(col("x"))`, `raw.filter(col("a") > 0)`, `raw.groupBy(...).agg(...)`.
-- pandas: `raw[["x"]]`, `raw.loc[raw.a > 0]`, `raw.groupby(...).agg(...)`.
-- polars: `raw.select(pl.col("x"))`, `raw.filter(pl.col("a") > 0)`, `raw.group_by(...).agg(...)`.
+### Forking `ty`
 
-This argues for moving toward a plugin/dispatch model for method handling before too much PySpark-specific code accumulates in `operations.rs`. Probably the right time to do this is **before** pandas support lands, while the surface is still small.
+Long term, dathon may fork Astral's `ty` (their Rust Python type checker)
+once it reaches a stable release — a single native stack, replacing the
+basedpyright multiplexer. Because dathon's analyzer is already built on
+`ruff_python_ast` (the AST `ty` uses), the schema-checking core ports
+cleanly; the multiplexer is interim scaffolding by design.

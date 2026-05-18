@@ -1,218 +1,214 @@
 # Architecture
 
-A snapshot of how dathon's checker is organized today. Will grow as the codebase grows.
+How dathon is organized. dathon is a static schema checker for PySpark —
+`.dpy` files are a strict superset of Python.
+
+## Workspace
+
+Two crates in one Cargo workspace:
+
+- **`dathon`** ([`crates/dathon/`](../../crates/dathon/)) — the checker. A
+  library (the analysis is a library so editors can embed it) plus the
+  CLI binary `dathon`.
+- **`dathon-lsp`** ([`crates/dathon-lsp/`](../../crates/dathon-lsp/)) — the
+  Language Server. An LSP *multiplexer*: it wraps the `dathon` library and
+  an embedded Python language server, so the editor talks to one server
+  and gets both schema checking and full Python support. See
+  [multiplexer.md](multiplexer.md).
 
 ## Pipeline
 
-```mermaid
-flowchart LR
-    A[".dpy source"] --> B["ruff_python_parser"]
-    B --> C["Python AST<br/>(ModModule)"]
-    C --> W["walk<br/>top-level classes<br/>+ top-level functions"]
-    W --> S["schema<br/>Schema classes,<br/>field resolution,<br/>SchemaView"]
-    W --> D["dataframe<br/>DataFrame[X] slot<br/>recognition"]
-    S --> T["types<br/>ColumnType vocab"]
-    D --> O["operations<br/>body analysis,<br/>result-schema inference,<br/>return-type check"]
-    S --> O
-    S --> M["main<br/>resolve, render,<br/>format diagnostics"]
-    D --> M
-    T --> M
-    O --> M
+The checker is no longer a single linear pass — it parses, builds
+registries, then runs a recursive body analysis with schema inference and
+type checking.
+
+```
+.dpy source
+  → ruff_python_parser           (Python AST — ModModule)
+  → walk                         (discover top-level classes + functions)
+  → schema / dataframe / registry (Schema classes, DataFrame[X] slots,
+                                   classes/methods/functions/UDFs/constants)
+  → operations                   (per-function body analysis: operation
+                                   modeling, result-schema inference,
+                                   column-existence + column-type checks)
+  → diagnostics                  (TypeScript-style: path:line:col - sev code: msg)
 ```
 
-Today the checker is a single linear pass: parse → discover classes → recognize schemas → print. No type checking, no inference, no transpiler — those come later. The pipeline will fan out (more walks, more analyzers) but the basic shape stays.
-
-## Crates
-
-One crate, `dathon`, at [`crates/dathon/`](../../crates/dathon/). It is the CLI binary.
-
-When we add a checker library (so an LSP can embed it), a transpiler, or a CLI argument parser big enough to need its own crate, they'll move into their own crates in the same workspace. The workspace `Cargo.toml` already supports that with zero migration.
+Cross-file resolution (imports, shared schemas) happens in `lib`, which
+pools declarations across the project before analyzing each file.
 
 ## Modules in `dathon`
 
 ### `diagnostics`
 
-A single struct, `Diagnostic`, with severity, code, message, line, column. `format()` emits the TypeScript-style line:
-
-```
-path:line:col - severity code: message
-```
-
-Line/column is computed eagerly at construction time using `ruff_source_file::LineIndex`. Diagnostics don't carry source references — they're self-contained for printing and later for aggregation.
+`Diagnostic` — severity, code, message, eagerly-computed line/column.
+`CheckMode` (`off` / `basic` / `standard` / `strict`) mirrors the embedded
+Python engine's `typeCheckingMode`; each diagnostic carries a `min_mode`
+and the driver keeps only those the active mode surfaces. `format()` emits
+the TypeScript-style line `path:line:col - severity code: message`.
 
 ### `walk`
 
-Read-only AST walks. Today only `discover_top_level_classes`. Will grow to find function definitions, imports, `DataSource` registrations, etc.
-
-`DiscoveredClass` wraps a `&StmtClassDef` plus convenience methods (`name`, `base_names`, `has_base`).
+Read-only AST discovery — `discover_top_level_classes`,
+`discover_top_level_functions`.
 
 ### `schema`
 
-Recognizes which discovered classes are dathon schemas (bases include `Schema`) and exposes their field annotations as `(name, &Expr)` pairs. Field resolution lives here too: `SchemaField::resolve(schemas)` returns a `FieldResolution` enum with four variants:
+Schema classes (a Python class whose bases include `Schema`) and field
+resolution. `SchemaField::resolve` produces a `FieldResolution`;
+`field_type` resolves a field's full [`ColumnType`], recursively — nested
+`array` / `map` element types and `struct` fields included, descending
+into referenced `Schema` classes (depth-guarded against a cyclic schema).
 
-- `Resolved(ColumnType)` — atomic type from the v0.1 vocabulary.
-- `ResolvedNested(&Schema)` — the field's type is another declared Schema class. Models PySpark's `StructType`. Resolution order: atomic first, then a Schema lookup against the discovered list.
-- `UnknownType { name }` — bare name that's neither atomic nor a Schema.
-- `NotABareName` — subscript, attribute access, or other complex expression.
+`SchemaView` is the unified view used during analysis — `Declared(&Schema)`,
+`Derived(Vec<DerivedField>)` (a schema inferred from an operation, each
+field carrying its name and inferred type), or `Grouped { keys, underlying }`
+(a post-`groupBy` intermediate).
 
-This module also owns `SchemaView`, the unified view used by body analysis. A `SchemaView` is either `Declared(&Schema)` (a user-defined Schema class), `Derived(Vec<&str>)` (a schema inferred from operating on another), or `Grouped { keys, underlying }` (a post-`groupBy` intermediate). All field-existence and field-set comparisons (`has_field`, `field_names`, `display_name`) work identically across them — letting `D0030`, `D0040`, and `D0050` reason about schemas regardless of where they came from.
-
-For nested struct fields, the field name still appears at the top level (`User.has_field("address")` is true even when `address`'s type is the nested `Address` schema). Dotted column access (`col("address.street")`) is not yet supported in v0.1 — it would require path-traversal through nested schemas.
+`resolve_path` walks a dotted column path — `col("orders.line.sku")` — through
+nested structs, piercing `array<struct>` as Spark does. `suggest_field_name`
+powers the "did you mean?" hints.
 
 ### `types`
 
-The atom layer of dathon's type system. Today: one enum, `ColumnType`, with the v0.1 vocabulary (`int`, `long`, `double`, `string`, `bool`, `date`, `timestamp`). `from_name` parses user-written source forms; `as_str` / `Display` produce the canonical printable name. Mapping to Spark types (`IntegerType`, etc.) lives here when we get to the transpiler.
+`ColumnType` — dathon's type system. The atomic vocabulary (`int`, `long`,
+`double`, `string`, `bool`, `date`, `timestamp`) plus the composites
+`Array`, `Map`, and `Struct`, which nest arbitrarily (`array<map<string,
+array<int>>>`, `array<struct<id: int>>`). A recursive type-string parser
+reads the annotation forms; `from_spark_name` handles Spark's wider cast
+vocabulary.
 
 ### `registry`
 
-File-level registries of discovered classes and top-level typed constants — built once per check, before body analysis begins.
-
-`ClassInfo` records every top-level class (Schema-derived or otherwise), its PEP 695 generic type parameters (`class Foo[T]`), and each of its method declarations. `MethodInfo` captures the method's name, type parameters (`def m[T]`), positional parameter annotations, and return-type annotation.
-
-`ConstantInfo` records top-level annotated assignments of the simple shape `NAME: GenericClass[Schema] = …`. The outer generic class name is decorative (we treat any such constant as "carries the named schema") — the schema name resolves against the schema list to bind the constant as a `SchemaView::Declared` value during body analysis.
-
-This module is read-only data; the substitution logic that uses it lives in `operations`.
+Per-file registries built before body analysis: classes and their methods
+(with PEP 695 generic type parameters), top-level functions, annotated
+constants (`NAME: DataSource[Schema] = …`, including class-body
+constants), and UDFs (`@udf` / `@pandas_udf` decorators and the functional
+`udf(f, …)` form, mapped to their return type).
 
 ### `dataframe`
 
-Recognizes DataFrame-typed annotations on function signatures. `recognize` classifies an annotation expression as `Untyped` (bare `DataFrame`), `Typed("Foo")` (`DataFrame[Foo]` with a bare-name schema), or `NonBareName` (`DataFrame[list[str]]`, etc.). `typed_slots` walks a function's parameters and return type and returns a list of every DataFrame-touching slot.
+Recognizes `DataFrame[X]` annotations on function signatures —
+`Untyped` / `Typed("Foo")` / `NonBareName` — and the typed parameter /
+return slots.
 
-`DataFrame` is currently matched by literal name only — once import resolution lands, aliased imports (`from pyspark.sql import DataFrame as DF`) will be handled here.
+### `imports`
+
+`from X import Y [as Z]` resolution — relative and absolute paths, `as`
+aliases — anchored at the project root (`pyproject.toml`, with a
+longest-common-ancestor fallback).
 
 ### `operations`
 
-PySpark DataFrame operation checking inside function bodies, with **result-schema inference** so chained calls and local variable bindings carry their schemas forward.
+The heart of the checker — body analysis with result-schema inference, so
+chained calls and local bindings carry their schemas forward.
 
-`BodyContext` holds two name-resolution maps:
+`BodyContext` resolves names to schemas (typed parameters, `x = …`
+bindings, annotated assignments, top-level constants, class instances).
+`analyze_expr` recursively walks an expression, returns a `SchemaView`
+when it evaluates to a DataFrame, and along the way checks every
+recognized call against the receiver's schema.
 
-- `df_bindings: name → SchemaView` — DataFrame-typed function parameters, results of `x = <DataFrame expression>` assignments, and `x: DataFrame[Schema] = …` annotated assignments.
-- `instance_bindings: name → class_name` — function parameters typed with a non-Schema class (`dal: DataAccessLayer`). These route method calls through the class registry instead of treating the receiver as a DataFrame.
+**Operations modeled** — `select`, `filter`/`where`, `withColumn`,
+`withColumns`, `withColumnRenamed`/`withColumnsRenamed`, `drop`,
+`dropDuplicates`, `dropna`, `groupBy`/`cube`/`rollup` + `agg`, `pivot`,
+`join`/`crossJoin`/`union`/`unionByName`, `selectExpr`, `transform`,
+`toDF`, the `df.na.*` family, `Window` key checking, the schema-cast
+`.cast(DataFrame[Schema])`, and a wide pass-through set
+(`persist`/`cache`/`orderBy`/`limit`/…).
 
-`BodyContext::lookup(name)` consults the DataFrame bindings first, then **falls back to the constants registry**: a `NAME: GenericClass[Schema]` top-level constant resolves to a `SchemaView::Declared(Schema)` value just like a parameter does, so `dal.read(RAW_ORDERS)` can find `RAW_ORDERS`'s schema even though the constant is declared at module scope, not in the function's params.
+**Column-type inference** — `infer_expr_type` works out the type of a
+column expression (`col(...)`, `.cast(...)`, `F.lit(...)`, literals, and a
+`pyspark.sql.functions` result catalog with type transforms like
+`collect_list(T) → array<T>` and `explode(array<T>) → T`). Result builders
+carry inferred types into `Derived` schemas.
 
-**Annotated assignments** (`x: DataFrame[Schema] = …`) are authoritative: the annotation wins even if the RHS is something dathon can't track. This is the simple bridge for external sources when generic inference isn't available.
+**Embedded SQL** — column references inside `F.expr("…")`, `selectExpr("…")`,
+and string-form `filter("…")` are parsed (see `sql`) and checked.
 
-**Generic-method dispatch** (`handle_class_method_call`): when the receiver of a method call is a class instance, dathon looks the method up in the registry. If the method has type parameters and the parameter / return annotations match the simple shape `GenericClass[T] -> GenericClass[T]`, dathon binds `T` from the argument's schema and substitutes through the return. The result is a `SchemaView::Declared(Schema)` value that participates in the same chain analysis as everything else — so `dal.read(RAW_ORDERS).select(col("missing"))` correctly fires `D0030` against `RawOrders`.
+### `sql`
 
-`analyze_expr` is the recursive heart. Given an expression, it returns a `SchemaView` when the expression evaluates to a DataFrame and `None` otherwise. While walking, every recognized method call's arguments are checked against the receiver's schema (emitting `D0030`/`D0040`) and the operation's result schema is computed and returned.
+Best-effort parsing of the SQL strings PySpark embeds — column references
+inside `F.expr`/`selectExpr`/string-`filter` (via `sqlparser`), and the
+projection columns of a `spark.sql("SELECT …")` query.
 
-Recursion is what enables chained calls: for `raw.filter(...).select("madeup")`, the outer `select` first analyzes its receiver (the `filter` call), which in turn analyzes *its* receiver (`raw`). Each level reports its own diagnostics and returns its result schema.
+### `hover` / `completion` / `symbols`
 
-**Recognized methods today** (two families):
-
-- **Column-method calls** — methods whose argument shape consists of column references / expressions. Each has one of three shapes:
-  - **AllColumnName** — `select`, `drop`, `dropDuplicates`, `groupBy`. Top-level string-literal args are treated as column names; list-of-string args are unpacked.
-  - **AllExpression** — `filter`, `where`. String literals are values; only `col("X")` references count as column refs.
-  - **Positional** — `withColumn` (`[NewName, Expression]`), `withColumnRenamed` (`[ColumnName, NewName]`). Each argument position has its own role; extra args reuse the last role.
-  Three roles (`ColumnName`, `Expression`, `NewName`) are combined into shapes via `column_method_shape` / `role_at`. Mismatched columns against the receiver schema emit `D0030`.
-
-- **Two-DataFrame calls** — `union`, `unionByName`, `join`, `crossJoin`. The first argument is analyzed (recursively) to obtain its schema. The check depends on the method:
-  - `union`/`unionByName` — the two schemas' field-name sets must match (`D0040`).
-  - `join` — the `on=` argument is parsed: a string literal or list of string literals lists the join keys, anything else is treated as a complex on-expression and not checked. Named keys must exist on both sides (`D0060`).
-  - `crossJoin` — no on-clause; nothing to check beyond the receivers themselves.
-
-**Result-schema inference** (`apply_column_method` / two-DataFrame methods):
-
-- `select(args)` → `Derived` schema whose fields are the output names of each arg (`alias("X")` wins; otherwise bare string literal, bare `col("X")`, or `.cast(...)` of those). Aliasless complex expressions silently drop.
-- `filter`, `where`, `dropDuplicates` → schema-preserving (receiver's schema).
-- `drop(...)` → receiver fields minus the dropped names.
-- `withColumn("new", expr)` → receiver fields plus `"new"` (if not already present).
-- `withColumnRenamed("old", "new")` → receiver fields with `"old"` replaced by `"new"`.
-- `union` / `unionByName` → receiver's schema (assumes the names match — if not, `D0040` already flagged it).
-- `join(other, on=…)` → keys appear once (left's value); non-key fields from both sides concatenated, with shared non-key names silently kept once (left wins). For a complex on-expression: same concatenation, no key dedup.
-- `crossJoin(other)` → concatenation of left + right fields, shared names kept once.
-- `groupBy(keys)` → `SchemaView::Grouped { keys, underlying }`. Not a DataFrame; only valid follow-up is `.agg(...)`. Other methods on a `Grouped` receiver collect `D0030` noise (their column references never match because `has_field` returns false on `Grouped`), which is acceptable in v0.1 since those calls are invalid in PySpark anyway.
-- `.agg(args)` → `SchemaView::Derived` with [keys ∪ aliased aggregates]. Each arg's column references (both `col("X")` and string-arg form `F.sum("x")`) are checked against the underlying (pre-groupBy) schema. `.agg(...)` is also valid on a regular DataFrame; in that case there are no keys and the result is just the aliased aggregates.
-
-**Aggregate function recognition**: `collect_col_refs` recognizes a small list of known PySpark aggregate names (`sum`, `avg`, `count`, `median`, `max_by`, `collect_list`, …) and treats their string-literal positional arguments as column references — so `F.sum("price")` resolves to a column ref to `"price"`. The list is conservative: only functions where every string arg is a column name are included (`lit` is excluded since `lit("x")` is a value, not a column).
-
-**Return-type validation**: when a function declares `-> DataFrame[X]`, every `return <value>` has its inferred schema compared against `X`'s field set. Mismatches emit `D0050` listing what's missing in the body and what's extra.
-
-Column reference discovery is a small recursive walker (`collect_col_refs`) that descends through `Call`, `Attribute`, `Subscript`, `BinOp`, `BoolOp`, `Compare`, `If`-expression, `Tuple`/`List`, and `Starred` — enough to find columns inside expressions like `(col("a") + col("b")).cast("int").alias("c")`. Scopes that bind new names (lambdas, comprehensions) are deliberately not entered.
-
-Three column-reference shapes are recognized:
-
-- `col("X")` — function-call form. Detected by name; the string-literal first arg is the column name.
-- Bare string literal `"X"` — only treated as a column name in column-name contexts (top-level args of `select` / `drop` / `dropDuplicates` / `groupBy`, the rename-target arg of `withColumnRenamed`, list elements unpacked from `dropDuplicates(["a", "b"])`).
-- `df.X` — attribute access on a Name. Only treated as a column reference when `df` is bound to a DataFrame in the current `BodyContext` (function parameter or local). This is the discriminator that filters out `F.add_months(...)`, `datetime.now()`, etc., where the receiver is a module / type, not a DataFrame. The column name `X` is checked against the *receiver's* schema — which `df` is named is ignored, mirroring Spark's "any column in scope" semantics after a join.
-
-The body walk is currently shallow (top-level statements only, direct calls on params only). Each new operation (`withColumn`, `withColumnRenamed`, `join`, …) and each new shape (chained calls, local-variable receivers, attribute-access columns) lands as an additive change here.
+Position-aware backends for the LSP — hover, completions, and document
+symbols. Each takes a parsed module and a `(line, column)` and returns the
+LSP payload.
 
 ### `transpiler`
 
-`.dpy` → `.py` emit, exposed via `dathon::transpile(source)`. Because `.dpy` is a strict superset of Python (deliberately — see the v0.1 spec), the transpiler is mostly an identity transform. The one transformation it does perform is prepending `from __future__ import annotations` to the source, which defers evaluation of all type annotations to strings.
+`.dpy` → `.py`. `.dpy` is a strict superset of Python, so this is nearly
+an identity transform — it prepends `from __future__ import annotations`
+(so dathon's atomic type names and `DataFrame[X]` annotations don't
+evaluate at runtime).
 
-That single change matters for two reasons:
+### `lib`
 
-1. dathon's atomic type names — `string`, `double`, `timestamp`, `date`, `long`, `bool` — aren't Python builtins. Without deferred annotations, `x: timestamp` would raise `NameError` at runtime.
-2. `DataFrame[X]`, `DataSource[X]`, and other `Generic[Schema]` annotation shapes use `__class_getitem__` semantics that some real classes (e.g. PySpark's `DataFrame`) don't implement. Without deferred annotations, evaluating them raises `TypeError`.
-
-Both vanish with the future import. No AST walking, no source reshaping; just one prepended line.
-
-Schema base classes (the user's `class Foo(Schema):` declarations) still need the name `Schema` bound to *something* at runtime. The transpiler doesn't inject this — that's a runtime concern. Users either import a real `Schema` from a future `dathon` Python package or define a no-op base class.
+The driver. `check` / `check_project` parse, build the pooled cross-file
+registries, run `analyze_module` per file, and filter diagnostics by
+`CheckMode`. Also the entry points the LSP layer calls for hover,
+completion, definition, and symbols.
 
 ### `main`
 
-CLI entry point. Dispatches `dathon <check|transpile>` to the matching library entry point. The `check` subcommand accepts one or more file paths; multiple paths are analyzed as a single project with cross-file Schema visibility.
+CLI — `dathon check <files…>` and `dathon transpile <file>`.
 
-## `dathon-lsp` crate
+## Diagnostic codes
 
-Separate workspace member at [`crates/dathon-lsp/`](../../crates/dathon-lsp/). Speaks the Language Server Protocol over stdio so any LSP-compatible editor can plug into dathon's analysis.
+| Code | Meaning |
+| --- | --- |
+| `D0001` | Parse error. |
+| `D0010` / `D0011` | Unknown column type / type is not a bare name. |
+| `D0020` / `D0021` | Unknown schema in `DataFrame[…]` / schema is not a bare name. |
+| `D0030` | Column does not exist on the schema. |
+| `D0040` | `union` / `unionByName` schema mismatch. |
+| `D0050` | Return type mismatch — column *set* differs from the declared schema. |
+| `D0060` | Join key missing on one side. |
+| `D0070` / `D0071` | Unresolved import / name not exported by a module. |
+| `D0080` | Return type mismatch — a column's *type* differs (conservative; on by default). |
+| `D0081` / `D0082` | Arithmetic on a non-numeric column / comparison of unrelated types (advisory; `typeCheckingMode: strict` only). |
 
-Architecturally the LSP server is a thin shell around the existing `dathon` library:
+## Column-type checking
 
-- **Server loop**: `lsp-server` crate (rust-analyzer's lightweight sync framework — no async runtime needed for our workload). One thread, one message at a time.
-- **Document sync**: `TextDocumentSyncKind::FULL` for v0.1. The client sends the entire new buffer on every `didChange`; the server replaces its in-memory copy. Incremental sync is a follow-up.
-- **Diagnostics flow**: `didOpen` / `didChange` run `dathon::check` on the new buffer and push the resulting diagnostics to the editor via `textDocument/publishDiagnostics`. `didClose` clears them by pushing an empty list.
-- **Diagnostic conversion** (`to_lsp_diagnostic`): translates dathon's 1-indexed `(line, column)` to LSP's 0-indexed `Position`, emits a zero-width range (the editor extends the underline to the word boundary), and maps severities and codes one-to-one.
+dathon checks both column *existence* (`D0030`) and column *types*.
+Type checking is split by strictness:
 
-Iteration 24 ships only diagnostics. The features layered on later (hover, document symbols, go-to-definition, completion, code actions, rename) each become a separate request handler on the same server loop.
-
-### `dathon::hover` (iteration 25)
-
-Position-aware hover lookup. Given `(line, column)`, `dathon::hover` parses the source, locates the AST node at that offset, and returns a markdown blob describing the symbol — or `None` if there isn't one. The LSP server routes `textDocument/hover` requests through it.
-
-Three positions are supported in v0.1:
-
-1. **Schema class declaration** (`class Orders(Schema):`) — fields with `ColumnType`s.
-2. **Typed function declaration** — full signature with `DataFrame[Schema]` annotations.
-3. **Schema reference** in an annotation we recognize: the `X` in `DataFrame[X]` on a function signature, or a bare-name annotation in a Schema field (`address: Address`).
-
-The function returns `Option<HoverInfo>` with a `markdown: String` field. Position arithmetic uses `ruff_source_file::LineIndex` to convert `(line, column)` to a `TextSize` offset; range checks use `TextRange::contains_inclusive`.
-
-Hover for column references (`col("foo")`), local-variable inferred schemas, and `df.X` attribute access is deferred to follow-up iterations.
+- **Conservative** (default) — `D0080` flags a declared-return type
+  mismatch only when both types are confidently known and genuinely
+  incompatible. Unknown types are permissive; numeric widening
+  (`int`/`long`/`double`) is accepted.
+- **Strict** (`typeCheckingMode: strict`) — `D0081`/`D0082` additionally
+  flag type combinations Spark *coerces* rather than rejects. They are
+  emitted at `min_mode: Strict`, so the driver surfaces them only in
+  strict mode.
 
 ## Multi-file analysis
 
-`check_project(files)` is the library entry point for analyzing multiple files together. The model in v0.1 is deliberately simple:
-
-1. Parse every supplied file. Parse failures are reported per-file as `D0001`.
-2. Pool every top-level Schema, class, and annotated constant from every successfully-parsed file into a single combined view.
-3. Analyze each file individually against that combined view — column references, generic-method substitution, and return-type checks all resolve cross-file.
-
-On duplicate top-level names across files, **last-write wins** in the combined registry. v0.1 doesn't warn about duplicates yet.
-
-Notably **not** in v0.1: parsing `import` / `from … import …` statements. There's no per-file scoping — every declaration in any file is visible everywhere. Real Python import semantics is a follow-up iteration; this minimum model already covers the common "shared schemas module + per-pipeline files" pattern.
+`check_project` parses every file, pools every Schema / class / constant /
+function (visible per-file through `from X import Y`), and analyzes each
+file against the pooled view. Column references, generic-method
+substitution, and return-type checks all resolve cross-file.
 
 ## External dependencies
 
-All git-pinned to `astral-sh/ruff` at tag `0.15.12`:
-
-| Crate | Why |
-| --- | --- |
-| `ruff_python_parser` | Python parser. |
-| `ruff_python_ast` | AST node types. |
-| `ruff_source_file` | `LineIndex` for offset → line/column. |
-| `ruff_text_size` | `TextSize` / `TextRange` / `Ranged` trait. |
-
-Astral's policy is to keep ruff's internal crates off crates.io, so depending on git tags is the canonical pattern.
+Git-pinned to `astral-sh/ruff` at tag `0.15.12`: `ruff_python_parser`,
+`ruff_python_ast`, `ruff_source_file`, `ruff_text_size`. Plus `sqlparser`
+(embedded-SQL parsing) and, for `dathon-lsp`, `lsp-server` / `lsp-types` /
+`crossbeam-channel`.
 
 ## Decisions in effect
 
-- **Language: Rust.** Reasoning in the project README + memory.
-- **Parser: ruff's, not our own.** Saves ~year of front-end work, tracks PEPs as they land.
-- **Checker is standalone**, not a pyright/mypy plugin. Decision: full control over the type system.
-- **`.dpy` is a strict superset of Python.** Files must parse with ruff's Python parser as-is, no new syntax in v0.1.
-- **Catalyst is a specification + a test oracle, not a runtime dependency.** Operation semantics will match Spark's, but our checker will be a pure static analyzer.
+- **Language: Rust.**
+- **Parser: ruff's** — saves a year of front-end work, tracks PEPs, and is
+  the same AST Astral's `ty` is built on (so the analyzer ports cleanly if
+  dathon ever forks `ty`).
+- **`.dpy` is a strict superset of Python** — every `.dpy` file parses
+  with ruff's Python parser as-is.
+- **The checker is a library** — the CLI and the LSP both embed it.
+- **TypeScript is the design north star** — adapted, not copied, for a
+  pipeline-heavy, coercion-happy language.
 
-See [docs/v0.1-spec.md](../v0.1-spec.md) for the user-facing contract.
+See [v0.1-spec.md](../v0.1-spec.md) for the original user-facing contract.

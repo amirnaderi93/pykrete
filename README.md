@@ -5,13 +5,14 @@
 
 A strict superset of Python that adds static schema checking for dataframes. Inspired by TypeScript's relationship to JavaScript.
 
-**Status:** v0.1 in progress.
+**Status:** actively developed. The PySpark static checker, the LSP server, and the VS Code extension all work end-to-end.
 
 ## What it does
 
-- Define schemas as Python classes.
+- Define schemas as Python classes — including arbitrarily-nested `array` / `map` / `struct` columns.
 - Annotate dataframes with their schema: `DataFrame[MySchema]`.
-- Catch column-name typos, schema drift, and shape mismatches at check time, not in production.
+- Catch column-name typos, schema drift, shape mismatches, and column-type mismatches at check time, not in production — across whole transformation chains, inline SQL, and nested-field access.
+- Live diagnostics, hover, completion, and go-to-definition in the editor.
 - Transpile to plain Python — runtime cost is zero.
 
 ## Project layout
@@ -40,15 +41,21 @@ dathon transpile examples/schemas.dpy > out.py
 
 ### Editor integration (LSP)
 
-`dathon-lsp` is a Language Server Protocol server. It speaks LSP over stdio
-and pushes live diagnostics to any LSP-compatible editor as you type.
-Iteration 24 ships the skeleton (diagnostics only); hover, document symbols,
-and go-to-definition land in subsequent iterations.
+`dathon-lsp` is a Language Server Protocol server — live diagnostics,
+hover, completion, document symbols, and go-to-definition over stdio.
 
-For now, hook it up manually via your editor's LSP config — point the
-client at the `dathon-lsp` binary (after `cargo build --release`, the path
-is `target/release/dathon-lsp`). A VS Code extension wrapping this is on
-the roadmap.
+It is also an **LSP multiplexer**: it embeds a Python language server
+(basedpyright) as a child process and merges its responses with dathon's
+schema-aware results, so a single server delivers both full Python
+support and dathon's checks. See [docs/design/multiplexer.md](docs/design/multiplexer.md).
+
+The **VS Code extension** ([editors/vscode/](editors/vscode/)) wraps this —
+it launches `dathon-lsp`, bundles the Python engine, and routes `.dpy`
+files to it. It is distributed as a local `.vsix` for now; marketplace
+publishing is pending.
+
+For other editors, point the LSP client at the `dathon-lsp` binary (after
+`cargo build --release`, at `target/release/dathon-lsp`).
 
 ## Contributing
 
