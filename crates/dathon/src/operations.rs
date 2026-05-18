@@ -2254,6 +2254,13 @@ fn handle_two_df_method<'a>(
         TwoDfMethod::Join => {
             let on = parse_on_arg(extract_on_arg(call));
             check_join_keys(left, &right, &on, source, line_index, diagnostics);
+            // Record each `on=` key as a column reference so the LSP
+            // layer offers column completion inside `join(on="…")`.
+            if let JoinOn::Keys(keys) = &on {
+                for &(name, range) in keys {
+                    ctx.record_column_ref(range, name, left.clone());
+                }
+            }
             Some(apply_join(left, &right, &on, ctx.schemas()))
         }
         TwoDfMethod::CrossJoin => Some(apply_concat(left, &right, ctx.schemas())),
