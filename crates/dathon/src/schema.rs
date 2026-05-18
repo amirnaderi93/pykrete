@@ -7,7 +7,7 @@
 
 use ruff_python_ast::Expr;
 
-use crate::types::{ColumnType, StructField, parse_type_expr};
+use crate::types::{ColumnType, StructField};
 use crate::walk::DiscoveredClass;
 
 /// Recursion ceiling for resolving a (possibly self-referential) schema
@@ -58,40 +58,32 @@ impl<'ast> SchemaField<'ast> {
     /// Resolve the field's annotation against the atomic-type vocabulary
     /// and the set of declared Schema classes.
     ///
+    /// Field types are written as ordinary Python type annotations: a
+    /// bare name for an atomic type (`int`, `double`, …) or a referenced
+    /// `Schema` class (`address: Address`), and a subscript for a
+    /// collection (`Array[int]`, `Map[string, Event]`).
+    ///
     /// The `schemas` parameter is the list of every Schema discovered in
     /// the same source file; nested struct references look the field's
     /// annotation name up there.
     pub fn resolve(&self, schemas: &'ast [Schema<'ast>]) -> FieldResolution<'ast> {
         match self.annotation {
-            // String-literal annotation: `EventDate: "timestamp"`. The
-            // dathon column-type vocabulary lives in these strings —
-            // this is the canonical form for atomic column types as of
-            // iteration 41. Plays cleanly with Pylance (a string is a
-            // forward-reference annotation that, paired with the
-            // bundled-typeshed in iteration 42, resolves globally).
-            Expr::StringLiteral(s) => {
-                // The string may name a nested type — `array<EventLog>`,
-                // `struct<id:int>` — whose leaf identifiers can be
-                // declared `Schema` classes, so resolution is schema-aware.
-                match resolve_field_column_type(self, schemas, 0) {
-                    Some(ct) => FieldResolution::Resolved(ct),
-                    None => FieldResolution::UnknownType {
-                        name: s.value.to_str(),
-                    },
-                }
-            }
-            // Bare-name annotation: `address: Address`. Used only for
-            // nested-struct references — the name must resolve to a
-            // declared Schema in the current scope. Atomic column-type
-            // names are NOT recognized here anymore; they live in the
-            // string-literal arm above.
+            // A bare name — an atomic type, or a nested `Schema` class.
             Expr::Name(name) => {
                 let id = name.id.as_str();
+                if let Some(ct) = ColumnType::from_name(id) {
+                    return FieldResolution::Resolved(ct);
+                }
                 if let Some(schema) = schemas.iter().find(|s| s.name() == id) {
                     return FieldResolution::ResolvedNested(schema);
                 }
                 FieldResolution::UnknownType { name: id }
             }
+            // A subscript — `Array[…]` / `Map[…, …]`.
+            Expr::Subscript(_) => match resolve_annotation_type(self.annotation, schemas, 0) {
+                Some(ct) => FieldResolution::Resolved(ct),
+                None => FieldResolution::NotABareName,
+            },
             _ => FieldResolution::NotABareName,
         }
     }
@@ -154,33 +146,55 @@ impl<'ast> Schema<'ast> {
     }
 }
 
-/// Resolve a schema field's annotation to its full [`ColumnType`],
-/// descending recursively through `array<…>` / `map<…>` / `struct<…>`
-/// and into referenced `Schema` classes.
+/// Resolve a schema field's annotation to its full [`ColumnType`].
 fn resolve_field_column_type(
     field: &SchemaField<'_>,
     schemas: &[Schema<'_>],
     depth: usize,
 ) -> Option<ColumnType> {
-    match field.annotation {
-        // A string annotation may name a nested type whose leaf
-        // identifiers can be declared `Schema` classes.
-        Expr::StringLiteral(s) => {
-            let leaf = |word: &str| -> Option<ColumnType> {
-                ColumnType::from_name(word).or_else(|| {
-                    schemas
-                        .iter()
-                        .find(|sc| sc.name() == word)
-                        .map(|sc| schema_as_struct(sc, schemas, depth + 1))
-                })
-            };
-            parse_type_expr(s.value.to_str(), &leaf)
+    resolve_annotation_type(field.annotation, schemas, depth)
+}
+
+/// Resolve a type-annotation expression to a [`ColumnType`], descending
+/// recursively through `Array[…]` / `Map[…, …]` subscripts and into
+/// referenced `Schema` classes.
+fn resolve_annotation_type(
+    expr: &Expr,
+    schemas: &[Schema<'_>],
+    depth: usize,
+) -> Option<ColumnType> {
+    match expr {
+        // A bare name: an atomic type, or a referenced `Schema` class.
+        Expr::Name(n) => {
+            let id = n.id.as_str();
+            if let Some(ct) = ColumnType::from_name(id) {
+                return Some(ct);
+            }
+            schemas
+                .iter()
+                .find(|sc| sc.name() == id)
+                .map(|sc| schema_as_struct(sc, schemas, depth))
         }
-        // A bare-name annotation references another declared `Schema`.
-        Expr::Name(n) => schemas
-            .iter()
-            .find(|sc| sc.name() == n.id.as_str())
-            .map(|sc| schema_as_struct(sc, schemas, depth)),
+        // `Array[T]` / `Map[K, V]`.
+        Expr::Subscript(sub) => {
+            let base = sub.value.as_name_expr()?.id.as_str();
+            match base {
+                "Array" | "array" => Some(ColumnType::Array(Some(Box::new(
+                    resolve_annotation_type(&sub.slice, schemas, depth)?,
+                )))),
+                "Map" | "map" => {
+                    let tuple = sub.slice.as_tuple_expr()?;
+                    let [key, value] = tuple.elts.as_slice() else {
+                        return None;
+                    };
+                    Some(ColumnType::Map(
+                        Some(Box::new(resolve_annotation_type(key, schemas, depth)?)),
+                        Some(Box::new(resolve_annotation_type(value, schemas, depth)?)),
+                    ))
+                }
+                _ => None,
+            }
+        }
         _ => None,
     }
 }

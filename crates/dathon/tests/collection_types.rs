@@ -8,8 +8,8 @@ use common::{assert_does_not_have_code, assert_has_code, check, check_strict};
 
 const IN: &str = "\
 class In(Schema):
-    name: \"string\"
-    score: \"int\"
+    name: string
+    score: int
 ";
 
 #[test]
@@ -17,8 +17,8 @@ fn collect_list_result_is_an_array() {
     let src = format!(
         "{IN}
 class Out(Schema):
-    name: \"string\"
-    scores: \"array<int>\"
+    name: string
+    scores: Array[int]
 
 def f(d: DataFrame[In]) -> DataFrame[Out]:
     return d.groupBy(\"name\").agg(F.collect_list(\"score\").alias(\"scores\"))
@@ -33,8 +33,8 @@ fn array_column_declared_but_atomic_produced_is_caught() {
     let src = format!(
         "{IN}
 class Out(Schema):
-    name: \"string\"
-    scores: \"string\"
+    name: string
+    scores: string
 
 def f(d: DataFrame[In]) -> DataFrame[Out]:
     return d.groupBy(\"name\").agg(F.collect_list(\"score\").alias(\"scores\"))
@@ -49,9 +49,9 @@ fn atomic_produced_where_array_declared_is_caught() {
     let src = format!(
         "{IN}
 class Out(Schema):
-    name: \"string\"
-    score: \"int\"
-    tag: \"array\"
+    name: string
+    score: int
+    tag: Array
 
 def f(d: DataFrame[In]) -> DataFrame[Out]:
     return d.withColumn(\"tag\", F.lower(col(\"name\")))

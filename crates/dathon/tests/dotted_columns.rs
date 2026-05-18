@@ -19,11 +19,11 @@ use common::*;
 
 const NESTED_SCHEMAS: &str = r#"
 class Address(Schema):
-    street: "string"
-    city: "string"
+    street: string
+    city: string
 
 class User(Schema):
-    name: "string"
+    name: string
     address: Address
 "#;
 
@@ -48,7 +48,7 @@ fn dotted_path_resolves_through_multiple_levels() {
     let result = check(
         r#"
 class Inner(Schema):
-    leaf: "int"
+    leaf: int
 
 class Middle(Schema):
     inner: Inner
@@ -150,7 +150,7 @@ fn deep_dotted_path_fails_at_the_first_missing_segment() {
     let result = check(
         r#"
 class Inner(Schema):
-    leaf: "int"
+    leaf: int
 
 class Middle(Schema):
     inner: Inner

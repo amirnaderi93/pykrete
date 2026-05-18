@@ -99,14 +99,11 @@ pub(crate) fn completions_with_scope<'a>(
         return schema_completions(schemas);
     }
 
-    // Inside a `name: "<cursor>"` string literal whose enclosing class
-    // extends `Schema`: suggest the column-type vocabulary. This is
-    // the iteration-41 syntax — every dathon-recognized column type
-    // (`"int"`, `"long"`, `"double"`, `"string"`, `"bool"`, `"date"`,
-    // `"timestamp"`) is offered as a plain identifier the editor can
-    // drop into the literal.
-    if completes_schema_field_type_literal(offset, module, schemas) {
-        return column_type_completions();
+    // Inside a `name: <cursor>` type annotation whose enclosing class
+    // extends `Schema`: suggest the column-type vocabulary (the atomic
+    // types, `Array` / `Map`, and the declared schema classes).
+    if completes_schema_field_type(offset, module, schemas) {
+        return column_type_completions(schemas);
     }
 
     let traces = crate::collect_module_traces(&functions, source, line_index, schemas, registry);
@@ -133,35 +130,31 @@ pub(crate) fn completions_with_scope<'a>(
 }
 
 // ---------------------------------------------------------------------------
-// Surface 0: cursor inside a string-literal field annotation within a
-// Schema class — suggest the column-type vocabulary.
+// Surface 0: cursor inside a field type annotation within a Schema
+// class — suggest the column-type vocabulary.
 // ---------------------------------------------------------------------------
 
-fn completes_schema_field_type_literal(
+fn completes_schema_field_type(
     offset: TextSize,
     module: &ruff_python_ast::ModModule,
     schemas: &[Schema<'_>],
 ) -> bool {
-    // For each declared Schema class, walk its body and check whether
-    // the cursor sits inside the value of a `name: "..."` annotated
-    // assignment.
+    // True when the cursor sits inside the type annotation of a
+    // `name: <type>` field assignment in a Schema-class body.
+    let body_has_annotation_at = |body: &[ruff_python_ast::Stmt]| {
+        body.iter().any(|stmt| {
+            matches!(stmt, ruff_python_ast::Stmt::AnnAssign(ann)
+                if ann.annotation.range().contains_inclusive(offset))
+        })
+    };
     for schema in schemas {
-        for stmt in &schema.class.def.body {
-            let ruff_python_ast::Stmt::AnnAssign(ann) = stmt else {
-                continue;
-            };
-            let Some(s) = ann.annotation.as_string_literal_expr() else {
-                continue;
-            };
-            if s.range().contains_inclusive(offset) {
-                return true;
-            }
+        if body_has_annotation_at(&schema.class.def.body) {
+            return true;
         }
     }
-    // Schema classes can also be undeclared (cursor in a class that
-    // we haven't built the Schema view for yet because the class has
-    // syntax errors above the cursor). Fall back to walking every
-    // top-level class with a `Schema` base.
+    // Schema classes can also be undeclared (the cursor is in a class
+    // with syntax errors above it, so no Schema view was built). Fall
+    // back to walking every top-level class with a `Schema` base.
     for stmt in &module.body {
         let ruff_python_ast::Stmt::ClassDef(class) = stmt else {
             continue;
@@ -170,33 +163,32 @@ fn completes_schema_field_type_literal(
             .bases()
             .iter()
             .any(|b| b.as_name_expr().is_some_and(|n| n.id.as_str() == "Schema"));
-        if !is_schema {
-            continue;
-        }
-        for body_stmt in &class.body {
-            let ruff_python_ast::Stmt::AnnAssign(ann) = body_stmt else {
-                continue;
-            };
-            let Some(s) = ann.annotation.as_string_literal_expr() else {
-                continue;
-            };
-            if s.range().contains_inclusive(offset) {
-                return true;
-            }
+        if is_schema && body_has_annotation_at(&class.body) {
+            return true;
         }
     }
     false
 }
 
-fn column_type_completions() -> Vec<CompletionItem> {
-    crate::types::COLUMN_TYPE_NAMES_LIST
+fn column_type_completions(schemas: &[Schema<'_>]) -> Vec<CompletionItem> {
+    // The atomic types and `Array` / `Map`…
+    let mut items: Vec<CompletionItem> = crate::types::COLUMN_TYPE_NAMES_LIST
         .iter()
         .map(|&name| CompletionItem {
             label: name.to_string(),
             detail: Some("dathon column type".to_string()),
             kind: CompletionItemKind::Field,
         })
-        .collect()
+        .collect();
+    // …plus every declared Schema class (a field can be a nested struct).
+    for schema in schemas {
+        items.push(CompletionItem {
+            label: schema.name().to_string(),
+            detail: Some("Schema".to_string()),
+            kind: CompletionItemKind::Class,
+        });
+    }
+    items
 }
 
 // ---------------------------------------------------------------------------

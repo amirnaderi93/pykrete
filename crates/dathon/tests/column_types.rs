@@ -9,8 +9,8 @@ use common::{assert_does_not_have_code, assert_has_code, check};
 
 const SCHEMAS: &str = "\
 class In(Schema):
-    amount: \"int\"
-    city: \"string\"
+    amount: int
+    city: string
 ";
 
 #[test]
@@ -20,8 +20,8 @@ fn return_type_column_type_mismatch_is_caught() {
     let src = format!(
         "{SCHEMAS}
 class Out(Schema):
-    amount: \"string\"
-    city: \"string\"
+    amount: string
+    city: string
 
 def f(x: DataFrame[In]) -> DataFrame[Out]:
     return x.select(col(\"amount\"), col(\"city\"))
@@ -35,8 +35,8 @@ fn matching_column_types_pass() {
     let src = format!(
         "{SCHEMAS}
 class Out(Schema):
-    amount: \"int\"
-    city: \"string\"
+    amount: int
+    city: string
 
 def f(x: DataFrame[In]) -> DataFrame[Out]:
     return x.select(col(\"amount\"), col(\"city\"))
@@ -52,8 +52,8 @@ fn cast_aligns_the_column_type() {
     let src = format!(
         "{SCHEMAS}
 class Out(Schema):
-    amount: \"string\"
-    city: \"string\"
+    amount: string
+    city: string
 
 def f(x: DataFrame[In]) -> DataFrame[Out]:
     return x.select(col(\"amount\").cast(\"string\"), col(\"city\"))
@@ -67,8 +67,8 @@ fn cast_to_the_wrong_type_is_caught() {
     let src = format!(
         "{SCHEMAS}
 class Out(Schema):
-    amount: \"int\"
-    city: \"string\"
+    amount: int
+    city: string
 
 def f(x: DataFrame[In]) -> DataFrame[Out]:
     return x.select(col(\"amount\").cast(\"string\"), col(\"city\"))
@@ -85,8 +85,8 @@ fn numeric_widening_is_not_flagged() {
     let src = format!(
         "{SCHEMAS}
 class Out(Schema):
-    amount: \"long\"
-    city: \"string\"
+    amount: long
+    city: string
 
 def f(x: DataFrame[In]) -> DataFrame[Out]:
     return x.select(col(\"amount\"), col(\"city\"))
@@ -102,9 +102,9 @@ fn unknown_column_type_is_not_flagged() {
     let src = format!(
         "{SCHEMAS}
 class Out(Schema):
-    amount: \"int\"
-    city: \"string\"
-    total: \"long\"
+    amount: int
+    city: string
+    total: long
 
 def f(x: DataFrame[In]) -> DataFrame[Out]:
     return x.withColumn(\"total\", F.sum(\"amount\"))
@@ -119,8 +119,8 @@ fn types_survive_a_group_by_agg() {
     let src = format!(
         "{SCHEMAS}
 class Out(Schema):
-    city: \"int\"
-    total: \"long\"
+    city: int
+    total: long
 
 def f(x: DataFrame[In]) -> DataFrame[Out]:
     return x.groupBy(\"city\").agg(F.sum(\"amount\").alias(\"total\"))
@@ -134,17 +134,17 @@ def f(x: DataFrame[In]) -> DataFrame[Out]:
 fn types_survive_a_join() {
     let src = "\
 class L(Schema):
-    id: \"int\"
-    amount: \"int\"
+    id: int
+    amount: int
 
 class R(Schema):
-    id: \"int\"
-    label: \"string\"
+    id: int
+    label: string
 
 class Out(Schema):
-    id: \"int\"
-    amount: \"string\"
-    label: \"string\"
+    id: int
+    amount: string
+    label: string
 
 def f(l: DataFrame[L], r: DataFrame[R]) -> DataFrame[Out]:
     return l.join(r, on=\"id\")
@@ -157,12 +157,12 @@ def f(l: DataFrame[L], r: DataFrame[R]) -> DataFrame[Out]:
 fn types_survive_to_df() {
     let src = "\
 class In(Schema):
-    a: \"int\"
-    b: \"string\"
+    a: int
+    b: string
 
 class Out(Schema):
-    x: \"string\"
-    y: \"string\"
+    x: string
+    y: string
 
 def f(d: DataFrame[In]) -> DataFrame[Out]:
     return d.toDF(\"x\", \"y\")
@@ -176,9 +176,9 @@ fn types_survive_with_columns() {
     let src = format!(
         "{SCHEMAS}
 class Out(Schema):
-    amount: \"int\"
-    city: \"string\"
-    doubled: \"string\"
+    amount: int
+    city: string
+    doubled: string
 
 def f(x: DataFrame[In]) -> DataFrame[Out]:
     return x.withColumns({{\"doubled\": col(\"amount\")}})
@@ -194,16 +194,16 @@ fn nested_struct_field_type_is_resolved_through_the_dotted_path() {
     // struct; `zipcode` is an int, declared `string` in Out.
     let src = "\
 class Address(Schema):
-    zipcode: \"int\"
-    street: \"string\"
+    zipcode: int
+    street: string
 
 class Person(Schema):
-    name: \"string\"
+    name: string
     address: Address
 
 class Out(Schema):
-    name: \"string\"
-    zip: \"string\"
+    name: string
+    zip: string
 
 def f(p: DataFrame[Person]) -> DataFrame[Out]:
     return p.select(col(\"name\"), col(\"address.zipcode\").alias(\"zip\"))
@@ -215,16 +215,16 @@ def f(p: DataFrame[Person]) -> DataFrame[Out]:
 fn nested_struct_field_type_matching_declaration_passes() {
     let src = "\
 class Address(Schema):
-    zipcode: \"int\"
-    street: \"string\"
+    zipcode: int
+    street: string
 
 class Person(Schema):
-    name: \"string\"
+    name: string
     address: Address
 
 class Out(Schema):
-    name: \"string\"
-    zip: \"int\"
+    name: string
+    zip: int
 
 def f(p: DataFrame[Person]) -> DataFrame[Out]:
     return p.select(col(\"name\"), col(\"address.zipcode\").alias(\"zip\"))
@@ -239,8 +239,8 @@ fn lit_value_type_flows_into_the_return_check() {
     let src = format!(
         "{SCHEMAS}
 class Out(Schema):
-    amount: \"int\"
-    city: \"string\"
+    amount: int
+    city: string
 
 def f(x: DataFrame[In]) -> DataFrame[Out]:
     return x.withColumn(\"city\", F.lit(1))

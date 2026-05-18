@@ -35,7 +35,7 @@ fn single_file_project_behaves_like_a_single_file_check() {
         "f.dpy",
         r#"
 class Orders(Schema):
-    place_code: "int"
+    place_code: int
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.select(col("place_code"))
@@ -61,8 +61,8 @@ fn function_in_file_b_can_reference_a_schema_declared_in_file_a() {
             "schemas.dpy",
             r#"
 class Orders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 "#,
         ),
         (
@@ -103,8 +103,8 @@ fn d0030_fires_in_file_b_against_a_schema_declared_in_file_a() {
             "schemas.dpy",
             r#"
 class Orders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 "#,
         ),
         (
@@ -137,7 +137,7 @@ fn d0020_still_fires_when_a_schema_is_not_declared_in_any_file() {
             "schemas.dpy",
             r#"
 class Orders(Schema):
-    place_code: "int"
+    place_code: int
 "#,
         ),
         (
@@ -162,8 +162,8 @@ fn d0050_return_type_check_works_across_files() {
             "schemas.dpy",
             r#"
 class Orders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 "#,
         ),
         (
@@ -199,8 +199,8 @@ fn nested_schema_can_reference_a_schema_declared_in_another_file() {
             "schemas.dpy",
             r#"
 class Address(Schema):
-    street: "string"
-    city: "string"
+    street: string
+    city: string
 "#,
         ),
         (
@@ -209,7 +209,7 @@ class Address(Schema):
 from .schemas import Address
 
 class User(Schema):
-    name: "string"
+    name: string
     address: Address
 
 def f(u: DataFrame[User]) -> DataFrame:
@@ -242,7 +242,7 @@ fn parse_error_in_one_file_does_not_block_analysis_of_other_files() {
             "good.dpy",
             r#"
 class Orders(Schema):
-    x: "int"
+    x: int
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.select(col("x"))

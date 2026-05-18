@@ -7,16 +7,16 @@ use common::{assert_does_not_have_code, assert_has_code, check};
 
 const SCHEMAS: &str = "\
 class Line(Schema):
-    sku: \"string\"
-    qty: \"int\"
+    sku: string
+    qty: int
 
 class Order(Schema):
-    id: \"int\"
+    id: int
     line: Line
 
 class In(Schema):
-    orders: \"array<Order>\"
-    meta: \"map<string, int>\"
+    orders: Array[Order]
+    meta: Map[string, int]
 ";
 
 #[test]

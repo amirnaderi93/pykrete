@@ -7,7 +7,7 @@ use dathon::CheckMode;
 /// except `off`.
 const BAD_COLUMN: &str = "\
 class Orders(Schema):
-    price: \"int\"
+    price: int
 
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:

@@ -24,8 +24,8 @@ fn chained_select_after_filter_is_clean_when_columns_are_valid() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.filter(col("price") > 0).select(col("place_code"), col("price"))
@@ -42,8 +42,8 @@ fn chained_select_after_filter_catches_typo_in_outer_call() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.filter(col("price") > 0).select(col("madeup"))
@@ -61,8 +61,8 @@ fn chained_filter_after_select_runs_against_the_selects_derived_schema() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.select(col("place_code")).filter(col("price") > 0)
@@ -83,8 +83,8 @@ fn local_bound_to_filter_preserves_the_input_schema() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     filtered = raw.filter(col("price") > 0)
@@ -102,8 +102,8 @@ fn local_bound_to_select_carries_the_narrowed_schema() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     partial = raw.select(col("place_code"))
@@ -120,8 +120,8 @@ fn local_bound_to_withColumnRenamed_carries_the_renamed_field() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     renamed = raw.withColumnRenamed("place_code", "code")
@@ -136,8 +136,8 @@ fn after_withColumnRenamed_the_old_name_is_gone() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     renamed = raw.withColumnRenamed("place_code", "code")
@@ -153,8 +153,8 @@ fn after_withColumn_the_new_field_is_part_of_the_schema() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     extended = raw.withColumn("doubled", col("price") * 2)
@@ -169,8 +169,8 @@ fn after_drop_the_dropped_column_is_no_longer_in_scope() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     trimmed = raw.drop("price")
@@ -189,8 +189,8 @@ fn unionByName_with_identical_schemas_emits_no_diagnostic() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 
 def f(a: DataFrame[Orders], b: DataFrame[Orders]) -> DataFrame[Orders]:
     return a.unionByName(b)
@@ -204,12 +204,12 @@ fn d0040_fires_when_unionByName_schemas_differ() {
     let result = check(
         r#"
 class A(Schema):
-    x: "int"
-    y: "int"
+    x: int
+    y: int
 
 class B(Schema):
-    x: "int"
-    z: "int"
+    x: int
+    z: int
 
 def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame[A]:
     return a.unionByName(b)
@@ -227,10 +227,10 @@ fn d0040_fires_for_plain_union_just_like_unionByName() {
     let result = check(
         r#"
 class A(Schema):
-    x: "int"
+    x: int
 
 class B(Schema):
-    y: "int"
+    y: int
 
 def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame[A]:
     return a.union(b)
@@ -249,8 +249,8 @@ fn return_with_matching_schema_is_clean() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.select(col("place_code"), col("price"))
@@ -265,8 +265,8 @@ fn d0050_fires_when_body_returns_fewer_columns_than_declared() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.select(col("place_code"))
@@ -282,8 +282,8 @@ fn d0050_fires_when_body_introduces_an_extra_column() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 
 def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
     return raw.withColumn("bonus", col("price") * 2)
@@ -300,7 +300,7 @@ fn d0050_does_not_fire_for_functions_without_a_typed_return_annotation() {
     let result = check(
         r#"
 class Orders(Schema):
-    place_code: "int"
+    place_code: int
 
 def f(raw: DataFrame[Orders]) -> DataFrame:
     return raw.select(col("place_code"))

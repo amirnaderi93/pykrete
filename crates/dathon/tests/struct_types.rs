@@ -1,6 +1,6 @@
-//! Struct column types — declared `Schema` classes and inline
-//! `struct<…>` compose into `array` / `map`, so a column of objects
-//! (`array<Event>`) is a first-class, structurally-checked type.
+//! Struct column types — declared `Schema` classes compose into
+//! `Array[…]` / `Map[…]`, so a column of objects (`Array[Event]`) is a
+//! first-class, structurally-checked type.
 
 mod common;
 
@@ -12,12 +12,12 @@ fn array_of_declared_schema_is_a_valid_type() {
     // `Event` resolves to the declared schema's struct.
     let src = "\
 class Event(Schema):
-    id: \"int\"
-    name: \"string\"
+    id: int
+    name: string
 
 class In(Schema):
-    events: \"array<Event>\"
-    amount: \"int\"
+    events: Array[Event]
+    amount: int
 
 def f(d: DataFrame[In]) -> DataFrame[In]:
     return d
@@ -29,22 +29,22 @@ def f(d: DataFrame[In]) -> DataFrame[In]:
 fn struct_element_mismatch_inside_an_array_is_caught() {
     let src = "\
 class Event(Schema):
-    id: \"int\"
+    id: int
 
 class Other(Schema):
-    id: \"string\"
+    id: string
 
 class In(Schema):
-    events: \"array<Event>\"
+    events: Array[Event]
 
 class Out(Schema):
-    events: \"array<Other>\"
+    events: Array[Other]
 
 def f(d: DataFrame[In]) -> DataFrame[Out]:
     return d.select(col(\"events\"))
 ";
-    // `events` is `array<struct<id:int>>`; Out declares the struct's
-    // `id` as a string.
+    // `events` is `Array[Event]` (a struct with `id: int`); Out declares
+    // the struct's `id` as a string.
     assert_has_code(&check(src), "D0080");
 }
 
@@ -52,14 +52,14 @@ def f(d: DataFrame[In]) -> DataFrame[Out]:
 fn matching_struct_element_passes() {
     let src = "\
 class Event(Schema):
-    id: \"int\"
-    name: \"string\"
+    id: int
+    name: string
 
 class In(Schema):
-    events: \"array<Event>\"
+    events: Array[Event]
 
 class Out(Schema):
-    events: \"array<Event>\"
+    events: Array[Event]
 
 def f(d: DataFrame[In]) -> DataFrame[Out]:
     return d.select(col(\"events\"))
@@ -68,31 +68,40 @@ def f(d: DataFrame[In]) -> DataFrame[Out]:
 }
 
 #[test]
-fn inline_struct_type_is_accepted_and_checked() {
+fn nested_struct_field_mismatch_is_caught() {
+    // A struct-typed field compared structurally: `rec`'s `label` is a
+    // string in In's struct, an int in Out's.
     let src = "\
+class RecIn(Schema):
+    id: int
+    label: string
+
+class RecOut(Schema):
+    id: int
+    label: int
+
 class In(Schema):
-    rec: \"struct<id: int, label: string>\"
+    rec: RecIn
 
 class Out(Schema):
-    rec: \"struct<id: int, label: int>\"
+    rec: RecOut
 
 def f(d: DataFrame[In]) -> DataFrame[Out]:
     return d.select(col(\"rec\"))
 ";
-    // The inline struct's `label` field is string in In, int in Out.
     assert_has_code(&check(src), "D0080");
 }
 
 #[test]
 fn dotted_access_into_an_array_of_structs_does_not_false_flag() {
-    // `events.id` pierces an `array<struct>` — dathon can't yet verify
-    // the nested field, but `events` exists, so it must not be flagged.
+    // `events.id` pierces an `Array[Event]` struct — `events` exists,
+    // so it must not be flagged.
     let src = "\
 class Event(Schema):
-    id: \"int\"
+    id: int
 
 class In(Schema):
-    events: \"array<Event>\"
+    events: Array[Event]
 
 def f(d: DataFrame[In]) -> DataFrame:
     return d.select(col(\"events.id\"))
@@ -104,7 +113,7 @@ def f(d: DataFrame[In]) -> DataFrame:
 fn dotted_access_into_an_atomic_column_is_still_caught() {
     let src = "\
 class In(Schema):
-    amount: \"int\"
+    amount: int
 
 def f(d: DataFrame[In]) -> DataFrame:
     return d.select(col(\"amount.foo\"))

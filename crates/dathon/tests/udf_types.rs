@@ -14,11 +14,11 @@ def to_score(x):
     return 1
 
 class In(Schema):
-    name: \"string\"
+    name: string
 
 class Out(Schema):
-    name: \"string\"
-    score: \"string\"
+    name: string
+    score: string
 
 def f(d: DataFrame[In]) -> DataFrame[Out]:
     return d.withColumn(\"score\", to_score(col(\"name\")))
@@ -35,11 +35,11 @@ def to_score(x):
     return 1
 
 class In(Schema):
-    name: \"string\"
+    name: string
 
 class Out(Schema):
-    name: \"string\"
-    score: \"int\"
+    name: string
+    score: int
 
 def f(d: DataFrame[In]) -> DataFrame[Out]:
     return d.withColumn(\"score\", to_score(col(\"name\")))
@@ -56,11 +56,11 @@ def label(x):
     return \"x\"
 
 class In(Schema):
-    name: \"string\"
+    name: string
 
 class Out(Schema):
-    name: \"string\"
-    tag: \"int\"
+    name: string
+    tag: int
 
 def f(d: DataFrame[In]) -> DataFrame[Out]:
     return d.withColumn(\"tag\", label(col(\"name\")))
@@ -78,11 +78,11 @@ def compute(x):
 score_udf = udf(compute, \"int\")
 
 class In(Schema):
-    name: \"string\"
+    name: string
 
 class Out(Schema):
-    name: \"string\"
-    score: \"string\"
+    name: string
+    score: string
 
 def f(d: DataFrame[In]) -> DataFrame[Out]:
     return d.withColumn(\"score\", score_udf(col(\"name\")))
@@ -98,7 +98,7 @@ def to_score(x):
     return 1
 
 class In(Schema):
-    name: \"string\"
+    name: string
 
 def f(d: DataFrame[In]) -> DataFrame:
     return d.filter(to_score(col(\"name\")) == col(\"name\"))

@@ -1,25 +1,25 @@
 # Probes schema + field-type + DataFrame[Schema] + body-level operation checks.
 
 class Orders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 
 class RawOrders(Schema):
-    ProductCode: "int"
-    UnitPrice: "double"
-    CreatedAt: "timestamp"
+    ProductCode: int
+    UnitPrice: double
+    CreatedAt: timestamp
 
 class NotASchema:
-    foo: "int"
+    foo: int
 
 class WithMixin(Schema, Mixin):
-    field: "int"
+    field: int
 
 class WithGeneric(Generic[T]):
     pass
 
 class BadSchema(Schema):
-    valid_field: "int"
+    valid_field: int
     unknown_field: WeirdType
     subscripted: list[str]
 

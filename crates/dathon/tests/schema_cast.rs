@@ -9,14 +9,14 @@ use common::{assert_has_code, assert_no_diagnostics, check};
 
 const SCHEMA: &str = "\
 class Raw(Schema):
-    city: \"string\"
-    amount: \"int\"
-    month: \"string\"
+    city: string
+    amount: int
+    month: string
 
 class Pivoted(Schema):
-    city: \"string\"
-    Jan: \"int\"
-    Feb: \"int\"
+    city: string
+    Jan: int
+    Feb: int
 ";
 
 #[test]

@@ -30,8 +30,8 @@ fn hover_on_imported_schema_reference_resolves_across_files() {
             "/proj/schemas.dpy",
             r#"
 class Orders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 "#,
         ),
         (
@@ -62,10 +62,10 @@ fn completion_inside_dataframe_subscript_lists_imported_schemas() {
             "/proj/schemas.dpy",
             r#"
 class Orders(Schema):
-    x: "int"
+    x: int
 
 class Returns(Schema):
-    y: "int"
+    y: int
 "#,
         ),
         (
@@ -95,7 +95,7 @@ fn goto_definition_on_imported_schema_jumps_to_the_declaring_file() {
             "/proj/schemas.dpy",
             r#"
 class Orders(Schema):
-    x: "int"
+    x: int
 "#,
         ),
         (
@@ -131,8 +131,8 @@ fn goto_definition_on_column_ref_jumps_to_the_imported_schemas_field() {
             "/proj/schemas.dpy",
             r#"
 class Orders(Schema):
-    place_code: "int"
-    price: "int"
+    place_code: int
+    price: int
 "#,
         ),
         (
@@ -165,7 +165,7 @@ fn goto_definition_on_import_module_jumps_to_the_module_file() {
             "/proj/schemas.dpy",
             r#"
 class Orders(Schema):
-    x: "int"
+    x: int
 "#,
         ),
         (
