@@ -43,12 +43,12 @@ pandas (v2) and polars (v3) — VS Code is the only supported editor for now.
 
 ## Configuration
 
-A `dathon.json` at (or above) the working directory configures a
-`dathon check` run — `typeCheckingMode` (`off` / `basic` / `standard` /
-`strict`), `exclude` (path substrings to skip), and `rules` (per-code
-overrides — `off` / `warning` / `error`). `typeCheckingMode` also drives
-the embedded Python engine. Remaining: have the LSP read `dathon.json`
-too (it currently takes `typeCheckingMode` from the editor).
+A `dathon.json` at (or above) the project root configures both the CLI
+and the LSP — `typeCheckingMode` (`off` / `basic` / `standard` /
+`strict`), `exclude` (path substrings to skip), and `rules` (per-rule
+overrides — `off` / `warning` / `error`, keyed by readable rule name).
+For the LSP, `dathon.json`'s `typeCheckingMode` overrides the editor's
+setting; the single value also drives the embedded Python engine.
 
 ## Generic-inference extensions
 
