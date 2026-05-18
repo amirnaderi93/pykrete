@@ -35,7 +35,8 @@ use lsp_types::{
     DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
     GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
     HoverProviderCapability, Location, MarkupContent, MarkupKind, NumberOrString, OneOf, Position,
-    PublishDiagnosticsParams, Range, ReferenceParams, ServerCapabilities, SymbolKind,
+    PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceParams, RenameOptions,
+    RenameParams, ServerCapabilities, SymbolKind, TextDocumentPositionParams,
     TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url, WorkspaceEdit,
 };
 
@@ -50,6 +51,10 @@ pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
         document_symbol_provider: Some(OneOf::Left(true)),
         definition_provider: Some(OneOf::Left(true)),
         references_provider: Some(OneOf::Left(true)),
+        rename_provider: Some(OneOf::Right(RenameOptions {
+            prepare_provider: Some(true),
+            work_done_progress_options: Default::default(),
+        })),
         completion_provider: Some(CompletionOptions {
             // Editors invoke completion automatically after the user types
             // one of these characters. `"` for `col("…")`, `.` for `df.…`,
@@ -406,6 +411,22 @@ fn handle_request(
             };
             fanout_request(connection, multiplexer, docs, req, dathon_result)?;
         }
+        "textDocument/rename" => {
+            let params: RenameParams = serde_json::from_value(req.params.clone())?;
+            let dathon_result = match handle_rename(docs, params) {
+                Some(edit) => serde_json::to_value(edit)?,
+                None => serde_json::Value::Null,
+            };
+            fanout_request(connection, multiplexer, docs, req, dathon_result)?;
+        }
+        "textDocument/prepareRename" => {
+            let params: TextDocumentPositionParams = serde_json::from_value(req.params.clone())?;
+            let dathon_result = match handle_prepare_rename(docs, params) {
+                Some(resp) => serde_json::to_value(resp)?,
+                None => serde_json::Value::Null,
+            };
+            fanout_request(connection, multiplexer, docs, req, dathon_result)?;
+        }
         // These are pure passthrough — dathon has no schema-specific
         // answer, so dathon's result is `null` and the merge just
         // returns the (remapped) child result. They're only advertised
@@ -413,8 +434,6 @@ fn handle_request(
         // `merge_capabilities`).
         "textDocument/signatureHelp"
         | "textDocument/documentHighlight"
-        | "textDocument/rename"
-        | "textDocument/prepareRename"
         | "textDocument/semanticTokens/full" => {
             fanout_request(connection, multiplexer, docs, req, serde_json::Value::Null)?;
         }
@@ -604,6 +623,48 @@ pub fn handle_references(docs: &HashMap<Url, String>, params: ReferenceParams) -
             range: span_to_range(span),
         })
         .collect()
+}
+
+/// Handle a `textDocument/rename` request via `dathon::rename` — rename
+/// the column under the cursor across the file. `None` when the cursor
+/// isn't on a column (the embedded engine then gets a turn).
+pub fn handle_rename(docs: &HashMap<Url, String>, params: RenameParams) -> Option<WorkspaceEdit> {
+    let uri = params.text_document_position.text_document.uri.clone();
+    let pos = params.text_document_position.position;
+    let text = docs.get(&uri)?;
+    let line = (pos.line as usize).checked_add(1)?;
+    let column = (pos.character as usize).checked_add(1)?;
+    let spans = dathon::rename(text, line, column);
+    if spans.is_empty() {
+        return None;
+    }
+    let edits: Vec<TextEdit> = spans
+        .into_iter()
+        .map(|span| TextEdit {
+            range: span_to_range(span),
+            new_text: params.new_name.clone(),
+        })
+        .collect();
+    let mut changes = HashMap::new();
+    changes.insert(uri, edits);
+    Some(WorkspaceEdit {
+        changes: Some(changes),
+        ..Default::default()
+    })
+}
+
+/// Handle a `textDocument/prepareRename` request via
+/// `dathon::prepare_rename` — confirm the cursor is on a column and
+/// return that token's range. `None` when it isn't.
+pub fn handle_prepare_rename(
+    docs: &HashMap<Url, String>,
+    params: TextDocumentPositionParams,
+) -> Option<PrepareRenameResponse> {
+    let text = docs.get(&params.text_document.uri)?;
+    let line = (params.position.line as usize).checked_add(1)?;
+    let column = (params.position.character as usize).checked_add(1)?;
+    let span = dathon::prepare_rename(text, line, column)?;
+    Some(PrepareRenameResponse::Range(span_to_range(span)))
 }
 
 /// Handle a `textDocument/completion` request by routing through
