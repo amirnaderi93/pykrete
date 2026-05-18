@@ -37,7 +37,10 @@ pub mod walk;
 
 pub use completion::{CompletionItem, CompletionItemKind, completions};
 pub use hover::{HoverInfo, hover};
-pub use symbols::{DocumentSymbol, Span, SymbolKind, definition, document_symbols, references};
+pub use symbols::{
+    DocumentSymbol, Span, SymbolKind, definition, document_symbols, prepare_rename, references,
+    rename,
+};
 pub use transpiler::transpile;
 
 use std::collections::HashMap;

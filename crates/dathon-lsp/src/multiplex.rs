@@ -567,8 +567,23 @@ pub fn merge_child_response(method: &str, dathon_result: Value, child_result: Va
         }
         "textDocument/signatureHelp" => child_result,
         "textDocument/documentHighlight" => remap_highlights(child_result),
-        "textDocument/rename" => remap_workspace_edit(child_result),
-        "textDocument/prepareRename" => remap_prepare_rename(child_result),
+        // `rename` / `prepareRename`: dathon answers for a column (its
+        // edit is already in editor coordinates — no remap); otherwise
+        // the child answers and its result is remapped.
+        "textDocument/rename" => {
+            if dathon_result.is_null() {
+                remap_workspace_edit(child_result)
+            } else {
+                dathon_result
+            }
+        }
+        "textDocument/prepareRename" => {
+            if dathon_result.is_null() {
+                remap_prepare_rename(child_result)
+            } else {
+                dathon_result
+            }
+        }
         "textDocument/semanticTokens/full" => remap_semantic_tokens(child_result, None),
         _ => dathon_result,
     }

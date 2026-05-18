@@ -310,6 +310,84 @@ pub fn references(source: &str, line: usize, column: usize) -> Vec<Span> {
         .collect()
 }
 
+/// Rename the column under the cursor: the editable name-only source
+/// ranges of every reference to it. Like [`references`], but each range
+/// is trimmed to just the identifier — a quoted `col("name")` literal
+/// has its quotes excluded so a rename replaces only `name`.
+///
+/// Empty when the cursor isn't on a column.
+pub fn rename(source: &str, line: usize, column: usize) -> Vec<Span> {
+    let line_index = LineIndex::from_source_text(source);
+    column_rename_sites(source, line, column)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| span_from_range(r, source, &line_index))
+        .collect()
+}
+
+/// Whether a rename is valid at the cursor — and if so, the name-only
+/// span of the column token there, which the editor pre-fills in its
+/// rename prompt. `None` when the cursor isn't on a column.
+pub fn prepare_rename(source: &str, line: usize, column: usize) -> Option<Span> {
+    let line_index = LineIndex::from_source_text(source);
+    let offset = offset_from_line_column(&line_index, source, line, column)?;
+    let site = column_rename_sites(source, line, column)?
+        .into_iter()
+        .find(|r| r.contains_inclusive(offset))?;
+    Some(span_from_range(site, source, &line_index))
+}
+
+/// The name-only source range of every reference to the column under
+/// the cursor — the spans a rename edits. `None` when the cursor isn't
+/// on a column.
+fn column_rename_sites(source: &str, line: usize, column: usize) -> Option<Vec<TextRange>> {
+    let parsed = ruff_python_parser::parse_module(source).ok()?;
+    let module = parsed.syntax();
+    let line_index = LineIndex::from_source_text(source);
+    let classes = discover_top_level_classes(module);
+    let schemas = discover_schemas(&classes);
+    let registry = Registry::build(module);
+    let functions = discover_top_level_functions(module);
+    let offset = offset_from_line_column(&line_index, source, line, column)?;
+    let traces =
+        crate::collect_module_column_refs(&functions, source, &line_index, &schemas, &registry);
+    let target = column_name_at(offset, &traces, &schemas)?;
+
+    let mut ranges: Vec<TextRange> = Vec::new();
+    for schema in &schemas {
+        for stmt in &schema.class.def.body {
+            if let Some(ann) = stmt.as_ann_assign_stmt() {
+                if let Some(t) = ann.target.as_name_expr() {
+                    if t.id.as_str() == target {
+                        ranges.push(t.range);
+                    }
+                }
+            }
+        }
+    }
+    for trace in &traces {
+        if trace.name == target {
+            ranges.push(inner_name_range(trace.range, source));
+        }
+    }
+    ranges.sort_by_key(|r| r.start());
+    ranges.dedup();
+    Some(ranges)
+}
+
+/// Trim a column-reference range down to the identifier characters: a
+/// quoted string literal (`"name"`) loses its quotes; a bare `df.X`
+/// attribute token is returned unchanged.
+fn inner_name_range(range: TextRange, source: &str) -> TextRange {
+    let text = &source[range];
+    let quotes = text.chars().take_while(|&c| c == '"' || c == '\'').count();
+    if quotes == 0 || quotes * 2 >= text.len() {
+        return range;
+    }
+    let q = TextSize::from(quotes as u32);
+    TextRange::new(range.start() + q, range.end() - q)
+}
+
 /// The column name the cursor sits on — from a column-reference trace,
 /// or a Schema field declaration's target name.
 fn column_name_at<'a>(
