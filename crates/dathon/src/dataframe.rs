@@ -20,6 +20,11 @@ pub enum DataFrameAnnotation<'ast> {
     Untyped,
     /// `DataFrame[X]` where X is a bare name; X has not yet been resolved.
     Typed(&'ast str),
+    /// `DataFrame[Pick[…]]` / `DataFrame[Omit[…]]` — a derived-schema
+    /// expression. The inner `Pick`/`Omit` subscript is carried for
+    /// resolution against the discovered schemas (see
+    /// [`crate::schema::resolve_pick_omit`]).
+    Derived(&'ast Expr),
     /// `DataFrame[<complex>]` — e.g. `DataFrame[list[str]]`, `DataFrame[A | B]`.
     NonBareName,
 }
@@ -36,6 +41,17 @@ pub fn recognize<'ast>(expr: &'ast Expr) -> Option<DataFrameAnnotation<'ast>> {
             }
             match sub.slice.as_ref() {
                 Expr::Name(inner) => Some(DataFrameAnnotation::Typed(inner.id.as_str())),
+                // `DataFrame[Pick[…]]` / `DataFrame[Omit[…]]` — a
+                // derived-schema operator. Recognized loosely here (the
+                // base is `Pick`/`Omit`); the inner shape is validated
+                // when the expression is resolved against schemas.
+                inner @ Expr::Subscript(s)
+                    if s.value
+                        .as_name_expr()
+                        .is_some_and(|n| matches!(n.id.as_str(), "Pick" | "Omit")) =>
+                {
+                    Some(DataFrameAnnotation::Derived(inner))
+                }
                 _ => Some(DataFrameAnnotation::NonBareName),
             }
         }

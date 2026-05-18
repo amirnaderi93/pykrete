@@ -130,7 +130,7 @@ fn schema_cast_strip_range(call: &ExprCall, source: &str) -> Option<TextRange> {
     }
     if !matches!(
         dataframe::recognize(&call.arguments.args[0]),
-        Some(DataFrameAnnotation::Typed(_)),
+        Some(DataFrameAnnotation::Typed(_) | DataFrameAnnotation::Derived(_)),
     ) {
         return None;
     }

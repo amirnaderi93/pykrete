@@ -268,11 +268,19 @@ impl<'a> BodyContext<'a> {
             let SlotLabel::Param(name) = slot.label else {
                 continue;
             };
-            let DataFrameAnnotation::Typed(schema_name) = slot.kind else {
-                continue;
+            let view = match slot.kind {
+                DataFrameAnnotation::Typed(schema_name) => {
+                    ctx.find_schema(schema_name).map(SchemaView::Declared)
+                }
+                // `DataFrame[Pick[…]]` / `DataFrame[Omit[…]]` — resolve
+                // the derived-schema expression to a `Derived` view.
+                DataFrameAnnotation::Derived(expr) => {
+                    crate::schema::resolve_pick_omit(expr, ctx.schemas())
+                }
+                DataFrameAnnotation::Untyped | DataFrameAnnotation::NonBareName => None,
             };
-            if let Some(schema) = ctx.find_schema(schema_name) {
-                ctx.bind_df(name, SchemaView::Declared(schema));
+            if let Some(view) = view {
+                ctx.bind_df(name, view);
             }
         }
 
@@ -375,7 +383,7 @@ impl<'a> BodyContext<'a> {
 /// that only want the diagnostics can ignore the result.
 pub fn check_function_body<'a>(
     func: &DiscoveredFunction<'a>,
-    declared_return: Option<&'a Schema<'a>>,
+    declared_return: Option<SchemaView<'a>>,
     ctx: &mut BodyContext<'a>,
     source: &str,
     line_index: &LineIndex,
@@ -417,7 +425,9 @@ pub fn check_function_body<'a>(
                 if inferred_return.is_none() {
                     inferred_return = actual.clone();
                 }
-                if let (Some(declared), Some(actual)) = (declared_return, actual.as_ref()) {
+                if let (Some(declared), Some(actual)) =
+                    (declared_return.as_ref(), actual.as_ref())
+                {
                     check_return_type(
                         declared,
                         actual,
@@ -484,6 +494,45 @@ fn handle_ann_assign<'a>(
                     source,
                     line_index,
                 ));
+            }
+        }
+        Some(DataFrameAnnotation::Derived(expr)) => {
+            // `x: DataFrame[Pick[…]] = …` — a local derived-schema
+            // re-annotation. Flag any picked/omitted column that isn't
+            // on the base schema, then bind the resolved view.
+            for (col, col_range) in crate::schema::pick_omit_invalid_columns(expr, ctx.schemas()) {
+                diagnostics.push(Diagnostic::at_range(
+                    Severity::Error,
+                    "D0030",
+                    format!(
+                        "Column '{col}' does not exist on schema '{}'.",
+                        crate::schema::pick_omit_base_name(expr).unwrap_or("?"),
+                    ),
+                    col_range,
+                    source,
+                    line_index,
+                ));
+            }
+            match crate::schema::resolve_pick_omit(expr, ctx.schemas()) {
+                Some(view) => {
+                    ctx.bind_df(target_name, view.clone());
+                    ctx.record_local_binding(target_name, target_range, view);
+                }
+                None => {
+                    diagnostics.push(Diagnostic::at_range(
+                        Severity::Error,
+                        "D0020",
+                        format!(
+                            "Unknown schema '{}' in {}. \
+                             Declare it as a class extending Schema.",
+                            crate::schema::pick_omit_base_name(expr).unwrap_or("?"),
+                            &source[ann.annotation.range()],
+                        ),
+                        ann.annotation.range(),
+                        source,
+                        line_index,
+                    ));
+                }
             }
         }
         Some(DataFrameAnnotation::NonBareName) => {
@@ -576,7 +625,7 @@ fn types_compatible(a: &ColumnType, b: &ColumnType) -> bool {
 }
 
 fn check_return_type<'a>(
-    declared: &Schema<'a>,
+    declared: &SchemaView<'a>,
     actual: &SchemaView<'a>,
     schemas: &'a [Schema<'a>],
     range: TextRange,
@@ -584,7 +633,13 @@ fn check_return_type<'a>(
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let declared_names: HashSet<&str> = declared.fields().iter().map(|f| f.name).collect();
+    // How to name the declared return type in messages: a named schema
+    // by name, a `Pick`/`Omit`-derived one by its column list.
+    let declared_label = match declared {
+        SchemaView::Declared(s) => format!("schema '{}'", s.name()),
+        _ => format!("[{}]", declared.field_names().join(", ")),
+    };
+    let declared_names: HashSet<&str> = declared.field_names().into_iter().collect();
     let actual_names: HashSet<&str> = actual.field_names().into_iter().collect();
 
     // Type check — a column present in both, with confidently-known but
@@ -604,8 +659,7 @@ fn check_return_type<'a>(
                     "D0080",
                     format!(
                         "Return type mismatch: column '{name}' is declared {declared_ty} \
-                         in schema '{}', but the body produces {actual_ty}.",
-                        declared.name(),
+                         in {declared_label}, but the body produces {actual_ty}.",
                     ),
                     range,
                     source,
@@ -624,9 +678,8 @@ fn check_return_type<'a>(
     only_actual.sort();
 
     let message = format!(
-        "Return type mismatch with declared schema '{}'. \
+        "Return type mismatch with declared {declared_label}. \
          Missing in body: [{}]; extra in body: [{}].",
-        declared.name(),
         only_declared.join(", "),
         only_actual.join(", "),
     );

@@ -73,6 +73,11 @@ field carrying its name and inferred type), or `Grouped { keys, underlying }`
 nested structs, piercing `array<struct>` as Spark does. `suggest_field_name`
 powers the "did you mean?" hints.
 
+`resolve_pick_omit` resolves the `Pick` / `Omit` schema operators —
+`DataFrame[Pick[Orders, "a", "b"]]` is `Orders` narrowed to those
+columns, `Omit[Orders, "x"]` is `Orders` without them — to a `Derived`
+view; a picked/omitted column absent from the base schema is a `D0030`.
+
 ### `types`
 
 `ColumnType` — dathon's type system. The atomic vocabulary (`int`, `long`,
@@ -95,7 +100,8 @@ constants), and UDFs (`@udf` / `@pandas_udf` decorators and the functional
 ### `dataframe`
 
 Recognizes `DataFrame[X]` annotations on function signatures —
-`Untyped` / `Typed("Foo")` / `NonBareName` — and the typed parameter /
+`Untyped` / `Typed("Foo")` / `Derived` (a `Pick` / `Omit` operator,
+resolved by `schema`) / `NonBareName` — and the typed parameter /
 return slots.
 
 ### `imports`
