@@ -161,7 +161,7 @@ impl Diagnostic {
             self.line,
             self.column,
             self.severity.label(),
-            self.code,
+            rule_name(self.code),
             self.message,
         )
     }
@@ -169,5 +169,31 @@ impl Diagnostic {
     /// Convenience accessor used by test helpers.
     pub fn severity_label(&self) -> &'static str {
         self.severity.label()
+    }
+}
+
+/// The human-readable name for a diagnostic code — what the CLI and
+/// editor display, and what `dathon.json`'s `rules` block keys on. The
+/// `D00xx` code stays the stable internal identifier (and the form the
+/// docs index by); this is the friendly surface. An unrecognized code
+/// (shouldn't happen) is returned unchanged.
+pub fn rule_name(code: &str) -> &str {
+    match code {
+        "D0001" => "parseError",
+        "D0010" => "unknownColumnType",
+        "D0011" => "invalidColumnType",
+        "D0020" => "unknownSchema",
+        "D0021" => "invalidSchemaExpression",
+        "D0030" => "unknownColumn",
+        "D0040" => "unionSchemaMismatch",
+        "D0050" => "returnColumnsMismatch",
+        "D0060" => "missingJoinKey",
+        "D0070" => "unresolvedImport",
+        "D0071" => "unexportedName",
+        "D0080" => "returnTypeMismatch",
+        "D0081" => "nonNumericArithmetic",
+        "D0082" => "crossTypeComparison",
+        "D0083" => "nullabilityMismatch",
+        other => other,
     }
 }
