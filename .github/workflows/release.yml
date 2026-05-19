@@ -80,7 +80,8 @@ jobs:
           # WiX source from that package's wix/ directory.
           cargo wix --package pykrete --no-build --target ${{ matrix.target }} \
             --install-version "${tag#v}" --output "$msi"
-          shasum -a 256 "$msi" | tee "$msi.sha256"
+          # Git Bash on Windows ships `sha256sum`, not `shasum`.
+          sha256sum "$msi" | tee "$msi.sha256"
 
       - name: Publish to the GitHub Release
         uses: softprops/action-gh-release@v2
