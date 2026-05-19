@@ -1,7 +1,8 @@
 name: Release
 
-# Tagging `vX.Y.Z` builds release binaries for every supported platform,
-# packages them as tarballs, and publishes them on a GitHub Release.
+# Tagging `vX.Y.Z` builds release artifacts for every supported platform
+# and publishes them on a GitHub Release: tarballs for macOS and Linux,
+# an MSI installer for Windows.
 #
 # It can also be run manually (workflow_dispatch) against an existing tag
 # — useful to re-build a release after a workflow fix.
@@ -51,19 +52,34 @@ jobs:
           key: ${{ matrix.target }}
       - name: Build release binaries
         run: cargo build --release --workspace --target ${{ matrix.target }}
-      - name: Package
+
+      # macOS / Linux: a tarball of the two binaries.
+      - name: Package (tarball)
+        if: matrix.target != 'x86_64-pc-windows-msvc'
         shell: bash
         run: |
           tag="${{ inputs.tag || github.ref_name }}"
           staging="pykrete-$tag-${{ matrix.target }}"
-          ext=""
-          [[ "${{ matrix.target }}" == *windows* ]] && ext=".exe"
           mkdir "$staging"
-          cp "target/${{ matrix.target }}/release/pykrete$ext" "$staging"/
-          cp "target/${{ matrix.target }}/release/pykrete-lsp$ext" "$staging"/
+          cp "target/${{ matrix.target }}/release/pykrete" "$staging"/
+          cp "target/${{ matrix.target }}/release/pykrete-lsp" "$staging"/
           cp README.md LICENSE "$staging"/
           tar czf "$staging.tar.gz" "$staging"
           shasum -a 256 "$staging.tar.gz" | tee "$staging.tar.gz.sha256"
+
+      # Windows: an MSI installer (cargo-wix / WiX). It drops both
+      # binaries into Program Files and appends them to the system PATH.
+      - name: Package (MSI installer)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          cargo install cargo-wix --locked
+          msi="pykrete-$tag-${{ matrix.target }}.msi"
+          cargo wix --package pykrete --no-build --target ${{ matrix.target }} \
+            --install-version "${tag#v}" --output "$msi"
+          shasum -a 256 "$msi" | tee "$msi.sha256"
+
       - name: Publish to the GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -71,4 +87,6 @@ jobs:
           files: |
             pykrete-*.tar.gz
             pykrete-*.tar.gz.sha256
+            pykrete-*.msi
+            pykrete-*.msi.sha256
           generate_release_notes: true

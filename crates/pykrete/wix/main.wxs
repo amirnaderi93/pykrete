@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="windows-1252"?>
+<!--
+  WiX v3 installer source for the pykrete MSI.
+
+  Built in CI by cargo-wix (see .github/workflows/release.yml), which
+  supplies the var.* values (Version, CargoTargetBinDir, Platform).
+  The MSI installs `pykrete.exe` and `pykrete-lsp.exe` into Program
+  Files and appends that directory to the system PATH.
+
+  The UpgradeCode below is permanent — it must never change, or
+  in-place upgrades will break.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product
+      Id="*"
+      Name="pykrete"
+      UpgradeCode="3B6CEFBD-23AB-4590-AFAE-59CC82A829A8"
+      Manufacturer="Amir Naderi"
+      Language="1033"
+      Codepage="1252"
+      Version="$(var.Version)">
+
+    <Package
+        Id="*"
+        Keywords="Installer"
+        Description="Static schema checking for PySpark dataframes"
+        Manufacturer="Amir Naderi"
+        InstallerVersion="450"
+        Languages="1033"
+        Compressed="yes"
+        InstallScope="perMachine"
+        SummaryCodepage="1252" />
+
+    <MajorUpgrade
+        Schedule="afterInstallInitialize"
+        DowngradeErrorMessage="A newer version of pykrete is already installed." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="ARPHELPLINK" Value="https://github.com/amirnaderi93/pykrete" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/amirnaderi93/pykrete" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLDIR" Name="pykrete">
+
+          <Component Id="PykreteExe" Guid="*">
+            <File Id="PykreteExe"
+                  Name="pykrete.exe"
+                  Source="$(var.CargoTargetBinDir)\pykrete.exe"
+                  KeyPath="yes" />
+          </Component>
+
+          <Component Id="PykreteLspExe" Guid="*">
+            <File Id="PykreteLspExe"
+                  Name="pykrete-lsp.exe"
+                  Source="$(var.CargoTargetBinDir)\pykrete-lsp.exe"
+                  KeyPath="yes" />
+          </Component>
+
+          <!-- Appends the install directory to the system PATH. A
+               registry value is the component keypath (the standard
+               pattern for an environment-only component). -->
+          <Component Id="PathEntry" Guid="67DA5D49-6E52-4EF8-83BC-847AF74A177F">
+            <Environment Id="PykretePath"
+                         Name="PATH"
+                         Value="[INSTALLDIR]"
+                         Permanent="no"
+                         Part="last"
+                         Action="set"
+                         System="yes" />
+            <RegistryValue Root="HKLM"
+                           Key="Software\pykrete"
+                           Name="installed"
+                           Type="integer"
+                           Value="1"
+                           KeyPath="yes" />
+          </Component>
+
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <Feature Id="Main" Title="pykrete" Level="1">
+      <ComponentRef Id="PykreteExe" />
+      <ComponentRef Id="PykreteLspExe" />
+      <ComponentRef Id="PathEntry" />
+    </Feature>
+
+  </Product>
+</Wix>
