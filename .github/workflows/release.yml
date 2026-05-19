@@ -25,8 +25,9 @@ jobs:
       fail-fast: false
       matrix:
         # Both macOS targets build on an Apple Silicon runner: arm64
-        # natively, x86_64 by cross-compiling (the macOS toolchain is
-        # universal). GitHub's Intel macOS runners are retired.
+        # natively, x86_64 by cross-compiling, which the universal macOS
+        # toolchain handles with no extra setup. GitHub's Intel macOS
+        # runners are retired.
         include:
           - target: aarch64-apple-darwin
             os: macos-14
@@ -34,6 +35,8 @@ jobs:
             os: macos-14
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,9 +56,11 @@ jobs:
         run: |
           tag="${{ inputs.tag || github.ref_name }}"
           staging="pykrete-$tag-${{ matrix.target }}"
+          ext=""
+          [[ "${{ matrix.target }}" == *windows* ]] && ext=".exe"
           mkdir "$staging"
-          cp "target/${{ matrix.target }}/release/pykrete" "$staging"/
-          cp "target/${{ matrix.target }}/release/pykrete-lsp" "$staging"/
+          cp "target/${{ matrix.target }}/release/pykrete$ext" "$staging"/
+          cp "target/${{ matrix.target }}/release/pykrete-lsp$ext" "$staging"/
           cp README.md LICENSE "$staging"/
           tar czf "$staging.tar.gz" "$staging"
           shasum -a 256 "$staging.tar.gz" | tee "$staging.tar.gz.sha256"
