@@ -2,9 +2,17 @@ name: Release
 
 # Tagging `vX.Y.Z` builds release binaries for every supported platform,
 # packages them as tarballs, and publishes them on a GitHub Release.
+#
+# It can also be run manually (workflow_dispatch) against an existing tag
+# — useful to re-build a release after a workflow fix.
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and release (e.g. v0.1.0)'
+        required: true
 
 permissions:
   contents: write
@@ -16,15 +24,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Both macOS targets build on an Apple Silicon runner: arm64
+        # natively, x86_64 by cross-compiling (the macOS toolchain is
+        # universal). GitHub's Intel macOS runners are retired.
         include:
           - target: aarch64-apple-darwin
             os: macos-14
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-14
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.95.0
         with:
@@ -38,7 +51,8 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          staging="pykrete-${{ github.ref_name }}-${{ matrix.target }}"
+          tag="${{ inputs.tag || github.ref_name }}"
+          staging="pykrete-$tag-${{ matrix.target }}"
           mkdir "$staging"
           cp "target/${{ matrix.target }}/release/pykrete" "$staging"/
           cp "target/${{ matrix.target }}/release/pykrete-lsp" "$staging"/
@@ -48,6 +62,7 @@ jobs:
       - name: Publish to the GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
           files: |
             pykrete-*.tar.gz
             pykrete-*.tar.gz.sha256
