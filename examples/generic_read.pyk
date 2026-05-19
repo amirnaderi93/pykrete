@@ -1,0 +1,66 @@
+# Generic-function inference end-to-end. Demonstrates the DataSource
+# registry pattern with PEP 695 generic syntax — same code shape the user
+# would adopt in production once DataSource and DataAccessLayer are made
+# generic. pykrete infers the right DataFrame schema flowing from the
+# constant declaration through the generic read method into the consumer.
+
+class RawOrders(Schema):
+    ProductCode: int
+    UnitPrice: double
+    Status: string
+
+
+class Orders(Schema):
+    place_code: int
+    price: int
+
+
+# The generic source class. The schema parameter T flows from the
+# constant declaration site into every read of the constant.
+class DataSource[T]:
+    def __init__(self, path):
+        pass
+
+
+class DataAccessLayer:
+    # Generic method: `T` is bound from the source argument's instantiation
+    # (DataSource[X]) and substituted through the return (DataFrame[T]).
+    def read[T](self, source: DataSource[T]) -> DataFrame[T]:
+        pass
+
+
+# Schema declared ONCE, at the source declaration. Every read of this
+# constant flows the schema through.
+RAW_ORDERS: DataSource[RawOrders] = DataSource("/path/raw_orders")
+
+
+def use_raw(dal: DataAccessLayer) -> DataFrame[RawOrders]:
+    # No annotation on `raw` — pykrete infers DataFrame[RawOrders] from
+    # the call to the generic read.
+    raw = dal.read(RAW_ORDERS)
+    return raw.filter(col("UnitPrice") > 0)
+
+
+def prepare_orders(dal: DataAccessLayer) -> DataFrame[Orders]:
+    # Same pattern, but the body projects to a different schema. Column
+    # references against RawOrders are checked all the way through the
+    # filter and the projection. The aliases produce the declared
+    # Orders schema, so no D0050.
+    return (
+        dal.read(RAW_ORDERS)
+        .filter(col("Status") == "confirmed")
+        .select(
+            col("ProductCode").alias("place_code"),
+            col("UnitPrice").cast("int").alias("price"),
+        )
+    )
+
+
+def bug_demo(dal: DataAccessLayer) -> DataFrame[Orders]:
+    # Typo `Acommodation` (single 'c'). Caught against RawOrders via the
+    # inferred-from-generic chain — pykrete points right at the typo
+    # because it knows the receiver's schema all the way through.
+    return (
+        dal.read(RAW_ORDERS)
+        .select(col("Acommodation").alias("place_code"))
+    )

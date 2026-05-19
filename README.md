@@ -1,6 +1,6 @@
-# dathon
+# pykrete
 
-[![pipeline status](https://gitlab.com/amir.naderi93/dathon/badges/main/pipeline.svg)](https://gitlab.com/amir.naderi93/dathon/-/commits/main)
+[![pipeline status](https://gitlab.com/amir.naderi93/pykrete/badges/main/pipeline.svg)](https://gitlab.com/amir.naderi93/pykrete/-/commits/main)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A strict superset of Python that adds static schema checking for dataframes. Inspired by TypeScript's relationship to JavaScript.
@@ -20,7 +20,7 @@ A strict superset of Python that adds static schema checking for dataframes. Ins
 - [docs/v0.1-spec.md](docs/v0.1-spec.md) — the contract for the first usable version.
 - [docs/language-reference/](docs/language-reference/) — user-facing reference (grows as features land).
 - [docs/design/](docs/design/) — internal design and implementation docs (grows as we build).
-- [examples/](examples/) — sample `.dpy` files for poking at the checker.
+- [examples/](examples/) — sample `.pyk` files for poking at the checker.
 
 ## Initial target
 
@@ -31,31 +31,31 @@ PySpark. The author's production PySpark codebase is the real-world testing yard
 ### Static checker
 
 ```bash
-dathon check examples/schemas.dpy          # single file
-dathon check schemas.dpy pipeline.dpy      # multi-file; cross-file Schema visibility
-dathon check src/*.dpy                     # shell glob
+pykrete check examples/schemas.pyk          # single file
+pykrete check schemas.pyk pipeline.pyk      # multi-file; cross-file Schema visibility
+pykrete check src/*.pyk                     # shell glob
 
-dathon transpile examples/schemas.dpy      # emit runnable Python to stdout
-dathon transpile examples/schemas.dpy > out.py
+pykrete transpile examples/schemas.pyk      # emit runnable Python to stdout
+pykrete transpile examples/schemas.pyk > out.py
 ```
 
 ### Editor integration (LSP)
 
-`dathon-lsp` is a Language Server Protocol server — live diagnostics,
+`pykrete-lsp` is a Language Server Protocol server — live diagnostics,
 hover, completion, document symbols, and go-to-definition over stdio.
 
 It is also an **LSP multiplexer**: it embeds a Python language server
-(basedpyright) as a child process and merges its responses with dathon's
+(basedpyright) as a child process and merges its responses with pykrete's
 schema-aware results, so a single server delivers both full Python
-support and dathon's checks. See [docs/design/multiplexer.md](docs/design/multiplexer.md).
+support and pykrete's checks. See [docs/design/multiplexer.md](docs/design/multiplexer.md).
 
 The **VS Code extension** ([editors/vscode/](editors/vscode/)) wraps this —
-it launches `dathon-lsp`, bundles the Python engine, and routes `.dpy`
+it launches `pykrete-lsp`, bundles the Python engine, and routes `.pyk`
 files to it. It is distributed as a local `.vsix` for now; marketplace
 publishing is pending.
 
-For other editors, point the LSP client at the `dathon-lsp` binary (after
-`cargo build --release`, at `target/release/dathon-lsp`).
+For other editors, point the LSP client at the `pykrete-lsp` binary (after
+`cargo build --release`, at `target/release/pykrete-lsp`).
 
 ## Contributing
 

@@ -9,7 +9,7 @@ understand the codebase.
   server are organized: the pipeline, every module, the diagnostic codes,
   the type system, multi-file analysis.
 - **[multiplexer.md](multiplexer.md)** — the LSP multiplexer: how
-  `dathon-lsp` embeds a Python language server, the virtual-document
+  `pykrete-lsp` embeds a Python language server, the virtual-document
   transform, message routing.
 
 ## Still to write

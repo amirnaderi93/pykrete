@@ -134,30 +134,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 
 [[package]]
-name = "dathon"
-version = "0.0.1"
-dependencies = [
- "ruff_python_ast",
- "ruff_python_parser",
- "ruff_source_file",
- "ruff_text_size",
- "serde",
- "serde_json",
- "sqlparser",
-]
-
-[[package]]
-name = "dathon-lsp"
-version = "0.0.1"
-dependencies = [
- "crossbeam-channel",
- "dathon",
- "lsp-server",
- "lsp-types",
- "serde_json",
-]
-
-[[package]]
 name = "derive-where"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -589,6 +565,30 @@ checksum = "645dbe486e346d9b5de3ef16ede18c26e6c70ad97418f4874b8b1889d6e761ea"
 dependencies = [
  "ar_archive_writer",
  "cc",
+]
+
+[[package]]
+name = "pykrete"
+version = "0.0.1"
+dependencies = [
+ "ruff_python_ast",
+ "ruff_python_parser",
+ "ruff_source_file",
+ "ruff_text_size",
+ "serde",
+ "serde_json",
+ "sqlparser",
+]
+
+[[package]]
+name = "pykrete-lsp"
+version = "0.0.1"
+dependencies = [
+ "crossbeam-channel",
+ "lsp-server",
+ "lsp-types",
+ "pykrete",
+ "serde_json",
 ]
 
 [[package]]

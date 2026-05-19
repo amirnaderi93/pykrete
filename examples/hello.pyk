@@ -1,0 +1,26 @@
+# Placeholder pykrete source file. The checker doesn't run yet.
+# This directory is the user's debugging surface — write `.pyk` files here
+# to poke at the checker once it exists.
+#
+# Example of what a working pykrete file will look like (none of this is
+# supported yet):
+#
+#     from pykrete import Schema, DataFrame
+#     from pyspark.sql import functions as F
+#     from pyspark.sql.functions import col
+#
+#     class RawOrders(Schema):
+#         ProductCode: int
+#         UnitPrice: double
+#         FeeRate: double
+#         CreatedAt: timestamp
+#
+#     class Orders(Schema):
+#         place_code: int
+#         price: int
+#
+#     def prepare_orders(raw: DataFrame[RawOrders]) -> DataFrame[Orders]:
+#         return raw.select(
+#             col("ProductCode").alias("place_code"),
+#             (col("UnitPrice") * col("FeeRate") / 100.0).cast("int").alias("price"),
+#         )

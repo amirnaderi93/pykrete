@@ -3,7 +3,7 @@
 What's planned, in rough priority order. A living document — updated as the
 project moves.
 
-## Where dathon is now
+## Where pykrete is now
 
 The **PySpark static checker is feature-complete**:
 
@@ -30,10 +30,10 @@ a Python language server (an LSP multiplexer — see
 [design/multiplexer.md](design/multiplexer.md)). The **VS Code extension**
 ([../editors/vscode/](../editors/vscode/)) wraps it.
 
-The **`.dpy` → `.py` transpiler** is complete: it prepends
-`from __future__ import annotations` (so dathon's atomic type names and
+The **`.pyk` → `.py` transpiler** is complete: it prepends
+`from __future__ import annotations` (so pykrete's atomic type names and
 `DataFrame[X]` annotations don't evaluate at runtime) and strips the
-schema-cast `.cast(DataFrame[Schema])` — the one dathon-only construct in
+schema-cast `.cast(DataFrame[Schema])` — the one pykrete-only construct in
 expression position, which the Python runtime has no `.cast` method for.
 
 ## PyCharm support
@@ -43,16 +43,16 @@ pandas (v2) and polars (v3) — VS Code is the only supported editor for now.
 
 ## Configuration
 
-A `dathon.json` at (or above) the project root configures both the CLI
+A `pykrete.json` at (or above) the project root configures both the CLI
 and the LSP — `typeCheckingMode` (`off` / `basic` / `standard` /
 `strict`), `exclude` (path substrings to skip), and `rules` (per-rule
 overrides — `off` / `warning` / `error`, keyed by readable rule name).
-For the LSP, `dathon.json`'s `typeCheckingMode` overrides the editor's
+For the LSP, `pykrete.json`'s `typeCheckingMode` overrides the editor's
 setting; the single value also drives the embedded Python engine.
 
 ## Generic-inference extensions
 
-dathon infers generic-function results for the simplest shape: one type
+pykrete infers generic-function results for the simplest shape: one type
 variable in both a parameter slot `GenericClass[T]` and a return slot
 `GenericClass[T]`. Larger patterns, listed so they're not forgotten:
 
@@ -68,7 +68,7 @@ variable in both a parameter slot `GenericClass[T]` and a return slot
 - **Editor-agnostic LSP docs** — setup snippets for Neovim, Helix, Zed,
   Emacs.
 - **Performance pass** — benchmark on large codebases; today every
-  `dathon check` reparses the whole project.
+  `pykrete check` reparses the whole project.
 - **Duplicate-name detection** across files.
 
 ## Strategic direction
@@ -92,8 +92,8 @@ PySpark-specific code in `operations`.
 
 ### Forking `ty`
 
-Long term, dathon may fork Astral's `ty` (their Rust Python type checker)
+Long term, pykrete may fork Astral's `ty` (their Rust Python type checker)
 once it reaches a stable release — a single native stack, replacing the
-basedpyright multiplexer. Because dathon's analyzer is already built on
+basedpyright multiplexer. Because pykrete's analyzer is already built on
 `ruff_python_ast` (the AST `ty` uses), the schema-checking core ports
 cleanly; the multiplexer is interim scaffolding by design.

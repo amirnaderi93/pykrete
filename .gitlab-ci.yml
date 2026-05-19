@@ -1,4 +1,4 @@
-# GitLab CI/CD pipeline for dathon.
+# GitLab CI/CD pipeline for pykrete.
 #
 # Runs on every push and merge request. Three jobs:
 #   - build_and_test : cargo build + cargo test

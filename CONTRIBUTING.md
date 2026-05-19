@@ -1,6 +1,6 @@
-# Contributing to dathon
+# Contributing to pykrete
 
-dathon is a static schema checker for PySpark, written in Rust. This guide covers everything you need to get set up, run tests, and submit changes. If anything here is unclear or missing, open an issue.
+pykrete is a static schema checker for PySpark, written in Rust. This guide covers everything you need to get set up, run tests, and submit changes. If anything here is unclear or missing, open an issue.
 
 ## Getting set up
 
@@ -13,8 +13,8 @@ dathon is a static schema checker for PySpark, written in Rust. This guide cover
 ### Clone and build
 
 ```bash
-git clone https://gitlab.com/amir.naderi93/dathon.git
-cd dathon
+git clone https://gitlab.com/amir.naderi93/pykrete.git
+cd pykrete
 cargo build
 ```
 
@@ -23,15 +23,15 @@ The first build pulls Astral's `ruff_python_parser` from GitHub (we depend on it
 ### Run the checker
 
 ```bash
-cargo run -- check examples/schemas.dpy
+cargo run -- check examples/schemas.pyk
 ```
 
 ### Run the test suite
 
 ```bash
 cargo test            # all crates in the workspace
-cargo test -p dathon  # just the checker library + CLI
-cargo test -p dathon-lsp  # just the LSP server
+cargo test -p pykrete  # just the checker library + CLI
+cargo test -p pykrete-lsp  # just the LSP server
 ```
 
 All tests should pass on a clean checkout. If any fail on your machine before you've made changes, that's a bug — please open an issue.
@@ -39,7 +39,7 @@ All tests should pass on a clean checkout. If any fail on your machine before yo
 ### Run the LSP server (manual smoke)
 
 ```bash
-cargo run -p dathon-lsp --bin dathon-lsp
+cargo run -p pykrete-lsp --bin pykrete-lsp
 ```
 
 stdin/stdout speak LSP JSON-RPC. For actual editor integration, see the README.
@@ -47,37 +47,37 @@ stdin/stdout speak LSP JSON-RPC. For actual editor integration, see the README.
 ## Project layout
 
 ```
-crates/dathon/
+crates/pykrete/
 ├── src/
 │   ├── main.rs           # CLI shell — calls into the library
-│   ├── lib.rs            # `dathon::check(path, source) -> CheckResult`
+│   ├── lib.rs            # `pykrete::check(path, source) -> CheckResult`
 │   ├── diagnostics.rs    # Diagnostic types + TS-style formatting
 │   ├── schema.rs         # Schema discovery, SchemaView, field resolution
 │   ├── types.rs          # ColumnType atoms (Int, String, Date, …)
 │   ├── dataframe.rs      # DataFrame[Schema] annotation recognition
 │   ├── walk.rs           # Top-level AST walks (classes, functions)
 │   ├── registry.rs       # Class + constant registries (for generics)
-│   ├── transpiler.rs     # .dpy → .py emit
+│   ├── transpiler.rs     # .pyk → .py emit
 │   └── operations.rs     # Body analysis, result-schema inference,
 │                         #   chain tracking, return-type checks
 └── tests/
     ├── common/mod.rs     # Shared test helpers
     └── *.rs              # Integration tests — one file per feature area
 
-crates/dathon-lsp/
+crates/pykrete-lsp/
 ├── src/
 │   ├── main.rs           # LSP binary — thin shell over the library
 │   └── lib.rs            # Server loop + diagnostic conversion
 
 docs/                     # Spec + architecture + design notes
-examples/                 # Sample `.dpy` files
+examples/                 # Sample `.pyk` files
 ```
 
 [`docs/design/architecture.md`](docs/design/architecture.md) is the authoritative reference for how the analyzer is structured. Read it before making non-trivial changes.
 
 ## Workflow
 
-dathon uses a **feature-branch + Merge-Request** workflow with a strict commit format. All of this exists so the git history stays legible as the project grows and so an external contributor can land changes without needing direct access to `main`.
+pykrete uses a **feature-branch + Merge-Request** workflow with a strict commit format. All of this exists so the git history stays legible as the project grows and so an external contributor can land changes without needing direct access to `main`.
 
 ### Branch naming
 
@@ -153,7 +153,7 @@ If a commit closes an issue, end with `Closes #N` or `Fixes #N`. Co-authored wor
 
 ## Adding a test
 
-Every new feature should ship with both **unit tests** (inside the module, under `#[cfg(test)]`) and **integration tests** (in `crates/dathon/tests/<feature>.rs`).
+Every new feature should ship with both **unit tests** (inside the module, under `#[cfg(test)]`) and **integration tests** (in `crates/pykrete/tests/<feature>.rs`).
 
 Integration tests use the helpers in `tests/common/mod.rs`:
 
@@ -187,7 +187,7 @@ Use the appropriate template under `.gitlab/issue_templates/`:
 - **Bug**: a reproducible incorrect behavior.
 - **Feature**: a new check, operation, or capability.
 
-Include a minimal `.dpy` snippet whenever possible — that's the fastest path to a fix.
+Include a minimal `.pyk` snippet whenever possible — that's the fastest path to a fix.
 
 ## Releases
 
