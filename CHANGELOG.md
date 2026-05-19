@@ -6,6 +6,19 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1]
+
+### Added
+
+- **Windows MSI installer** — every release now publishes a `.msi` that
+  installs `pykrete` and `pykrete-lsp` and adds them to `PATH`.
+
+### Changed
+
+- Release builds and the Homebrew tap update are fully automated; the
+  obsolete pre-multiplexer Pylance stub was removed. No checker, LSP, or
+  transpiler behavior changed from 0.1.0.
+
 ## [0.1.0]
 
 First usable release — see [docs/v0.1-spec.md](docs/v0.1-spec.md) for the
@@ -31,5 +44,6 @@ full contract.
 - **Multi-file analysis** via imported typed declarations.
 - **`pykrete.json`** project configuration with non-strict / strict modes.
 
-[Unreleased]: https://github.com/amirnaderi93/pykrete/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/amirnaderi93/pykrete/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/amirnaderi93/pykrete/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/amirnaderi93/pykrete/releases/tag/v0.1.0
