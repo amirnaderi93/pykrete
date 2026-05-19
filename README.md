@@ -24,7 +24,7 @@ A strict superset of Python that adds static schema checking for dataframes. Ins
 
 ## Initial target
 
-PySpark. The author's production PySpark codebase is the real-world testing yardstick for v0.1.
+PySpark. pandas and polars support is planned — see the [roadmap](docs/roadmap.md).
 
 ## Usage
 
@@ -59,10 +59,14 @@ For other editors, point the LSP client at the `pykrete-lsp` binary (after
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow — feature branches, Conventional Commits, CI, and the MR-based merge process.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow — feature branches, Conventional Commits, CI, and the pull-request review process.
 
 The [roadmap](docs/roadmap.md) lays out what's planned after v0.1.
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Built with Claude
+
+pykrete is developed with [Claude Code](https://claude.com/claude-code), Anthropic's agentic coding tool.

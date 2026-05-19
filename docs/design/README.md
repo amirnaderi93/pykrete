@@ -16,5 +16,5 @@ understand the codebase.
 
 - **Operation semantics** — per-operation rules, derived from Spark's
   Catalyst analyzer.
-- **Testing strategy** — unit tests, integration tests, and real-world testing
-  against a real-world codebase.
+- **Testing strategy** — unit tests, integration tests, and the
+  example-based regression suite.

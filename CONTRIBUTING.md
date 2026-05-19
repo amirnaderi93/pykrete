@@ -6,7 +6,7 @@ pykrete is a static schema checker for PySpark, written in Rust. This guide cove
 
 ### Prerequisites
 
-- **Rust ≥ 1.95**. Install via [rustup](https://rustup.rs). The toolchain version is pinned in `rust-toolchain.toml`; cargo will use it automatically once rustup is installed.
+- **Rust ≥ 1.95**. Install via [rustup](https://rustup.rs); your stable toolchain works. CI pins an exact version (currently 1.95.0) so `cargo fmt --check` and `cargo clippy -D warnings` stay reproducible — CI is the authoritative gate.
 - **Git**.
 - The Rust analyzer extension for your editor (VS Code: `rust-lang.rust-analyzer`).
 
@@ -69,7 +69,7 @@ crates/pykrete-lsp/
 │   ├── main.rs           # LSP binary — thin shell over the library
 │   └── lib.rs            # Server loop + diagnostic conversion
 
-docs/                     # Spec + architecture + design notes
+docs/                     # Spec, architecture, and design notes
 examples/                 # Sample `.pyk` files
 ```
 
@@ -77,7 +77,7 @@ examples/                 # Sample `.pyk` files
 
 ## Workflow
 
-pykrete uses a **feature-branch + Merge-Request** workflow with a strict commit format. All of this exists so the git history stays legible as the project grows and so an external contributor can land changes without needing direct access to `main`.
+pykrete uses a **feature-branch + pull-request** workflow with a strict commit format. All of this exists so the git history stays legible as the project grows and so an external contributor can land changes without needing direct access to `main`.
 
 ### Branch naming
 
