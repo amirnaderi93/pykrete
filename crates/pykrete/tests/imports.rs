@@ -143,9 +143,9 @@ fn importing_an_external_module_is_silent_in_pykrete() {
     // Iteration 40: imports whose target isn't a `.pyk` file in the
     // project are external Python imports — `from pyspark.sql.functions
     // import col`, `from datetime import datetime`, `from pykrete import
-    // Schema` (the Pylance companion stub), etc. pykrete doesn't try
-    // to validate them; that's the companion Python LSP's job. We just
-    // skip them so they don't flood the diagnostic stream.
+    // Schema`, etc. pykrete doesn't try to validate them; that's the
+    // embedded Python engine's job. We just skip them so they don't
+    // flood the diagnostic stream.
     let results = check_pairs(&[(
         "pipeline.pyk",
         r#"

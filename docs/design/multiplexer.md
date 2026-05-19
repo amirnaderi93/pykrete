@@ -44,7 +44,7 @@ almost as-is. The one transform: pykrete's magic names (`Schema`,
 every `.pyk` document, pykrete-lsp constructs a **virtual document**:
 
 ```
-<injected preamble: from pykrete import *  (+ the stub body inline)>
+<injected preamble: defines Schema, DataFrame, col + the column-type names>
 <original .pyk content, verbatim>
 ```
 

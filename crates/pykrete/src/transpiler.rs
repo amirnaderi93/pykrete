@@ -25,8 +25,8 @@
 //!
 //! User-declared `Schema` classes still need the `Schema` base name bound
 //! to *something* at runtime — users import it from a pykrete runtime
-//! package or define a no-op base themselves (see `examples/pykrete.py`).
-//! Shipping that runtime is out of scope for the transpiler.
+//! package or define a no-op base themselves. Shipping that runtime is
+//! out of scope for the transpiler.
 //!
 //! Stripping the schema-cast is the transpiler's one AST-aware step: it
 //! parses the source, locates every `.cast(DataFrame[…])` call, and
