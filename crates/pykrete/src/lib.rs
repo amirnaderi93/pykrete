@@ -488,7 +488,9 @@ impl<'a> ProjectContext<'a> {
                     .local_classes
                     .iter()
                     .filter(|class| {
-                        !visible_schemas.iter().any(|s| std::ptr::eq(s.class, *class))
+                        !visible_schemas
+                            .iter()
+                            .any(|s| std::ptr::eq(s.class, *class))
                             && class
                                 .base_names()
                                 .iter()
@@ -641,10 +643,10 @@ pub fn definition_in_project(
 /// first input file, falling back to the longest common ancestor of the
 /// inputs and then to the current dir.
 fn resolve_project_root(files: &[(String, String)]) -> PathBuf {
-    if let Some((first, _)) = files.first() {
-        if let Some(root) = find_pyproject_root(&PathBuf::from(first)) {
-            return root;
-        }
+    if let Some((first, _)) = files.first()
+        && let Some(root) = find_pyproject_root(&PathBuf::from(first))
+    {
+        return root;
     }
     longest_common_ancestor(files.iter().map(|(p, _)| p)).unwrap_or_else(|| PathBuf::from("."))
 }
@@ -737,9 +739,10 @@ fn declared_return_schema<'a>(
     for slot in slots {
         if matches!(slot.label, SlotLabel::Return) {
             return match slot.kind {
-                DataFrameAnnotation::Typed(name) => {
-                    schemas.iter().find(|s| s.name() == name).map(SchemaView::Declared)
-                }
+                DataFrameAnnotation::Typed(name) => schemas
+                    .iter()
+                    .find(|s| s.name() == name)
+                    .map(SchemaView::Declared),
                 DataFrameAnnotation::Derived(expr) => resolve_derived_schema(expr, schemas),
                 _ => None,
             };

@@ -45,7 +45,11 @@ def f(d: DataFrame[Premium]) -> DataFrame:
     assert!(
         results[1].diagnostics.is_empty(),
         "expected pipeline.pyk clean, got {:?}",
-        results[1].diagnostics.iter().map(|d| &d.code).collect::<Vec<_>>(),
+        results[1]
+            .diagnostics
+            .iter()
+            .map(|d| &d.code)
+            .collect::<Vec<_>>(),
     );
 }
 
@@ -115,7 +119,11 @@ def f(d: DataFrame[Top]) -> DataFrame:
     assert!(
         results[1].diagnostics.is_empty(),
         "expected pipeline.pyk clean, got {:?}",
-        results[1].diagnostics.iter().map(|d| &d.code).collect::<Vec<_>>(),
+        results[1]
+            .diagnostics
+            .iter()
+            .map(|d| &d.code)
+            .collect::<Vec<_>>(),
     );
 }
 
@@ -139,6 +147,10 @@ def f(d: DataFrame[Premium]) -> DataFrame:
     assert!(
         results[1].diagnostics.is_empty(),
         "expected pipeline.pyk clean, got {:?}",
-        results[1].diagnostics.iter().map(|d| &d.code).collect::<Vec<_>>(),
+        results[1]
+            .diagnostics
+            .iter()
+            .map(|d| &d.code)
+            .collect::<Vec<_>>(),
     );
 }

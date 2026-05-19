@@ -57,10 +57,10 @@ def prepare_orders(dal: DataAccessLayer) -> DataFrame[Orders]:
 
 
 def bug_demo(dal: DataAccessLayer) -> DataFrame[Orders]:
-    # Typo `Acommodation` (single 'c'). Caught against RawOrders via the
+    # Typo `ProductCdoe` (single 'c'). Caught against RawOrders via the
     # inferred-from-generic chain — pykrete points right at the typo
     # because it knows the receiver's schema all the way through.
     return (
         dal.read(RAW_ORDERS)
-        .select(col("Acommodation").alias("place_code"))
+        .select(col("ProductCdoe").alias("place_code"))
     )

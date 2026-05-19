@@ -30,7 +30,9 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
-use ruff_python_ast::{CmpOp, Expr, ExprAttribute, ExprCall, Number, Operator, Stmt, StmtFunctionDef};
+use ruff_python_ast::{
+    CmpOp, Expr, ExprAttribute, ExprCall, Number, Operator, Stmt, StmtFunctionDef,
+};
 use ruff_source_file::LineIndex;
 use ruff_text_size::{Ranged, TextRange};
 
@@ -335,10 +337,10 @@ impl<'a> BodyContext<'a> {
         if let Some(view) = self.df_bindings.get(name).cloned() {
             return Some(view);
         }
-        if let Some(constant) = self.registry.find_constant(name) {
-            if let Some(schema) = self.find_schema(constant.schema_name) {
-                return Some(SchemaView::Declared(schema));
-            }
+        if let Some(constant) = self.registry.find_constant(name)
+            && let Some(schema) = self.find_schema(constant.schema_name)
+        {
+            return Some(SchemaView::Declared(schema));
         }
         None
     }
@@ -425,8 +427,7 @@ pub fn check_function_body<'a>(
                 if inferred_return.is_none() {
                     inferred_return = actual.clone();
                 }
-                if let (Some(declared), Some(actual)) =
-                    (declared_return.as_ref(), actual.as_ref())
+                if let (Some(declared), Some(actual)) = (declared_return.as_ref(), actual.as_ref())
                 {
                     check_return_type(
                         declared,
@@ -633,7 +634,10 @@ fn check_return_type<'a>(
     // incompatible types, is a real schema-contract mismatch regardless
     // of any missing/extra columns. Both types must be known: an unknown
     // (`None`) type is permissive and never flagged.
-    let mut shared: Vec<&str> = declared_names.intersection(&actual_names).copied().collect();
+    let mut shared: Vec<&str> = declared_names
+        .intersection(&actual_names)
+        .copied()
+        .collect();
     shared.sort();
     for name in shared {
         if let (Some(declared_ty), Some(actual_ty)) = (
@@ -728,15 +732,13 @@ fn analyze_expr<'a>(
             // `@dataclass(frozen=True) class DataSources:` body, so this
             // shape resolves to the same `SchemaView::Declared` a
             // module-level `RAW_ORDERS: DataSource[X] = ...` would.
-            if let Some(class) = a.value.as_name_expr() {
-                if let Some(constant) = ctx
+            if let Some(class) = a.value.as_name_expr()
+                && let Some(constant) = ctx
                     .registry()
                     .find_class_constant(class.id.as_str(), a.attr.id.as_str())
-                {
-                    if let Some(schema) = ctx.find_schema(constant.schema_name) {
-                        return Some(SchemaView::Declared(schema));
-                    }
-                }
+                && let Some(schema) = ctx.find_schema(constant.schema_name)
+            {
+                return Some(SchemaView::Declared(schema));
             }
             // Otherwise this is a column access (`<chain>.colname`) — not
             // a DataFrame itself, but analyze the receiver so a call in
@@ -765,34 +767,33 @@ fn analyze_method_call<'a>(
     // that's the whole reason the cast is there. The `DataFrame[…]`
     // argument shape is what distinguishes this from `Column.cast("int")`
     // (whose argument is a type string, and whose receiver is a `Column`).
-    if method == "cast" {
-        if let Some(arg) = call.arguments.args.first() {
-            if let Some(DataFrameAnnotation::Typed(name)) = dataframe::recognize(arg) {
-                // Analyze the receiver for its own diagnostics; its schema
-                // is discarded — the cast overrides whatever it was.
-                let _ = analyze_expr(&attr.value, ctx, source, line_index, diagnostics);
-                return match ctx.find_schema(name) {
-                    Some(schema) => Some(SchemaView::Declared(schema)),
-                    None => {
-                        diagnostics.push(Diagnostic::at_range(
-                            Severity::Error,
-                            "D0020",
-                            format!(
-                                "Unknown schema '{name}' in .cast(DataFrame[…]). \
+    if method == "cast"
+        && let Some(arg) = call.arguments.args.first()
+        && let Some(DataFrameAnnotation::Typed(name)) = dataframe::recognize(arg)
+    {
+        // Analyze the receiver for its own diagnostics; its schema
+        // is discarded — the cast overrides whatever it was.
+        let _ = analyze_expr(&attr.value, ctx, source, line_index, diagnostics);
+        return match ctx.find_schema(name) {
+            Some(schema) => Some(SchemaView::Declared(schema)),
+            None => {
+                diagnostics.push(Diagnostic::at_range(
+                    Severity::Error,
+                    "D0020",
+                    format!(
+                        "Unknown schema '{name}' in .cast(DataFrame[…]). \
                                  Declare it as a class extending Schema.",
-                            ),
-                            arg.range(),
-                            source,
-                            line_index,
-                        ));
-                        None
-                    }
-                };
+                    ),
+                    arg.range(),
+                    source,
+                    line_index,
+                ));
+                None
             }
-        }
-        // Not a `DataFrame[Schema]` argument — ordinary `Column.cast`, or
-        // a form pykrete doesn't model. Fall through to the default path.
+        };
     }
+    // Not a `DataFrame[Schema]` argument — ordinary `Column.cast`, or
+    // a form pykrete doesn't model. Fall through to the default path.
     // `df.transform(fn)` — Spark's chaining sugar; equivalent to `fn(df)`.
     // The result schema is `fn`'s declared return; the receiver is checked
     // against `fn`'s parameter. Reachable on an unknown receiver too (the
@@ -805,20 +806,19 @@ fn analyze_method_call<'a>(
     // schema of `df` unchanged. Intercepted here, against the `.na`
     // receiver shape, so `df.na.drop("all")` isn't mistaken for
     // `df.drop("col")` (the `"all"` would be a bogus column reference).
-    if matches!(method, "fill" | "drop" | "replace") {
-        if let Some(inner) = attr.value.as_attribute_expr() {
-            if inner.attr.id.as_str() == "na" {
-                let recv = analyze_expr(&inner.value, ctx, source, line_index, diagnostics)?;
-                check_subset_kwarg(call, &recv, ctx, source, line_index, diagnostics);
-                // `na.fill` / `na.drop` clear nulls from the affected
-                // columns; `na.replace` doesn't.
-                return Some(if matches!(method, "fill" | "drop") {
-                    strip_nullability(&recv, ctx.schemas())
-                } else {
-                    recv
-                });
-            }
-        }
+    if matches!(method, "fill" | "drop" | "replace")
+        && let Some(inner) = attr.value.as_attribute_expr()
+        && inner.attr.id.as_str() == "na"
+    {
+        let recv = analyze_expr(&inner.value, ctx, source, line_index, diagnostics)?;
+        check_subset_kwarg(call, &recv, ctx, source, line_index, diagnostics);
+        // `na.fill` / `na.drop` clear nulls from the affected
+        // columns; `na.replace` doesn't.
+        return Some(if matches!(method, "fill" | "drop") {
+            strip_nullability(&recv, ctx.schemas())
+        } else {
+            recv
+        });
     }
 
     // `spark.sql("SELECT … FROM …")` — infer the result schema from the
@@ -833,10 +833,9 @@ fn analyze_method_call<'a>(
             .args
             .first()
             .and_then(|a| a.as_string_literal_expr())
+            && let Some(cols) = crate::sql::select_projection_columns(lit.value.to_str())
         {
-            if let Some(cols) = crate::sql::select_projection_columns(lit.value.to_str()) {
-                return Some(SchemaView::derived_untyped(cols));
-            }
+            return Some(SchemaView::derived_untyped(cols));
         }
         return None;
     }
@@ -934,51 +933,58 @@ fn analyze_method_call<'a>(
         // column per distinct value of `col`, so the result schema is
         // genuinely data-dependent. The user re-anchors the chain with
         // `.cast(DataFrame[…])`.
-        if let SchemaView::Grouped { underlying, .. } = &receiver {
-            if let Some(lit) = call
+        if let SchemaView::Grouped { underlying, .. } = &receiver
+            && let Some(lit) = call
                 .arguments
                 .args
                 .first()
                 .and_then(|a| a.as_string_literal_expr())
+        {
+            let name = lit.value.to_str();
+            if let FieldPathResult::Missing { field, on } =
+                resolve_path(underlying.as_ref(), name, ctx.schemas())
             {
-                let name = lit.value.to_str();
-                if let FieldPathResult::Missing { field, on } =
-                    resolve_path(underlying.as_ref(), name, ctx.schemas())
-                {
-                    let suggestion = on.as_ref().and_then(|v| suggest_field_name(field, v));
-                    let on_phrase = on.as_ref().map_or_else(
-                        || "the nested struct".to_string(),
-                        SchemaView::display_name,
-                    );
-                    let mut message =
-                        format!("Column '{field}' does not exist on {on_phrase}.");
-                    if let Some(s) = &suggestion {
-                        message.push_str(&format!(" Did you mean '{s}'?"));
-                    }
-                    diagnostics.push(
-                        Diagnostic::at_range(
-                            Severity::Error,
-                            "D0030",
-                            message,
-                            lit.range(),
-                            source,
-                            line_index,
-                        )
-                        .with_suggestion(suggestion),
-                    );
+                let suggestion = on.as_ref().and_then(|v| suggest_field_name(field, v));
+                let on_phrase = on
+                    .as_ref()
+                    .map_or_else(|| "the nested struct".to_string(), SchemaView::display_name);
+                let mut message = format!("Column '{field}' does not exist on {on_phrase}.");
+                if let Some(s) = &suggestion {
+                    message.push_str(&format!(" Did you mean '{s}'?"));
                 }
+                diagnostics.push(
+                    Diagnostic::at_range(
+                        Severity::Error,
+                        "D0030",
+                        message,
+                        lit.range(),
+                        source,
+                        line_index,
+                    )
+                    .with_suggestion(suggestion),
+                );
             }
         }
         return None;
     }
     if method == "withColumns" {
         return Some(apply_with_columns(
-            call, &receiver, ctx, source, line_index, diagnostics,
+            call,
+            &receiver,
+            ctx,
+            source,
+            line_index,
+            diagnostics,
         ));
     }
     if method == "withColumnsRenamed" {
         return Some(apply_with_columns_renamed(
-            call, &receiver, ctx, source, line_index, diagnostics,
+            call,
+            &receiver,
+            ctx,
+            source,
+            line_index,
+            diagnostics,
         ));
     }
     if let Some(shape) = column_method_shape(method) {
@@ -1108,10 +1114,10 @@ fn handle_class_method_call<'a>(
         let Some(pann) = mp.annotation else {
             continue;
         };
-        if let Some(tv) = extract_type_var_from_subscript(pann, &method.type_params) {
-            if let Some(schema) = arg_schema(arg, ctx, source, line_index, diagnostics) {
-                subst.insert(tv, schema);
-            }
+        if let Some(tv) = extract_type_var_from_subscript(pann, &method.type_params)
+            && let Some(schema) = arg_schema(arg, ctx, source, line_index, diagnostics)
+        {
+            subst.insert(tv, schema);
         }
     }
 
@@ -1181,31 +1187,28 @@ fn handle_transform<'a>(
     let sig = ctx.registry().find_function(func_name)?;
 
     // Input-compatibility check: receiver schema vs. fn's first parameter.
-    if let (Some(recv), Some(first_param)) = (&receiver, sig.params.first()) {
-        if let Some(DataFrameAnnotation::Typed(pname)) =
+    if let (Some(recv), Some(first_param)) = (&receiver, sig.params.first())
+        && let Some(DataFrameAnnotation::Typed(pname)) =
             first_param.annotation.and_then(dataframe::recognize)
-        {
-            if let Some(param_schema) = ctx.find_schema(pname) {
-                check_transform_input(
-                    recv,
-                    param_schema,
-                    func_name,
-                    attr.value.range(),
-                    source,
-                    line_index,
-                    diagnostics,
-                );
-            }
-        }
+        && let Some(param_schema) = ctx.find_schema(pname)
+    {
+        check_transform_input(
+            recv,
+            param_schema,
+            func_name,
+            attr.value.range(),
+            source,
+            line_index,
+            diagnostics,
+        );
     }
 
     // Result schema — fn's declared `-> DataFrame[Schema]` if it has one…
     if let Some(DataFrameAnnotation::Typed(rname)) =
         sig.return_annotation.and_then(dataframe::recognize)
+        && let Some(schema) = ctx.find_schema(rname)
     {
-        if let Some(schema) = ctx.find_schema(rname) {
-            return Some(SchemaView::Declared(schema));
-        }
+        return Some(SchemaView::Declared(schema));
     }
     // …otherwise infer it by analyzing fn's body with the receiver bound
     // to fn's parameter. Needs a known receiver to feed in.
@@ -1318,14 +1321,21 @@ fn handle_agg<'a>(
     for arg in &call.arguments.args {
         collect_col_refs(arg, ctx, &mut refs);
         report_expr_sql_refs(arg, &underlying, source, line_index, diagnostics);
-        report_expr_type_errors(arg, &underlying, ctx.type_ctx(), source, line_index, diagnostics);
-        if let Some(name) = select_output_name(arg) {
-            if !fields.iter().any(|f| f.name == name) {
-                fields.push(DerivedField {
-                    name,
-                    ty: select_arg_type(arg, &underlying, ctx.type_ctx()),
-                });
-            }
+        report_expr_type_errors(
+            arg,
+            &underlying,
+            ctx.type_ctx(),
+            source,
+            line_index,
+            diagnostics,
+        );
+        if let Some(name) = select_output_name(arg)
+            && !fields.iter().any(|f| f.name == name)
+        {
+            fields.push(DerivedField {
+                name,
+                ty: select_arg_type(arg, &underlying, ctx.type_ctx()),
+            });
         }
     }
     report_column_refs(&refs, &underlying, ctx, source, line_index, diagnostics);
@@ -1390,7 +1400,14 @@ fn apply_with_columns<'a>(
         }
         collect_col_refs(&item.value, ctx, &mut refs);
         report_expr_sql_refs(&item.value, recv, source, line_index, diagnostics);
-        report_expr_type_errors(&item.value, recv, ctx.type_ctx(), source, line_index, diagnostics);
+        report_expr_type_errors(
+            &item.value,
+            recv,
+            ctx.type_ctx(),
+            source,
+            line_index,
+            diagnostics,
+        );
     }
     report_column_refs(&refs, recv, ctx, source, line_index, diagnostics);
     SchemaView::Derived(fields)
@@ -1632,11 +1649,7 @@ fn infer_expr_type<'a>(
 /// string literal is a column *name* there (not a string value), so it
 /// is resolved against the receiver before falling back to
 /// [`infer_expr_type`].
-fn select_arg_type<'a>(
-    arg: &Expr,
-    recv: &SchemaView<'a>,
-    tcx: TypeCtx<'a>,
-) -> Option<ColumnType> {
+fn select_arg_type<'a>(arg: &Expr, recv: &SchemaView<'a>, tcx: TypeCtx<'a>) -> Option<ColumnType> {
     if let Some(s) = arg.as_string_literal_expr() {
         return recv.field_type(s.value.to_str(), tcx.schemas);
     }
@@ -1652,19 +1665,23 @@ fn function_result_type(name: &str, first_arg: Option<ColumnType>) -> Option<Col
     use ColumnType::{Array, Bool, Date, Double, Int, Long, Map, String, Timestamp};
     // Functions with a fixed result type, regardless of input.
     match name {
-        "count" | "countDistinct" | "count_distinct" | "approx_count_distinct"
-        | "unix_timestamp" | "monotonically_increasing_id" | "factorial" => return Some(Long),
+        "count"
+        | "countDistinct"
+        | "count_distinct"
+        | "approx_count_distinct"
+        | "unix_timestamp"
+        | "monotonically_increasing_id"
+        | "factorial" => return Some(Long),
         "avg" | "mean" | "stddev" | "stddev_pop" | "stddev_samp" | "variance" | "var_pop"
         | "var_samp" | "skewness" | "kurtosis" | "corr" | "covar_pop" | "covar_samp"
         | "percent_rank" | "cume_dist" | "rand" | "randn" | "sqrt" | "exp" | "expm1" | "ln"
-        | "log" | "log2" | "log10" | "log1p" | "sin" | "cos" | "tan" | "asin" | "acos"
-        | "atan" | "atan2" | "sinh" | "cosh" | "tanh" | "degrees" | "radians" | "cbrt"
-        | "pow" | "power" | "hypot" | "signum" | "months_between" => return Some(Double),
+        | "log" | "log2" | "log10" | "log1p" | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
+        | "atan2" | "sinh" | "cosh" | "tanh" | "degrees" | "radians" | "cbrt" | "pow" | "power"
+        | "hypot" | "signum" | "months_between" => return Some(Double),
         "length" | "char_length" | "character_length" | "ascii" | "instr" | "locate"
-        | "levenshtein" | "year" | "month" | "dayofmonth" | "day" | "dayofweek"
-        | "dayofyear" | "hour" | "minute" | "second" | "weekofyear" | "quarter"
-        | "datediff" | "row_number" | "rank" | "dense_rank" | "ntile"
-        | "spark_partition_id" | "size" => return Some(Int),
+        | "levenshtein" | "year" | "month" | "dayofmonth" | "day" | "dayofweek" | "dayofyear"
+        | "hour" | "minute" | "second" | "weekofyear" | "quarter" | "datediff" | "row_number"
+        | "rank" | "dense_rank" | "ntile" | "spark_partition_id" | "size" => return Some(Int),
         "lower" | "upper" | "initcap" | "trim" | "ltrim" | "rtrim" | "reverse" | "concat_ws"
         | "substring" | "substring_index" | "regexp_replace" | "regexp_extract" | "lpad"
         | "rpad" | "translate" | "repeat" | "soundex" | "base64" | "format_string"
@@ -1688,9 +1705,8 @@ fn function_result_type(name: &str, first_arg: Option<ColumnType>) -> Option<Col
         // Null-coalescing — the result is non-null when *any* argument
         // is. Conservatively drop nullability (this only under-reports).
         "coalesce" | "nvl" | "ifnull" => first_arg.map(|t| t.base().clone()),
-        "min" | "max" | "first" | "last" | "first_value" | "last_value" | "greatest"
-        | "least" | "nanvl" | "abs" | "round" | "bround"
-        | "negative" | "positive" => first_arg,
+        "min" | "max" | "first" | "last" | "first_value" | "last_value" | "greatest" | "least"
+        | "nanvl" | "abs" | "round" | "bround" | "negative" | "positive" => first_arg,
         "ceil" | "ceiling" | "floor" => Some(Long),
         // `sum` widens an integral input to long; a double stays double.
         "sum" | "sumDistinct" | "sum_distinct" => match first_arg {
@@ -1879,28 +1895,27 @@ fn report_expr_type_errors<'a>(
         Expr::Compare(c) => {
             let mut left = c.left.as_ref();
             for (op, right) in c.ops.iter().zip(&c.comparators) {
-                if is_value_comparison(*op) {
-                    if let (Some(lt), Some(rt)) = (
+                if is_value_comparison(*op)
+                    && let (Some(lt), Some(rt)) = (
                         infer_expr_type(left, schema, tcx),
                         infer_expr_type(right, schema, tcx),
-                    ) {
-                        if !comparable(&lt, &rt) {
-                            diagnostics.push(
-                                Diagnostic::at_range(
-                                    Severity::Warning,
-                                    "D0082",
-                                    format!(
-                                        "Comparison between unrelated types {lt} and {rt}. \
+                    )
+                    && !comparable(&lt, &rt)
+                {
+                    diagnostics.push(
+                        Diagnostic::at_range(
+                            Severity::Warning,
+                            "D0082",
+                            format!(
+                                "Comparison between unrelated types {lt} and {rt}. \
                                          Spark coerces them; cast explicitly if intended.",
-                                    ),
-                                    c.range(),
-                                    source,
-                                    line_index,
-                                )
-                                .with_min_mode(CheckMode::Strict),
-                            );
-                        }
-                    }
+                            ),
+                            c.range(),
+                            source,
+                            line_index,
+                        )
+                        .with_min_mode(CheckMode::Strict),
+                    );
                 }
                 left = right;
             }
@@ -1932,14 +1947,7 @@ fn report_expr_type_errors<'a>(
         Expr::If(if_exp) => {
             report_expr_type_errors(&if_exp.test, schema, tcx, source, line_index, diagnostics);
             report_expr_type_errors(&if_exp.body, schema, tcx, source, line_index, diagnostics);
-            report_expr_type_errors(
-                &if_exp.orelse,
-                schema,
-                tcx,
-                source,
-                line_index,
-                diagnostics,
-            );
+            report_expr_type_errors(&if_exp.orelse, schema, tcx, source, line_index, diagnostics);
         }
         Expr::Tuple(t) => {
             for e in &t.elts {
@@ -2026,10 +2034,7 @@ fn apply_column_method<'a>(
             if let Some(existing) = fields.iter_mut().find(|f| f.name == new_name) {
                 existing.ty = ty;
             } else {
-                fields.push(DerivedField {
-                    name: new_name,
-                    ty,
-                });
+                fields.push(DerivedField { name: new_name, ty });
             }
             Some(SchemaView::Derived(fields))
         }
@@ -2207,22 +2212,21 @@ fn report_expr_sql_refs(
             Expr::Attribute(a) => Some(a.attr.id.as_str()),
             _ => None,
         };
-        if func_name == Some("expr") {
-            if let Some(lit) = call
+        if func_name == Some("expr")
+            && let Some(lit) = call
                 .arguments
                 .args
                 .first()
                 .and_then(|a| a.as_string_literal_expr())
-            {
-                report_sql_column_refs(
-                    lit.value.to_str(),
-                    lit.range(),
-                    schema,
-                    source,
-                    line_index,
-                    diagnostics,
-                );
-            }
+        {
+            report_sql_column_refs(
+                lit.value.to_str(),
+                lit.range(),
+                schema,
+                source,
+                line_index,
+                diagnostics,
+            );
         }
     }
     match expr {
@@ -2282,20 +2286,17 @@ fn report_expr_sql_refs(
     }
 }
 
-fn select_output_name<'a>(arg: &'a Expr) -> Option<&'a str> {
-    if let Some(call) = arg.as_call_expr() {
-        if let Some(attr) = call.func.as_attribute_expr() {
-            if attr.attr.id.as_str() == "alias" {
-                if let Some(lit) = call
-                    .arguments
-                    .args
-                    .first()
-                    .and_then(|a| a.as_string_literal_expr())
-                {
-                    return Some(lit.value.to_str());
-                }
-            }
-        }
+fn select_output_name(arg: &Expr) -> Option<&str> {
+    if let Some(call) = arg.as_call_expr()
+        && let Some(attr) = call.func.as_attribute_expr()
+        && attr.attr.id.as_str() == "alias"
+        && let Some(lit) = call
+            .arguments
+            .args
+            .first()
+            .and_then(|a| a.as_string_literal_expr())
+    {
+        return Some(lit.value.to_str());
     }
     if let Some(s) = arg.as_string_literal_expr() {
         return Some(s.value.to_str());
@@ -2304,10 +2305,10 @@ fn select_output_name<'a>(arg: &'a Expr) -> Option<&'a str> {
         return Some(name);
     }
     if let Some(call) = arg.as_call_expr() {
-        if let Some(attr) = call.func.as_attribute_expr() {
-            if attr.attr.id.as_str() == "cast" {
-                return select_output_name(&attr.value);
-            }
+        if let Some(attr) = call.func.as_attribute_expr()
+            && attr.attr.id.as_str() == "cast"
+        {
+            return select_output_name(&attr.value);
         }
         // `F.explode("arr")` / `explode_outer(...)` — Spark names the
         // unnested column `col` when no `.alias(...)` is given.
@@ -2323,7 +2324,7 @@ fn select_output_name<'a>(arg: &'a Expr) -> Option<&'a str> {
     None
 }
 
-fn column_name_arg<'a>(arg: &'a Expr) -> Option<&'a str> {
+fn column_name_arg(arg: &Expr) -> Option<&str> {
     if let Some(s) = arg.as_string_literal_expr() {
         return Some(s.value.to_str());
     }
@@ -2337,10 +2338,10 @@ fn column_name_arg<'a>(arg: &'a Expr) -> Option<&'a str> {
     // from is irrelevant to the resulting column. Restricted to a bare
     // `Name` base so a called `F.func(...)` or a chained `a.b.c` can't be
     // mistaken for a column reference.
-    if let Some(attr) = arg.as_attribute_expr() {
-        if attr.value.is_name_expr() {
-            return Some(attr.attr.id.as_str());
-        }
+    if let Some(attr) = arg.as_attribute_expr()
+        && attr.value.is_name_expr()
+    {
+        return Some(attr.attr.id.as_str());
     }
     None
 }
@@ -2477,12 +2478,12 @@ fn check_union_schemas(
 
 /// The on= argument of a join call, looked up either as `on=…` keyword or as
 /// the second positional argument.
-fn extract_on_arg<'a>(call: &'a ExprCall) -> Option<&'a Expr> {
+fn extract_on_arg(call: &ExprCall) -> Option<&Expr> {
     for kw in &call.arguments.keywords {
-        if let Some(name) = kw.arg.as_ref() {
-            if name.id.as_str() == "on" {
-                return Some(&kw.value);
-            }
+        if let Some(name) = kw.arg.as_ref()
+            && name.id.as_str() == "on"
+        {
+            return Some(&kw.value);
         }
     }
     call.arguments.args.get(1)
@@ -2646,13 +2647,11 @@ fn apply_join<'a>(
 /// known. A no-op when `nullable` is false or the type is unknown, and
 /// idempotent — an already-nullable type isn't double-wrapped.
 fn with_nullability(mut f: DerivedField<'_>, nullable: bool) -> DerivedField<'_> {
-    if nullable {
-        if let Some(ty) = f.ty {
-            f.ty = Some(match ty {
-                ColumnType::Nullable(_) => ty,
-                other => ColumnType::Nullable(Box::new(other)),
-            });
-        }
+    if nullable && let Some(ty) = f.ty {
+        f.ty = Some(match ty {
+            ColumnType::Nullable(_) => ty,
+            other => ColumnType::Nullable(Box::new(other)),
+        });
     }
     f
 }
@@ -2914,13 +2913,12 @@ fn collect_col_refs<'a>(
     // Importantly, this filters out things like `F.add_months(...)` —
     // `F` is not in `ctx`, so the attribute is left for the default walker
     // to descend into, and `add_months` is not collected.
-    if let Some(attr) = expr.as_attribute_expr() {
-        if let Some(name) = attr.value.as_name_expr() {
-            if ctx.lookup(name.id.as_str()).is_some() {
-                out.push((attr.attr.id.as_str(), attr.attr.range));
-                return;
-            }
-        }
+    if let Some(attr) = expr.as_attribute_expr()
+        && let Some(name) = attr.value.as_name_expr()
+        && ctx.lookup(name.id.as_str()).is_some()
+    {
+        out.push((attr.attr.id.as_str(), attr.attr.range));
+        return;
     }
     // Recognize `F.sum("x")` and similar — for the listed function names,
     // every string-literal positional arg is a column reference. Non-string
@@ -2931,25 +2929,25 @@ fn collect_col_refs<'a>(
             Expr::Attribute(a) => Some(a.attr.id.as_str()),
             _ => None,
         };
-        if let Some(name) = func_name {
-            if COLUMN_REF_FUNCTIONS.contains(&name) {
-                for arg in &call.arguments.args {
-                    if let Some(s) = arg.as_string_literal_expr() {
-                        out.push((s.value.to_str(), s.range()));
-                    } else {
-                        collect_col_refs(arg, ctx, out);
-                    }
+        if let Some(name) = func_name
+            && COLUMN_REF_FUNCTIONS.contains(&name)
+        {
+            for arg in &call.arguments.args {
+                if let Some(s) = arg.as_string_literal_expr() {
+                    out.push((s.value.to_str(), s.range()));
+                } else {
+                    collect_col_refs(arg, ctx, out);
                 }
-                for kw in &call.arguments.keywords {
-                    collect_col_refs(&kw.value, ctx, out);
-                }
-                // Descend into the callee too, so an *earlier* link in a
-                // builder chain is still reached — e.g. the `partitionBy`
-                // in `Window.partitionBy("city").orderBy("amount")`, which
-                // lives in this call's `func`, not its arguments.
-                collect_col_refs(&call.func, ctx, out);
-                return;
             }
+            for kw in &call.arguments.keywords {
+                collect_col_refs(&kw.value, ctx, out);
+            }
+            // Descend into the callee too, so an *earlier* link in a
+            // builder chain is still reached — e.g. the `partitionBy`
+            // in `Window.partitionBy("city").orderBy("amount")`, which
+            // lives in this call's `func`, not its arguments.
+            collect_col_refs(&call.func, ctx, out);
+            return;
         }
     }
     match expr {

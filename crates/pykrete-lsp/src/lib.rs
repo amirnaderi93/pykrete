@@ -863,7 +863,9 @@ fn publish_project_diagnostics(
         // Route pykrete's diagnostics through the merge store so they're
         // published alongside whatever the embedded Python engine last
         // reported for the same file.
-        let merged = multiplexer.diagnostics.set_pykrete(uri.clone(), diagnostics);
+        let merged = multiplexer
+            .diagnostics
+            .set_pykrete(uri.clone(), diagnostics);
         send_diagnostics(connection, uri, merged)?;
     }
     Ok(())
@@ -881,7 +883,9 @@ fn publish_single_file_diagnostics(
     let path = uri_to_path(uri);
     let result = pykrete::check_with_mode(&path, text, multiplexer.type_checking_mode);
     let diagnostics: Vec<Diagnostic> = result.diagnostics.iter().map(to_lsp_diagnostic).collect();
-    let merged = multiplexer.diagnostics.set_pykrete(uri.clone(), diagnostics);
+    let merged = multiplexer
+        .diagnostics
+        .set_pykrete(uri.clone(), diagnostics);
     send_diagnostics(connection, uri, merged)
 }
 
@@ -1008,6 +1012,7 @@ pub fn handle_code_action(params: CodeActionParams) -> CodeActionResponse {
 }
 
 #[cfg(test)]
+#[allow(non_snake_case)] // Test names embed PySpark/pykrete type names (DataFrame, …).
 mod tests {
     use super::*;
     use pykrete::diagnostics::{Diagnostic as PykreteDiagnostic, Severity};

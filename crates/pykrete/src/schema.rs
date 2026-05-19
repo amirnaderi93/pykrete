@@ -406,19 +406,21 @@ impl<'a> SchemaView<'a> {
             Self::Declared(s) => {
                 if let Some((head, rest)) = name.split_once('.') {
                     // Walk into the nested struct named by `head`.
-                    let nested = s.fields().iter().find(|f| f.name == head).and_then(|f| {
-                        match f.resolve(schemas) {
-                            FieldResolution::ResolvedNested(n) => Some(n),
-                            _ => None,
-                        }
-                    })?;
+                    let nested =
+                        s.fields().iter().find(|f| f.name == head).and_then(|f| {
+                            match f.resolve(schemas) {
+                                FieldResolution::ResolvedNested(n) => Some(n),
+                                _ => None,
+                            }
+                        })?;
                     return Self::Declared(nested).field_type(rest, schemas);
                 }
                 s.field_type(name, schemas)
             }
-            Self::Derived(fields) => {
-                fields.iter().find(|f| f.name == name).and_then(|f| f.ty.clone())
-            }
+            Self::Derived(fields) => fields
+                .iter()
+                .find(|f| f.name == name)
+                .and_then(|f| f.ty.clone()),
             Self::Grouped { underlying, .. } => underlying.field_type(name, schemas),
         }
     }
@@ -498,14 +500,14 @@ pub fn resolve_path<'a>(
         // Prefer descending as a bare-name nested `Schema` — that keeps a
         // named schema to point at in any later diagnostic.
         let nested = match &current {
-            SchemaView::Declared(s) => s
-                .fields()
-                .iter()
-                .find(|f| f.name == segment)
-                .and_then(|f| match f.resolve(schemas) {
-                    FieldResolution::ResolvedNested(nested) => Some(nested),
-                    _ => None,
-                }),
+            SchemaView::Declared(s) => {
+                s.fields().iter().find(|f| f.name == segment).and_then(|f| {
+                    match f.resolve(schemas) {
+                        FieldResolution::ResolvedNested(nested) => Some(nested),
+                        _ => None,
+                    }
+                })
+            }
             _ => None,
         };
         if let Some(nested) = nested {
@@ -664,7 +666,9 @@ pub fn resolve_derived_schema<'a>(
                     .filter_map(|c| all.iter().find(|f| f.name == *c).cloned())
                     .collect()
             } else {
-                all.into_iter().filter(|f| !cols.contains(&f.name)).collect()
+                all.into_iter()
+                    .filter(|f| !cols.contains(&f.name))
+                    .collect()
             };
             Some(SchemaView::Derived(fields))
         }

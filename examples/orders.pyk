@@ -1,0 +1,50 @@
+# Synthetic demo input for pykrete's v0.1 acceptance checks.
+#
+# A small orders pipeline with three planted schema bugs that pykrete
+# catches statically — without running Spark:
+#
+#   1. an unknown column reference (a typo against the input schema),
+#   2. a unionByName between two differently-shaped dataframes,
+#   3. a function whose body produces a different schema than its
+#      return annotation declares.
+
+class RawOrders(Schema):
+    order_id: int
+    City: string
+    amount: double
+    quantity: int
+    status: string
+
+
+class Orders(Schema):
+    order_id: int
+    city: string
+    revenue: double
+
+
+class Shipments(Schema):
+    order_id: int
+    carrier: string
+    delivered: bool
+
+
+# Bug 1 — unknown column. `Citi` is a typo for `City`; pykrete checks
+# the reference against RawOrders and suggests the intended name.
+def clean_orders(raw: DataFrame[RawOrders]) -> DataFrame[Orders]:
+    return raw.select(
+        col("order_id"),
+        col("Citi").alias("city"),
+        (col("amount") * col("quantity")).alias("revenue"),
+    )
+
+
+# Bug 2 — unionByName schema mismatch. Orders and Shipments do not
+# share a schema, so the union cannot line their columns up.
+def all_records(orders: DataFrame[Orders], shipments: DataFrame[Shipments]) -> DataFrame[Orders]:
+    return orders.unionByName(shipments)
+
+
+# Bug 3 — return-type mismatch. Annotated to return DataFrame[Orders],
+# but the body only filters RawOrders and never projects to Orders.
+def confirmed_orders(raw: DataFrame[RawOrders]) -> DataFrame[Orders]:
+    return raw.filter(col("status") == "confirmed")

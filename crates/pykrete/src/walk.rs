@@ -21,7 +21,7 @@ impl<'ast> DiscoveredClass<'ast> {
     /// Subscripts (`Foo[T]`) and attribute access (`mod.Foo`) are not matched —
     /// we can broaden this later if/when import resolution lands.
     pub fn has_base(&self, name: &str) -> bool {
-        self.base_names().iter().any(|&n| n == name)
+        self.base_names().contains(&name)
     }
 
     /// The bare-name bases of this class, in declaration order. Subscript

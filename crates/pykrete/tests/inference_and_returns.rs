@@ -6,11 +6,11 @@
 //!
 //! Exercises diagnostics:
 //! - `D0030` — used here in cases where the receiver's schema is *inferred*
-//!             rather than directly declared.
+//!   rather than directly declared.
 //! - `D0040` — `unionByName` / `union` between two DataFrames with
-//!             different field-name sets.
+//!   different field-name sets.
 //! - `D0050` — function body's return value's schema doesn't match the
-//!             declared return type.
+//!   declared return type.
 
 mod common;
 use common::*;

@@ -16,7 +16,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        # Pinned so `cargo fmt --check` and `clippy -D warnings` stay
+        # reproducible — both drift across toolchain releases.
+        uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: rustfmt, clippy
       # Caches the cargo registry, the git-cloned ruff crates, and

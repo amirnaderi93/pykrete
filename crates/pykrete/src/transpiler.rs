@@ -100,10 +100,10 @@ struct SchemaCastFinder<'a> {
 
 impl<'a> SourceOrderVisitor<'a> for SchemaCastFinder<'a> {
     fn visit_expr(&mut self, expr: &'a Expr) {
-        if let Expr::Call(call) = expr {
-            if let Some(range) = schema_cast_strip_range(call, self.source) {
-                self.ranges.push(range);
-            }
+        if let Expr::Call(call) = expr
+            && let Some(range) = schema_cast_strip_range(call, self.source)
+        {
+            self.ranges.push(range);
         }
         // Keep walking — a schema-cast can appear inside another call's
         // receiver or arguments (`a.cast(DataFrame[A]).cast(DataFrame[B])`).

@@ -32,10 +32,10 @@ pub fn column_refs(fragment: &str) -> Vec<String> {
     };
     let mut names: Vec<String> = Vec::new();
     let _ = visit_expressions(&statements, |expr| {
-        if let Expr::Identifier(ident) = expr {
-            if !names.iter().any(|n| n == &ident.value) {
-                names.push(ident.value.clone());
-            }
+        if let Expr::Identifier(ident) = expr
+            && !names.iter().any(|n| n == &ident.value)
+        {
+            names.push(ident.value.clone());
         }
         ControlFlow::<()>::Continue(())
     });
@@ -115,7 +115,8 @@ fn find_top_level_keyword(s: &str, keyword: &str) -> Option<usize> {
                 && s.is_char_boundary(i)
                 && s[i..i + keyword.len()].eq_ignore_ascii_case(keyword)
                 && (i == 0 || !is_word_byte(bytes[i - 1]))
-                && (i + keyword.len() == bytes.len() || !is_word_byte(bytes[i + keyword.len()])) =>
+                && (i + keyword.len() == bytes.len()
+                    || !is_word_byte(bytes[i + keyword.len()])) =>
             {
                 return Some(i);
             }
@@ -168,7 +169,11 @@ fn projection_item_name(item: &str) -> Option<&str> {
             .then_some(alias);
     }
     let bare = item.trim_matches(['`', '"']);
-    if !bare.is_empty() && bare.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.') {
+    if !bare.is_empty()
+        && bare
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+    {
         return Some(bare.rsplit('.').next().unwrap_or(bare));
     }
     None
@@ -247,15 +252,15 @@ mod tests {
 
     #[test]
     fn projection_columns_handle_a_select_with_no_from() {
-        assert_eq!(
-            select_projection_columns("SELECT a AS x"),
-            Some(vec!["x"]),
-        );
+        assert_eq!(select_projection_columns("SELECT a AS x"), Some(vec!["x"]),);
     }
 
     #[test]
     fn projection_columns_bail_on_a_non_select() {
-        assert_eq!(select_projection_columns("WITH c AS (SELECT 1) SELECT * FROM c"), None);
+        assert_eq!(
+            select_projection_columns("WITH c AS (SELECT 1) SELECT * FROM c"),
+            None
+        );
         assert_eq!(select_projection_columns("not sql at all"), None);
     }
 }

@@ -1096,8 +1096,7 @@ mod tests {
 
     #[test]
     fn unresolved_relative_import_is_recognized_as_a_pykrete_import() {
-        let source =
-            "from pyspark.sql import functions as F\nfrom .schemas import RawEvents\n";
+        let source = "from pyspark.sql import functions as F\nfrom .schemas import RawEvents\n";
         // Line 1 is the relative import — the engine can't resolve the
         // sibling `.pyk`, so its complaint is pykrete's to own.
         let relative = missing_import_diag(1, "reportMissingImports");
@@ -1108,8 +1107,7 @@ mod tests {
     fn unresolved_absolute_import_is_kept() {
         // Line 0 is an absolute import — a genuinely missing package is
         // a real diagnostic and must reach the editor.
-        let source =
-            "from pyspark.sql import functions as F\nfrom .schemas import RawEvents\n";
+        let source = "from pyspark.sql import functions as F\nfrom .schemas import RawEvents\n";
         let absolute = missing_import_diag(0, "reportMissingImports");
         assert!(!is_unresolved_pykrete_import(&absolute, source));
     }

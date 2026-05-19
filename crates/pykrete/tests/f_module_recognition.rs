@@ -8,6 +8,8 @@
 //! so we don't introduce false positives on functions that take
 //! value-shaped strings (`lit`, `date_format`, `regexp_replace`, …).
 
+#![allow(non_snake_case)] // Test names embed PySpark `F.*` helper names.
+
 mod common;
 
 use common::check;

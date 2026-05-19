@@ -110,8 +110,7 @@ pub(crate) fn hover_with_scope<'a>(
     if let Some(info) = hover_on_column_ref(offset, &traces.column_refs, schemas) {
         return Some(info);
     }
-    if let Some(info) =
-        hover_on_local_binding(offset, &traces.local_bindings, &functions, schemas)
+    if let Some(info) = hover_on_local_binding(offset, &traces.local_bindings, &functions, schemas)
     {
         return Some(info);
     }
@@ -164,10 +163,10 @@ fn hover_on_schema_reference_in_function_signature(
 ) -> Option<HoverInfo> {
     for func in functions {
         for slot in typed_slots(func) {
-            if let Some(name) = name_inside_subscript_slice(slot.annotation, offset) {
-                if let Some(schema) = schemas.iter().find(|s| s.name() == name) {
-                    return Some(render_schema_hover(schema, schemas));
-                }
+            if let Some(name) = name_inside_subscript_slice(slot.annotation, offset)
+                && let Some(schema) = schemas.iter().find(|s| s.name() == name)
+            {
+                return Some(render_schema_hover(schema, schemas));
             }
         }
     }
@@ -186,12 +185,11 @@ fn hover_on_schema_reference_in_schema_field(
     for schema in schemas {
         for field in schema.fields() {
             // Only bare-name annotations like `address: Address` qualify.
-            if let Expr::Name(name) = field.annotation {
-                if name.range.contains_inclusive(offset) {
-                    if let Some(target) = schemas.iter().find(|s| s.name() == name.id.as_str()) {
-                        return Some(render_schema_hover(target, schemas));
-                    }
-                }
+            if let Expr::Name(name) = field.annotation
+                && name.range.contains_inclusive(offset)
+                && let Some(target) = schemas.iter().find(|s| s.name() == name.id.as_str())
+            {
+                return Some(render_schema_hover(target, schemas));
             }
         }
     }
@@ -292,7 +290,7 @@ fn name_reference_at<'a>(
     None
 }
 
-fn name_in_stmt<'a>(offset: TextSize, stmt: &'a ruff_python_ast::Stmt) -> Option<&'a str> {
+fn name_in_stmt(offset: TextSize, stmt: &ruff_python_ast::Stmt) -> Option<&str> {
     use ruff_python_ast::Stmt;
     match stmt {
         Stmt::Expr(e) => name_in_expr(offset, &e.value),
@@ -303,7 +301,7 @@ fn name_in_stmt<'a>(offset: TextSize, stmt: &'a ruff_python_ast::Stmt) -> Option
     }
 }
 
-fn name_in_expr<'a>(offset: TextSize, expr: &'a Expr) -> Option<&'a str> {
+fn name_in_expr(offset: TextSize, expr: &Expr) -> Option<&str> {
     use ruff_text_size::Ranged;
     if !expr.range().contains_inclusive(offset) {
         return None;
@@ -491,7 +489,7 @@ fn offset_from_line_column(
 /// the inner `Name(X)`'s range, return `X` — the schema name being
 /// referenced. This is the `DataFrame[X]` case where we want to hover on
 /// `X`.
-fn name_inside_subscript_slice<'a>(expr: &'a Expr, offset: TextSize) -> Option<&'a str> {
+fn name_inside_subscript_slice(expr: &Expr, offset: TextSize) -> Option<&str> {
     let subscript = expr.as_subscript_expr()?;
     let inner = subscript.slice.as_name_expr()?;
     if inner.range.contains_inclusive(offset) {

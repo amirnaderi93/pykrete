@@ -219,11 +219,17 @@ mod tests {
     #[test]
     fn load_config_reads_pykrete_json_from_the_project_root() {
         let root = tmpdir();
-        write(&root.join("pykrete.json"), r#"{"typeCheckingMode": "strict"}"#);
+        write(
+            &root.join("pykrete.json"),
+            r#"{"typeCheckingMode": "strict"}"#,
+        );
         let docs = docs_with(&root);
 
         let config = load_config(&docs);
-        assert_eq!(config.check_mode_override(), Some(pykrete::CheckMode::Strict));
+        assert_eq!(
+            config.check_mode_override(),
+            Some(pykrete::CheckMode::Strict)
+        );
 
         std::fs::remove_dir_all(&root).ok();
     }

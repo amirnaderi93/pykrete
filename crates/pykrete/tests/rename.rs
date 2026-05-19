@@ -46,7 +46,11 @@ fn rename_spans_exclude_the_string_literal_quotes() {
 
 #[test]
 fn rename_covers_a_bare_string_column_argument() {
-    for span in rename(SRC, cursor_at(SRC, "\"city\")").0, cursor_at(SRC, "\"city\")").1 + 1) {
+    for span in rename(
+        SRC,
+        cursor_at(SRC, "\"city\")").0,
+        cursor_at(SRC, "\"city\")").1 + 1,
+    ) {
         assert_eq!(span_text(SRC, span), "city");
     }
 }

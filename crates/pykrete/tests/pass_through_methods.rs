@@ -14,6 +14,8 @@
 //! chain like `raw.persist().filter(col("x"))` keeps lighting up
 //! column-reference checks on every operation.
 
+#![allow(non_snake_case)] // Test names embed diagnostic codes (D0030).
+
 mod common;
 
 use common::check;

@@ -7,7 +7,7 @@
 //! - `D0001` — Python parse error.
 //! - `D0010` — unknown column type name in a schema field.
 //! - `D0011` — column type expression isn't a bare name
-//!             (subscripts, attribute access, etc.).
+//!   (subscripts, attribute access, etc.).
 //!
 //! Each test embeds a small `.pyk` source as a raw string literal and asserts
 //! on the diagnostics produced by `pykrete::check`.

@@ -262,8 +262,9 @@ def f(raw: DataFrame[Orders]) -> DataFrame:
 fn group_by_an_attribute_access_key_keeps_it_in_the_result_schema() {
     // `groupBy(df.key, ...)` — an attribute-access grouping key, a column
     // carried in from a joined DataFrame, must land in the post-agg
-    // schema exactly like a string key. A common real-world pattern; before the
-    // fix the key was dropped and the return-type check false-flagged it.
+    // schema exactly like a string key. A common real-world pattern;
+    // before the fix the key was dropped and the return-type check
+    // false-flagged it.
     let result = check(
         r#"
 class Left(Schema):

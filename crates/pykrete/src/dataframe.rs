@@ -106,14 +106,14 @@ pub fn typed_slots<'ast>(func: &'ast DiscoveredFunction<'ast>) -> Vec<TypedSlot<
         }
     }
 
-    if let Some(ret) = func.def.returns.as_deref() {
-        if let Some(kind) = recognize(ret) {
-            slots.push(TypedSlot {
-                label: SlotLabel::Return,
-                annotation: ret,
-                kind,
-            });
-        }
+    if let Some(ret) = func.def.returns.as_deref()
+        && let Some(kind) = recognize(ret)
+    {
+        slots.push(TypedSlot {
+            label: SlotLabel::Return,
+            annotation: ret,
+            kind,
+        });
     }
 
     slots

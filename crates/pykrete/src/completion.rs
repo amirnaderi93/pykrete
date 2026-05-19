@@ -255,8 +255,7 @@ fn column_completions_after_df_dot(
     //    name in the function, which is the right answer for the
     //    common single-assignment case.
     for func in functions {
-        let Some((receiver, _attr_range)) = find_attribute_access_at(offset, &func.def.body)
-        else {
+        let Some((receiver, _attr_range)) = find_attribute_access_at(offset, &func.def.body) else {
             continue;
         };
         // Only a bare-name receiver is a parameter / local binding —
@@ -285,8 +284,7 @@ fn column_completions_after_chain_dot(
     schemas: &[Schema<'_>],
 ) -> Option<Vec<CompletionItem>> {
     for func in functions {
-        let Some((receiver, _attr_range)) = find_attribute_access_at(offset, &func.def.body)
-        else {
+        let Some((receiver, _attr_range)) = find_attribute_access_at(offset, &func.def.body) else {
             continue;
         };
         // Match the receiver expression against a recorded call result —
@@ -312,10 +310,10 @@ fn latest_binding_for<'a>(
 /// Walk a list of statements looking for an `Attribute(receiver, attr)`
 /// expression where `offset` sits on the `attr` token. Returns the
 /// receiver expression and the attr range.
-fn find_attribute_access_at<'a>(
+fn find_attribute_access_at(
     offset: TextSize,
-    body: &'a [ruff_python_ast::Stmt],
-) -> Option<(&'a Expr, ruff_text_size::TextRange)> {
+    body: &[ruff_python_ast::Stmt],
+) -> Option<(&Expr, ruff_text_size::TextRange)> {
     for stmt in body {
         if let Some(hit) = stmt_attribute_at(offset, stmt) {
             return Some(hit);
@@ -324,10 +322,10 @@ fn find_attribute_access_at<'a>(
     None
 }
 
-fn stmt_attribute_at<'a>(
+fn stmt_attribute_at(
     offset: TextSize,
-    stmt: &'a ruff_python_ast::Stmt,
-) -> Option<(&'a Expr, ruff_text_size::TextRange)> {
+    stmt: &ruff_python_ast::Stmt,
+) -> Option<(&Expr, ruff_text_size::TextRange)> {
     use ruff_python_ast::Stmt;
     match stmt {
         Stmt::Expr(e) => expr_attribute_at(offset, &e.value),
@@ -344,10 +342,7 @@ fn stmt_attribute_at<'a>(
     }
 }
 
-fn expr_attribute_at<'a>(
-    offset: TextSize,
-    expr: &'a Expr,
-) -> Option<(&'a Expr, ruff_text_size::TextRange)> {
+fn expr_attribute_at(offset: TextSize, expr: &Expr) -> Option<(&Expr, ruff_text_size::TextRange)> {
     if !expr.range().contains_inclusive(offset) {
         return None;
     }

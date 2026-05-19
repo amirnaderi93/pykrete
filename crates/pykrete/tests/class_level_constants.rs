@@ -1,11 +1,10 @@
 //! Iteration 35: class-qualified annotated constants.
 //!
-//! Real codebases (notably a real codebase's `shared/data_access_layer.py`)
-//! declare every data source as an annotated assignment INSIDE a
-//! frozen-dataclass class body:
+//! Real codebases commonly declare every data source as an annotated
+//! assignment INSIDE a frozen-dataclass class body:
 //!
 //!     class DataSources:
-//!         RAW_ORDERS: DataSource[RawEvents] = DataSource("/path")
+//!         RAW_ORDERS: DataSource[RawOrders] = DataSource("/path")
 //!
 //! Before iteration 35, the constants registry only walked module-
 //! level annotated assignments, so `DataSources.RAW_ORDERS`

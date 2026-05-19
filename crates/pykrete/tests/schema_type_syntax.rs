@@ -2,7 +2,7 @@
 //!
 //!     class Forecast(Schema):
 //!         predicted_value: double
-//!         checkin: date
+//!         forecast_date: date
 //!         lead_time: int
 //!         tags: Array[string]
 //!         by_city: Map[string, int]
@@ -33,7 +33,11 @@ class Orders(Schema):
     assert!(
         result.diagnostics.is_empty(),
         "expected a clean run; got {:?}",
-        result.diagnostics.iter().map(|d| &d.code).collect::<Vec<_>>(),
+        result
+            .diagnostics
+            .iter()
+            .map(|d| &d.code)
+            .collect::<Vec<_>>(),
     );
     assert_eq!(result.schema_count, 1);
 }
@@ -73,7 +77,11 @@ class User(Schema):
     assert!(
         result.diagnostics.is_empty(),
         "expected clean nested-struct resolution; got {:?}",
-        result.diagnostics.iter().map(|d| &d.code).collect::<Vec<_>>(),
+        result
+            .diagnostics
+            .iter()
+            .map(|d| &d.code)
+            .collect::<Vec<_>>(),
     );
 }
 

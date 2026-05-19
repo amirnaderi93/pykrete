@@ -271,8 +271,7 @@ impl fmt::Display for ColumnType {
 
 /// Comma-separated list of the source-form names users can write in a
 /// `.pyk` file. Used inside error messages.
-pub const COLUMN_TYPE_NAMES: &str =
-    "int, long, double, string, bool, date, timestamp, Array, Map";
+pub const COLUMN_TYPE_NAMES: &str = "int, long, double, string, bool, date, timestamp, Array, Map";
 
 /// Same vocabulary as [`COLUMN_TYPE_NAMES`] but as a slice — fed to the
 /// completion engine when the cursor sits inside a `name: "<cursor>"`
@@ -320,7 +319,10 @@ mod tests {
 
     #[test]
     fn from_name_parses_nested_array_and_map_element_types() {
-        assert_eq!(ColumnType::from_name("array<string>"), Some(array(ColumnType::String)));
+        assert_eq!(
+            ColumnType::from_name("array<string>"),
+            Some(array(ColumnType::String))
+        );
         assert_eq!(
             ColumnType::from_name("map<string, int>"),
             Some(map(ColumnType::String, ColumnType::Int)),
@@ -331,8 +333,14 @@ mod tests {
             Some(array(map(ColumnType::String, array(ColumnType::Int)))),
         );
         // Bare `array` / `map` — element types unknown.
-        assert_eq!(ColumnType::from_name("array"), Some(ColumnType::Array(None)));
-        assert_eq!(ColumnType::from_name("map"), Some(ColumnType::Map(None, None)));
+        assert_eq!(
+            ColumnType::from_name("array"),
+            Some(ColumnType::Array(None))
+        );
+        assert_eq!(
+            ColumnType::from_name("map"),
+            Some(ColumnType::Map(None, None))
+        );
     }
 
     #[test]
@@ -351,7 +359,10 @@ mod tests {
 
     #[test]
     fn from_spark_name_accepts_the_wider_vocabulary_and_nesting() {
-        assert_eq!(ColumnType::from_spark_name("bigint"), Some(ColumnType::Long));
+        assert_eq!(
+            ColumnType::from_spark_name("bigint"),
+            Some(ColumnType::Long)
+        );
         assert_eq!(
             ColumnType::from_spark_name("array<integer>"),
             Some(array(ColumnType::Int)),
@@ -371,7 +382,15 @@ mod tests {
     #[test]
     fn column_type_names_constant_lists_every_type_name() {
         for name in [
-            "int", "long", "double", "string", "bool", "date", "timestamp", "Array", "Map",
+            "int",
+            "long",
+            "double",
+            "string",
+            "bool",
+            "date",
+            "timestamp",
+            "Array",
+            "Map",
         ] {
             assert!(
                 COLUMN_TYPE_NAMES.contains(name),

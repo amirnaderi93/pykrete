@@ -56,7 +56,7 @@ def f(spark) -> DataFrame[RawOrders]:
 
 #[test]
 fn typo_after_local_dal_assignment_now_fires_D0030() {
-    // The smoking-gun bug from the example suite: with iteration 34
+    // The smoking-gun bug this iteration targets: with iteration 34
     // landed, a typo'd column reference on a `data_access = DAL(spark)`
     // → `read(...)` chain surfaces, where it used to slide silently.
     let src = r#"

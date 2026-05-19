@@ -79,13 +79,8 @@ fn generic_read_pyk_transpiles_to_parseable_python() {
 }
 
 #[test]
-fn orders_example_pyk_transpiles_to_parseable_python() {
-    transpile_and_reparse("orders_example.pyk").expect("orders_example.pyk");
-}
-
-#[test]
-fn events_example_pyk_transpiles_to_parseable_python() {
-    transpile_and_reparse("events_example.pyk").expect("events_example.pyk");
+fn orders_pyk_transpiles_to_parseable_python() {
+    transpile_and_reparse("orders.pyk").expect("orders.pyk");
 }
 
 // ===========================================================================

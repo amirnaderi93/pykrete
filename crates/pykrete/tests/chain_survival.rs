@@ -1,7 +1,7 @@
 //! Operations that reshape rows but not columns must keep a
 //! transformation chain alive — otherwise a bad column reference
 //! *after* one of them passes silently (the "cascade degradation"
-//! found in real-world testing).
+//! found when checking real-world pipelines).
 
 mod common;
 

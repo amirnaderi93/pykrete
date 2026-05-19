@@ -88,8 +88,8 @@ pub struct Registry<'a> {
     pub classes: HashMap<&'a str, ClassInfo<'a>>,
     pub constants: HashMap<&'a str, ConstantInfo<'a>>,
     /// Class-qualified annotated assignments — `DataSources.RAW_ORDERS`
-    /// in the example pattern. Keyed by `(class_name, const_name)` so the
-    /// analyzer can resolve `Attribute(Name("DataSources"), "RAW_ORDERS")`
+    /// in a frozen-dataclass registry. Keyed by `(class_name, const_name)`
+    /// so the analyzer can resolve `Attribute(Name("DataSources"), "RAW_ORDERS")`
     /// the same way it resolves a bare module-level constant.
     pub class_constants: HashMap<(&'a str, &'a str), ConstantInfo<'a>>,
     /// Top-level `def` functions, keyed by name. Captured as [`MethodInfo`]
@@ -147,10 +147,10 @@ impl<'a> Registry<'a> {
                     // `@dataclass class DataSources:` body, not at module
                     // top level.
                     for body_stmt in &def.body {
-                        if let Stmt::AnnAssign(ann) = body_stmt {
-                            if let Some(const_info) = build_constant_info(ann) {
-                                class_constants.insert((class_name, const_info.name), const_info);
-                            }
+                        if let Stmt::AnnAssign(ann) = body_stmt
+                            && let Some(const_info) = build_constant_info(ann)
+                        {
+                            class_constants.insert((class_name, const_info.name), const_info);
                         }
                     }
                 }
@@ -245,7 +245,11 @@ fn udf_decorator_return_type(decorator: &Decorator) -> Option<ColumnType> {
                 return None;
             }
             for kw in &call.arguments.keywords {
-                if kw.arg.as_ref().is_some_and(|n| n.id.as_str() == "returnType") {
+                if kw
+                    .arg
+                    .as_ref()
+                    .is_some_and(|n| n.id.as_str() == "returnType")
+                {
                     return spark_type_from_expr(&kw.value);
                 }
             }
@@ -275,7 +279,11 @@ fn functional_udf_return_type(value: &Expr) -> Option<ColumnType> {
         return None;
     }
     for kw in &call.arguments.keywords {
-        if kw.arg.as_ref().is_some_and(|n| n.id.as_str() == "returnType") {
+        if kw
+            .arg
+            .as_ref()
+            .is_some_and(|n| n.id.as_str() == "returnType")
+        {
             return spark_type_from_expr(&kw.value);
         }
     }

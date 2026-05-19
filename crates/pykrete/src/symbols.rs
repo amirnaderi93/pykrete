@@ -289,12 +289,11 @@ pub fn references(source: &str, line: usize, column: usize) -> Vec<Span> {
     let mut ranges: Vec<TextRange> = Vec::new();
     for schema in &schemas {
         for stmt in &schema.class.def.body {
-            if let Some(ann) = stmt.as_ann_assign_stmt() {
-                if let Some(t) = ann.target.as_name_expr() {
-                    if t.id.as_str() == target {
-                        ranges.push(t.range);
-                    }
-                }
+            if let Some(ann) = stmt.as_ann_assign_stmt()
+                && let Some(t) = ann.target.as_name_expr()
+                && t.id.as_str() == target
+            {
+                ranges.push(t.range);
             }
         }
     }
@@ -357,12 +356,11 @@ fn column_rename_sites(source: &str, line: usize, column: usize) -> Option<Vec<T
     let mut ranges: Vec<TextRange> = Vec::new();
     for schema in &schemas {
         for stmt in &schema.class.def.body {
-            if let Some(ann) = stmt.as_ann_assign_stmt() {
-                if let Some(t) = ann.target.as_name_expr() {
-                    if t.id.as_str() == target {
-                        ranges.push(t.range);
-                    }
-                }
+            if let Some(ann) = stmt.as_ann_assign_stmt()
+                && let Some(t) = ann.target.as_name_expr()
+                && t.id.as_str() == target
+            {
+                ranges.push(t.range);
             }
         }
     }
@@ -401,12 +399,11 @@ fn column_name_at<'a>(
     }
     for schema in schemas {
         for stmt in &schema.class.def.body {
-            if let Some(ann) = stmt.as_ann_assign_stmt() {
-                if let Some(t) = ann.target.as_name_expr() {
-                    if t.range.contains_inclusive(offset) {
-                        return Some(t.id.as_str());
-                    }
-                }
+            if let Some(ann) = stmt.as_ann_assign_stmt()
+                && let Some(t) = ann.target.as_name_expr()
+                && t.range.contains_inclusive(offset)
+            {
+                return Some(t.id.as_str());
             }
         }
     }
@@ -499,10 +496,10 @@ fn definition_on_schema_reference_in_function_signature(
             let Some(inner) = sub.slice.as_name_expr() else {
                 continue;
             };
-            if inner.range.contains_inclusive(offset) {
-                if let Some(target) = schemas.iter().find(|s| s.name() == inner.id.as_str()) {
-                    return Some((target.file_index, target.class.def.name.range));
-                }
+            if inner.range.contains_inclusive(offset)
+                && let Some(target) = schemas.iter().find(|s| s.name() == inner.id.as_str())
+            {
+                return Some((target.file_index, target.class.def.name.range));
             }
         }
     }
