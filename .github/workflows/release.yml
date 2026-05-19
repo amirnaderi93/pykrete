@@ -76,10 +76,10 @@ jobs:
           tag="${{ inputs.tag || github.ref_name }}"
           msi="pykrete-$tag-${{ matrix.target }}.msi"
           cargo install cargo-wix --locked
-          # Run from the package directory so cargo-wix finds its
-          # wix/main.wxs unambiguously; write the MSI to the repo root.
-          ( cd crates/pykrete && cargo wix --no-build --target ${{ matrix.target }} \
-              --install-version "${tag#v}" --output "$GITHUB_WORKSPACE/$msi" )
+          # --package is required in a workspace; cargo-wix then reads the
+          # WiX source from that package's wix/ directory.
+          cargo wix --package pykrete --no-build --target ${{ matrix.target }} \
+            --install-version "${tag#v}" --output "$msi"
           shasum -a 256 "$msi" | tee "$msi.sha256"
 
       - name: Publish to the GitHub Release
