@@ -6,7 +6,7 @@ resolver = "2"
 version = "0.0.1"
 edition = "2024"
 license = "MIT"
-repository = "https://gitlab.com/amir.naderi93/pykrete"
+repository = "https://github.com/amirnaderi93/pykrete"
 
 [workspace.dependencies]
 # Shared/pinned dependencies will go here as we add crates.

@@ -13,7 +13,7 @@ pykrete is a static schema checker for PySpark, written in Rust. This guide cove
 ### Clone and build
 
 ```bash
-git clone https://gitlab.com/amir.naderi93/pykrete.git
+git clone https://github.com/amirnaderi93/pykrete.git
 cd pykrete
 cargo build
 ```
@@ -136,13 +136,13 @@ If a commit closes an issue, end with `Closes #N` or `Fixes #N`. Co-authored wor
 2. Make commits, **one logical change per commit** (small, reviewable diffs).
 3. Run `cargo test` and `cargo fmt --all` before pushing.
 4. Push the branch: `git push -u origin feat/your-change`.
-5. Open a Merge Request on GitLab — either via the URL printed by git on push, or via `git push -o merge_request.create=true ...`. Fill out the [MR template](.gitlab/merge_request_templates/Default.md).
+5. Open a Pull Request on GitHub — via the URL git prints on push, or with `gh pr create`. The [PR template](.github/pull_request_template.md) is filled in for you.
 6. CI runs automatically. Make sure it's green before requesting review.
-7. Once approved, merge with **no fast-forward** so the branch's history is preserved as a side-track in `main`:
+7. Once approved, merge with a **merge commit** (not squash/rebase) so the branch's history is preserved as a side-track in `main`:
    ```bash
    git checkout main && git merge --no-ff feat/your-change
    ```
-   (The GitLab UI defaults to this for non-trivial branches.)
+   (GitHub's "Create a merge commit" option does the same.)
 
 ## Code style
 
@@ -182,7 +182,7 @@ Conventions:
 
 ## Filing issues
 
-Use the appropriate template under `.gitlab/issue_templates/`:
+Pick the matching template when you open a new issue on GitHub (defined under `.github/ISSUE_TEMPLATE/`):
 
 - **Bug**: a reproducible incorrect behavior.
 - **Feature**: a new check, operation, or capability.

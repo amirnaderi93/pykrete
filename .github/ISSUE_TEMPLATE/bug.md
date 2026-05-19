@@ -1,3 +1,9 @@
+---
+name: Bug report
+about: pykrete produces an incorrect result for a specific input
+labels: bug
+---
+
 <!-- A bug = pykrete does something incorrect, given a specific input. -->
 
 ## What I did
@@ -10,7 +16,7 @@
 ## Command I ran
 
 ```
-cargo run -- check ...
+pykrete check ...
 ```
 
 ## What I expected

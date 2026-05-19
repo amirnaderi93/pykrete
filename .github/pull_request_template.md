@@ -1,6 +1,6 @@
 ## Summary
 
-<!-- One or two sentences: what does this MR do? Why? -->
+<!-- One or two sentences: what does this PR do? Why? -->
 
 ## What changed
 

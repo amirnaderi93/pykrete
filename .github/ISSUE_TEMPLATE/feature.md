@@ -1,3 +1,9 @@
+---
+name: Feature request
+about: A new check, operation, syntactic shape, or capability pykrete should support
+labels: enhancement
+---
+
 <!-- A feature = a new check, operation, syntactic shape, or capability
      pykrete doesn't yet support. -->
 
