@@ -26,6 +26,32 @@ A strict superset of Python that adds static schema checking for dataframes. Ins
 
 PySpark. pandas and polars support is planned — see the [roadmap](docs/roadmap.md).
 
+## Install
+
+pykrete ships two binaries: `pykrete` (the CLI checker/transpiler) and
+`pykrete-lsp` (the editor language server).
+
+**Homebrew** (macOS / Linux):
+
+```bash
+brew install amirnaderi93/pykrete/pykrete
+```
+
+**Prebuilt binaries** — download the tarball for your platform from the
+[latest release](https://github.com/amirnaderi93/pykrete/releases/latest)
+and put `pykrete` and `pykrete-lsp` on your `PATH`.
+
+**From source** with Cargo (Rust ≥ 1.95):
+
+```bash
+cargo install --git https://github.com/amirnaderi93/pykrete pykrete
+cargo install --git https://github.com/amirnaderi93/pykrete pykrete-lsp
+```
+
+pykrete depends on ruff's parser via a pinned git revision, which Astral
+does not publish to crates.io — so installation is via Homebrew, a
+prebuilt binary, or `cargo install --git`, not `cargo install pykrete`.
+
 ## Usage
 
 ### Static checker
@@ -54,8 +80,8 @@ it launches `pykrete-lsp`, bundles the Python engine, and routes `.pyk`
 files to it. It is distributed as a local `.vsix` for now; marketplace
 publishing is pending.
 
-For other editors, point the LSP client at the `pykrete-lsp` binary (after
-`cargo build --release`, at `target/release/pykrete-lsp`).
+For Neovim, Helix, Emacs, and other LSP clients, see
+[docs/editors/](docs/editors/).
 
 ## Contributing
 
