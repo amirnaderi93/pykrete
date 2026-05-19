@@ -2,7 +2,7 @@ name: Release
 
 # Tagging `vX.Y.Z` builds release artifacts for every supported platform
 # and publishes them on a GitHub Release: tarballs for macOS and Linux,
-# an MSI installer for Windows.
+# an MSI installer for Windows. It then updates the Homebrew tap.
 #
 # It can also be run manually (workflow_dispatch) against an existing tag
 # — useful to re-build a release after a workflow fix.
@@ -90,3 +90,44 @@ jobs:
             pykrete-*.msi
             pykrete-*.msi.sha256
           generate_release_notes: true
+
+  # Re-render the Homebrew formula from the freshly published checksums
+  # and push it to the tap. Requires a HOMEBREW_TAP_TOKEN secret — a
+  # token with contents:write on the amirnaderi93/homebrew-pykrete repo.
+  homebrew:
+    name: Update Homebrew tap
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out pykrete (for the formula renderer)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+      - name: Check out the Homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: amirnaderi93/homebrew-pykrete
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+      - name: Render and push the formula
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          base="https://github.com/$REPO/releases/download/$TAG"
+          sha() { curl -fsSL "$base/pykrete-$TAG-$1.tar.gz.sha256" | cut -d' ' -f1; }
+          export VERSION="${TAG#v}"
+          export SHA_DARWIN_ARM="$(sha aarch64-apple-darwin)"
+          export SHA_DARWIN_X64="$(sha x86_64-apple-darwin)"
+          export SHA_LINUX_X64="$(sha x86_64-unknown-linux-gnu)"
+          bash packaging/homebrew/render.sh > tap/Formula/pykrete.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/pykrete.rb
+          if git diff --staged --quiet; then
+            echo "Formula already up to date."
+          else
+            git commit -m "pykrete $TAG"
+            git push
+          fi
