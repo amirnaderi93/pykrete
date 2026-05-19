@@ -14,8 +14,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const serverPath = resolveServerPath();
   if (!serverPath) {
     vscode.window.showErrorMessage(
-      "Dathon: could not locate the dathon-lsp binary. Set 'dathon.serverPath' in settings, " +
-        "or run `cargo build --release -p dathon-lsp` inside the workspace.",
+      "Pykrete: could not locate the pykrete-lsp binary. Set 'pykrete.serverPath' in settings, " +
+        "or run `cargo build --release -p pykrete-lsp` inside the workspace.",
     );
     return;
   }
@@ -25,18 +25,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     debug: { command: serverPath, transport: TransportKind.stdio },
   };
 
-  // The Python language server dathon-lsp embeds for general Python
-  // features. `undefined` lets dathon-lsp fall back to PATH discovery,
-  // and failing that to dathon-only mode.
+  // The Python language server pykrete-lsp embeds for general Python
+  // features. `undefined` lets pykrete-lsp fall back to PATH discovery,
+  // and failing that to pykrete-only mode.
   const pythonServer = resolvePythonServer(context);
 
-  // dathon-lsp multiplexes the embedded Python engine internally;
+  // pykrete-lsp multiplexes the embedded Python engine internally;
   // `pythonServer` tells it how to launch the one this extension
   // bundles, and `typeCheckingMode` is the single strictness knob it
-  // applies to both dathon's checks and the engine.
+  // applies to both pykrete's checks and the engine.
   const initializationOptions: Record<string, unknown> = {
     typeCheckingMode: vscode.workspace
-      .getConfiguration("dathon")
+      .getConfiguration("pykrete")
       .get<string>("typeCheckingMode", "standard"),
   };
   if (pythonServer) {
@@ -44,19 +44,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   const clientOptions: LanguageClientOptions = {
-    // Two selectors so dathon-lsp activates whether VS Code identifies
-    // `.dpy` as this extension's `dathon` language (the default) or as
+    // Two selectors so pykrete-lsp activates whether VS Code identifies
+    // `.pyk` as this extension's `pykrete` language (the default) or as
     // `python` (when the user sets `"files.associations"`).
     documentSelector: [
-      { scheme: "file", language: "dathon" },
-      { scheme: "file", language: "python", pattern: "**/*.dpy" },
+      { scheme: "file", language: "pykrete" },
+      { scheme: "file", language: "python", pattern: "**/*.pyk" },
     ],
     initializationOptions,
   };
 
   client = new LanguageClient(
-    "dathon",
-    "Dathon Language Server",
+    "pykrete",
+    "Pykrete Language Server",
     serverOptions,
     clientOptions,
   );
@@ -77,7 +77,7 @@ export function deactivate(): Thenable<void> | undefined {
 
 function resolveServerPath(): string | undefined {
   const configured = vscode.workspace
-    .getConfiguration("dathon")
+    .getConfiguration("pykrete")
     .get<string>("serverPath", "")
     .trim();
   if (configured.length > 0) {
@@ -87,8 +87,8 @@ function resolveServerPath(): string | undefined {
   for (const folder of vscode.workspace.workspaceFolders ?? []) {
     const root = folder.uri.fsPath;
     const candidates = [
-      path.join(root, "target", "release", "dathon-lsp"),
-      path.join(root, "target", "debug", "dathon-lsp"),
+      path.join(root, "target", "release", "pykrete-lsp"),
+      path.join(root, "target", "debug", "pykrete-lsp"),
     ];
     for (const candidate of candidates) {
       if (fs.existsSync(candidate)) {
@@ -97,25 +97,25 @@ function resolveServerPath(): string | undefined {
     }
   }
 
-  return "dathon-lsp";
+  return "pykrete-lsp";
 }
 
 /**
- * Resolve how dathon-lsp should launch the embedded Python engine.
+ * Resolve how pykrete-lsp should launch the embedded Python engine.
  *
- *   1. `dathon.pythonServer.path` — a user-supplied langserver binary,
+ *   1. `pykrete.pythonServer.path` — a user-supplied langserver binary,
  *      run directly as `<path> --stdio`.
  *   2. The basedpyright bundled in this extension's `node_modules`,
  *      run as `node <langserver.index.js> --stdio` (needs Node.js on
  *      PATH).
- *   3. `undefined` — dathon-lsp searches PATH itself, and runs
- *      dathon-only if nothing is found.
+ *   3. `undefined` — pykrete-lsp searches PATH itself, and runs
+ *      pykrete-only if nothing is found.
  */
 function resolvePythonServer(
   context: vscode.ExtensionContext,
 ): { command: string; args: string[] } | undefined {
   const override = vscode.workspace
-    .getConfiguration("dathon")
+    .getConfiguration("pykrete")
     .get<string>("pythonServer.path", "")
     .trim();
   if (override.length > 0) {

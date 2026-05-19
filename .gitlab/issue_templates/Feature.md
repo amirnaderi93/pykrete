@@ -1,14 +1,14 @@
 <!-- A feature = a new check, operation, syntactic shape, or capability
-     dathon doesn't yet support. -->
+     pykrete doesn't yet support. -->
 
 ## The problem
 
-<!-- What can't you express today? What real PySpark code is dathon
+<!-- What can't you express today? What real PySpark code is pykrete
      silent on or wrong about? -->
 
 ## Proposed solution
 
-<!-- How should the feature behave? Include an example .dpy snippet
+<!-- How should the feature behave? Include an example .pyk snippet
      showing the expected diagnostic(s). -->
 
 ```python

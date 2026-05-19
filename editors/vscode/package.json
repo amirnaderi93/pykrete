@@ -1,13 +1,13 @@
 {
-  "name": "dathon-vscode",
-  "displayName": "Dathon",
-  "description": "Static schema checking for PySpark .dpy files — diagnostics, hover, completion, go-to-definition, quick-fixes — plus general Python language features from a bundled, multiplexed Python engine.",
+  "name": "pykrete-vscode",
+  "displayName": "Pykrete",
+  "description": "Static schema checking for PySpark .pyk files — diagnostics, hover, completion, go-to-definition, quick-fixes — plus general Python language features from a bundled, multiplexed Python engine.",
   "version": "0.2.1",
-  "publisher": "dathon",
+  "publisher": "pykrete",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://gitlab.com/amir.naderi93/dathon"
+    "url": "https://gitlab.com/amir.naderi93/pykrete"
   },
   "engines": {
     "vscode": "^1.85.0"
@@ -19,54 +19,54 @@
   "main": "./out/extension.js",
   "activationEvents": [
     "onLanguage:python",
-    "workspaceContains:**/*.dpy"
+    "workspaceContains:**/*.pyk"
   ],
   "contributes": {
     "languages": [
       {
-        "id": "dathon",
-        "aliases": ["Dathon", "dathon"],
-        "extensions": [".dpy"],
+        "id": "pykrete",
+        "aliases": ["Pykrete", "pykrete"],
+        "extensions": [".pyk"],
         "configuration": "./language-configuration.json"
       }
     ],
     "grammars": [
       {
-        "language": "dathon",
-        "scopeName": "source.dathon",
-        "path": "./syntaxes/dathon.tmLanguage.json"
+        "language": "pykrete",
+        "scopeName": "source.pykrete",
+        "path": "./syntaxes/pykrete.tmLanguage.json"
       }
     ],
     "configuration": {
-      "title": "Dathon",
+      "title": "Pykrete",
       "properties": {
-        "dathon.serverPath": {
+        "pykrete.serverPath": {
           "type": "string",
           "default": "",
-          "description": "Absolute path to the dathon-lsp binary. If empty, the extension searches the workspace's target/release and target/debug directories, then falls back to 'dathon-lsp' on PATH."
+          "description": "Absolute path to the pykrete-lsp binary. If empty, the extension searches the workspace's target/release and target/debug directories, then falls back to 'pykrete-lsp' on PATH."
         },
-        "dathon.pythonServer.path": {
+        "pykrete.pythonServer.path": {
           "type": "string",
           "default": "",
-          "description": "Absolute path to a Python language server (basedpyright-langserver / pyright-langserver) for dathon-lsp to embed for general Python features. If empty, the basedpyright bundled with this extension is used (requires Node.js on PATH). dathon's schema features work regardless."
+          "description": "Absolute path to a Python language server (basedpyright-langserver / pyright-langserver) for pykrete-lsp to embed for general Python features. If empty, the basedpyright bundled with this extension is used (requires Node.js on PATH). pykrete's schema features work regardless."
         },
-        "dathon.typeCheckingMode": {
+        "pykrete.typeCheckingMode": {
           "type": "string",
           "enum": ["off", "basic", "standard", "strict"],
           "enumDescriptions": [
-            "No checking — dathon and the embedded Python engine both stay silent.",
+            "No checking — pykrete and the embedded Python engine both stay silent.",
             "Fundamental errors only.",
-            "Every error dathon and the engine report by default.",
+            "Every error pykrete and the engine report by default.",
             "Standard plus advisory checks that are too noisy for everyday use."
           ],
           "default": "standard",
-          "description": "How strict dathon's checking is. A single knob driving both dathon's own schema checks and the embedded Python engine's typeCheckingMode."
+          "description": "How strict pykrete's checking is. A single knob driving both pykrete's own schema checks and the embedded Python engine's typeCheckingMode."
         },
-        "dathon.trace.server": {
+        "pykrete.trace.server": {
           "type": "string",
           "enum": ["off", "messages", "verbose"],
           "default": "off",
-          "description": "Trace LSP communication between the editor and dathon-lsp."
+          "description": "Trace LSP communication between the editor and pykrete-lsp."
         }
       }
     }

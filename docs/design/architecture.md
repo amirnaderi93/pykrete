@@ -1,17 +1,17 @@
 # Architecture
 
-How dathon is organized. dathon is a static schema checker for PySpark —
-`.dpy` files are a strict superset of Python.
+How pykrete is organized. pykrete is a static schema checker for PySpark —
+`.pyk` files are a strict superset of Python.
 
 ## Workspace
 
 Two crates in one Cargo workspace:
 
-- **`dathon`** ([`crates/dathon/`](../../crates/dathon/)) — the checker. A
+- **`pykrete`** ([`crates/pykrete/`](../../crates/pykrete/)) — the checker. A
   library (the analysis is a library so editors can embed it) plus the
-  CLI binary `dathon`.
-- **`dathon-lsp`** ([`crates/dathon-lsp/`](../../crates/dathon-lsp/)) — the
-  Language Server. An LSP *multiplexer*: it wraps the `dathon` library and
+  CLI binary `pykrete`.
+- **`pykrete-lsp`** ([`crates/pykrete-lsp/`](../../crates/pykrete-lsp/)) — the
+  Language Server. An LSP *multiplexer*: it wraps the `pykrete` library and
   an embedded Python language server, so the editor talks to one server
   and gets both schema checking and full Python support. See
   [multiplexer.md](multiplexer.md).
@@ -23,7 +23,7 @@ registries, then runs a recursive body analysis with schema inference and
 type checking.
 
 ```
-.dpy source
+.pyk source
   → ruff_python_parser           (Python AST — ModModule)
   → walk                         (discover top-level classes + functions)
   → schema / dataframe / registry (Schema classes, DataFrame[X] slots,
@@ -37,7 +37,7 @@ type checking.
 Cross-file resolution (imports, shared schemas) happens in `lib`, which
 pools declarations across the project before analyzing each file.
 
-## Modules in `dathon`
+## Modules in `pykrete`
 
 ### `diagnostics`
 
@@ -84,7 +84,7 @@ inline-schema type (`D0010` / `D0011`).
 
 ### `types`
 
-`ColumnType` — dathon's type system. The atomic vocabulary (`int`, `long`,
+`ColumnType` — pykrete's type system. The atomic vocabulary (`int`, `long`,
 `double`, `string`, `bool`, `date`, `timestamp`), the composites `Array`,
 `Map`, and `Struct`, which nest arbitrarily, and `Nullable` — an
 `Optional[T]` column, Spark's per-column nullable flag. Schema fields are
@@ -168,18 +168,18 @@ LSP payload.
 
 ### `transpiler`
 
-`.dpy` → `.py`. `.dpy` is a strict superset of Python, so this is nearly
+`.pyk` → `.py`. `.pyk` is a strict superset of Python, so this is nearly
 an identity transform — it prepends `from __future__ import annotations`
-(so dathon's atomic type names and `DataFrame[X]` annotations don't
+(so pykrete's atomic type names and `DataFrame[X]` annotations don't
 evaluate at runtime) and strips the schema-cast `.cast(DataFrame[Schema])`
-— the one dathon-only construct in *expression* position, which the
+— the one pykrete-only construct in *expression* position, which the
 Python runtime has no `.cast` method for. Stripping is AST-located but
 byte-surgical: only the `.cast(…)` slice is deleted, line numbers are
 preserved, everything else is copied verbatim.
 
 ### `config`
 
-`dathon.json` — the project config: `typeCheckingMode` (the `CheckMode`),
+`pykrete.json` — the project config: `typeCheckingMode` (the `CheckMode`),
 `exclude` (path substrings whose files are skipped), and `rules`
 (per-rule overrides — `off` / `warning` / `error`, keyed by readable
 rule name). `Config` owns the parse and the lookups; the CLI and the
@@ -194,14 +194,14 @@ completion, definition, and symbols.
 
 ### `main`
 
-CLI — `dathon check <files…>` and `dathon transpile <file>`. `check`
-loads `dathon.json` (working directory or an ancestor) and applies its
+CLI — `pykrete check <files…>` and `pykrete transpile <file>`. `check`
+loads `pykrete.json` (working directory or an ancestor) and applies its
 mode, excludes, and rule overrides.
 
 ## Diagnostic codes
 
 The `D00xx` code is the stable internal identifier; the **name** is what
-the CLI and editor show and what `dathon.json`'s `rules` block keys on
+the CLI and editor show and what `pykrete.json`'s `rules` block keys on
 (`rule_name` in `diagnostics` maps between them — the `rules` block
 accepts either).
 
@@ -225,7 +225,7 @@ accepts either).
 
 ## Column-type checking
 
-dathon checks both column *existence* (`D0030`) and column *types*.
+pykrete checks both column *existence* (`D0030`) and column *types*.
 Type checking is split by strictness:
 
 - **Conservative** (default) — `D0080` flags a declared-return type
@@ -250,7 +250,7 @@ substitution, and return-type checks all resolve cross-file.
 
 Git-pinned to `astral-sh/ruff` at tag `0.15.12`: `ruff_python_parser`,
 `ruff_python_ast`, `ruff_source_file`, `ruff_text_size`. Plus `sqlparser`
-(embedded-SQL parsing) and, for `dathon-lsp`, `lsp-server` / `lsp-types` /
+(embedded-SQL parsing) and, for `pykrete-lsp`, `lsp-server` / `lsp-types` /
 `crossbeam-channel`.
 
 ## Decisions in effect
@@ -258,8 +258,8 @@ Git-pinned to `astral-sh/ruff` at tag `0.15.12`: `ruff_python_parser`,
 - **Language: Rust.**
 - **Parser: ruff's** — saves a year of front-end work, tracks PEPs, and is
   the same AST Astral's `ty` is built on (so the analyzer ports cleanly if
-  dathon ever forks `ty`).
-- **`.dpy` is a strict superset of Python** — every `.dpy` file parses
+  pykrete ever forks `ty`).
+- **`.pyk` is a strict superset of Python** — every `.pyk` file parses
   with ruff's Python parser as-is.
 - **The checker is a library** — the CLI and the LSP both embed it.
 - **TypeScript is the design north star** — adapted, not copied, for a

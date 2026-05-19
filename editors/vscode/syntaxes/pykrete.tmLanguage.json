@@ -1,0 +1,7 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Pykrete",
+  "scopeName": "source.pykrete",
+  "comment": "pykrete is a strict superset of Python, so `.pyk` files are highlighted with Python's TextMate grammar. This grammar simply delegates to `source.python` — the grammar VS Code ships built-in. pykrete-lsp layers semantic tokens on top for schema-aware coloring.",
+  "patterns": [{ "include": "source.python" }]
+}

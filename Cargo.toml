@@ -1,12 +1,12 @@
 [workspace]
-members = ["crates/dathon", "crates/dathon-lsp"]
+members = ["crates/pykrete", "crates/pykrete-lsp"]
 resolver = "2"
 
 [workspace.package]
 version = "0.0.1"
 edition = "2024"
 license = "MIT"
-repository = "https://gitlab.com/amir.naderi93/dathon"
+repository = "https://gitlab.com/amir.naderi93/pykrete"
 
 [workspace.dependencies]
 # Shared/pinned dependencies will go here as we add crates.

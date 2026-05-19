@@ -1,8 +1,8 @@
-<!-- A bug = dathon does something incorrect, given a specific input. -->
+<!-- A bug = pykrete does something incorrect, given a specific input. -->
 
 ## What I did
 
-<!-- Minimal `.dpy` snippet that triggers the bug. Smaller is better. -->
+<!-- Minimal `.pyk` snippet that triggers the bug. Smaller is better. -->
 
 ```python
 ```
@@ -18,7 +18,7 @@ cargo run -- check ...
 <!-- The diagnostic(s) you expected, or "no diagnostics" if you expected
      a clean run. -->
 
-## What dathon did instead
+## What pykrete did instead
 
 <!-- The actual output, copy-pasted. -->
 
@@ -27,6 +27,6 @@ cargo run -- check ...
 
 ## Environment
 
-- dathon commit / version:
+- pykrete commit / version:
 - Rust version (`rustc --version`):
 - OS:
