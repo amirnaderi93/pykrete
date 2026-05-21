@@ -40,8 +40,10 @@
     <Property Id="ARPHELPLINK" Value="https://github.com/amirnaderi93/pykrete" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/amirnaderi93/pykrete" />
 
-    <!-- Icon shown in Windows' Add/Remove Programs. -->
-    <Icon Id="pykrete.ico" SourceFile="pykrete.ico" />
+    <!-- Icon shown in Windows' Add/Remove Programs. `sys.SOURCEFILEDIR`
+         is the directory of this wxs file; light resolves relative
+         `SourceFile` paths against the CWD, which isn't this one. -->
+    <Icon Id="pykrete.ico" SourceFile="$(sys.SOURCEFILEDIR)pykrete.ico" />
     <Property Id="ARPPRODUCTICON" Value="pykrete.ico" />
 
     <Directory Id="TARGETDIR" Name="SourceDir">
