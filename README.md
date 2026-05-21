@@ -79,18 +79,22 @@ support and pykrete's checks. See [docs/design/multiplexer.md](docs/design/multi
 
 The **VS Code extension** ([editors/vscode/](editors/vscode/)) wraps this —
 it launches `pykrete-lsp`, bundles the Python engine, and routes `.pyk`
-files to it. Each release attaches a `.vsix` file you can side-load:
+files to it.
 
-1. Download `pykrete-vscode-vX.Y.Z.vsix` from the
-   [latest release](https://github.com/amirnaderi93/pykrete/releases/latest).
-2. Install it:
-   ```bash
-   code --install-extension pykrete-vscode-vX.Y.Z.vsix
-   ```
-   Or, inside the editor: **Extensions panel → ⋯ menu → Install from VSIX…**
+**Cursor, VSCodium, code-server, Theia** — search **pykrete** in the
+extensions panel. Each release is published to the
+[Open VSX Registry](https://open-vsx.org/extension/pykrete/pykrete-vscode),
+which those editors use as their default extension source.
 
-Works the same way in **Cursor**, **VSCodium**, and other VS Code-derived
-editors (`cursor --install-extension …`, `codium --install-extension …`).
+**VS Code** — download `pykrete-vscode-vX.Y.Z.vsix` from the
+[latest release](https://github.com/amirnaderi93/pykrete/releases/latest)
+and install it:
+
+```bash
+code --install-extension pykrete-vscode-vX.Y.Z.vsix
+```
+
+Or inside the editor: **Extensions panel → ⋯ menu → Install from VSIX…**
 
 For Neovim, Helix, Emacs, and other LSP clients, see
 [docs/editors/](docs/editors/).

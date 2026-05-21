@@ -68,24 +68,42 @@ cargo install --git https://github.com/amirnaderi93/pykrete pykrete
 cargo install --git https://github.com/amirnaderi93/pykrete pykrete-lsp
 ```
 
-### VS Code extension (.vsix)
+### VS Code extension (.vsix + Open VSX)
 
-The extension lives in [`../editors/vscode/`](../editors/vscode/). It is
-distributed as a `.vsix` file attached to every GitHub Release; users
-download it and side-load it (see the [main README](../README.md#editor-integration-lsp)
-for the install command). The `vsix` job in `release.yml` builds it on
-each release tag — no manual packaging step.
+The extension lives in [`../editors/vscode/`](../editors/vscode/). The
+`vsix` job in `release.yml` packages it on every release tag and
+publishes it through two channels:
 
-Other distribution paths, when you want them:
+1. **GitHub Release asset** — `pykrete-vscode-<tag>.vsix` attached to
+   every release. Users download it and side-load it (see the
+   [main README](../README.md#editor-integration-lsp)). This path always
+   works, no secrets needed.
+2. **Open VSX Registry** (<https://open-vsx.org>) — the open-source
+   extension registry that Cursor, VSCodium, code-server and Theia use
+   as their default source. The release workflow's `Publish to Open
+   VSX` step publishes here automatically when `OVSX_TOKEN` is set.
+   Re-running for an existing tag is safe — the step detects
+   "already published" and skips.
 
-- **Open VSX Registry** (<https://open-vsx.org>) — the open-source
-  marketplace used by Cursor, VSCodium, Theia, code-server. Free,
-  Eclipse Foundation account (no Microsoft, no billing). Publish with
-  `npx ovsx publish -p <TOKEN>` from `editors/vscode/`.
-- **Visual Studio Marketplace** — Microsoft's marketplace. Requires an
-  Azure DevOps PAT and a publisher registered at
-  <https://marketplace.visualstudio.com/manage>. Same tooling
-  (`npx vsce publish`); just an extra account hurdle.
+**One-time setup for Open VSX:**
+
+1. Create an [Eclipse account](https://accounts.eclipse.org/user/register)
+   and sign the Publisher Agreement once.
+2. Log into <https://open-vsx.org/> with that account and create an
+   access token (user-settings → Access Tokens).
+3. Create the `pykrete` namespace at
+   <https://open-vsx.org/user-settings/namespaces> (matches the
+   `publisher` field in `package.json`).
+4. Add the token to the pykrete repo's Actions secrets as
+   **`OVSX_TOKEN`**.
+
+Without `OVSX_TOKEN`, the Open VSX step is skipped silently and only
+the `.vsix` lands on the GitHub Release.
+
+**Visual Studio Marketplace** — Microsoft's marketplace, optional.
+Requires an Azure DevOps PAT and a publisher registered at
+<https://marketplace.visualstudio.com/manage>. Same tooling
+(`npx vsce publish`); just an extra account hurdle.
 
 A JetBrains/PyCharm plugin is planned and will use the JetBrains
 Marketplace once it exists.
