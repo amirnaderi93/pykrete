@@ -1,0 +1,155 @@
+---
+/*
+ * Web-native "editor" graphic for the landing page — HTML + CSS, no
+ * screenshot. Shows pykrete catching a column-name typo: the offending
+ * token gets a wavy underline and a diagnostic strip states the error.
+ *
+ * Crisp at any zoom, themeable, nothing to re-capture when the UI moves.
+ */
+---
+
+<figure class="editor-demo">
+  <div
+    class="window"
+    role="img"
+    aria-label="A code editor showing pykrete flagging the column name 'plcae_code' as a typo. Diagnostic D0030: Column 'plcae_code' does not exist on schema 'Order'. Did you mean 'place_code'?"
+  >
+    <div class="titlebar">
+      <span class="dots"><i class="r"></i><i class="y"></i><i class="g"></i></span>
+      <span class="filename">orders.pyk</span>
+    </div>
+    <ol class="code" aria-hidden="true">
+      <li><span class="kw">class</span> <span class="cls">Order</span>(<span class="cls">Schema</span>):</li>
+      <li>    place_code: <span class="cls">int</span></li>
+      <li>    status: <span class="cls">string</span></li>
+      <li>    amount: <span class="cls">int</span></li>
+      <li> </li>
+      <li><span class="kw">def</span> <span class="fn">average_basket</span>(orders: <span class="cls">DataFrame</span>[<span class="cls">Order</span>]):</li>
+      <li>    <span class="kw">return</span> (</li>
+      <li>        orders</li>
+      <li>        .<span class="fn">filter</span>(<span class="fn">F</span>.<span class="fn">col</span>(<span class="str">"status"</span>) == <span class="str">"paid"</span>)</li>
+      <li class="err-line">        .<span class="fn">groupBy</span>(<span class="str">"<span class="squiggle">plcae_code</span>"</span>)</li>
+      <li>        .<span class="fn">agg</span>(<span class="fn">F</span>.<span class="fn">avg</span>(<span class="str">"amount"</span>))</li>
+      <li>    )</li>
+    </ol>
+    <div class="diagnostic">
+      <span class="badge">D0030</span>
+      <span class="msg">
+        Column <b>'plcae_code'</b> does not exist on schema <b>'Order'</b>.
+        Did you mean <span class="sug">'place_code'</span>?
+      </span>
+    </div>
+  </div>
+</figure>
+
+<style>
+  .editor-demo {
+    margin: 2.25rem auto 0;
+    max-width: 44rem;
+  }
+  .window {
+    background: #1e2127;
+    border: 1px solid #30353f;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 20px 44px -14px rgba(0, 0, 0, 0.55);
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    text-align: left;
+  }
+  .titlebar {
+    position: relative;
+    display: flex;
+    align-items: center;
+    background: #272b33;
+    padding: 0.6rem 0.85rem;
+    border-bottom: 1px solid #30353f;
+  }
+  .dots {
+    display: flex;
+    gap: 0.4rem;
+  }
+  .dots i {
+    display: block;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+  }
+  .dots .r { background: #e06c75; }
+  .dots .y { background: #e5c07b; }
+  .dots .g { background: #98c379; }
+  .filename {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    color: #8b94a3;
+    font-size: 0.8rem;
+  }
+  .code {
+    margin: 0;
+    padding: 0.9rem 0;
+    list-style: none;
+    counter-reset: ln;
+    font-size: 0.82rem;
+    line-height: 1.7;
+    color: #abb2bf;
+    overflow-x: auto;
+  }
+  .code li {
+    counter-increment: ln;
+    white-space: pre;
+    padding-right: 1rem;
+  }
+  .code li::before {
+    content: counter(ln);
+    display: inline-block;
+    width: 2.25rem;
+    margin-right: 1rem;
+    text-align: right;
+    color: #4b515e;
+  }
+  .err-line {
+    background: rgba(224, 108, 117, 0.08);
+  }
+  .kw  { color: #c678dd; }
+  .str { color: #98c379; }
+  .cls { color: #e5c07b; }
+  .fn  { color: #61afef; }
+  .squiggle {
+    text-decoration: underline wavy #e06c75;
+    text-decoration-skip-ink: none;
+    text-underline-offset: 3px;
+  }
+  .diagnostic {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.6rem;
+    background: rgba(224, 108, 117, 0.1);
+    border-top: 1px solid #30353f;
+    padding: 0.7rem 1rem;
+    font-size: 0.8rem;
+    line-height: 1.55;
+  }
+  .badge {
+    flex: none;
+    margin-top: 0.05rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+    background: #e06c75;
+    color: #1e2127;
+    font-weight: 700;
+    font-size: 0.7rem;
+  }
+  .msg { color: #c2c8d2; }
+  .msg b {
+    color: #e7eaf0;
+    font-weight: 600;
+  }
+  .sug {
+    color: #98c379;
+    font-weight: 600;
+  }
+  @media (max-width: 30rem) {
+    .code { font-size: 0.72rem; }
+    .filename { display: none; }
+  }
+</style>

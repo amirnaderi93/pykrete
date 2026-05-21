@@ -19,6 +19,7 @@ hero:
 ---
 
 import { Card, CardGrid, Steps } from '@astrojs/starlight/components';
+import EditorDemo from '../../components/EditorDemo.astro';
 
 ## The bug that reaches production
 
@@ -28,26 +29,7 @@ The job runs. It returns an empty dataframe, a column of nulls, a number that's 
 
 pykrete catches it while you type.
 
-{/* PLACEHOLDER IMAGE — replace /public/editor-demo-placeholder.svg with a
-    real editor screenshot/GIF before this page is published. */}
-![pykrete flagging a column typo in the editor](/pykrete/editor-demo-placeholder.svg)
-
-```python
-class Order(Schema):
-    place_code: int
-    status: string
-    amount: int
-
-def average_basket(orders: DataFrame[Order]) -> DataFrame:
-    return (
-        orders
-        .filter(F.col("status") == "paid")
-        .groupBy("plcae_code")
-        .agg(F.avg("amount").alias("avg_amount"))
-    )
-#                ╰── D0030  Column 'plcae_code' does not exist on
-#                           schema 'Order'. Did you mean 'place_code'?
-```
+<EditorDemo />
 
 Tell pykrete the shape of a dataframe — a `Schema` class, a `DataFrame[Order]` annotation — and it checks every column you touch, the whole way down the chain.
 
