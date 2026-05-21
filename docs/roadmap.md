@@ -63,13 +63,27 @@ variable in both a parameter slot `GenericClass[T]` and a return slot
 
 ## Quality-of-life
 
-- **Packaging** — `cargo install` + a Homebrew tap; marketplace publishing
-  for the VS Code extension (distributed as a local `.vsix` today).
-- **Editor-agnostic LSP docs** — setup snippets for Neovim, Helix, Zed,
-  Emacs.
+- **User-facing language reference** ([`language-reference/`](language-reference/))
+  — schema syntax, operation reference, error catalog, configuration,
+  cookbook. The doc lives but is empty.
 - **Performance pass** — benchmark on large codebases; today every
   `pykrete check` reparses the whole project.
 - **Duplicate-name detection** across files.
+- **Zed extension** — Neovim, Helix and Emacs setups are wired in
+  [`editors/`](editors/); Zed needs a dedicated extension.
+
+Already shipped (recorded here for completeness):
+
+- **Packaging.** GitHub Releases with prebuilt binaries for macOS
+  (arm64/x64), Linux x64, and a Windows MSI installer; a Homebrew tap
+  (`brew install amirnaderi93/pykrete/pykrete`); `cargo install --git`.
+  Each release ships through the release workflow automatically.
+- **VS Code extension on both registries.** The Visual Studio Marketplace
+  (for VS Code) and the Open VSX Registry (for Cursor, VSCodium,
+  code-server, Theia). A `.vsix` is also attached to every release for
+  side-loading.
+- **Editor-agnostic LSP setup docs** for Neovim, Helix and Emacs in
+  [`editors/`](editors/).
 
 ## Strategic direction
 

@@ -2,6 +2,26 @@
 
 Thin client that launches `pykrete-lsp` and routes `.pyk` files to it.
 
+## Install
+
+**VS Code** — search **pykrete** in the Extensions panel, or:
+
+```sh
+code --install-extension pykrete.pykrete-vscode
+```
+
+**Cursor / VSCodium / code-server / Theia** — search **pykrete** in the
+Extensions panel; the same extension is on the Open VSX Registry.
+
+**Offline / locked-down environments** — every pykrete release attaches
+a `pykrete-vscode-vX.Y.Z.vsix` file. Download it and side-load:
+
+```sh
+code --install-extension pykrete-vscode-vX.Y.Z.vsix
+```
+
+Or, in-editor: **Extensions panel → ⋯ → Install from VSIX…**.
+
 ## What you get
 
 Install the extension, open a `.pyk` file. pykrete-lsp gives you:
@@ -45,15 +65,17 @@ npm run watch           # rebuild on save
 `npm install` also fetches the bundled basedpyright (~40 MB) into
 `node_modules`; it ships inside the packaged `.vsix`.
 
-## Package + install locally
+## Package the .vsix locally (development)
 
 ```sh
-npx vsce package --allow-missing-repository
-code --install-extension pykrete-vscode-0.1.0.vsix
+npx vsce package
+code --install-extension pykrete-vscode-<version>.vsix
 ```
 
 To pick up code changes after reinstall, reload the VS Code window
-(`Developer: Reload Window`).
+(`Developer: Reload Window`). For released versions the same `.vsix` is
+attached to every GitHub Release, so you rarely need to build it
+yourself.
 
 ## Server discovery
 

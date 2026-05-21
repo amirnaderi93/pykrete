@@ -191,4 +191,4 @@ Include a minimal `.pyk` snippet whenever possible — that's the fastest path t
 
 ## Releases
 
-When v0.1 ships we'll tag `v0.1.0`. Going forward, releases follow [semantic versioning](https://semver.org/) with notes in `CHANGELOG.md`.
+pykrete follows [semantic versioning](https://semver.org/). To cut a release: bump `version` in the workspace `Cargo.toml`, add a `CHANGELOG.md` entry, commit, then `git tag vX.Y.Z && git push origin vX.Y.Z`. The [release workflow](.github/workflows/release.yml) builds binaries for macOS (arm64/x64) + Linux x64 + Windows (MSI), attaches the `.vsix`, publishes the extension to the Visual Studio Marketplace and Open VSX, and bumps the Homebrew tap — all automatically. See [`packaging/README.md`](packaging/README.md) for the full pipeline.

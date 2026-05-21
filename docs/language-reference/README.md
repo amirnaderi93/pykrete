@@ -2,7 +2,12 @@
 
 User-facing reference for writing pykrete code.
 
-**Status:** empty. Will be populated as features land in the checker.
+**Status:** not yet written. v0.1 (checker + LSP + transpiler) shipped
+without a dedicated language reference; the README, the
+[v0.1 spec](../v0.1-spec.md), and
+[`docs/design/architecture.md`](../design/architecture.md) cover most of
+the territory in the meantime. Filling this in is on the
+[roadmap](../roadmap.md).
 
 ## Planned sections
 
