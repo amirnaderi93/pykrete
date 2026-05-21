@@ -77,8 +77,9 @@ jobs:
           msi="pykrete-$tag-${{ matrix.target }}.msi"
           cargo install cargo-wix --locked
           # --package is required in a workspace; cargo-wix then reads the
-          # WiX source from that package's wix/ directory.
-          cargo wix --package pykrete --no-build --target ${{ matrix.target }} \
+          # WiX source from that package's wix/ directory. --nocapture
+          # forwards candle/light's output so any WiX error is visible.
+          cargo wix --package pykrete --no-build --nocapture --target ${{ matrix.target }} \
             --install-version "${tag#v}" --output "$msi"
           # Git Bash on Windows ships `sha256sum`, not `shasum`.
           sha256sum "$msi" | tee "$msi.sha256"
