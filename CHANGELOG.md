@@ -6,6 +6,25 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.2]
+
+### Added
+
+- **VS Code extension on two registries.** Every release publishes the
+  extension to the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=pykrete.pykrete-vscode)
+  (VS Code) and the [Open VSX Registry](https://open-vsx.org/extension/pykrete/pykrete-vscode)
+  (Cursor, VSCodium, code-server, Theia). Search **pykrete** in the
+  extensions panel.
+- **`.vsix` attached to every release** for offline / sideload installs.
+- **File icon for `.pyk` files** in the VS Code explorer.
+- **Brand assets** — logo at the top of the README, file icons, and a
+  proper pykrete icon in Windows' Add/Remove Programs entry for the MSI.
+
+### Changed
+
+- No checker, LSP, or transpiler behavior changed from 0.1.1; this
+  release is brand, packaging, and distribution-channel work.
+
 ## [0.1.1]
 
 ### Added
@@ -44,6 +63,7 @@ full contract.
 - **Multi-file analysis** via imported typed declarations.
 - **`pykrete.json`** project configuration with non-strict / strict modes.
 
-[Unreleased]: https://github.com/amirnaderi93/pykrete/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/amirnaderi93/pykrete/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/amirnaderi93/pykrete/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/amirnaderi93/pykrete/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/amirnaderi93/pykrete/releases/tag/v0.1.0
