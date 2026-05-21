@@ -1505,10 +1505,20 @@ fn check_chained_field_access<'a>(
             // flag 'withField' as a missing field on schema R.)
             match c.func.as_ref() {
                 Expr::Attribute(a) => check_chained_field_access(
-                    &a.value, receiver, ctx, source, line_index, diagnostics,
+                    &a.value,
+                    receiver,
+                    ctx,
+                    source,
+                    line_index,
+                    diagnostics,
                 ),
                 other => check_chained_field_access(
-                    other, receiver, ctx, source, line_index, diagnostics,
+                    other,
+                    receiver,
+                    ctx,
+                    source,
+                    line_index,
+                    diagnostics,
                 ),
             }
             for arg in &c.arguments.args {

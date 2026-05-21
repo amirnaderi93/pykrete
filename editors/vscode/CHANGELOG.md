@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.6
+
+Tracks the v0.1.6 pykrete-lsp release — five real-codebase fixes from
+the pykrete-tests integration loop. No editor-side behavior changes;
+the LSP gains four new D0030 diagnostic shapes (`df["X"]` subscript,
+GroupedData shortcut aggregates, `intersect`/`subtract`/`exceptAll`,
+chained nested-field access, lowercase `groupby` alias). See the
+[main CHANGELOG](../../CHANGELOG.md#016) for the breakdown.
+
 ## 0.2.5
 
 - Temporary displayName change to bypass the Visual Studio Marketplace's

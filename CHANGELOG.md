@@ -6,6 +6,47 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.6]
+
+Five fixes batched from the
+[pykrete-tests](https://github.com/amirnaderi93/pykrete-tests) loop —
+annotating real PySpark codebases (Apache Spark + MLflow) and patching
+every gap that surfaced. CI on every push and nightly is wired up there
+to keep the runs green.
+
+### Added
+
+- **`df["X"]` subscript** recognized as a column reference alongside
+  `col("X")` and `df.X`. Typo in `df["aeg"]` is now caught the same way
+  `df.aeg` is. Surfaced by pilot 1 (Spark `basic.py`).
+- **GroupedData shortcut aggregates** check their string column args.
+  `g.max("col")` / `g.min(...)` / `g.sum(...)` / `g.mean(...)` /
+  `g.avg(...)` now route through the same `resolve_path` machinery as
+  pivot — dotted nested refs (`g.max("b.c")`) work too. Surfaced by
+  pilot 2 (Spark `test_group.py`).
+- **`intersect` / `intersectAll` / `subtract` / `exceptAll`** modeled
+  as set ops alongside `union` / `unionByName`. Downstream
+  `select(col("typo"))` after one of these is now checked; the
+  schema-mismatch diagnostic names the actual method. Surfaced by
+  pilot 3 (MLflow `test_spark_datasource_autologging.py`).
+- **Chained Column-on-Column nested-field access** — `df.r.X` /
+  `df["r"].X` / `df.r["X"]` / `df["r"]["X"]` — checked against the
+  nested struct schema, not just the top-level column. The diagnostic
+  for `df.r.typo` names schema `R`, not the outer schema. Method
+  calls (`df["r"].withField(...)`) are correctly distinguished from
+  field accesses so the method name isn't flagged. Surfaced by
+  pilot 4 (Spark `test_column.py`).
+- **Lowercase `df.groupby(...)` alias** recognized identically to
+  `df.groupBy(...)`. Doc-tutorial code (e.g. `examples/.../arrow.py`)
+  uses the lowercase form exclusively; typos there used to slip past.
+  Surfaced by pilot 5 (Spark `arrow.py`).
+
+### Changed
+
+- Workspace and VS Code extension version bumps. No release-channel or
+  packaging changes; the publishing pipeline from 0.1.5 ships
+  unchanged.
+
 ## [0.1.5]
 
 ### Changed
@@ -93,7 +134,8 @@ full contract.
 - **Multi-file analysis** via imported typed declarations.
 - **`pykrete.json`** project configuration with non-strict / strict modes.
 
-[Unreleased]: https://github.com/amirnaderi93/pykrete/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/amirnaderi93/pykrete/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/amirnaderi93/pykrete/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/amirnaderi93/pykrete/compare/v0.1.3...v0.1.5
 [0.1.4]: https://github.com/amirnaderi93/pykrete/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/amirnaderi93/pykrete/compare/v0.1.2...v0.1.3
