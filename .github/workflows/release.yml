@@ -129,10 +129,13 @@ jobs:
       # use by default. Publishing here gives "search → install" UX in
       # those editors. The step is a no-op when OVSX_TOKEN isn't set.
       - name: Publish to Open VSX
-        if: ${{ secrets.OVSX_TOKEN != '' }}
         env:
           OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}
         run: |
+          if [ -z "${OVSX_TOKEN:-}" ]; then
+            echo "::notice::OVSX_TOKEN not set; skipping Open VSX publish"
+            exit 0
+          fi
           tag="${{ inputs.tag || github.ref_name }}"
           vsix="pykrete-vscode-$tag.vsix"
           set +e
@@ -152,10 +155,13 @@ jobs:
       # default search/install source. The step is a no-op when
       # VSCE_PAT isn't set.
       - name: Publish to the Visual Studio Marketplace
-        if: ${{ secrets.VSCE_PAT != '' }}
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: |
+          if [ -z "${VSCE_PAT:-}" ]; then
+            echo "::notice::VSCE_PAT not set; skipping VS Marketplace publish"
+            exit 0
+          fi
           tag="${{ inputs.tag || github.ref_name }}"
           vsix="$GITHUB_WORKSPACE/pykrete-vscode-$tag.vsix"
           cd editors/vscode
