@@ -259,6 +259,87 @@ def f(raw: DataFrame[Orders]) -> DataFrame:
 }
 
 // ===========================================================================
+// Lowercase `groupby` alias
+//
+// PySpark accepts both `df.groupBy(...)` (the documented form) and
+// `df.groupby(...)` (a lowercase alias). Real code in the wild — e.g.
+// examples/src/main/python/sql/arrow.py — uses lowercase exclusively.
+// pykrete used to recognize only the camelCase form; a typo on the
+// groupby key with lowercase slipped past silently.
+// ===========================================================================
+
+#[test]
+fn lowercase_groupby_alias_checks_keys() {
+    let result = check(
+        r#"
+class Sales(Schema):
+    region: string
+    year: int
+    amount: int
+
+def f(df: DataFrame[Sales]) -> None:
+    df.groupby("typo").agg(F.sum("amount").alias("total"))
+"#,
+    );
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "typo");
+}
+
+#[test]
+fn lowercase_groupby_alias_produces_a_Grouped_view_for_pivot() {
+    // Confirm the alias plugs into the same downstream machinery —
+    // pivot's argument check should fire just like under groupBy.
+    let result = check(
+        r#"
+class Sales(Schema):
+    region: string
+    year: int
+    amount: int
+
+def f(df: DataFrame[Sales]) -> None:
+    df.groupby("year").pivot("typo").sum("amount")
+"#,
+    );
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "typo");
+}
+
+#[test]
+fn lowercase_groupby_alias_plugs_into_shortcut_aggregates() {
+    // groupby + GroupedData shortcut (.max here) — the column arg
+    // should be checked the same way it is for groupBy.max.
+    let result = check(
+        r#"
+class Sales(Schema):
+    region: string
+    year: int
+    amount: int
+
+def f(df: DataFrame[Sales]) -> None:
+    df.groupby("year").max("typo")
+"#,
+    );
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "typo");
+}
+
+#[test]
+fn lowercase_groupby_alias_clean_path_does_not_false_flag() {
+    let result = check(
+        r#"
+class Sales(Schema):
+    region: string
+    year: int
+    amount: int
+
+def f(df: DataFrame[Sales]) -> None:
+    df.groupby("region", "year").agg(F.sum("amount").alias("total"))
+"#,
+    );
+    assert_does_not_have_code(&result, "D0030");
+}
+
+// ===========================================================================
 // GroupedData shortcut aggregates — `g.max("col")`, `g.min/sum/mean/avg(...)`
 //
 // Spark's GroupedData carries shortcut methods that are equivalent to

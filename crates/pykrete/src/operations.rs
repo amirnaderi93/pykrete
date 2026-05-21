@@ -83,7 +83,7 @@ enum TwoDfMethod {
 
 fn column_method_shape(method: &str) -> Option<ColumnMethodShape> {
     match method {
-        "select" | "drop" | "dropDuplicates" | "groupBy" | "cube" | "rollup" => {
+        "select" | "drop" | "dropDuplicates" | "groupBy" | "groupby" | "cube" | "rollup" => {
             Some(ColumnMethodShape::AllColumnName)
         }
         "filter" | "where" | "dropna" => Some(ColumnMethodShape::AllExpression),
@@ -2345,13 +2345,17 @@ fn apply_column_method<'a>(
                 .collect();
             Some(SchemaView::Derived(fields))
         }
-        "groupBy" | "cube" | "rollup" => {
-            // None of these return a DataFrame; they return a GroupedData
-            // that captures the group keys and remembers the input schema.
-            // The follow-up .agg(...) call uses that to check its column
-            // references and produce the final DataFrame schema. `cube`
-            // and `rollup` differ from `groupBy` only in which subtotal
-            // rows they emit — irrelevant to the column schema.
+        "groupBy" | "groupby" | "cube" | "rollup" => {
+            // `groupby` is the lowercase Spark alias of `groupBy` —
+            // identical semantics; PySpark accepts both and a lot of
+            // real-world code (e.g. examples/src/main/python/sql/
+            // arrow.py) uses the lowercase form. None of these return
+            // a DataFrame; they return a GroupedData that captures
+            // the group keys and remembers the input schema. The
+            // follow-up .agg(...) call uses that to check its column
+            // references and produce the final DataFrame schema.
+            // `cube` and `rollup` differ from `groupBy` only in which
+            // subtotal rows they emit — irrelevant to the column schema.
             let mut keys: Vec<&'a str> = Vec::new();
             for arg in &call.arguments.args {
                 if let Some(name) = column_name_arg(arg) {
