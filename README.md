@@ -81,14 +81,15 @@ The **VS Code extension** ([editors/vscode/](editors/vscode/)) wraps this —
 it launches `pykrete-lsp`, bundles the Python engine, and routes `.pyk`
 files to it.
 
-**Cursor, VSCodium, code-server, Theia** — search **pykrete** in the
-extensions panel. Each release is published to the
-[Open VSX Registry](https://open-vsx.org/extension/pykrete/pykrete-vscode),
-which those editors use as their default extension source.
+**VS Code, Cursor, VSCodium, code-server, Theia** — search **pykrete**
+in the extensions panel. Each release is published to both the
+[Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=pykrete.pykrete-vscode)
+(VS Code's default source) and the
+[Open VSX Registry](https://open-vsx.org/extension/pykrete/pykrete-vscode)
+(the default for the others).
 
-**VS Code** — download `pykrete-vscode-vX.Y.Z.vsix` from the
-[latest release](https://github.com/amirnaderi93/pykrete/releases/latest)
-and install it:
+If you can't reach either registry, every release also attaches a
+`pykrete-vscode-vX.Y.Z.vsix` you can side-load:
 
 ```bash
 code --install-extension pykrete-vscode-vX.Y.Z.vsix

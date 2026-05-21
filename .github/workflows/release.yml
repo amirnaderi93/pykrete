@@ -148,6 +148,30 @@ jobs:
             echo "::warning::Open VSX publish failed (rc=$rc) — see log above; the GitHub Release upload already succeeded"
           fi
 
+      # Visual Studio Marketplace (Microsoft) — vanilla VS Code's
+      # default search/install source. The step is a no-op when
+      # VSCE_PAT isn't set.
+      - name: Publish to the Visual Studio Marketplace
+        if: ${{ secrets.VSCE_PAT != '' }}
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          vsix="$GITHUB_WORKSPACE/pykrete-vscode-$tag.vsix"
+          cd editors/vscode
+          set +e
+          out=$(npx vsce publish -p "$VSCE_PAT" --packagePath "$vsix" 2>&1)
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" = 0 ]; then
+            echo "::notice::VS Marketplace: published"
+          elif echo "$out" | grep -qi 'already exists\|already published\|same version\|version.*already'; then
+            echo "::notice::VS Marketplace: this version is already published, skipping"
+          else
+            echo "::warning::VS Marketplace publish failed (rc=$rc) — see log above; the GitHub Release upload already succeeded"
+          fi
+
   # Re-render the Homebrew formula from the freshly published checksums
   # and push it to the tap. Requires a HOMEBREW_TAP_TOKEN secret — a
   # token with contents:write on the amirnaderi93/homebrew-pykrete repo.

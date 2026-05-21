@@ -100,10 +100,23 @@ publishes it through two channels:
 Without `OVSX_TOKEN`, the Open VSX step is skipped silently and only
 the `.vsix` lands on the GitHub Release.
 
-**Visual Studio Marketplace** — Microsoft's marketplace, optional.
-Requires an Azure DevOps PAT and a publisher registered at
-<https://marketplace.visualstudio.com/manage>. Same tooling
-(`npx vsce publish`); just an extra account hurdle.
+**Visual Studio Marketplace** — Microsoft's marketplace, vanilla VS
+Code's default search source. The `Publish to the Visual Studio
+Marketplace` step in `release.yml` publishes here automatically when
+`VSCE_PAT` is set. The token is an Azure DevOps PAT scoped to
+**Marketplace → Manage**, **All accessible organizations**; create it
+at `https://<your-org>.visualstudio.com/_usersSettings/tokens`. The
+publisher (matching `package.json`'s `publisher` field) is registered
+at <https://marketplace.visualstudio.com/manage>.
+
+Like Open VSX, the step detects "version already published" and skips
+on re-dispatch; other failures become warnings, not job failures.
+
+**Version discipline:** the marketplace and Open VSX both reject
+re-uploads of the same version. Bump `editors/vscode/package.json`'s
+`version` whenever the extension's code, icon, or metadata changes —
+not on every pykrete release. Pykrete's pipeline version
+(`Cargo.toml`) and the extension's version are independent.
 
 A JetBrains/PyCharm plugin is planned and will use the JetBrains
 Marketplace once it exists.
