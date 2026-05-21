@@ -3,6 +3,7 @@
 # pykrete
 
 [![CI](https://github.com/amirnaderi93/pykrete/actions/workflows/ci.yml/badge.svg)](https://github.com/amirnaderi93/pykrete/actions/workflows/ci.yml)
+[![pykrete-tests](https://github.com/amirnaderi93/pykrete-tests/actions/workflows/check.yml/badge.svg)](https://github.com/amirnaderi93/pykrete-tests/actions/workflows/check.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A strict superset of Python that adds static schema checking for dataframes. Inspired by TypeScript's relationship to JavaScript.
