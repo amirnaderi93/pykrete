@@ -1,16 +1,16 @@
 ---
 title: Configuration
-description: pykrete.json reference — typeCheckingMode, exclude, rules.
+description: The pykrete.json reference — typeCheckingMode, exclude, and per-rule severity overrides.
 ---
 
-pykrete picks up a `pykrete.json` file at (or above) the project root. The same file configures both the CLI and the LSP server.
+pykrete reads a `pykrete.json` file from the project root, or the nearest ancestor directory. The same file configures the CLI and the language server, so the editor and your CI agree.
 
-A minimal example:
+You don't need one to get started — the defaults are sensible. Add a `pykrete.json` when you want to tune behavior.
 
 ```json
 {
   "typeCheckingMode": "standard",
-  "exclude": ["target", ".venv", "tests/fixtures"],
+  "exclude": ["target", ".venv"],
   "rules": {
     "unionSchemaMismatch": "warning"
   }
@@ -19,56 +19,51 @@ A minimal example:
 
 ## `typeCheckingMode`
 
-How aggressively pykrete checks column types.
+How far pykrete goes when checking column **types**. Column **existence** checking (`unknownColumn` and friends) runs regardless of this setting.
 
-| Value | What it does |
+| Value | Behavior |
 |---|---|
-| `off` | No type checking; column-existence checks (`D0030`) still run. |
-| `basic` | `D0080` only — obvious type errors. Permissive. |
-| `standard` *(default)* | `D0080` + a stricter pass that catches more mismatches. |
-| `strict` | `standard` + `D0081` + nullability (`D0082`). |
+| `off` | No type checking. Existence checks still run. |
+| `basic` | Minimal type checking. |
+| `standard` *(default)* | Conservative type checking — `returnTypeMismatch` fires only when two types are confidently known and genuinely incompatible. |
+| `strict` | Everything in `standard`, plus the advisory checks: `nonNumericArithmetic`, `crossTypeComparison`, `nullabilityMismatch`. |
 
-The LSP server picks up the same setting. For the bundled VS Code extension, `pykrete.json`'s `typeCheckingMode` overrides the editor's setting, and the single value also drives the embedded Python language server.
+The language server reads the same value, and a `pykrete.json` `typeCheckingMode` takes precedence over the editor's own setting. See [Diagnostics](/pykrete/reference/diagnostics/#type-checking-diagnostics) for what each level surfaces.
 
 ## `exclude`
 
-Path substrings to skip. Any file whose path contains one of these is not checked.
+Path substrings to skip. A file whose path contains any of these is not checked.
 
 ```json
 {
-  "exclude": ["target", ".venv", "node_modules"]
+  "exclude": ["target", ".venv", "generated"]
 }
 ```
 
-Useful for excluding generated code, vendored sources, or build directories.
+Useful for build output, virtual environments, and vendored or generated code.
 
 ## `rules`
 
-Per-rule severity overrides. Keyed by the readable rule name (not the `D00XX` code).
+Per-rule severity overrides — turn a rule into a warning, or off entirely.
 
 ```json
 {
   "rules": {
     "unknownColumn": "error",
     "unionSchemaMismatch": "warning",
-    "columnTypeMismatch": "off"
+    "returnTypeMismatch": "off"
   }
 }
 ```
 
-Possible values: `error`, `warning`, `off`.
+Each value is `error`, `warning`, or `off`. Keys are [rule names](/pykrete/reference/diagnostics/#full-reference) — the `D00xx` code works too.
 
-Common patterns:
+A common adoption pattern on an existing codebase: set the noisy rules to `warning` first, clear them at your own pace, then promote them back to `error` once the project is clean.
 
-- **Adopting incrementally on a legacy codebase** — set everything to `warning` first, fix the loudest ones, then turn the rules back to `error` once the codebase is clean.
-- **Suppressing a noisy rule on a specific style** — turn `columnTypeMismatch` to `warning` if you intentionally feed `int` columns into string-formatting UDFs.
+## Where pykrete looks
 
-## Where pykrete looks for the file
-
-pykrete walks up from the file being checked, looking for the nearest `pykrete.json`. If none is found, defaults apply:
+Starting from the file being checked, pykrete walks up the directory tree and uses the first `pykrete.json` it finds. With none, the defaults apply:
 
 - `typeCheckingMode`: `standard`
 - `exclude`: empty
-- `rules`: empty (all rules at their default severity)
-
-You don't *need* a `pykrete.json` to use pykrete. Add one when you want to tune behavior.
+- `rules`: empty — every rule at its default severity

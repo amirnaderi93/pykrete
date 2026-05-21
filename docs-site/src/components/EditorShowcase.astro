@@ -1,0 +1,391 @@
+---
+/*
+ * Web-native, multi-tab "editor" showcase for the landing page —
+ * HTML + CSS, no screenshots. Modeled on the TypeScript homepage's
+ * hero widget: a row of tabs, each showing one pykrete capability.
+ *
+ * Tabs: Editor checks · Autocomplete · Hover · Inline SQL.
+ * Tab switching is CSS-only (radio inputs + :checked) — no JS.
+ *
+ * The running example is a deliberately generic `Sale` schema.
+ */
+---
+
+<figure class="showcase">
+  <input class="tabradio" type="radio" name="pk-showcase" id="pk-tab-1" checked />
+  <input class="tabradio" type="radio" name="pk-showcase" id="pk-tab-2" />
+  <input class="tabradio" type="radio" name="pk-showcase" id="pk-tab-3" />
+  <input class="tabradio" type="radio" name="pk-showcase" id="pk-tab-4" />
+
+  <div class="tabbar" role="tablist">
+    <label for="pk-tab-1">Editor checks</label>
+    <label for="pk-tab-2">Autocomplete</label>
+    <label for="pk-tab-3">Hover</label>
+    <label for="pk-tab-4">Inline SQL</label>
+  </div>
+
+  <div class="panels">
+    {/* ---- Panel 1 — Editor checks ---------------------------------- */}
+    <div
+      class="panel panel-1"
+      role="img"
+      aria-label="pykrete flags the misspelled column 'regoin' with an unknownColumn error: Column 'regoin' does not exist on schema 'Sale'. Did you mean 'region'?"
+    >
+      <div class="win">
+        <div class="titlebar">
+          <span class="dots"><i class="r"></i><i class="y"></i><i class="g"></i></span>
+          <span class="filename">sales.pyk</span>
+        </div>
+        <ol class="code">
+          <li><span class="kw">class</span> <span class="cls">Sale</span>(<span class="cls">Schema</span>):</li>
+          <li>    region: <span class="cls">string</span></li>
+          <li>    product: <span class="cls">string</span></li>
+          <li>    amount: <span class="cls">int</span></li>
+          <li>    quantity: <span class="cls">int</span></li>
+          <li> </li>
+          <li><span class="kw">def</span> <span class="fn">revenue_by_region</span>(sales: <span class="cls">DataFrame</span>[<span class="cls">Sale</span>]):</li>
+          <li class="err-line">    <span class="kw">return</span> sales.<span class="fn">groupBy</span>(<span class="str">"<span class="squiggle">regoin</span>"</span>).<span class="fn">agg</span>(<span class="fn">F</span>.<span class="fn">sum</span>(<span class="str">"amount"</span>))</li>
+        </ol>
+        <div class="diagnostic">
+          <span class="sev" aria-hidden="true">!</span>
+          <span class="msg">
+            <span class="rule">unknownColumn</span>Column <b>'regoin'</b> does not
+            exist on schema <b>'Sale'</b>. Did you mean <span class="sug">'region'</span>?
+          </span>
+        </div>
+      </div>
+    </div>
+
+    {/* ---- Panel 2 — Autocomplete ----------------------------------- */}
+    <div
+      class="panel panel-2"
+      role="img"
+      aria-label="pykrete offers column-name completions inside groupBy: region, product, amount, quantity — each with its type."
+    >
+      <div class="win">
+        <div class="titlebar">
+          <span class="dots"><i class="r"></i><i class="y"></i><i class="g"></i></span>
+          <span class="filename">sales.pyk</span>
+        </div>
+        <ol class="code">
+          <li><span class="kw">def</span> <span class="fn">revenue_by_region</span>(sales: <span class="cls">DataFrame</span>[<span class="cls">Sale</span>]):</li>
+          <li>    <span class="kw">return</span> sales.<span class="fn">groupBy</span>(<span class="str">"<span class="caret"></span>"</span>)</li>
+        </ol>
+        <div class="popup popup-complete">
+          <div class="opt sel"><span class="opt-i">abc</span><span class="opt-n">region</span><span class="opt-t">string</span></div>
+          <div class="opt"><span class="opt-i">abc</span><span class="opt-n">product</span><span class="opt-t">string</span></div>
+          <div class="opt"><span class="opt-i opt-i-n">123</span><span class="opt-n">amount</span><span class="opt-t">int</span></div>
+          <div class="opt"><span class="opt-i opt-i-n">123</span><span class="opt-n">quantity</span><span class="opt-t">int</span></div>
+        </div>
+      </div>
+    </div>
+
+    {/* ---- Panel 3 — Hover ------------------------------------------ */}
+    <div
+      class="panel panel-3"
+      role="img"
+      aria-label="Hovering the sales parameter shows its schema: DataFrame[Sale] with columns region string, product string, amount int, quantity int."
+    >
+      <div class="win">
+        <div class="titlebar">
+          <span class="dots"><i class="r"></i><i class="y"></i><i class="g"></i></span>
+          <span class="filename">sales.pyk</span>
+        </div>
+        <ol class="code">
+          <li><span class="kw">def</span> <span class="fn">revenue_by_region</span>(sales: <span class="cls">DataFrame</span>[<span class="cls">Sale</span>]):</li>
+          <li>    <span class="kw">return</span> <span class="hover-tok">sales</span>.<span class="fn">groupBy</span>(<span class="str">"region"</span>).<span class="fn">agg</span>(<span class="fn">F</span>.<span class="fn">sum</span>(<span class="str">"amount"</span>))</li>
+        </ol>
+        <div class="popup popup-hover">
+          <div class="hov-head">(parameter) <b>sales</b>: <span class="cls">DataFrame</span>[<span class="cls">Sale</span>]</div>
+          <div class="hov-rule"></div>
+          <div class="hov-schema">
+            <div class="hov-row"><span class="opt-n">region</span><span class="opt-t">string</span></div>
+            <div class="hov-row"><span class="opt-n">product</span><span class="opt-t">string</span></div>
+            <div class="hov-row"><span class="opt-n">amount</span><span class="opt-t">int</span></div>
+            <div class="hov-row"><span class="opt-n">quantity</span><span class="opt-t">int</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {/* ---- Panel 4 — Inline SQL ------------------------------------- */}
+    <div
+      class="panel panel-4"
+      role="img"
+      aria-label="pykrete checks column names inside SQL strings — the misspelled 'regoin' in a filter string is flagged with an unknownColumn error."
+    >
+      <div class="win">
+        <div class="titlebar">
+          <span class="dots"><i class="r"></i><i class="y"></i><i class="g"></i></span>
+          <span class="filename">sales.pyk</span>
+        </div>
+        <ol class="code">
+          <li><span class="kw">def</span> <span class="fn">eu_sales</span>(sales: <span class="cls">DataFrame</span>[<span class="cls">Sale</span>]):</li>
+          <li class="err-line">    <span class="kw">return</span> sales.<span class="fn">filter</span>(<span class="str">"<span class="squiggle">regoin</span> = 'EU'"</span>)</li>
+        </ol>
+        <div class="diagnostic">
+          <span class="sev" aria-hidden="true">!</span>
+          <span class="msg">
+            <span class="rule">unknownColumn</span>Column <b>'regoin'</b> does not
+            exist on schema <b>'Sale'</b>. Did you mean <span class="sug">'region'</span>?
+            <span class="diag-note">— checked inside the SQL string</span>
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+</figure>
+
+<style>
+  .showcase {
+    margin: 2.25rem auto 0;
+    max-width: 44rem;
+  }
+
+  /* Hidden radios drive the tabs; kept focusable for keyboard use. */
+  .tabradio {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .tabbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    margin-bottom: 0.6rem;
+  }
+  .tabbar label {
+    cursor: pointer;
+    padding: 0.35rem 0.7rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--sl-color-gray-2);
+    user-select: none;
+  }
+  .tabbar label:hover {
+    color: var(--sl-color-white);
+    background: var(--sl-color-gray-6);
+  }
+
+  /* Active-tab highlight, panel visibility — driven by :checked. */
+  #pk-tab-1:checked ~ .tabbar label[for='pk-tab-1'],
+  #pk-tab-2:checked ~ .tabbar label[for='pk-tab-2'],
+  #pk-tab-3:checked ~ .tabbar label[for='pk-tab-3'],
+  #pk-tab-4:checked ~ .tabbar label[for='pk-tab-4'] {
+    color: var(--sl-color-white);
+    background: var(--sl-color-accent-low);
+  }
+  .tabradio:focus-visible ~ .tabbar label {
+    outline: none;
+  }
+  #pk-tab-1:focus-visible ~ .tabbar label[for='pk-tab-1'],
+  #pk-tab-2:focus-visible ~ .tabbar label[for='pk-tab-2'],
+  #pk-tab-3:focus-visible ~ .tabbar label[for='pk-tab-3'],
+  #pk-tab-4:focus-visible ~ .tabbar label[for='pk-tab-4'] {
+    outline: 2px solid var(--sl-color-accent);
+    outline-offset: 2px;
+  }
+
+  .panels {
+    position: relative;
+    min-height: 17.5rem;
+  }
+  .panel { display: none; }
+  #pk-tab-1:checked ~ .panels .panel-1,
+  #pk-tab-2:checked ~ .panels .panel-2,
+  #pk-tab-3:checked ~ .panels .panel-3,
+  #pk-tab-4:checked ~ .panels .panel-4 {
+    display: block;
+  }
+
+  /* ---- Editor window ---------------------------------------------- */
+  .win {
+    background: #1e2127;
+    border: 1px solid #30353f;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 20px 44px -14px rgba(0, 0, 0, 0.55);
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    text-align: left;
+  }
+  .titlebar {
+    position: relative;
+    display: flex;
+    align-items: center;
+    background: #272b33;
+    padding: 0.6rem 0.85rem;
+    border-bottom: 1px solid #30353f;
+  }
+  .dots { display: flex; gap: 0.4rem; }
+  .dots i {
+    display: block;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+  }
+  .dots .r { background: #e06c75; }
+  .dots .y { background: #e5c07b; }
+  .dots .g { background: #98c379; }
+  .filename {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    color: #8b94a3;
+    font-size: 0.8rem;
+  }
+
+  .code {
+    margin: 0;
+    padding: 0.9rem 0;
+    list-style: none;
+    counter-reset: ln;
+    font-size: 0.82rem;
+    line-height: 1.7;
+    color: #abb2bf;
+    overflow-x: auto;
+  }
+  .code li {
+    counter-increment: ln;
+    white-space: pre;
+    padding-right: 1rem;
+  }
+  .code li::before {
+    content: counter(ln);
+    display: inline-block;
+    width: 2.25rem;
+    margin-right: 1rem;
+    text-align: right;
+    color: #4b515e;
+  }
+  .err-line { background: rgba(224, 108, 117, 0.08); }
+
+  .kw  { color: #c678dd; }
+  .str { color: #98c379; }
+  .cls { color: #e5c07b; }
+  .fn  { color: #61afef; }
+
+  .squiggle {
+    text-decoration: underline wavy #e06c75;
+    text-decoration-skip-ink: none;
+    text-underline-offset: 3px;
+  }
+
+  /* ---- Diagnostic strip (panels 1 & 4) ---------------------------- */
+  .diagnostic {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.6rem;
+    background: rgba(224, 108, 117, 0.1);
+    border-top: 1px solid #30353f;
+    padding: 0.7rem 1rem;
+    font-size: 0.8rem;
+    line-height: 1.55;
+  }
+  .sev {
+    flex: none;
+    margin-top: 0.05rem;
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: #e06c75;
+    color: #1e2127;
+    font-weight: 800;
+    font-size: 0.72rem;
+  }
+  .msg { color: #c2c8d2; }
+  .msg b { color: #e7eaf0; font-weight: 600; }
+  .sug { color: #98c379; font-weight: 600; }
+  .diag-note { color: #7d8694; }
+  /* The rule name — what the CLI prints and the editor shows as the
+     diagnostic code (e.g. `pykrete(unknownColumn)`). */
+  .rule {
+    color: #8b94a3;
+    margin-right: 0.45rem;
+  }
+
+  /* ---- Floating caret (autocomplete panel) ------------------------ */
+  .caret {
+    display: inline-block;
+    width: 1.5px;
+    height: 1.05em;
+    margin: 0 -0.75px;
+    vertical-align: text-bottom;
+    background: #abb2bf;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .caret { animation: pk-blink 1.1s steps(1) infinite; }
+  }
+  @keyframes pk-blink { 50% { opacity: 0; } }
+
+  /* ---- Popups (autocomplete & hover) ------------------------------ */
+  .popup {
+    width: max-content;
+    max-width: calc(100% - 2rem);
+    margin-top: -0.35rem;
+    margin-bottom: 1rem;
+    background: #21252b;
+    border: 1px solid #3a4150;
+    border-radius: 6px;
+    box-shadow: 0 10px 24px -8px rgba(0, 0, 0, 0.6);
+    font-size: 0.78rem;
+    overflow: hidden;
+  }
+  /* Indent each popup to sit under the relevant token: gutter (3.25rem)
+     plus the column count, in `ch` so it tracks the font size. */
+  .popup-complete { margin-left: calc(3.25rem + 25ch); }
+  .popup-hover    { margin-left: calc(3.25rem + 11ch); }
+
+  .opt {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.28rem 0.7rem 0.28rem 0.5rem;
+  }
+  .opt.sel { background: var(--sl-color-accent-low); }
+  .opt-i {
+    flex: none;
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: #98c379;
+    background: rgba(152, 195, 121, 0.14);
+    border-radius: 3px;
+    padding: 0.05rem 0.2rem;
+  }
+  .opt-i-n { color: #d19a66; background: rgba(209, 154, 102, 0.14); }
+  .opt-n { color: #d7dce4; }
+  .opt-t { margin-left: auto; padding-left: 1.5rem; color: #6b7280; }
+
+  .popup-hover { padding: 0; }
+  .hov-head {
+    padding: 0.5rem 0.7rem;
+    color: #c2c8d2;
+  }
+  .hov-head b { color: #e7eaf0; font-weight: 600; }
+  .hov-rule { border-top: 1px solid #3a4150; }
+  .hov-schema { padding: 0.4rem 0.7rem 0.5rem; }
+  .hov-row {
+    display: flex;
+    gap: 1.5rem;
+    line-height: 1.6;
+  }
+  .hover-tok {
+    border-radius: 2px;
+    background: rgba(97, 175, 239, 0.16);
+    box-shadow: 0 0 0 1px rgba(97, 175, 239, 0.35);
+  }
+
+  @media (max-width: 32rem) {
+    .code { font-size: 0.72rem; }
+    .filename { display: none; }
+    .popup-complete,
+    .popup-hover { margin-left: 1rem; }
+  }
+</style>

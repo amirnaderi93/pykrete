@@ -1,101 +1,94 @@
 ---
 title: Quickstart
-description: From a plain Python PySpark file to a pykrete-checked one in three steps.
+description: From a plain Python dataframe file to a pykrete-checked one — in three steps, five minutes, no project rewrite.
 ---
 
-The shortest path from "I have a PySpark codebase" to "pykrete is catching my typos". Five minutes, no project rewrite.
+You have a PySpark codebase and pykrete [installed](/pykrete/getting-started/install/). Here's the shortest path to it catching your first typo.
 
-## 1. Rename one file `.py` → `.pyk`
+## 1. Rename one file
 
-Pick a function whose dataframe schema you actually know. Rename its file:
+Pick a file with a function whose dataframe you understand. Rename it:
 
 ```sh
-mv orders.py orders.pyk
+mv sales.py sales.pyk
 ```
 
-Nothing else changes. `.pyk` is a strict superset of Python — every valid Python file is also valid pykrete. At this point `pykrete check orders.pyk` will run and report `0 issues`, because there are no `Schema` annotations yet to check anything against.
+That's a real change and a safe one. `.pyk` is a strict superset of Python — the file still parses, still runs, still does exactly what it did. `pykrete check sales.pyk` already works; it just has nothing to check yet.
 
-## 2. Add a `Schema` class
+## 2. Declare a schema
 
-Declare the columns of the dataframe you're working with. Field names and types match what Spark sees in the source:
+Add a class describing the columns of the dataframe the function works with:
 
 ```python
-# orders.pyk
-class Order(Schema):
-    place_code: int
-    status: string
+class Sale(Schema):
+    region: string
+    product: string
     amount: int
+    quantity: int
 ```
 
-Atomic types are `int`, `long`, `string`, `double`, `bool`, `date`, `timestamp`. Nested types are arrays, maps, and structs — declared by referencing another `Schema` class as a field type. See [Schemas](/pykrete/reference/schemas/) for the full reference.
+Field name is column name; field type is column type. The atomic types are `int`, `long`, `string`, `double`, `bool`, `date`, `timestamp`; columns can also be arrays, maps, and nested structs — see [Schemas](/pykrete/reference/schemas/).
 
-## 3. Annotate one function's parameter
+## 3. Annotate the function
+
+Add the schema to a parameter with `DataFrame[Sale]`:
 
 ```python
-# orders.pyk
-def average_basket(orders: DataFrame[Order]) -> DataFrame:
+def revenue_by_region(sales: DataFrame[Sale]) -> DataFrame:
     return (
-        orders
-        .filter(F.col("status") == "paid")
-        .groupBy("place_code")
-        .agg(F.avg("amount").alias("avg_amount"))
+        sales
+        .filter(F.col("quantity") > 0)
+        .groupBy("region")
+        .agg(F.sum("amount").alias("total"))
     )
 ```
 
-That's the whole investment: one `Schema` class, one `DataFrame[Order]` annotation.
-
-Run the check:
+That's the whole investment — one class, one annotation. Run the check:
 
 ```sh
-$ pykrete check orders.pyk
-orders.pyk: parsed OK — 1 schema(s), 1 typed function(s), 0 issue(s)
+$ pykrete check sales.pyk
+sales.pyk: parsed OK — 1 schema(s), 1 typed function(s), 0 issue(s)
 ```
 
-## 4. Make a typo on purpose
+## 4. Break it on purpose
 
-Change `"place_code"` to `"plcae_code"` and re-run:
+Change `"region"` to `"regoin"` and run again:
 
 ```sh
-$ pykrete check orders.pyk
-orders.pyk:6:18 error D0030 unknownColumn:
-    Column 'plcae_code' does not exist on schema 'Order'.
-    Did you mean 'place_code'?
+$ pykrete check sales.pyk
+sales.pyk:10:18 - error unknownColumn: Column 'regoin' does not exist on schema 'Sale'. Did you mean 'region'?
 ```
 
-The diagnostic includes the location, the rule name, the failing column, the schema it was checked against, and a did-you-mean. If you have the [VS Code extension](/pykrete/getting-started/install/#vs-code-extension) installed, this same diagnostic appears as a red squiggle under `plcae_code` as you type.
+There it is — location, severity, rule name, the bad column, the schema it was checked against, and a suggestion. With the [VS Code extension](/pykrete/getting-started/install/#vs-code-extension), this is a red underline under `regoin` as you type, no command needed.
 
-Revert the typo. You now have one checked function.
+Change it back. You now have one checked function.
 
-## What gets checked
+## What pykrete is checking
 
-The annotation propagates through whole chains:
+The annotation doesn't just check the one `groupBy`. It follows the chain:
 
-- After `.filter(...)`, the schema is still `Order` — filter doesn't change columns.
-- After `.groupBy("place_code")`, pykrete tracks that the group key is `place_code` and the underlying schema is `Order`.
-- After `.agg(F.avg("amount").alias("avg_amount"))`, the result schema is `place_code: int, avg_amount: double`. A downstream `.filter(F.col("amount") > 0)` would now fail — `amount` was aggregated away.
+- `.filter(...)` keeps the schema `Sale` — a filter changes rows, not columns.
+- `.groupBy("region")` produces a grouped view keyed on `region`.
+- `.agg(F.sum("amount").alias("total"))` produces a new schema: `region` and `total`.
 
-The same flow applies to `select`, `withColumn`, `drop`, `join`, `union`, `intersect`, `cube`, `rollup`, `pivot`, `transform`, and the rest. See [Diagnostics](/pykrete/reference/diagnostics/) for what gets caught.
+So a `.select(F.col("amount"))` tacked on the end would be flagged — `amount` was aggregated away two steps earlier. The error points at the line that uses the missing column, not the line that removed it. The same tracking covers `select`, `withColumn`, `drop`, `join`, `union`, `pivot`, and the rest.
 
-## 5. Gradual adoption
+## Grow it at your own pace
 
-You don't need to convert the whole repo. Run pykrete on the one file you've annotated:
+One file is a complete, useful state — leave it there as long as you like.
 
-```sh
-pykrete check orders.pyk
-```
+When the `Sale` schema would help elsewhere, move it to a shared module and import it; other files can stay `.py`. pykrete only enters a function when its signature has a `DataFrame[…]` slot, so unannotated code costs nothing.
 
-When `Order` becomes useful elsewhere, move it to a shared module — `schemas.py` or whatever — and import it. Other files can stay `.py`; pykrete only enters body analysis for functions whose signature has a `DataFrame[X]` slot.
-
-When you're ready, run pykrete against the whole repo:
+When you want the whole project checked at once:
 
 ```sh
 pykrete check .
 ```
 
-It walks `.pyk` files and reports the same `parsed OK — N schema(s), M typed function(s), K issue(s)` summary per file. Unannotated `.py` files are skipped.
+It walks every `.pyk` file and prints the same `parsed OK — N schema(s), M typed function(s), K issue(s)` summary per file. That line is what you put in CI.
 
-## What's next
+## Next
 
-- [Schemas](/pykrete/reference/schemas/) — the full schema syntax including nested arrays / maps / structs and the TypeScript-style type operators (`Pick`, `Omit`, `Join`, `GroupBy`).
-- [Diagnostics](/pykrete/reference/diagnostics/) — every rule with example and fix.
-- [Real-codebase tests](/pykrete/about/pykrete-tests/) — see what pykrete catches on real annotated PySpark code.
+- [Schemas](/pykrete/reference/schemas/) — nested arrays / maps / structs, and the `Pick` / `Omit` / `Join` operators.
+- [Diagnostics](/pykrete/reference/diagnostics/) — every rule, with examples.
+- [How it works](/pykrete/about/how-it-works/) — what's happening under the hood.

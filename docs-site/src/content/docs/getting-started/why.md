@@ -1,50 +1,57 @@
 ---
 title: Why pykrete
-description: The case for static schema checking on PySpark codebases — and why pykrete looks the way it does.
+description: The case for static schema checking on dataframe code — the bug it removes, and why pykrete looks the way it does.
 ---
 
-PySpark dataframes have a schema. The schema is real — every row in a DataFrame has the same columns, the same types, the same nullability. But Python doesn't see it. `df.select("price")` is just a string passed to a method; mistyping it as `"prcie"` produces no syntax error, no IDE warning, no test failure unless the test happens to assert on the wrong column name explicitly.
+## The bug
 
-What you get instead is an empty DataFrame in production, or a `Column 'prcie' does not exist` from Spark's analyzer the first time a query plan actually runs — by which point the bad code is already merged, deployed, or part of a scheduled job that ran at 2am.
+A dataframe has a schema — every row has the same columns, the same types. The schema is real. Python just can't see it.
 
-The shape of this problem is identical to JavaScript's. Object keys are strings; mistyping them is silent. TypeScript fixed it by adding a separate type layer that the runtime ignores, with a checker that runs at edit time. pykrete does the same thing for dataframes.
+`df.select("amount")` is a method call with a string argument. Mistype it `"amuont"` and nothing reacts: not the interpreter, not your linter, not your tests unless one happens to assert on that exact name. The mistake travels — into review, into `main`, into a scheduled job. The first thing that notices is Spark itself, the first time the query plan actually runs, and by then the answer is already wrong: an empty dataframe, a column of nulls, a number nobody can explain.
 
-## The shape of the solution
+Multiply that by every column reference in a pipeline that's been refactored four times by three people, and you have the normal state of a dataframe codebase: correct by habit and memory, not by anything a machine checks.
+
+## The fix has a familiar shape
+
+JavaScript had the same problem with object keys — strings, mistyped silently. TypeScript fixed it by adding a type layer the runtime ignores and a checker that runs while you type. pykrete does that for dataframes.
+
+You describe a dataframe's columns once, as a class:
 
 ```python
-class Order(Schema):
-    place_code: int
-    status: string
+class Sale(Schema):
+    region: string
+    product: string
     amount: int
-
-def total_per_place(orders: DataFrame[Order]) -> DataFrame:
-    return orders.groupBy("place_code").agg(F.sum("amount").alias("total"))
+    quantity: int
 ```
 
-Three things happen here, none of which exist in plain Python:
+You annotate the dataframes that have that shape:
 
-1. **`Schema`** declares a dataframe's columns and types. Python evaluates it as a class with type-annotated attributes; pykrete reads it as a schema.
-2. **`DataFrame[Order]`** is a parameterized type — same shape as TypeScript's `Array<Order>`. It says "this parameter is a DataFrame whose columns are exactly those of `Order`".
-3. **The body** is checked against `Order`. A typo on `"place_code"` would fire `D0030 unknownColumn` at the call site. A typo on `"amount"` would fire it inside the `F.sum(...)` call. A `select("status").filter("payed > 0")` after the `agg` would catch `payed` against the *post-agg* schema (`place_code` and `total`), not the original `Order`.
+```python
+def revenue_by_region(sales: DataFrame[Sale]) -> DataFrame:
+    return sales.groupBy("region").agg(F.sum("amount").alias("total"))
+```
 
-`.pyk` is a strict superset of Python — every valid Python file is also valid pykrete. The new syntax (`Schema`, `DataFrame[X]`) evaluates at runtime to plain Python classes and annotations; the checker is the only thing that uses them as types. `pykrete transpile` strips back to `.py` if you want to deploy without the `.pyk` extension visible — though you usually don't have to; Spark workers don't care about file extensions, only about the Python they get.
+And pykrete checks every column you touch against the schema in scope — `groupBy("regoin")` is flagged, `F.sum("amuont")` is flagged, and a reference to a column that an earlier `drop` removed is flagged at the line that uses it. The checks follow the data through the whole chain, because each operation transforms the schema and pykrete tracks the result.
 
-## What this is and isn't
+`.pyk` is a strict superset of Python. Every valid Python file is valid pykrete; the schema class and the `DataFrame[Sale]` annotation are ordinary Python that the interpreter is happy to ignore. The file runs unchanged. pykrete is the layer that reads those annotations at edit time — nothing it adds reaches runtime.
 
-It **is** a static checker, an LSP, a VS Code extension, and a thin transpiler. It catches column-name typos, schema drift through transformation chains, mismatched schemas at `union` / `unionByName` / `intersect`, column-type errors at function boundaries, and shape mismatches between what a function declares it returns and what its body actually produces.
+## Adopt it one file at a time
 
-It **isn't** a runtime validator, a query planner, a Spark client, or a replacement for tests. The deployed code is plain Python that runs on the same JVM-backed Spark. pykrete is a separate layer that sits at edit time, like TypeScript at edit time.
+You do not convert a codebase to use pykrete. You convert a file.
 
-## Why "strict superset"
+Rename `sales.py` to `sales.pyk` — it still runs exactly as before. Add one `Schema` class and one `DataFrame[…]` annotation to the function whose dataframe you actually understand. That function is now checked. The other two hundred files stay `.py` and untouched; pykrete only analyzes functions you've annotated.
 
-Same reason TypeScript is one: gradual adoption. Annotate the one function whose dataframe you actually understand, ship it, run pykrete only on that file at first. The other 200 files in the repo can stay `.py` and untouched. When `Order` becomes useful elsewhere, move it to a shared module and add `DataFrame[Order]` annotations to the next function. The checker scales with the annotations you've added; un-annotated code is just Python.
+This is the whole reason pykrete is a *superset* and not a new language. Adoption scales with the annotations you've added, and stops costing you anything the moment you stop adding them. There is no all-or-nothing migration, no flag day.
 
-## Why now
+## What it is, and what it isn't
 
-PySpark codebases have grown faster than their type discipline. Every team has a wiki page somewhere documenting "the canonical columns of the orders dataset" — a thing that the language should know but doesn't. The pieces to fix that are now off-the-shelf:
+It **is** a static checker (`pykrete check`), a language server (`pykrete-lsp`) that puts the same checks in your editor as diagnostics, hover, and completion, and a thin transpiler back to `.py`. It catches column-name typos, schema drift through transformation chains, mismatched schemas at `union` / `intersect`, wrong join keys, and shape mismatches between what a function declares and what it returns.
 
-- A fast Python parser (ruff's, reused).
-- A flexible LSP protocol so the checker becomes diagnostics in your editor, not a build step.
-- Cross-editor reach via VS Code, Cursor, Open VSX, and a dedicated LSP that any editor with LSP support can use.
+It **isn't** a runtime validator, a query planner, or a replacement for tests. It doesn't run your job or touch your cluster. The deployed code is plain Python on the same Spark as before. pykrete sits one layer up, at edit time — exactly where TypeScript sits relative to JavaScript.
 
-pykrete is what falls out when you assemble those pieces around a `DataFrame[Schema]` type and a Spark-aware schema model.
+## Where it's going
+
+PySpark is supported today. Every dataframe library has the same shape — a value carries a schema, operations narrow or widen it, column names must exist when referenced — so pandas and polars are next. The [roadmap](/pykrete/about/roadmap/) has the detail.
+
+Ready to try it? [Install](/pykrete/getting-started/install/) takes a minute; the [quickstart](/pykrete/getting-started/quickstart/) gets a real function under checking in five.

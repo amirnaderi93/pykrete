@@ -1,99 +1,125 @@
 ---
 title: Diagnostics
-description: Every pykrete diagnostic code, with what triggers it and how to fix.
+description: Every pykrete diagnostic — what triggers it, what it looks like, and how to fix it.
 ---
 
-Diagnostic codes are stable across releases. The format is always:
+Every diagnostic pykrete reports has the same shape:
 
 ```
-file.pyk:LINE:COL  severity  CODE  rule-name: message
+path:line:col - severity rule-name: message
 ```
 
-Most are errors; a few default to warnings. The severity of each is configurable in [`pykrete.json`](/pykrete/reference/configuration/).
-
-## D0030 — `unknownColumn`
-
-A column reference doesn't exist on the schema in scope at that point in the chain.
-
-**Triggers on:**
-
-- `col("typo")` / `df.typo` / `df["typo"]`
-- Chained nested access — `df.r.typo`, `df["r"].typo`, `df.r["typo"]`, `df["r"]["typo"]`
-- Bare-string column arguments to F-functions — `F.sum("typo")`, `F.first("typo")`, …
-- Inline SQL identifiers — `df.filter("typo > 0")`, `df.selectExpr("typo")`, `spark.sql("SELECT typo FROM …")`
-- DataFrame method args expecting column names — `groupBy("typo")`, `drop("typo")`, `withColumnRenamed("typo", "new")`, `sort("typo")`, …
-
-**Fix:** correct the column name, or add it to the schema if it's actually expected.
+For example:
 
 ```
-orders.pyk:9:18 error D0030 unknownColumn:
-    Column 'plcae_code' does not exist on schema 'Order'.
-    Did you mean 'place_code'?
+sales.pyk:10:18 - error unknownColumn: Column 'regoin' does not exist on schema 'Sale'. Did you mean 'region'?
 ```
 
-The diagnostic includes a did-you-mean when there's a close match in the schema.
+The **rule name** (`unknownColumn`) is what the CLI prints and what the editor shows as the diagnostic code. Each rule also has a stable `D00xx` identifier used internally — both the name and the code are accepted as keys in [`pykrete.json`](/pykrete/reference/configuration/)'s `rules` block.
 
-## D0040 — `unionSchemaMismatch`
+## Full reference
 
-`union` / `unionByName` / `intersect` / `intersectAll` / `subtract` / `exceptAll` between two dataframes whose schemas don't agree on the column-name set.
+| Code | Rule name | What it means |
+|---|---|---|
+| `D0001` | `parseError` | The file isn't valid Python syntax. |
+| `D0010` | `unknownColumnType` | A schema field's type isn't a recognized type. |
+| `D0011` | `invalidColumnType` | A schema field's type isn't a valid type expression. |
+| `D0020` | `unknownSchema` | `DataFrame[X]` names a schema pykrete can't find. |
+| `D0021` | `invalidSchemaExpression` | The thing inside `DataFrame[…]` isn't a schema name or a valid operator. |
+| `D0030` | `unknownColumn` | A column reference doesn't exist on the schema in scope. |
+| `D0040` | `unionSchemaMismatch` | `union` / `intersect` / `subtract` between dataframes whose columns don't match. |
+| `D0050` | `returnColumnsMismatch` | A function's returned **columns** differ from its declared return schema. |
+| `D0060` | `missingJoinKey` | A join key isn't present on one side of the join. |
+| `D0070` | `unresolvedImport` | An `import` can't be resolved. |
+| `D0071` | `unexportedName` | An imported name isn't exported by the module. |
+| `D0080` | `returnTypeMismatch` | A returned column's **type** differs from the declared return schema. |
+| `D0081` | `nonNumericArithmetic` | Arithmetic on a non-numeric column. Strict mode only. |
+| `D0082` | `crossTypeComparison` | A comparison between unrelated types. Strict mode only. |
+| `D0083` | `nullabilityMismatch` | A nullable column flows into a slot the return schema declares non-null. Strict mode only. |
 
-**Fix:** align the schemas, or use the appropriate method for the actual intent (`unionByName` if names match but order doesn't).
+## The ones you'll see most
+
+### `unknownColumn` — D0030
+
+A column reference doesn't exist on the schema at that point in the chain. This is the workhorse diagnostic.
+
+It fires on every form of column reference:
+
+- `col("x")`, attribute access `df.x`, subscript `df["x"]`
+- Chained nested access — `df.address.city`, `df["address"]["city"]`
+- Dotted paths — `col("address.city")`
+- String column arguments to functions — `F.sum("x")`, `groupBy("x")`, `drop("x")`, `sort("x")`
+- Identifiers inside embedded SQL — `filter("x > 0")`, `selectExpr("x")`, `spark.sql("SELECT x …")`
+
+Because pykrete tracks the schema through each operation, a reference to a column that an earlier `drop` or aggregation removed is caught at the line that uses it.
 
 ```
-report.pyk:12:5 error D0040 unionSchemaMismatch:
-    union between schema 'Orders' and schema 'Returns': schemas differ.
-    Missing in schema 'Returns': [status]; missing in schema 'Orders': [reason].
+sales.pyk:10:18 - error unknownColumn: Column 'regoin' does not exist on schema 'Sale'. Did you mean 'region'?
 ```
 
-## D0050 — `returnSchemaMismatch`
+The message names the failing column and the schema it was checked against, with a *did you mean* when a close match exists.
 
-A function declared `-> DataFrame[Schema]` returns a dataframe whose inferred schema doesn't match.
+### `unionSchemaMismatch` — D0040
 
-**Fix:** add a `.cast(DataFrame[Schema])` if the chain ends with an opaque step (like `spark.read.json(...)`), or correct the body.
+`union`, `unionByName`, `intersect`, `intersectAll`, `subtract`, or `exceptAll` between two dataframes whose column-name sets don't agree.
 
 ```
-ingest.pyk:14:5 error D0050 returnSchemaMismatch:
-    Declared return is DataFrame[Order] (columns: place_code, price);
-    inferred return is DataFrame (columns: place_code, total).
-    'price' is missing; 'total' is unexpected.
+report.pyk:14:12 - error unionSchemaMismatch: union between schema 'Sale' and schema 'Refund': schemas differ. Missing in schema 'Refund': [quantity]; missing in schema 'Sale': [reason].
 ```
 
-## D0080 / D0081 / D0082 — column type checking
+**Fix:** align the two schemas, or switch to the operation that matches your intent.
 
-Conservative type checks (`D0080`, on by default) catch obvious type errors. Strict checks (`D0081`, `D0082`) catch nullability mismatches and require `typeCheckingMode: strict` in [`pykrete.json`](/pykrete/reference/configuration/#typecheckingmode).
+### `returnColumnsMismatch` — D0050
 
-| Code | Rule | Severity | Triggers on |
-|---|---|---|---|
-| D0080 | `columnTypeMismatch` | error | `F.upper(col("price"))` where `price: int` — string-expecting function called with an int column. |
-| D0081 | `strictColumnTypeMismatch` | error in strict mode | Stricter cross-type combinations the basic mode lets through. |
-| D0082 | `nullabilityMismatch` | error in strict mode | Operations that produce a nullable result fed into a non-null sink. |
+A function declared `-> DataFrame[Schema]` returns a dataframe whose **column set** doesn't match — a column is missing, or an extra one is present.
 
-## D0001 — `parseError`
+```
+summary.pyk:8:5 - error returnColumnsMismatch: declared return DataFrame[SaleSummary] expects columns [region, total]; the body produces [region, amount].
+```
 
-The file isn't valid Python syntax. pykrete uses ruff's parser, so the message matches ruff's.
+**Fix:** correct the body, or re-anchor an opaque chain (like `spark.read.parquet(...)`) with `.cast(DataFrame[Schema])` so pykrete knows the shape.
 
-## D0020 — `unknownSchema`
+### `missingJoinKey` — D0060
 
-A `DataFrame[X]` annotation references a class `X` that pykrete can't find — typo in the schema name, missing import, or not annotated with `class X(Schema)`.
+A column named as a join key doesn't exist on one (or both) sides of the join.
 
-## D0021 — `notASchema`
+**Fix:** check the key name against both schemas; join keys must exist on each side.
 
-A `DataFrame[X]` annotation where `X` is not actually a `Schema` subclass.
+## Type-checking diagnostics
 
-## Configuring severity
+pykrete checks column **types**, not just existence. How much it checks depends on [`typeCheckingMode`](/pykrete/reference/configuration/#typecheckingmode).
 
-Any diagnostic can be downgraded to a warning or turned off entirely in `pykrete.json`:
+**`returnTypeMismatch` — D0080.** On by default. The returned columns match the declared return schema by name, but a column's *type* doesn't — and both types are confidently known and genuinely incompatible. Numeric widening (`int` → `long` → `double`) is accepted; unknown types are left alone. This is the conservative check: it fires only when it's sure.
+
+**Strict mode adds three.** Under `typeCheckingMode: strict`:
+
+- **`nonNumericArithmetic` — D0081.** Arithmetic applied to a column that isn't numeric.
+- **`crossTypeComparison` — D0082.** A comparison between two unrelated types — the kind Spark silently coerces rather than rejects.
+- **`nullabilityMismatch` — D0083.** A nullable column (or an explicit `lit(None)`) flowing into a slot the return schema declares non-null.
+
+These three are advisory — they catch things that *work* but are usually mistakes. They stay quiet outside strict mode.
+
+## Setup and import diagnostics
+
+These fire before any schema checking — they mean pykrete couldn't read something.
+
+- **`parseError` — D0001.** The file isn't valid Python. The message comes from Ruff's parser.
+- **`unknownColumnType` / `invalidColumnType` — D0010 / D0011.** A `Schema` field's type annotation isn't a type pykrete recognizes.
+- **`unknownSchema` / `invalidSchemaExpression` — D0020 / D0021.** A `DataFrame[X]` annotation where `X` isn't a known schema, or isn't a schema name / valid operator at all — usually a typo or a missing import.
+- **`unresolvedImport` / `unexportedName` — D0070 / D0071.** An `import` that doesn't resolve, or a name the imported module doesn't export.
+
+## Changing severity
+
+Any rule can be downgraded to a warning or switched off in `pykrete.json`:
 
 ```json
 {
   "rules": {
     "unknownColumn": "error",
     "unionSchemaMismatch": "warning",
-    "columnTypeMismatch": "off"
+    "returnTypeMismatch": "off"
   }
 }
 ```
 
-Use the rule name (the part after the code), not the code itself.
-
-See [Configuration](/pykrete/reference/configuration/) for the full file format.
+Key by the rule name (or the `D00xx` code — both work). See [Configuration](/pykrete/reference/configuration/).

@@ -19,7 +19,7 @@ hero:
 ---
 
 import { Card, CardGrid, Steps } from '@astrojs/starlight/components';
-import EditorDemo from '../../components/EditorDemo.astro';
+import EditorShowcase from '../../components/EditorShowcase.astro';
 
 ## The bug that reaches production
 
@@ -29,9 +29,9 @@ The job runs. It returns an empty dataframe, a column of nulls, a number that's 
 
 pykrete catches it while you type.
 
-<EditorDemo />
+<EditorShowcase />
 
-Tell pykrete the shape of a dataframe — a `Schema` class, a `DataFrame[Order]` annotation — and it checks every column you touch, the whole way down the chain.
+Tell pykrete the shape of a dataframe — a `Schema` class, a `DataFrame[Sale]` annotation — and it checks every column you touch, the whole way down the chain.
 
 ## What you get
 
@@ -74,13 +74,13 @@ You don't convert a codebase. You convert a file.
 
 <Steps>
 
-1. **Rename it.** `mv orders.py orders.pyk` — `.pyk` is a strict superset
+1. **Rename it.** `mv sales.py sales.pyk` — `.pyk` is a strict superset
    of Python, so the file runs exactly as it did.
 
 2. **Declare the schema.** A short class naming the columns you already
    know.
 
-3. **Annotate a function.** Add `DataFrame[Order]` to one parameter.
+3. **Annotate a function.** Add `DataFrame[Sale]` to one parameter.
    That function is now checked, end to end.
 
 </Steps>
