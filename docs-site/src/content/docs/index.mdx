@@ -1,13 +1,14 @@
 ---
 title: pykrete
-description: Static schema checking for Python dataframes. TypeScript-style annotations catch column-name typos, schema drift, and shape mismatches at check time — across whole transformation chains.
+description: Static type checking for dataframe schemas. Catch column typos and schema drift in your editor, before the job runs.
 template: splash
 hero:
-  tagline: Static schema checking for Python dataframes. Catch column-name typos, schema drift, and shape mismatches at check time — across whole transformation chains, inline SQL, and nested-field access.
+  title: Python dataframes, done right
+  tagline: Static type checking for dataframe schemas.
   image:
     file: ../../assets/logo.svg
   actions:
-    - text: Install
+    - text: Get started
       link: /pykrete/getting-started/install/
       icon: right-arrow
       variant: primary
@@ -17,39 +18,21 @@ hero:
       variant: minimal
 ---
 
-import { Card, CardGrid, Code, Tabs, TabItem } from '@astrojs/starlight/components';
+import { Card, CardGrid, Steps } from '@astrojs/starlight/components';
 
-## Why pykrete
+## The bug that reaches production
 
-Production PySpark jobs fail at 2am because someone renamed a column three transforms ago and nothing told you. pykrete is a strict superset of Python — it adds dataframe schemas as Python classes and a `DataFrame[Schema]` annotation, then walks every transformation chain to verify the columns referenced actually exist.
+Rename a column. Mistype it once, three transforms downstream. Nothing stops you — not the interpreter, not the linter, not your tests, unless one happens to assert on that exact name.
 
-It's TypeScript for PySpark. Same shape: a checker that runs at edit time, an LSP for your editor, a transpiler that strips back to plain Python so the runtime cost is zero.
+The job runs. It returns an empty dataframe, a column of nulls, a number that's quietly wrong. You find out later — in a scheduled run, a blank dashboard, a metric nobody trusts anymore.
 
-<Tabs>
-  <TabItem label="Without pykrete">
+pykrete catches it while you type.
+
+{/* PLACEHOLDER IMAGE — replace /public/editor-demo-placeholder.svg with a
+    real editor screenshot/GIF before this page is published. */}
+![pykrete flagging a column typo in the editor](/pykrete/editor-demo-placeholder.svg)
+
 ```python
-# orders.py — plain Python. The typo on "place_code" is silent
-# until production. The query runs against a 50M-row table and
-# returns an empty DataFrame. You find out at 2am.
-
-def average_basket(orders):
-    return (
-        orders
-        .filter(F.col("status") == "paid")
-        .groupBy("plcae_code")           # typo
-        .agg(F.avg("amount").alias("avg_amount"))
-    )
-```
-  </TabItem>
-  <TabItem label="With pykrete">
-```python
-# orders.pyk — strict superset of Python. The annotation tells
-# pykrete what columns exist. The typo is flagged at check time:
-#
-#   orders.pyk:9:18 error D0030 unknownColumn:
-#       Column 'plcae_code' does not exist on schema 'Order'.
-#       Did you mean 'place_code'?
-
 class Order(Schema):
     place_code: int
     status: string
@@ -59,40 +42,77 @@ def average_basket(orders: DataFrame[Order]) -> DataFrame:
     return (
         orders
         .filter(F.col("status") == "paid")
-        .groupBy("plcae_code")           # caught
+        .groupBy("plcae_code")
         .agg(F.avg("amount").alias("avg_amount"))
     )
+#                ╰── D0030  Column 'plcae_code' does not exist on
+#                           schema 'Order'. Did you mean 'place_code'?
 ```
-  </TabItem>
-</Tabs>
 
-## What it checks
+Tell pykrete the shape of a dataframe — a `Schema` class, a `DataFrame[Order]` annotation — and it checks every column you touch, the whole way down the chain.
+
+## What you get
 
 <CardGrid>
-  <Card title="Column existence" icon="approve-check">
-    Every column reference — `col("x")`, `df.x`, `df["x"]`, dotted nested paths `col("orders.line.sku")`, raw SQL strings, F-function string args — checked against the schema in scope.
+  <Card title="Typos caught as you type" icon="approve-check-circle">
+    Every column you reference — `col("x")`, `df.x`, `df["x"]`, a dotted
+    path into a nested struct — is checked against the schema. Misspell
+    one and you get a red underline and a *did you mean*, not a silent
+    wrong answer.
   </Card>
-  <Card title="Schema flow through chains" icon="rocket">
-    `select / filter / withColumn / drop / join / groupBy+agg / pivot / union / cube / rollup / transform` — the result schema after each step is the input to the next. A typo three transforms after a `rename` is still caught.
+  <Card title="Checks that follow the data" icon="right-arrow">
+    Filter, rename, drop, aggregate, join — pykrete tracks the schema
+    through every step. Reference a column three transforms after it
+    was dropped, and that's exactly where the error points.
   </Card>
-  <Card title="Cross-function shape" icon="puzzle">
-    `DataFrame[Schema]` parameters and return types validate that what a function takes and produces matches what its callers pass in.
+  <Card title="See a dataframe's shape without leaving the file" icon="magnifier">
+    Open code you last touched six months ago. Hover a `DataFrame[…]`
+    parameter and pykrete shows its columns; jump straight to the
+    schema with go-to-definition. No more reading the whole call tree
+    to remember what goes in.
   </Card>
-  <Card title="Inline SQL" icon="document">
-    `df.filter("place_code > 0")`, `df.selectExpr("price * 1.2 AS marked")`, `spark.sql("SELECT …")` — the identifiers inside SQL strings are checked against the same schema as Python column refs.
+  <Card title="Column-name autocomplete" icon="pencil">
+    Start typing a column name and pykrete completes the ones that
+    actually exist on the dataframe in scope.
   </Card>
-  <Card title="Editor integration" icon="laptop">
-    Live diagnostics, hover, completion, go-to-definition, find-references, rename, semantic tokens via a dedicated LSP. The VS Code extension wraps it; Neovim, Helix, Emacs and Zed are documented.
+  <Card title="Inline SQL is checked too" icon="document">
+    `filter("amount > 0")`, `selectExpr(...)`, `spark.sql("SELECT …")` —
+    column names inside SQL strings get the same checking as the
+    Python ones.
   </Card>
-  <Card title="Zero runtime cost" icon="seti:rust">
-    `pykrete transpile` emits plain Python. The `.pyk` extension is a checker boundary, not a runtime one — the deployed code is identical to what you'd write in vanilla Python.
+  <Card title="Nothing to run in production" icon="rocket">
+    pykrete works in your editor and your CI. The job you deploy is
+    ordinary Python — same runtime, nothing extra on the cluster.
   </Card>
 </CardGrid>
 
-## Tested against real codebases
+## Start with one file
 
-[pykrete-tests](https://github.com/amirnaderi93/pykrete-tests) vendors snapshots of well-known PySpark codebases (Apache Spark, MLflow), adds pykrete annotations the way a real adopter would, and runs `pykrete check` on every push + nightly. The loop already surfaced and fixed five real gaps in v0.1.6 — subscript column refs, GroupedData shortcut aggregates, set-op result schemas, chained nested-field access, the lowercase `groupby` alias. See [Real-codebase tests](/pykrete/about/pykrete-tests/) for the breakdown.
+You don't convert a codebase. You convert a file.
 
-## Status
+<Steps>
 
-v0.1.6. The PySpark checker, the LSP, the VS Code extension and the transpiler all work end-to-end. pandas support is next; see the [roadmap](/pykrete/about/roadmap/).
+1. **Rename it.** `mv orders.py orders.pyk` — `.pyk` is a strict superset
+   of Python, so the file runs exactly as it did.
+
+2. **Declare the schema.** A short class naming the columns you already
+   know.
+
+3. **Annotate a function.** Add `DataFrame[Order]` to one parameter.
+   That function is now checked, end to end.
+
+</Steps>
+
+That's the whole investment. The rest of your repo stays plain Python — pykrete only checks what you've annotated. Add the next schema when it earns its place, not before.
+
+## Proven on real code
+
+pykrete runs against annotated snapshots of real PySpark codebases — Apache Spark's own test suite, MLflow — on every change, in CI. It's tested where the dataframes are messy, not just on tidy examples.
+
+[See how that works →](/pykrete/about/pykrete-tests/)
+
+## Get started
+
+[Installing pykrete](/pykrete/getting-started/install/) takes a minute. The [quickstart](/pykrete/getting-started/quickstart/) gets a real function under checking in five.
+
+PySpark is supported today; pandas and polars are next — see the [roadmap](/pykrete/about/roadmap/).
