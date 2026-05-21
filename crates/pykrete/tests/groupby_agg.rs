@@ -258,6 +258,129 @@ def f(raw: DataFrame[Orders]) -> DataFrame:
     assert_message_contains(&result, "D0030", "missing");
 }
 
+// ===========================================================================
+// GroupedData shortcut aggregates — `g.max("col")`, `g.min/sum/mean/avg(...)`
+//
+// Spark's GroupedData carries shortcut methods that are equivalent to
+// `g.agg(F.<method>(col))` but take string args directly. We check those
+// args against the underlying schema the same way pivot does, with
+// `resolve_path` so dotted nested refs (`"b.c"`) work too.
+// ===========================================================================
+
+#[test]
+fn groupBy_max_string_arg_is_recognized_against_underlying_schema() {
+    let result = check(
+        r#"
+class KV(Schema):
+    key: int
+    value: int
+
+def f(df: DataFrame[KV]) -> None:
+    df.groupBy("key").max("value")
+"#,
+    );
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn groupBy_max_catches_typo_in_string_arg() {
+    let result = check(
+        r#"
+class KV(Schema):
+    key: int
+    value: int
+
+def f(df: DataFrame[KV]) -> None:
+    df.groupBy("key").max("vlaue")
+"#,
+    );
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "vlaue");
+    // No did-you-mean assertion: edit distance from "vlaue" to "value" is 2
+    // (transposition), past the suggester's threshold. Coverage of the
+    // did-you-mean path is in `groupBy_max_catches_typo_in_dotted_nested_path`.
+}
+
+#[test]
+fn groupBy_min_sum_mean_avg_all_check_string_args() {
+    // One typo on each of min, sum, mean, avg. All four should fire D0030.
+    for method in &["min", "sum", "mean", "avg"] {
+        let src = format!(
+            r#"
+class KV(Schema):
+    key: int
+    value: int
+
+def f(df: DataFrame[KV]) -> None:
+    df.groupBy("key").{method}("vlaue")
+"#
+        );
+        let result = check(&src);
+        assert_has_code(&result, "D0030");
+        assert_message_contains(&result, "D0030", "vlaue");
+    }
+}
+
+#[test]
+fn groupBy_max_walks_dotted_nested_paths() {
+    // `g.max("b.c")` — same dotted-path resolution as `col("b.c")`.
+    let result = check(
+        r#"
+class C(Schema):
+    c: int
+
+class AB(Schema):
+    a: string
+    b: C
+
+def f(df: DataFrame[AB]) -> None:
+    df.groupBy("a").max("b.c")
+"#,
+    );
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn groupBy_max_catches_typo_in_dotted_nested_path() {
+    // `g.max("b.cc")` — typo on the nested-field name. The error message
+    // names the nested schema, not the top-level one.
+    let result = check(
+        r#"
+class C(Schema):
+    c: int
+
+class AB(Schema):
+    a: string
+    b: C
+
+def f(df: DataFrame[AB]) -> None:
+    df.groupBy("a").max("b.cc")
+"#,
+    );
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "cc");
+    assert_message_contains(&result, "D0030", "C"); // schema name in "on ... C"
+}
+
+#[test]
+fn groupBy_max_on_a_non_grouped_DataFrame_falls_through() {
+    // `df.max("col")` without a groupBy first — receiver is not Grouped,
+    // so the shortcut handler doesn't fire. (Spark itself would actually
+    // error on this at runtime; we just don't claim to check it here.)
+    // No false positive.
+    let result = check(
+        r#"
+class KV(Schema):
+    key: int
+    value: int
+
+def f(df: DataFrame[KV]) -> None:
+    df.max("vlaue")
+"#,
+    );
+    assert_does_not_have_code(&result, "D0030");
+}
+
 #[test]
 fn group_by_an_attribute_access_key_keeps_it_in_the_result_schema() {
     // `groupBy(df.key, ...)` — an attribute-access grouping key, a column

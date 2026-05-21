@@ -927,6 +927,48 @@ fn analyze_method_call<'a>(
             .collect();
         return Some(SchemaView::Derived(fields));
     }
+    // `groupBy(keys).max("col")` / `.min("col")` / `.sum("col")` /
+    // `.mean("col")` / `.avg("col")` — Spark's GroupedData aggregate
+    // shortcuts, equivalent to `groupBy(keys).agg(F.<method>(col))`.
+    // Each string-literal arg is a column name on the underlying schema;
+    // dotted paths into nested structs (`"b.c"`) are walked through
+    // `resolve_path`, same as `col("b.c")`. The chain bails after — the
+    // output column name is auto-generated (`max(col)`, ...) and not
+    // statically modeled here; users re-anchor with `.cast(...)` if they
+    // need to continue.
+    if matches!(method, "max" | "min" | "sum" | "mean" | "avg")
+        && let SchemaView::Grouped { underlying, .. } = &receiver
+    {
+        for arg in &call.arguments.args {
+            if let Some(lit) = arg.as_string_literal_expr() {
+                let name = lit.value.to_str();
+                if let FieldPathResult::Missing { field, on } =
+                    resolve_path(underlying.as_ref(), name, ctx.schemas())
+                {
+                    let suggestion = on.as_ref().and_then(|v| suggest_field_name(field, v));
+                    let on_phrase = on
+                        .as_ref()
+                        .map_or_else(|| "the nested struct".to_string(), SchemaView::display_name);
+                    let mut message = format!("Column '{field}' does not exist on {on_phrase}.");
+                    if let Some(s) = &suggestion {
+                        message.push_str(&format!(" Did you mean '{s}'?"));
+                    }
+                    diagnostics.push(
+                        Diagnostic::at_range(
+                            Severity::Error,
+                            "D0030",
+                            message,
+                            lit.range(),
+                            source,
+                            line_index,
+                        )
+                        .with_suggestion(suggestion),
+                    );
+                }
+            }
+        }
+        return None;
+    }
     if method == "pivot" {
         // `groupBy(keys).pivot("col")` — verify the pivot column exists
         // on the grouped input, then bail: the pivoted output has one
