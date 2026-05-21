@@ -2343,6 +2343,16 @@ fn column_name_arg(arg: &Expr) -> Option<&str> {
     {
         return Some(attr.attr.id.as_str());
     }
+    // `df["colname"]` subscript — sibling of the attribute form above.
+    // Same rationale: `drop(df["col"])`, `groupBy(df["key"], ...)` accept
+    // Column objects. Restricted to `df["literal"]` (bare-name receiver,
+    // string-literal slice).
+    if let Some(sub) = arg.as_subscript_expr()
+        && sub.value.is_name_expr()
+        && let Some(s) = sub.slice.as_string_literal_expr()
+    {
+        return Some(s.value.to_str());
+    }
     None
 }
 
@@ -2918,6 +2928,21 @@ fn collect_col_refs<'a>(
         && ctx.lookup(name.id.as_str()).is_some()
     {
         out.push((attr.attr.id.as_str(), attr.attr.range));
+        return;
+    }
+    // `df["X"]` subscript access — the sibling of `df.X`. Real PySpark code
+    // uses this ubiquitously (`df["age"]`, `df["name"]`), and a typo in the
+    // string slot should be a D0030 just like a typo on `df.X` or
+    // `col("X")`. The receiver name must be bound in the current scope
+    // (same ctx discriminator as the attribute arm) and the slice must be
+    // a string literal — computed subscripts fall through to the default
+    // walker.
+    if let Some(sub) = expr.as_subscript_expr()
+        && let Some(name) = sub.value.as_name_expr()
+        && ctx.lookup(name.id.as_str()).is_some()
+        && let Some(s) = sub.slice.as_string_literal_expr()
+    {
+        out.push((s.value.to_str(), s.range()));
         return;
     }
     // Recognize `F.sum("x")` and similar — for the listed function names,
