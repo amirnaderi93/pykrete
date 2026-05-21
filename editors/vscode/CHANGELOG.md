@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.4
+
+- Temporary displayName change to bypass the Visual Studio Marketplace's
+  post-deletion reservation on the name "Pykrete". The new displayName
+  is "Pykrete — Static schema checking for PySpark" and is also better
+  for marketplace search. It will be reverted to plain "Pykrete" once
+  the reservation clears.
+
 ## 0.2.3
 
 - Republish under the `amirnaderi` publisher and drop the redundant
