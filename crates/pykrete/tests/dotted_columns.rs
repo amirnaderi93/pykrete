@@ -168,6 +168,138 @@ def f(o: DataFrame[Outer]) -> DataFrame:
 }
 
 // ===========================================================================
+// Chained Column-on-Column nested-field access — `df.r.X`, `df["r"].X`,
+// `df.r["X"]`, `df["r"]["X"]`. Spark resolves these by first lifting
+// `r` to a Column (the nested struct) and then accessing `X` on it.
+// Pykrete used to record only the first step ("r") and skip the second
+// — pilot 4 surfaced this on real PySpark column-method usage.
+// ===========================================================================
+
+const NESTED_LR: &str = r#"
+class R(Schema):
+    a: int
+    b: string
+
+class LR(Schema):
+    l: int
+    r: R
+"#;
+
+#[test]
+fn chained_attribute_access_into_nested_struct_is_clean_when_valid() {
+    let result = check(&format!(
+        r#"{NESTED_LR}
+def f(df: DataFrame[LR]) -> DataFrame:
+    return df.select(df.r.a)
+"#
+    ));
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn chained_attribute_access_catches_typo_on_nested_field() {
+    let result = check(&format!(
+        r#"{NESTED_LR}
+def f(df: DataFrame[LR]) -> DataFrame:
+    return df.select(df.r.typo)
+"#
+    ));
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "typo");
+    // The diagnostic names the nested schema R, not the outer LR.
+    assert_message_contains(&result, "D0030", "R");
+}
+
+#[test]
+fn attribute_then_subscript_into_nested_struct_catches_typo() {
+    // df.r["typo"] — attr then subscript with string literal.
+    let result = check(&format!(
+        r#"{NESTED_LR}
+def f(df: DataFrame[LR]) -> DataFrame:
+    return df.select(df.r["typo"])
+"#
+    ));
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "typo");
+    assert_message_contains(&result, "D0030", "R");
+}
+
+#[test]
+fn subscript_then_attribute_into_nested_struct_catches_typo() {
+    // df["r"].typo — subscript then attr.
+    let result = check(&format!(
+        r#"{NESTED_LR}
+def f(df: DataFrame[LR]) -> DataFrame:
+    return df.select(df["r"].typo)
+"#
+    ));
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "typo");
+    assert_message_contains(&result, "D0030", "R");
+}
+
+#[test]
+fn double_subscript_into_nested_struct_catches_typo() {
+    // df["r"]["typo"] — subscript chain.
+    let result = check(&format!(
+        r#"{NESTED_LR}
+def f(df: DataFrame[LR]) -> DataFrame:
+    return df.select(df["r"]["typo"])
+"#
+    ));
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "typo");
+    assert_message_contains(&result, "D0030", "R");
+}
+
+#[test]
+fn chained_access_through_unknown_top_level_still_flags_outer_typo() {
+    // The single-step arm fires on the outer column 'noexist'; the
+    // chained walker shouldn't double-fire because the first step
+    // didn't even resolve. (One diagnostic, not two.)
+    let result = check(&format!(
+        r#"{NESTED_LR}
+def f(df: DataFrame[LR]) -> DataFrame:
+    return df.select(df.noexist.field)
+"#
+    ));
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "noexist");
+}
+
+#[test]
+fn chained_access_inside_filter_is_caught() {
+    // df.r.typo inside a predicate — needs the chained walker to
+    // descend into BinOp/Compare branches.
+    let result = check(&format!(
+        r#"{NESTED_LR}
+def f(df: DataFrame[LR]) -> DataFrame:
+    return df.filter(df.r.typo == 0)
+"#
+    ));
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "typo");
+}
+
+#[test]
+fn chained_access_through_non_nested_field_does_not_false_flag() {
+    // df.l is an atomic int column; df.l.something has no schema to
+    // walk into. We must not flag "something" — pykrete can't verify
+    // anything about it, but the int.something pattern is also
+    // nonsense at runtime, so silence here is fine (consistent with
+    // resolve_path's degrade-rather-than-false-flag stance).
+    let result = check(&format!(
+        r#"{NESTED_LR}
+def f(df: DataFrame[LR]) -> DataFrame:
+    return df.select(df.l.something)
+"#
+    ));
+    // The "l" first step is fine. The chained walker should bail at
+    // step 2 because l is atomic — no false D0030 on "something".
+    assert_does_not_have_code(&result, "D0030");
+}
+
+// ===========================================================================
 // Unit-test the `resolve_path` helper directly
 // ===========================================================================
 

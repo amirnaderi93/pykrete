@@ -40,7 +40,8 @@ use crate::dataframe::{self, DataFrameAnnotation, SlotLabel, TypedSlot};
 use crate::diagnostics::{CheckMode, Diagnostic, Severity};
 use crate::registry::Registry;
 use crate::schema::{
-    DerivedField, FieldPathResult, Schema, SchemaView, resolve_path, suggest_field_name,
+    DerivedField, FieldPathResult, FieldResolution, Schema, SchemaView, resolve_path,
+    suggest_field_name,
 };
 use crate::types::ColumnType;
 use crate::walk::DiscoveredFunction;
@@ -1425,8 +1426,227 @@ fn check_column_method_args<'a>(
         // its identifiers are checked against the same schema.
         report_expr_sql_refs(arg, schema, source, line_index, diagnostics);
         report_expr_type_errors(arg, schema, ctx.type_ctx(), source, line_index, diagnostics);
+        // Chained Column-on-Column accesses (`df.r.X`, `df["r"].X`,
+        // `df.r["X"]`, `df["r"]["X"]`) that drill into a nested struct
+        // column — checked separately because they don't reduce to a
+        // single name in the source. Single-step refs (`df.X`, `df["X"]`)
+        // are still handled by collect_arg_column_refs above.
+        check_chained_field_access(arg, schema, ctx, source, line_index, diagnostics);
     }
     report_column_refs(&refs, schema, ctx, source, line_index, diagnostics);
+}
+
+/// Walks `expr` for chained DataFrame-column accesses of the form
+/// `df.<f1>.<f2>...` / `df["<f1>"]["<f2>"]...` / mixed, and verifies
+/// each step against the receiver schema (descending into nested
+/// structs as it goes). Single-step accesses are left for the
+/// existing `collect_col_refs` arm to handle.
+///
+/// Emits D0030 with the failing segment's range and the schema we
+/// failed on (so the diagnostic for `df.r.typo` reads "Column 'typo'
+/// does not exist on schema 'R'", not "...on schema 'LR'").
+fn check_chained_field_access<'a>(
+    expr: &'a Expr,
+    receiver: &SchemaView<'a>,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    // Walk into every sub-expression so we catch chained accesses inside
+    // bigger trees (e.g. `df.select(df.r.typo, ...)`).
+    match expr {
+        Expr::Attribute(_) | Expr::Subscript(_) => {
+            if let Some(chain) = extract_chained_access(expr, ctx)
+                && chain.len() >= 2
+            {
+                report_chain_against_schema(&chain, receiver, ctx, source, line_index, diagnostics);
+                return;
+            }
+            // Single-step or a chain we couldn't parse — descend into
+            // the inner value to keep searching.
+            match expr {
+                Expr::Attribute(a) => check_chained_field_access(
+                    &a.value,
+                    receiver,
+                    ctx,
+                    source,
+                    line_index,
+                    diagnostics,
+                ),
+                Expr::Subscript(s) => {
+                    check_chained_field_access(
+                        &s.value,
+                        receiver,
+                        ctx,
+                        source,
+                        line_index,
+                        diagnostics,
+                    );
+                    check_chained_field_access(
+                        &s.slice,
+                        receiver,
+                        ctx,
+                        source,
+                        line_index,
+                        diagnostics,
+                    );
+                }
+                _ => unreachable!(),
+            }
+        }
+        Expr::Call(c) => {
+            // For a method call `<recv>.<method>(...)`, c.func is
+            // Attribute(<recv>, <method>). The METHOD name isn't a
+            // field on `<recv>`'s schema — it's a method on the Column
+            // object. Only walk INTO the receiver; don't let
+            // extract_chained_access pick up the method as a final
+            // step. (Without this, `df["r"].withField(...)` would
+            // flag 'withField' as a missing field on schema R.)
+            match c.func.as_ref() {
+                Expr::Attribute(a) => check_chained_field_access(
+                    &a.value, receiver, ctx, source, line_index, diagnostics,
+                ),
+                other => check_chained_field_access(
+                    other, receiver, ctx, source, line_index, diagnostics,
+                ),
+            }
+            for arg in &c.arguments.args {
+                check_chained_field_access(arg, receiver, ctx, source, line_index, diagnostics);
+            }
+            for kw in &c.arguments.keywords {
+                check_chained_field_access(
+                    &kw.value,
+                    receiver,
+                    ctx,
+                    source,
+                    line_index,
+                    diagnostics,
+                );
+            }
+        }
+        Expr::BinOp(b) => {
+            check_chained_field_access(&b.left, receiver, ctx, source, line_index, diagnostics);
+            check_chained_field_access(&b.right, receiver, ctx, source, line_index, diagnostics);
+        }
+        Expr::UnaryOp(u) => {
+            check_chained_field_access(&u.operand, receiver, ctx, source, line_index, diagnostics)
+        }
+        Expr::Compare(c) => {
+            check_chained_field_access(&c.left, receiver, ctx, source, line_index, diagnostics);
+            for cmp in &c.comparators {
+                check_chained_field_access(cmp, receiver, ctx, source, line_index, diagnostics);
+            }
+        }
+        Expr::BoolOp(b) => {
+            for v in &b.values {
+                check_chained_field_access(v, receiver, ctx, source, line_index, diagnostics);
+            }
+        }
+        Expr::Tuple(t) => {
+            for e in &t.elts {
+                check_chained_field_access(e, receiver, ctx, source, line_index, diagnostics);
+            }
+        }
+        Expr::List(l) => {
+            for e in &l.elts {
+                check_chained_field_access(e, receiver, ctx, source, line_index, diagnostics);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Extract a chain of (name, range) steps from a possibly-chained
+/// attribute / subscript expression bottoming out at a DataFrame-bound
+/// Name. Returns `None` if the bottom isn't a known DataFrame, or any
+/// step is a non-string-literal subscript (computed). The chain is in
+/// access order — outermost step last.
+fn extract_chained_access<'a>(
+    expr: &'a Expr,
+    ctx: &BodyContext<'a>,
+) -> Option<Vec<(&'a str, TextRange)>> {
+    let mut parts: Vec<(&'a str, TextRange)> = Vec::new();
+    let mut cursor = expr;
+    loop {
+        match cursor {
+            Expr::Attribute(a) => {
+                parts.push((a.attr.id.as_str(), a.attr.range));
+                cursor = &a.value;
+            }
+            Expr::Subscript(s) => {
+                let lit = s.slice.as_string_literal_expr()?;
+                parts.push((lit.value.to_str(), lit.range()));
+                cursor = &s.value;
+            }
+            Expr::Name(n) if ctx.lookup(n.id.as_str()).is_some() => {
+                parts.reverse();
+                return Some(parts);
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// Walk a pre-extracted chain of segments against `receiver`, emitting
+/// D0030 at the first failing step. Mirrors `resolve_path`'s descent
+/// logic but consumes segments segment-by-segment (no path String
+/// allocation needed).
+fn report_chain_against_schema<'a>(
+    chain: &[(&'a str, TextRange)],
+    receiver: &SchemaView<'a>,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut current = receiver.clone();
+    for (i, &(segment, segment_range)) in chain.iter().enumerate() {
+        let is_last = i + 1 == chain.len();
+        if !current.has_field(segment) {
+            let suggestion = suggest_field_name(segment, &current);
+            let on_phrase = current.display_name();
+            let mut message = format!("Column '{segment}' does not exist on {on_phrase}.");
+            if let Some(s) = &suggestion {
+                message.push_str(&format!(" Did you mean '{s}'?"));
+            }
+            diagnostics.push(
+                Diagnostic::at_range(
+                    Severity::Error,
+                    "D0030",
+                    message,
+                    segment_range,
+                    source,
+                    line_index,
+                )
+                .with_suggestion(suggestion),
+            );
+            return;
+        }
+        if is_last {
+            return;
+        }
+        // Descend into a nested Declared schema if possible. For other
+        // composite field types (array, map, opaque struct) we stop
+        // walking rather than risk a false positive — the single-step
+        // arm already verified the field exists, so the diagnostic
+        // budget for this access is spent.
+        let next = match &current {
+            SchemaView::Declared(s) => {
+                s.fields().iter().find(|f| f.name == segment).and_then(|f| {
+                    match f.resolve(ctx.schemas()) {
+                        FieldResolution::ResolvedNested(nested) => Some(nested),
+                        _ => None,
+                    }
+                })
+            }
+            _ => None,
+        };
+        match next {
+            Some(nested) => current = SchemaView::Declared(nested),
+            None => return,
+        }
+    }
 }
 
 /// Model `df.withColumns({"a": expr, "b": expr})` (Spark 3.3+) — adds
