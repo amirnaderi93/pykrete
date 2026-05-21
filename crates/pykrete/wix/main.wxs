@@ -40,6 +40,10 @@
     <Property Id="ARPHELPLINK" Value="https://github.com/amirnaderi93/pykrete" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/amirnaderi93/pykrete" />
 
+    <!-- Icon shown in Windows' Add/Remove Programs. -->
+    <Icon Id="pykrete.ico" SourceFile="pykrete.ico" />
+    <Property Id="ARPPRODUCTICON" Value="pykrete.ico" />
+
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
         <Directory Id="INSTALLDIR" Name="pykrete">

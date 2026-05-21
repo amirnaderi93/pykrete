@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/assets/logo.svg" width="160" alt="pykrete logo"></p>
+
 # pykrete
 
 [![CI](https://github.com/amirnaderi93/pykrete/actions/workflows/ci.yml/badge.svg)](https://github.com/amirnaderi93/pykrete/actions/workflows/ci.yml)
