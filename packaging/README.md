@@ -68,17 +68,24 @@ cargo install --git https://github.com/amirnaderi93/pykrete pykrete
 cargo install --git https://github.com/amirnaderi93/pykrete pykrete-lsp
 ```
 
-### VS Code Marketplace
+### VS Code extension (.vsix)
 
-The extension lives in [`../editors/vscode/`](../editors/vscode/) and is
-already marketplace-ready (`publisher: pykrete`). To publish:
+The extension lives in [`../editors/vscode/`](../editors/vscode/). It is
+distributed as a `.vsix` file attached to every GitHub Release; users
+download it and side-load it (see the [main README](../README.md#editor-integration-lsp)
+for the install command). The `vsix` job in `release.yml` builds it on
+each release tag — no manual packaging step.
 
-1. Register the `pykrete` publisher at <https://marketplace.visualstudio.com/manage>.
-2. From `editors/vscode/`:
-   ```bash
-   npm install
-   npx vsce publish
-   ```
+Other distribution paths, when you want them:
+
+- **Open VSX Registry** (<https://open-vsx.org>) — the open-source
+  marketplace used by Cursor, VSCodium, Theia, code-server. Free,
+  Eclipse Foundation account (no Microsoft, no billing). Publish with
+  `npx ovsx publish -p <TOKEN>` from `editors/vscode/`.
+- **Visual Studio Marketplace** — Microsoft's marketplace. Requires an
+  Azure DevOps PAT and a publisher registered at
+  <https://marketplace.visualstudio.com/manage>. Same tooling
+  (`npx vsce publish`); just an extra account hurdle.
 
 A JetBrains/PyCharm plugin is planned and will use the JetBrains
 Marketplace once it exists.
