@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.2
+
+- `.pyk` files now show the pykrete logo in the file explorer (used as
+  the language icon when the active icon theme doesn't have one).
+
 ## 0.2.1
 
 First marketplace release.
