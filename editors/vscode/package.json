@@ -1,9 +1,9 @@
 {
-  "name": "pykrete-vscode",
+  "name": "pykrete",
   "displayName": "Pykrete",
   "description": "Static schema checking for PySpark .pyk files — diagnostics, hover, completion, go-to-definition, quick-fixes — plus general Python language features from a bundled, multiplexed Python engine.",
-  "version": "0.2.2",
-  "publisher": "pykrete",
+  "version": "0.2.3",
+  "publisher": "amirnaderi",
   "license": "MIT",
   "icon": "icon.png",
   "repository": {

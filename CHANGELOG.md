@@ -6,6 +6,19 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.3]
+
+### Changed
+
+- VS Code extension republished under the **`amirnaderi`** publisher
+  with the redundant `-vscode` suffix dropped from the package name.
+  New IDs:
+  [`amirnaderi.pykrete`](https://marketplace.visualstudio.com/items?itemName=amirnaderi.pykrete)
+  on the Visual Studio Marketplace and Open VSX. The old
+  `pykrete.pykrete-vscode` listings are scheduled for removal.
+
+No checker, LSP, or transpiler behavior changed from 0.1.2.
+
 ## [0.1.2]
 
 ### Added
@@ -63,7 +76,8 @@ full contract.
 - **Multi-file analysis** via imported typed declarations.
 - **`pykrete.json`** project configuration with non-strict / strict modes.
 
-[Unreleased]: https://github.com/amirnaderi93/pykrete/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/amirnaderi93/pykrete/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/amirnaderi93/pykrete/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/amirnaderi93/pykrete/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/amirnaderi93/pykrete/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/amirnaderi93/pykrete/releases/tag/v0.1.0

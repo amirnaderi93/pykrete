@@ -83,9 +83,9 @@ files to it.
 
 **VS Code, Cursor, VSCodium, code-server, Theia** — search **pykrete**
 in the extensions panel. Each release is published to both the
-[Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=pykrete.pykrete-vscode)
+[Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=amirnaderi.pykrete)
 (VS Code's default source) and the
-[Open VSX Registry](https://open-vsx.org/extension/pykrete/pykrete-vscode)
+[Open VSX Registry](https://open-vsx.org/extension/amirnaderi/pykrete)
 (the default for the others).
 
 If you can't reach either registry, every release also attaches a

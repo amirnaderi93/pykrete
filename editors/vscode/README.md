@@ -7,7 +7,7 @@ Thin client that launches `pykrete-lsp` and routes `.pyk` files to it.
 **VS Code** — search **pykrete** in the Extensions panel, or:
 
 ```sh
-code --install-extension pykrete.pykrete-vscode
+code --install-extension amirnaderi.pykrete
 ```
 
 **Cursor / VSCodium / code-server / Theia** — search **pykrete** in the

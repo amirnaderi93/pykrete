@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.3
+
+- Republish under the `amirnaderi` publisher and drop the redundant
+  `-vscode` suffix from the package name. New marketplace IDs:
+  `amirnaderi.pykrete` on both the Visual Studio Marketplace and Open
+  VSX. The old `pykrete.pykrete-vscode` listings will be removed.
+
 ## 0.2.2
 
 - `.pyk` files now show the pykrete logo in the file explorer (used as
