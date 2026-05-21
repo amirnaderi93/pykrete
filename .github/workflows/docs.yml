@@ -1,0 +1,58 @@
+name: docs
+
+# Builds docs-site/ (Astro + Starlight) and deploys to GitHub Pages on
+# every push to main. Path-filtered so unrelated changes don't burn CI
+# minutes; manual dispatch is wired for one-off rebuilds.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs-site/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow at most one in-flight deploy. Don't cancel an in-flight build —
+# Pages doesn't gain from concurrent runs and a cancelled deploy can
+# leave the site in an unpredictable state.
+concurrency:
+  group: docs
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: docs-site
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          # No lockfile (committed .gitignore excludes them so users
+          # can pick npm/pnpm/yarn locally). CI uses npm install on a
+          # fresh tree each run.
+      - uses: actions/configure-pages@v5
+      - name: Install dependencies
+        run: npm install
+      - name: Build
+        run: npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs-site/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

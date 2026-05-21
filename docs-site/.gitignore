@@ -1,0 +1,15 @@
+# Astro / Node
+node_modules/
+dist/
+.astro/
+
+# Editor
+.vscode/
+.DS_Store
+
+# Lockfile policy: committed at the repo root level if/when CI repro
+# matters more than ease of local install. For now, omit so npm/pnpm/
+# yarn users can pick their tooling without conflicting lockfiles.
+package-lock.json
+pnpm-lock.yaml
+yarn.lock

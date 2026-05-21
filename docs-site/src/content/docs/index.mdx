@@ -1,0 +1,98 @@
+---
+title: pykrete
+description: Static schema checking for Python dataframes. TypeScript-style annotations catch column-name typos, schema drift, and shape mismatches at check time — across whole transformation chains.
+template: splash
+hero:
+  tagline: Static schema checking for Python dataframes. Catch column-name typos, schema drift, and shape mismatches at check time — across whole transformation chains, inline SQL, and nested-field access.
+  image:
+    file: ../../assets/logo.svg
+  actions:
+    - text: Install
+      link: /pykrete/getting-started/install/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/amirnaderi93/pykrete
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, Code, Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Why pykrete
+
+Production PySpark jobs fail at 2am because someone renamed a column three transforms ago and nothing told you. pykrete is a strict superset of Python — it adds dataframe schemas as Python classes and a `DataFrame[Schema]` annotation, then walks every transformation chain to verify the columns referenced actually exist.
+
+It's TypeScript for PySpark. Same shape: a checker that runs at edit time, an LSP for your editor, a transpiler that strips back to plain Python so the runtime cost is zero.
+
+<Tabs>
+  <TabItem label="Without pykrete">
+```python
+# orders.py — plain Python. The typo on "place_code" is silent
+# until production. The query runs against a 50M-row table and
+# returns an empty DataFrame. You find out at 2am.
+
+def average_basket(orders):
+    return (
+        orders
+        .filter(F.col("status") == "paid")
+        .groupBy("plcae_code")           # typo
+        .agg(F.avg("amount").alias("avg_amount"))
+    )
+```
+  </TabItem>
+  <TabItem label="With pykrete">
+```python
+# orders.pyk — strict superset of Python. The annotation tells
+# pykrete what columns exist. The typo is flagged at check time:
+#
+#   orders.pyk:9:18 error D0030 unknownColumn:
+#       Column 'plcae_code' does not exist on schema 'Order'.
+#       Did you mean 'place_code'?
+
+class Order(Schema):
+    place_code: int
+    status: string
+    amount: int
+
+def average_basket(orders: DataFrame[Order]) -> DataFrame:
+    return (
+        orders
+        .filter(F.col("status") == "paid")
+        .groupBy("plcae_code")           # caught
+        .agg(F.avg("amount").alias("avg_amount"))
+    )
+```
+  </TabItem>
+</Tabs>
+
+## What it checks
+
+<CardGrid>
+  <Card title="Column existence" icon="approve-check">
+    Every column reference — `col("x")`, `df.x`, `df["x"]`, dotted nested paths `col("orders.line.sku")`, raw SQL strings, F-function string args — checked against the schema in scope.
+  </Card>
+  <Card title="Schema flow through chains" icon="rocket">
+    `select / filter / withColumn / drop / join / groupBy+agg / pivot / union / cube / rollup / transform` — the result schema after each step is the input to the next. A typo three transforms after a `rename` is still caught.
+  </Card>
+  <Card title="Cross-function shape" icon="puzzle">
+    `DataFrame[Schema]` parameters and return types validate that what a function takes and produces matches what its callers pass in.
+  </Card>
+  <Card title="Inline SQL" icon="document">
+    `df.filter("place_code > 0")`, `df.selectExpr("price * 1.2 AS marked")`, `spark.sql("SELECT …")` — the identifiers inside SQL strings are checked against the same schema as Python column refs.
+  </Card>
+  <Card title="Editor integration" icon="laptop">
+    Live diagnostics, hover, completion, go-to-definition, find-references, rename, semantic tokens via a dedicated LSP. The VS Code extension wraps it; Neovim, Helix, Emacs and Zed are documented.
+  </Card>
+  <Card title="Zero runtime cost" icon="seti:rust">
+    `pykrete transpile` emits plain Python. The `.pyk` extension is a checker boundary, not a runtime one — the deployed code is identical to what you'd write in vanilla Python.
+  </Card>
+</CardGrid>
+
+## Tested against real codebases
+
+[pykrete-tests](https://github.com/amirnaderi93/pykrete-tests) vendors snapshots of well-known PySpark codebases (Apache Spark, MLflow), adds pykrete annotations the way a real adopter would, and runs `pykrete check` on every push + nightly. The loop already surfaced and fixed five real gaps in v0.1.6 — subscript column refs, GroupedData shortcut aggregates, set-op result schemas, chained nested-field access, the lowercase `groupby` alias. See [Real-codebase tests](/pykrete/about/pykrete-tests/) for the breakdown.
+
+## Status
+
+v0.1.6. The PySpark checker, the LSP, the VS Code extension and the transpiler all work end-to-end. pandas support is next; see the [roadmap](/pykrete/about/roadmap/).
