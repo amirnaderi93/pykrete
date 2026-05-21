@@ -240,6 +240,112 @@ def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame[A]:
 }
 
 // ===========================================================================
+// Set operations — intersect/intersectAll/subtract/except/exceptAll
+//
+// Same shape as union: result = receiver's schema, both sides must have
+// the same column-name set. Until pilot 3 these slipped past entirely —
+// downstream select on a typo column ran against an empty schema view
+// and emitted no diagnostic.
+// ===========================================================================
+
+#[test]
+fn intersect_preserves_receiver_schema_for_downstream_select() {
+    let result = check(
+        r#"
+class Numbers(Schema):
+    number1: int
+    number2: int
+
+def f(a: DataFrame[Numbers], b: DataFrame[Numbers]) -> DataFrame:
+    return a.intersect(b).select(col("number1"))
+"#,
+    );
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn intersect_catches_typo_in_downstream_select() {
+    let result = check(
+        r#"
+class Numbers(Schema):
+    number1: int
+    number2: int
+
+def f(a: DataFrame[Numbers], b: DataFrame[Numbers]) -> DataFrame:
+    return a.intersect(b).select(col("nofield"))
+"#,
+    );
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "nofield");
+}
+
+#[test]
+fn subtract_exceptAll_intersectAll_all_check_downstream_select() {
+    // Same shape, three different method names — confirm they're all wired.
+    // (Spark also documents `df.except`, but Python's `except` keyword
+    // makes that unavailable as an attribute access in real code.)
+    for method in &["subtract", "exceptAll", "intersectAll"] {
+        let src = format!(
+            r#"
+class Numbers(Schema):
+    number1: int
+    number2: int
+
+def f(a: DataFrame[Numbers], b: DataFrame[Numbers]) -> DataFrame:
+    return a.{method}(b).select(col("nofield"))
+"#
+        );
+        let result = check(&src);
+        assert_has_code(&result, "D0030");
+        assert_message_contains(&result, "D0030", "nofield");
+    }
+}
+
+#[test]
+fn d0040_fires_when_intersect_schemas_differ() {
+    // Set ops use the same name-set check as union. The error message
+    // names the actual method, not "unionByName".
+    let result = check(
+        r#"
+class A(Schema):
+    x: int
+    y: int
+
+class B(Schema):
+    x: int
+    z: int
+
+def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame[A]:
+    return a.intersect(b)
+"#,
+    );
+    assert_has_code(&result, "D0040");
+    assert_message_contains(&result, "D0040", "intersect");
+    assert_message_contains(&result, "D0040", "y");
+    assert_message_contains(&result, "D0040", "z");
+}
+
+#[test]
+fn d0040_fires_when_subtract_schemas_differ_with_correct_method_in_message() {
+    // Guard against the previous "unionByName between …" leakage from the
+    // shared diagnostic for non-union set ops.
+    let result = check(
+        r#"
+class A(Schema):
+    x: int
+
+class B(Schema):
+    y: int
+
+def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame[A]:
+    return a.subtract(b)
+"#,
+    );
+    assert_has_code(&result, "D0040");
+    assert_message_contains(&result, "D0040", "subtract");
+}
+
+// ===========================================================================
 // D0050 — return-type validation
 // ===========================================================================
 

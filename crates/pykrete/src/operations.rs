@@ -66,6 +66,16 @@ enum ColumnMethodShape {
 enum TwoDfMethod {
     Union,
     UnionByName,
+    /// `intersect`, `intersectAll`, `subtract`, `exceptAll` — set
+    /// operations that all return a DataFrame with the same schema as
+    /// the receiver and require the other side's schema to match.
+    /// (Spark's docs also reference `except`, but Python's `except`
+    /// keyword makes that name unavailable as an attribute access —
+    /// real PySpark code uses `exceptAll`/`subtract`.)
+    /// We don't distinguish which one here because the check is the
+    /// same shape (set equality on the column-name set) and the
+    /// diagnostic message reads the same.
+    SetOp,
     Join,
     CrossJoin,
 }
@@ -92,6 +102,7 @@ fn two_df_method(method: &str) -> Option<TwoDfMethod> {
     match method {
         "union" => Some(TwoDfMethod::Union),
         "unionByName" => Some(TwoDfMethod::UnionByName),
+        "intersect" | "intersectAll" | "subtract" | "exceptAll" => Some(TwoDfMethod::SetOp),
         "join" => Some(TwoDfMethod::Join),
         "crossJoin" => Some(TwoDfMethod::CrossJoin),
         _ => None,
@@ -1061,7 +1072,16 @@ fn analyze_method_call<'a>(
         return apply_column_method(method, &receiver, call, ctx.type_ctx());
     }
     if let Some(kind) = two_df_method(method) {
-        return handle_two_df_method(kind, call, &receiver, ctx, source, line_index, diagnostics);
+        return handle_two_df_method(
+            kind,
+            method,
+            call,
+            &receiver,
+            ctx,
+            source,
+            line_index,
+            diagnostics,
+        );
     }
     // PySpark has a handful of methods that don't alter the receiver's
     // schema — caching hints, partitioning hints, materialization
@@ -2452,8 +2472,10 @@ enum JoinOn<'a> {
     Expression,
 }
 
+#[allow(clippy::too_many_arguments)] // mostly source/line_index/diagnostics plumbing
 fn handle_two_df_method<'a>(
     kind: TwoDfMethod,
+    method: &str,
     call: &'a ExprCall,
     left: &SchemaView<'a>,
     ctx: &BodyContext<'a>,
@@ -2465,8 +2487,16 @@ fn handle_two_df_method<'a>(
     let right = analyze_expr(arg, ctx, source, line_index, diagnostics)?;
 
     match kind {
-        TwoDfMethod::Union | TwoDfMethod::UnionByName => {
-            check_union_schemas(left, &right, arg.range(), source, line_index, diagnostics);
+        TwoDfMethod::Union | TwoDfMethod::UnionByName | TwoDfMethod::SetOp => {
+            check_union_schemas(
+                method,
+                left,
+                &right,
+                arg.range(),
+                source,
+                line_index,
+                diagnostics,
+            );
             Some(left.clone())
         }
         TwoDfMethod::Join => {
@@ -2492,6 +2522,7 @@ fn handle_two_df_method<'a>(
 }
 
 fn check_union_schemas(
+    method: &str,
     left: &SchemaView<'_>,
     right: &SchemaView<'_>,
     range: TextRange,
@@ -2509,7 +2540,7 @@ fn check_union_schemas(
     only_left.sort();
     only_right.sort();
     let message = format!(
-        "unionByName between {} and {}: schemas differ. \
+        "{method} between {} and {}: schemas differ. \
          Missing in {}: [{}]; missing in {}: [{}].",
         left.display_name(),
         right.display_name(),
