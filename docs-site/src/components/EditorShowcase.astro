@@ -8,6 +8,10 @@
  * Tab switching is CSS-only (radio inputs + :checked) — no JS.
  *
  * The running example is a deliberately generic `Sale` schema.
+ *
+ * Note: every layout-critical element pins its own `line-height` and
+ * height — Starlight's content `line-height` is inherited otherwise
+ * and inflates the title bar and the tabs.
  */
 ---
 
@@ -33,7 +37,9 @@
     >
       <div class="win">
         <div class="titlebar">
-          <span class="dots"><i class="r"></i><i class="y"></i><i class="g"></i></span>
+          <span class="dot dot-r"></span>
+          <span class="dot dot-y"></span>
+          <span class="dot dot-g"></span>
           <span class="filename">sales.pyk</span>
         </div>
         <ol class="code">
@@ -64,7 +70,9 @@
     >
       <div class="win">
         <div class="titlebar">
-          <span class="dots"><i class="r"></i><i class="y"></i><i class="g"></i></span>
+          <span class="dot dot-r"></span>
+          <span class="dot dot-y"></span>
+          <span class="dot dot-g"></span>
           <span class="filename">sales.pyk</span>
         </div>
         <ol class="code">
@@ -88,7 +96,9 @@
     >
       <div class="win">
         <div class="titlebar">
-          <span class="dots"><i class="r"></i><i class="y"></i><i class="g"></i></span>
+          <span class="dot dot-r"></span>
+          <span class="dot dot-y"></span>
+          <span class="dot dot-g"></span>
           <span class="filename">sales.pyk</span>
         </div>
         <ol class="code">
@@ -112,22 +122,29 @@
     <div
       class="panel panel-4"
       role="img"
-      aria-label="pykrete checks column names inside SQL strings — the misspelled 'regoin' in a filter string is flagged with an unknownColumn error."
+      aria-label="pykrete checks column names inside SQL strings — the misspelled 'amuont' in a filter string is flagged with an unknownColumn error."
     >
       <div class="win">
         <div class="titlebar">
-          <span class="dots"><i class="r"></i><i class="y"></i><i class="g"></i></span>
+          <span class="dot dot-r"></span>
+          <span class="dot dot-y"></span>
+          <span class="dot dot-g"></span>
           <span class="filename">sales.pyk</span>
         </div>
         <ol class="code">
-          <li><span class="kw">def</span> <span class="fn">eu_sales</span>(sales: <span class="cls">DataFrame</span>[<span class="cls">Sale</span>]):</li>
-          <li class="err-line">    <span class="kw">return</span> sales.<span class="fn">filter</span>(<span class="str">"<span class="squiggle">regoin</span> = 'EU'"</span>)</li>
+          <li><span class="kw">def</span> <span class="fn">eu_revenue</span>(sales: <span class="cls">DataFrame</span>[<span class="cls">Sale</span>]):</li>
+          <li>    <span class="kw">return</span> (</li>
+          <li>        sales</li>
+          <li class="err-line">        .<span class="fn">filter</span>(<span class="str">"region = 'EU' AND <span class="squiggle">amuont</span> &gt; 1000"</span>)</li>
+          <li>        .<span class="fn">selectExpr</span>(<span class="str">"product"</span>, <span class="str">"amount * quantity AS revenue"</span>)</li>
+          <li>        .<span class="fn">orderBy</span>(<span class="str">"product"</span>)</li>
+          <li>    )</li>
         </ol>
         <div class="diagnostic">
           <span class="sev" aria-hidden="true">!</span>
           <span class="msg">
-            <span class="rule">unknownColumn</span>Column <b>'regoin'</b> does not
-            exist on schema <b>'Sale'</b>. Did you mean <span class="sug">'region'</span>?
+            <span class="rule">unknownColumn</span>Column <b>'amuont'</b> does not
+            exist on schema <b>'Sale'</b>. Did you mean <span class="sug">'amount'</span>?
             <span class="diag-note">— checked inside the SQL string</span>
           </span>
         </div>
@@ -154,15 +171,19 @@
   .tabbar {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.25rem;
-    margin-bottom: 0.6rem;
+    align-items: center; /* not `stretch` — keeps every tab its own height */
+    gap: 0.3rem;
+    margin-bottom: 0.65rem;
   }
   .tabbar label {
+    display: inline-flex;
+    align-items: center;
     cursor: pointer;
-    padding: 0.35rem 0.7rem;
+    padding: 0.4rem 0.75rem;
     border-radius: 6px;
     font-size: 0.85rem;
     font-weight: 600;
+    line-height: 1.2; /* pinned — don't inherit Starlight's content line-height */
     color: var(--sl-color-gray-2);
     user-select: none;
   }
@@ -179,9 +200,6 @@
     color: var(--sl-color-white);
     background: var(--sl-color-accent-low);
   }
-  .tabradio:focus-visible ~ .tabbar label {
-    outline: none;
-  }
   #pk-tab-1:focus-visible ~ .tabbar label[for='pk-tab-1'],
   #pk-tab-2:focus-visible ~ .tabbar label[for='pk-tab-2'],
   #pk-tab-3:focus-visible ~ .tabbar label[for='pk-tab-3'],
@@ -192,7 +210,7 @@
 
   .panels {
     position: relative;
-    min-height: 17.5rem;
+    min-height: 18rem;
   }
   .panel { display: none; }
   #pk-tab-1:checked ~ .panels .panel-1,
@@ -212,24 +230,30 @@
     font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
     text-align: left;
   }
+
+  /* Fixed height + pinned line-height so the three dots sit on one row
+     and the bar doesn't grow with inherited line-height. */
   .titlebar {
     position: relative;
     display: flex;
     align-items: center;
+    gap: 0.45rem;
+    height: 2.4rem;
+    padding: 0 0.85rem;
+    box-sizing: border-box;
+    line-height: 1;
     background: #272b33;
-    padding: 0.6rem 0.85rem;
     border-bottom: 1px solid #30353f;
   }
-  .dots { display: flex; gap: 0.4rem; }
-  .dots i {
-    display: block;
+  .dot {
+    flex: 0 0 auto;
     width: 11px;
     height: 11px;
     border-radius: 50%;
   }
-  .dots .r { background: #e06c75; }
-  .dots .y { background: #e5c07b; }
-  .dots .g { background: #98c379; }
+  .dot-r { background: #e06c75; }
+  .dot-y { background: #e5c07b; }
+  .dot-g { background: #98c379; }
   .filename {
     position: absolute;
     left: 50%;
@@ -250,6 +274,7 @@
   }
   .code li {
     counter-increment: ln;
+    margin: 0;
     white-space: pre;
     padding-right: 1rem;
   }
@@ -286,7 +311,7 @@
     line-height: 1.55;
   }
   .sev {
-    flex: none;
+    flex: 0 0 auto;
     margin-top: 0.05rem;
     width: 16px;
     height: 16px;
@@ -298,6 +323,7 @@
     color: #1e2127;
     font-weight: 800;
     font-size: 0.72rem;
+    line-height: 1;
   }
   .msg { color: #c2c8d2; }
   .msg b { color: #e7eaf0; font-weight: 600; }
@@ -335,6 +361,7 @@
     border-radius: 6px;
     box-shadow: 0 10px 24px -8px rgba(0, 0, 0, 0.6);
     font-size: 0.78rem;
+    line-height: 1.5;
     overflow: hidden;
   }
   /* Indent each popup to sit under the relevant token: gutter (3.25rem)
@@ -350,7 +377,7 @@
   }
   .opt.sel { background: var(--sl-color-accent-low); }
   .opt-i {
-    flex: none;
+    flex: 0 0 auto;
     font-size: 0.6rem;
     font-weight: 700;
     letter-spacing: 0.02em;
@@ -374,8 +401,8 @@
   .hov-row {
     display: flex;
     gap: 1.5rem;
-    line-height: 1.6;
   }
+
   .hover-tok {
     border-radius: 2px;
     background: rgba(97, 175, 239, 0.16);
