@@ -1,111 +1,99 @@
-<p align="center"><img src="docs/assets/logo.svg" width="160" alt="pykrete logo"></p>
+<p align="center"><img src="docs/assets/logo.svg" width="150" alt="pykrete logo"></p>
 
-# pykrete
+<h1 align="center">pykrete</h1>
 
-[![CI](https://github.com/amirnaderi93/pykrete/actions/workflows/ci.yml/badge.svg)](https://github.com/amirnaderi93/pykrete/actions/workflows/ci.yml)
-[![pykrete-tests](https://github.com/amirnaderi93/pykrete-tests/actions/workflows/check.yml/badge.svg)](https://github.com/amirnaderi93/pykrete-tests/actions/workflows/check.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+<p align="center">
+  <strong>Python dataframes, done right.</strong><br>
+  Static type checking for dataframe schemas.
+</p>
 
-A strict superset of Python that adds static schema checking for dataframes. Inspired by TypeScript's relationship to JavaScript.
+<p align="center">
+  <a href="https://github.com/amirnaderi93/pykrete/actions/workflows/ci.yml"><img src="https://github.com/amirnaderi93/pykrete/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/amirnaderi93/pykrete-tests/actions/workflows/check.yml"><img src="https://github.com/amirnaderi93/pykrete-tests/actions/workflows/check.yml/badge.svg" alt="pykrete-tests"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+</p>
 
-**Status:** actively developed. The PySpark static checker, the LSP server, and the VS Code extension all work end-to-end.
+<p align="center">
+  <a href="https://amirnaderi93.github.io/pykrete/"><strong>Docs</strong></a> ·
+  <a href="https://amirnaderi93.github.io/pykrete/getting-started/install/">Install</a> ·
+  <a href="https://amirnaderi93.github.io/pykrete/getting-started/quickstart/">Quickstart</a> ·
+  <a href="docs/roadmap.md">Roadmap</a>
+</p>
 
-## What it does
+---
 
-- Define schemas as Python classes — including arbitrarily-nested `array` / `map` / `struct` columns.
-- Annotate dataframes with their schema: `DataFrame[MySchema]`.
-- Catch column-name typos, schema drift, shape mismatches, and column-type mismatches at check time, not in production — across whole transformation chains, inline SQL, and nested-field access.
-- Live diagnostics, hover, completion, and go-to-definition in the editor.
-- Transpile to plain Python — runtime cost is zero.
+## The bug that reaches production
 
-## Project layout
+Rename a column. Mistype it once, three transforms downstream. Nothing stops you — not the interpreter, not the linter, not your tests, unless one happens to assert on that exact name. The job runs, returns an empty dataframe or a column of nulls, and you find out hours later in a scheduled run or a dashboard that quietly went blank.
 
-- [docs/v0.1-spec.md](docs/v0.1-spec.md) — the contract for the first usable version.
-- [docs/language-reference/](docs/language-reference/) — user-facing reference (grows as features land).
-- [docs/design/](docs/design/) — internal design and implementation docs (grows as we build).
-- [examples/](examples/) — sample `.pyk` files for poking at the checker.
+pykrete catches it while you type.
 
-## Initial target
+```python
+class Sale(Schema):
+    region: string
+    product: string
+    amount: int
+    quantity: int
 
-PySpark. pandas and polars support is planned — see the [roadmap](docs/roadmap.md).
+def revenue_by_region(sales: DataFrame[Sale]) -> DataFrame:
+    return sales.groupBy("regoin").agg(F.sum("amount").alias("total"))
+```
 
-## Install
+```console
+$ pykrete check sales.pyk
+sales.pyk:8:26 - error unknownColumn: Column 'regoin' does not exist on schema 'Sale'. Did you mean 'region'?
+```
 
-pykrete ships two binaries: `pykrete` (the CLI checker/transpiler) and
-`pykrete-lsp` (the editor language server).
+Tell pykrete the shape of a dataframe — a `Schema` class, a `DataFrame[Sale]` annotation — and it checks every column you touch, the whole way down the chain. It's TypeScript's idea, applied to dataframes: a type layer the runtime ignores, and a checker that runs while you write.
 
-**Homebrew** (macOS / Linux):
+## What you get
+
+- **Typos caught as you type** — every column reference, against the schema in scope, with a *did you mean*.
+- **Checks that follow the data** — `select` / `filter` / `withColumn` / `drop` / `join` / `groupBy` + `agg` / `pivot` / `union` and the rest; a reference to a column three transforms after it was dropped is still caught.
+- **Schema visibility** — hover a `DataFrame[…]` parameter to see its columns; go-to-definition jumps to the schema.
+- **Column-name autocomplete** in string arguments.
+- **Inline SQL checked too** — identifiers inside `filter("…")`, `selectExpr(...)`, `spark.sql("SELECT …")`.
+- **Zero runtime cost** — `.pyk` is a strict superset of Python; the deployed job is ordinary Python.
+
+## Quickstart
+
+Install (full options in the [install guide](https://amirnaderi93.github.io/pykrete/getting-started/install/)):
 
 ```bash
 brew install amirnaderi93/pykrete/pykrete
 ```
 
-**Prebuilt binaries** — download the tarball for your platform from the
-[latest release](https://github.com/amirnaderi93/pykrete/releases/latest)
-and put `pykrete` and `pykrete-lsp` on your `PATH`.
-
-**From source** with Cargo (Rust ≥ 1.95):
+Then convert one file — rename `sales.py` to `sales.pyk` (it still runs unchanged), add a `Schema` class, annotate one function with `DataFrame[Schema]`, and check it:
 
 ```bash
-cargo install --git https://github.com/amirnaderi93/pykrete pykrete
-cargo install --git https://github.com/amirnaderi93/pykrete pykrete-lsp
+pykrete check sales.pyk
 ```
 
-pykrete depends on ruff's parser via a pinned git revision, which Astral
-does not publish to crates.io — so installation is via Homebrew, a
-prebuilt binary, or `cargo install --git`, not `cargo install pykrete`.
+The rest of your repo stays plain Python — pykrete only checks the functions you've annotated. The [quickstart](https://amirnaderi93.github.io/pykrete/getting-started/quickstart/) walks through it in five minutes.
 
-## Usage
+## Editor integration
 
-### Static checker
+The **VS Code extension** gives you live diagnostics, hover, completion, and go-to-definition on `.pyk` files. Search **pykrete** in the Extensions panel — it's on the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=amirnaderi.pykrete) (VS Code) and the [Open VSX Registry](https://open-vsx.org/extension/amirnaderi/pykrete) (Cursor, VSCodium, code-server, Theia).
 
-```bash
-pykrete check examples/schemas.pyk          # single file
-pykrete check schemas.pyk pipeline.pyk      # multi-file; cross-file Schema visibility
-pykrete check src/*.pyk                     # shell glob
+For Neovim, Helix, Emacs, and other LSP clients, see [docs/editors/](docs/editors/).
 
-pykrete transpile examples/schemas.pyk      # emit runnable Python to stdout
-pykrete transpile examples/schemas.pyk > out.py
-```
+## Documentation
 
-### Editor integration (LSP)
+Full documentation — schema reference, the diagnostic catalog, how it works, the roadmap — is at **[amirnaderi93.github.io/pykrete](https://amirnaderi93.github.io/pykrete/)**.
 
-`pykrete-lsp` is a Language Server Protocol server — live diagnostics,
-hover, completion, document symbols, and go-to-definition over stdio.
+PySpark is supported today; pandas and polars are next. See the [roadmap](docs/roadmap.md).
 
-It is also an **LSP multiplexer**: it embeds a Python language server
-(basedpyright) as a child process and merges its responses with pykrete's
-schema-aware results, so a single server delivers both full Python
-support and pykrete's checks. See [docs/design/multiplexer.md](docs/design/multiplexer.md).
+## Repository layout
 
-The **VS Code extension** ([editors/vscode/](editors/vscode/)) wraps this —
-it launches `pykrete-lsp`, bundles the Python engine, and routes `.pyk`
-files to it.
-
-**VS Code, Cursor, VSCodium, code-server, Theia** — search **pykrete**
-in the extensions panel. Each release is published to both the
-[Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=amirnaderi.pykrete)
-(VS Code's default source) and the
-[Open VSX Registry](https://open-vsx.org/extension/amirnaderi/pykrete)
-(the default for the others).
-
-If you can't reach either registry, every release also attaches a
-`pykrete-vscode-vX.Y.Z.vsix` you can side-load:
-
-```bash
-code --install-extension pykrete-vscode-vX.Y.Z.vsix
-```
-
-Or inside the editor: **Extensions panel → ⋯ menu → Install from VSIX…**
-
-For Neovim, Helix, Emacs, and other LSP clients, see
-[docs/editors/](docs/editors/).
+- [`crates/`](crates/) — the Rust workspace: `pykrete` (checker + CLI) and `pykrete-lsp` (language server).
+- [`editors/vscode/`](editors/vscode/) — the VS Code extension.
+- [`docs/`](docs/) — design docs, the roadmap, and the source for the docs site.
+- [`docs-site/`](docs-site/) — the Astro + Starlight documentation site.
+- [`examples/`](examples/) — sample `.pyk` files.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow — feature branches, Conventional Commits, CI, and the pull-request review process.
-
-The [roadmap](docs/roadmap.md) lays out what's planned after v0.1.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow — feature branches, Conventional Commits, CI, and the pull-request process.
 
 ## License
 
