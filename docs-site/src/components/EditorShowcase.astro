@@ -15,17 +15,23 @@
  */
 ---
 
-<figure class="showcase">
+{/*
+  `not-content` opts the whole component out of Starlight's Markdown
+  content styles — most importantly the rule that gives every sibling
+  after the first a `margin-top: 1rem`. Without it, tabs 2-4 and the
+  popups inherit that margin and the layout drifts.
+*/}
+<figure class="showcase not-content">
   <input class="tabradio" type="radio" name="pk-showcase" id="pk-tab-1" checked />
   <input class="tabradio" type="radio" name="pk-showcase" id="pk-tab-2" />
   <input class="tabradio" type="radio" name="pk-showcase" id="pk-tab-3" />
   <input class="tabradio" type="radio" name="pk-showcase" id="pk-tab-4" />
 
   <div class="tabbar" role="tablist">
-    <label for="pk-tab-1">Editor checks</label>
-    <label for="pk-tab-2">Autocomplete</label>
-    <label for="pk-tab-3">Hover</label>
-    <label for="pk-tab-4">Inline SQL</label>
+    <label class="tab tab-1" for="pk-tab-1">Editor checks</label>
+    <label class="tab tab-2" for="pk-tab-2">Autocomplete</label>
+    <label class="tab tab-3" for="pk-tab-3">Hover</label>
+    <label class="tab tab-4" for="pk-tab-4">Inline SQL</label>
   </div>
 
   <div class="panels">
@@ -196,18 +202,22 @@
     background: var(--sl-color-gray-6);
   }
 
-  /* Active-tab highlight, panel visibility — driven by :checked. */
-  #pk-tab-1:checked ~ .tabbar label[for='pk-tab-1'],
-  #pk-tab-2:checked ~ .tabbar label[for='pk-tab-2'],
-  #pk-tab-3:checked ~ .tabbar label[for='pk-tab-3'],
-  #pk-tab-4:checked ~ .tabbar label[for='pk-tab-4'] {
+  /* Active-tab highlight, panel visibility — driven by :checked.
+     The tabs are targeted by `.tab-N` class, not `label[for='pk-tab-N']`:
+     an attribute selector whose value equals an id gets miscompiled by
+     the scoped-style pass (the first selector in the list loses its
+     `#pk-tab-1:checked ~` prefix). A plain class compiles cleanly. */
+  #pk-tab-1:checked ~ .tabbar .tab-1,
+  #pk-tab-2:checked ~ .tabbar .tab-2,
+  #pk-tab-3:checked ~ .tabbar .tab-3,
+  #pk-tab-4:checked ~ .tabbar .tab-4 {
     color: var(--sl-color-white);
     background: var(--sl-color-accent-low);
   }
-  #pk-tab-1:focus-visible ~ .tabbar label[for='pk-tab-1'],
-  #pk-tab-2:focus-visible ~ .tabbar label[for='pk-tab-2'],
-  #pk-tab-3:focus-visible ~ .tabbar label[for='pk-tab-3'],
-  #pk-tab-4:focus-visible ~ .tabbar label[for='pk-tab-4'] {
+  #pk-tab-1:focus-visible ~ .tabbar .tab-1,
+  #pk-tab-2:focus-visible ~ .tabbar .tab-2,
+  #pk-tab-3:focus-visible ~ .tabbar .tab-3,
+  #pk-tab-4:focus-visible ~ .tabbar .tab-4 {
     outline: 2px solid var(--sl-color-accent);
     outline-offset: 2px;
   }
