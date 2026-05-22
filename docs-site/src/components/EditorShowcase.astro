@@ -245,14 +245,21 @@
 
   .tabbar {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap; /* one row — scroll it rather than wrap on mobile */
     align-items: center; /* not `stretch` — keeps every tab its own height */
     gap: 0.3rem;
     margin-bottom: 0.65rem;
+    overflow-x: auto;
+    scrollbar-width: none; /* tabs scroll on touch; no visible rail */
+  }
+  .tabbar::-webkit-scrollbar {
+    display: none;
   }
   .tabbar label {
     display: inline-flex;
     align-items: center;
+    flex: 0 0 auto; /* don't shrink — overflow the row so it can scroll */
+    white-space: nowrap;
     cursor: pointer;
     /* `margin: 0` is load-bearing: Starlight's content styles give every
        sibling after the first a `margin-top`, which (with align-items:
