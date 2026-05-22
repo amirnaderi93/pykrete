@@ -4,32 +4,40 @@
  * HTML + CSS, no screenshots. Modeled on the TypeScript homepage's
  * hero widget: a row of tabs, each showing one pykrete capability.
  *
- * Tabs: Editor checks · Autocomplete · Hover · Inline SQL.
+ * Tabs: Column typos · Autocomplete · Hover · Inline SQL ·
+ *       Schema flow · Return types.
  * Tab switching is CSS-only (radio inputs + :checked) — no JS.
  *
  * The running example is a deliberately generic `Sale` schema.
  *
- * Note: every layout-critical element pins its own `line-height` and
- * height — Starlight's content `line-height` is inherited otherwise
- * and inflates the title bar and the tabs.
+ * Notes:
+ *  - The root carries `not-content` so Starlight's Markdown content
+ *    styles (notably a `margin-top` on every sibling-after-first)
+ *    don't leak in and skew the layout.
+ *  - The code area has a capped height and scrolls — a long panel
+ *    behaves like a real editor instead of growing the window.
  */
 ---
 
-<figure class="showcase">
+<figure class="showcase not-content">
   <input class="tabradio" type="radio" name="pk-showcase" id="pk-tab-1" checked />
   <input class="tabradio" type="radio" name="pk-showcase" id="pk-tab-2" />
   <input class="tabradio" type="radio" name="pk-showcase" id="pk-tab-3" />
   <input class="tabradio" type="radio" name="pk-showcase" id="pk-tab-4" />
+  <input class="tabradio" type="radio" name="pk-showcase" id="pk-tab-5" />
+  <input class="tabradio" type="radio" name="pk-showcase" id="pk-tab-6" />
 
   <div class="tabbar" role="tablist">
-    <label for="pk-tab-1">Editor checks</label>
-    <label for="pk-tab-2">Autocomplete</label>
-    <label for="pk-tab-3">Hover</label>
-    <label for="pk-tab-4">Inline SQL</label>
+    <label class="tab tab-1" for="pk-tab-1">Column typos</label>
+    <label class="tab tab-2" for="pk-tab-2">Autocomplete</label>
+    <label class="tab tab-3" for="pk-tab-3">Hover</label>
+    <label class="tab tab-4" for="pk-tab-4">Inline SQL</label>
+    <label class="tab tab-5" for="pk-tab-5">Schema flow</label>
+    <label class="tab tab-6" for="pk-tab-6">Return types</label>
   </div>
 
   <div class="panels">
-    {/* ---- Panel 1 — Editor checks ---------------------------------- */}
+    {/* ---- Panel 1 — Column typos ----------------------------------- */}
     <div
       class="panel panel-1"
       role="img"
@@ -150,6 +158,73 @@
         </div>
       </div>
     </div>
+
+    {/* ---- Panel 5 — Schema flow ------------------------------------ */}
+    <div
+      class="panel panel-5"
+      role="img"
+      aria-label="pykrete tracks the schema through a transformation chain. Hovering the result shows its derived schema — a DataFrame with columns region string and total long, after withColumn, drop, groupBy and agg."
+    >
+      <div class="win">
+        <div class="titlebar">
+          <span class="dot dot-r"></span>
+          <span class="dot dot-y"></span>
+          <span class="dot dot-g"></span>
+          <span class="filename">sales.pyk</span>
+        </div>
+        <ol class="code">
+          <li><span class="kw">def</span> <span class="fn">report</span>(sales: <span class="cls">DataFrame</span>[<span class="cls">Sale</span>]):</li>
+          <li>    summary = (</li>
+          <li>        sales</li>
+          <li>        .<span class="fn">withColumn</span>(<span class="str">"revenue"</span>, <span class="fn">F</span>.<span class="fn">col</span>(<span class="str">"amount"</span>) * <span class="fn">F</span>.<span class="fn">col</span>(<span class="str">"quantity"</span>))</li>
+          <li>        .<span class="fn">drop</span>(<span class="str">"amount"</span>, <span class="str">"quantity"</span>)</li>
+          <li>        .<span class="fn">groupBy</span>(<span class="str">"region"</span>)</li>
+          <li>        .<span class="fn">agg</span>(<span class="fn">F</span>.<span class="fn">sum</span>(<span class="str">"revenue"</span>).<span class="fn">alias</span>(<span class="str">"total"</span>))</li>
+          <li>    )</li>
+          <li>    <span class="kw">return</span> <span class="hover-tok">summary</span></li>
+        </ol>
+        <div class="popup popup-hover">
+          <div class="hov-head">(local) <b>summary</b>: <span class="cls">DataFrame</span></div>
+          <div class="hov-rule"></div>
+          <div class="hov-schema">
+            <div class="hov-row"><span class="opt-n">region</span><span class="opt-t">string</span></div>
+            <div class="hov-row"><span class="opt-n">total</span><span class="opt-t">long</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {/* ---- Panel 6 — Return types ----------------------------------- */}
+    <div
+      class="panel panel-6"
+      role="img"
+      aria-label="pykrete flags a return-type mismatch: the function declares it returns DataFrame[Summary] but the body produces a different column set — missing total, extra amount."
+    >
+      <div class="win">
+        <div class="titlebar">
+          <span class="dot dot-r"></span>
+          <span class="dot dot-y"></span>
+          <span class="dot dot-g"></span>
+          <span class="filename">sales.pyk</span>
+        </div>
+        <ol class="code">
+          <li><span class="kw">class</span> <span class="cls">Summary</span>(<span class="cls">Schema</span>):</li>
+          <li>    region: <span class="cls">string</span></li>
+          <li>    total: <span class="cls">int</span></li>
+          <li> </li>
+          <li><span class="kw">def</span> <span class="fn">report</span>(sales: <span class="cls">DataFrame</span>[<span class="cls">Sale</span>]) -&gt; <span class="cls">DataFrame</span>[<span class="cls">Summary</span>]:</li>
+          <li class="err-line">    <span class="kw">return</span> <span class="squiggle">sales.<span class="fn">select</span>(<span class="str">"region"</span>, <span class="str">"amount"</span>)</span></li>
+        </ol>
+        <div class="diagnostic">
+          <span class="sev" aria-hidden="true">!</span>
+          <span class="msg">
+            <span class="rule">returnColumnsMismatch</span>Return type mismatch with
+            declared schema <b>'Summary'</b>. Missing in body: [<b>total</b>];
+            extra in body: [<b>amount</b>].
+          </span>
+        </div>
+      </div>
+    </div>
   </div>
 </figure>
 
@@ -170,14 +245,21 @@
 
   .tabbar {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap; /* one row — scroll it rather than wrap on mobile */
     align-items: center; /* not `stretch` — keeps every tab its own height */
     gap: 0.3rem;
     margin-bottom: 0.65rem;
+    overflow-x: auto;
+    scrollbar-width: none; /* tabs scroll on touch; no visible rail */
+  }
+  .tabbar::-webkit-scrollbar {
+    display: none;
   }
   .tabbar label {
     display: inline-flex;
     align-items: center;
+    flex: 0 0 auto; /* don't shrink — overflow the row so it can scroll */
+    white-space: nowrap;
     cursor: pointer;
     /* `margin: 0` is load-bearing: Starlight's content styles give every
        sibling after the first a `margin-top`, which (with align-items:
@@ -196,18 +278,26 @@
     background: var(--sl-color-gray-6);
   }
 
-  /* Active-tab highlight, panel visibility — driven by :checked. */
-  #pk-tab-1:checked ~ .tabbar label[for='pk-tab-1'],
-  #pk-tab-2:checked ~ .tabbar label[for='pk-tab-2'],
-  #pk-tab-3:checked ~ .tabbar label[for='pk-tab-3'],
-  #pk-tab-4:checked ~ .tabbar label[for='pk-tab-4'] {
+  /* Active-tab highlight, panel visibility — driven by :checked.
+     The tabs are targeted by `.tab-N` class, not `label[for='pk-tab-N']`:
+     an attribute selector whose value equals an id gets miscompiled by
+     the scoped-style pass (the first selector in the list loses its
+     `#pk-tab-1:checked ~` prefix). A plain class compiles cleanly. */
+  #pk-tab-1:checked ~ .tabbar .tab-1,
+  #pk-tab-2:checked ~ .tabbar .tab-2,
+  #pk-tab-3:checked ~ .tabbar .tab-3,
+  #pk-tab-4:checked ~ .tabbar .tab-4,
+  #pk-tab-5:checked ~ .tabbar .tab-5,
+  #pk-tab-6:checked ~ .tabbar .tab-6 {
     color: var(--sl-color-white);
     background: var(--sl-color-accent-low);
   }
-  #pk-tab-1:focus-visible ~ .tabbar label[for='pk-tab-1'],
-  #pk-tab-2:focus-visible ~ .tabbar label[for='pk-tab-2'],
-  #pk-tab-3:focus-visible ~ .tabbar label[for='pk-tab-3'],
-  #pk-tab-4:focus-visible ~ .tabbar label[for='pk-tab-4'] {
+  #pk-tab-1:focus-visible ~ .tabbar .tab-1,
+  #pk-tab-2:focus-visible ~ .tabbar .tab-2,
+  #pk-tab-3:focus-visible ~ .tabbar .tab-3,
+  #pk-tab-4:focus-visible ~ .tabbar .tab-4,
+  #pk-tab-5:focus-visible ~ .tabbar .tab-5,
+  #pk-tab-6:focus-visible ~ .tabbar .tab-6 {
     outline: 2px solid var(--sl-color-accent);
     outline-offset: 2px;
   }
@@ -220,7 +310,9 @@
   #pk-tab-1:checked ~ .panels .panel-1,
   #pk-tab-2:checked ~ .panels .panel-2,
   #pk-tab-3:checked ~ .panels .panel-3,
-  #pk-tab-4:checked ~ .panels .panel-4 {
+  #pk-tab-4:checked ~ .panels .panel-4,
+  #pk-tab-5:checked ~ .panels .panel-5,
+  #pk-tab-6:checked ~ .panels .panel-6 {
     display: block;
   }
 
@@ -266,6 +358,8 @@
     font-size: 0.8rem;
   }
 
+  /* The code area scrolls — a long panel behaves like an editor pane
+     rather than stretching the whole window. */
   .code {
     margin: 0;
     padding: 0.9rem 0;
@@ -274,7 +368,8 @@
     font-size: 0.82rem;
     line-height: 1.7;
     color: #abb2bf;
-    overflow-x: auto;
+    max-height: 16rem;
+    overflow: auto;
   }
   .code li {
     counter-increment: ln;
@@ -303,7 +398,7 @@
     text-underline-offset: 3px;
   }
 
-  /* ---- Diagnostic strip (panels 1 & 4) ---------------------------- */
+  /* ---- Diagnostic strip (panels 1, 4 & 6) ------------------------- */
   .diagnostic {
     display: flex;
     align-items: flex-start;

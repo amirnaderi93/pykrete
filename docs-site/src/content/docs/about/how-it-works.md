@@ -35,7 +35,7 @@ When pykrete checks a file, it:
 
 Column references are checked wherever they appear: `col("x")`, attribute access `df.x`, subscript `df["x"]`, dotted paths into nested structs, the string arguments to functions like `F.sum("x")`, and the identifiers inside embedded SQL — `filter("x > 0")`, `selectExpr(...)`, `spark.sql("SELECT …")`.
 
-Function boundaries are checked too: what a `DataFrame[…]`-annotated function declares it returns is verified against what its body actually produces, and what its callers pass in is verified against what it declares it takes.
+Function boundaries are checked too: a `DataFrame[Schema]` parameter is the schema the function body is checked against, and what the function declares it returns is verified against what its body actually produces.
 
 ## One server, two kinds of help
 
