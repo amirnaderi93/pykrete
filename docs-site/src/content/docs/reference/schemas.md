@@ -3,20 +3,21 @@ title: Schemas
 description: Declare dataframe shapes as Python classes — atomic types, nested arrays / maps / structs, and TypeScript-style type operators.
 ---
 
-A schema is a Python class. pykrete reads its annotated attributes as the columns of a dataframe.
+A schema is a Python class. pykrete reads its type-annotated attributes as the columns of a dataframe.
 
 ```python
-class Order(Schema):
-    place_code: int
-    price: int
-    status: string
+class Sale(Schema):
+    region: string
+    product: string
+    amount: int
+    quantity: int
 ```
 
-`Order` declares three columns. Field name is the column name; field type is the column type.
+`Sale` declares four columns. Field name is the column name; field type is the column type. That's the whole idea — everything below is detail.
 
 ## Atomic types
 
-| Pykrete | Spark / SQL |
+| pykrete | Spark / SQL |
 |---|---|
 | `int` | `int` |
 | `long` | `bigint` |
@@ -29,25 +30,25 @@ class Order(Schema):
 | `decimal` | `decimal(p, s)` |
 | `bytes` | `binary` |
 
-The Pykrete name is what you write in `.pyk`; the Spark column is what's stored in the actual dataframe. Atomic types are case-sensitive.
+The pykrete name is what you write in `.pyk`; the Spark column is the type in the actual dataframe. Names are case-sensitive.
 
 ## Optional columns
 
-Wrap any atomic type in `Optional[...]` to mark it nullable:
+Wrap a type in `Optional[...]` to mark the column nullable:
 
 ```python
-class User(Schema):
+class Customer(Schema):
     id: int
     email: Optional[string]
 ```
 
-The checker treats `Optional[T]` and `T` interchangeably for column-existence checks; the distinction matters for [strict type-checking mode](/pykrete/reference/configuration/#typecheckingmode).
+For column-existence checks, `Optional[T]` and `T` behave the same. The distinction matters under [strict type-checking](/pykrete/reference/configuration/#typecheckingmode), where a nullable value flowing into a non-nullable slot is flagged.
 
 ## Nested types
 
 ### Struct columns
 
-A struct column is declared by referencing another `Schema` class as a field type:
+A struct column is a field whose type is another `Schema` class:
 
 ```python
 class Address(Schema):
@@ -55,31 +56,31 @@ class Address(Schema):
     city: string
     zip: string
 
-class User(Schema):
+class Customer(Schema):
     id: int
     address: Address
 ```
 
-Dotted access through the nested struct works in column refs:
+Dotted column references walk into the struct:
 
 ```python
-def f(users: DataFrame[User]) -> DataFrame:
-    return users.select(F.col("address.city"))
+def f(customers: DataFrame[Customer]) -> DataFrame:
+    return customers.select(F.col("address.city"))
 ```
 
-A typo on the dotted path (`"address.cty"`) fires `D0030` and names the failing schema (`Address`).
+A typo on the path — `"address.cty"` — fires `D0030` and names the schema it failed on (`Address`), not the outer one.
 
 ### Array columns
 
 ```python
 from typing import List
 
-class Order(Schema):
-    line_skus: List[string]
-    tags: List[int]
+class Event(Schema):
+    tags: List[string]
+    scores: List[int]
 ```
 
-Arrays of structs work via a nested Schema reference:
+For an array of structs, the element type is another `Schema`:
 
 ```python
 class LineItem(Schema):
@@ -90,7 +91,7 @@ class Order(Schema):
     lines: List[LineItem]
 ```
 
-A dotted path into an array's element type pierces the array:
+A dotted path pierces the array to its element type:
 
 ```python
 orders.select(F.col("lines.sku"))   # checked against LineItem.sku
@@ -106,70 +107,71 @@ class Telemetry(Schema):
     payload: Dict[string, string]
 ```
 
-The checker doesn't walk into map values (key names are runtime data, not part of the schema).
+pykrete doesn't walk into map values — the keys are runtime data, not part of the schema.
 
-## TypeScript-style type operators
+## Type operators
 
-Compose schemas the way TypeScript composes object types:
+Compose schemas the way TypeScript composes object types, instead of redeclaring columns.
 
-### `Pick`
-
-```python
-class User(Schema):
-    id: int
-    email: string
-    name: string
-
-class UserSummary(Pick[User, "id", "name"]):
-    pass
-# UserSummary == { id: int, name: string }
-```
-
-### `Omit`
+### `Pick` — keep some columns
 
 ```python
-class UserPublic(Omit[User, "email"]):
+class Sale(Schema):
+    region: string
+    product: string
+    amount: int
+    quantity: int
+
+class SaleSummary(Pick[Sale, "region", "amount"]):
     pass
-# UserPublic == { id: int, name: string }
+# SaleSummary == { region: string, amount: int }
 ```
 
-### `Join`
+### `Omit` — drop some columns
 
 ```python
-class Address(Schema):
-    user_id: int
-    city: string
-
-class UserWithCity(Join[User, Address]):
+class SaleLite(Omit[Sale, "product", "quantity"]):
     pass
-# UserWithCity == { id: int, email: string, name: string, user_id: int, city: string }
+# SaleLite == { region: string, amount: int }
 ```
 
-### `GroupBy`
+### `Join` — combine two schemas
 
 ```python
-class Aggregated(GroupBy[User, "name"]):
+class Region(Schema):
+    region: string
+    manager: string
+
+class SaleWithManager(Join[Sale, Region]):
     pass
-# Aggregated has 'name' as a grouping key
+# SaleWithManager has every column of Sale plus every column of Region
 ```
 
-Mirrors PySpark's groupBy result type. Used by `DataFrame[GroupBy[Schema, key]]` annotations.
+### `GroupBy` — a grouped result
+
+```python
+class SaleByRegion(GroupBy[Sale, "region"]):
+    pass
+# 'region' is the grouping key
+```
+
+Mirrors the shape PySpark's `groupBy` produces; used in `DataFrame[GroupBy[Sale, "region"]]` annotations.
 
 ## Cross-file schemas
 
-Move shared schemas to a dedicated module. Importing the schema class brings the type into scope; pykrete walks `.pyk` imports the same way Python does:
+Put shared schemas in their own module and import them — pykrete resolves `.pyk` imports the same way Python does:
 
 ```python
-# schemas.py (or schemas.pyk)
-class Order(Schema):
-    place_code: int
-    price: int
+# schemas.py  (or schemas.pyk)
+class Sale(Schema):
+    region: string
+    amount: int
 
-# orders.pyk
-from schemas import Order
+# sales.pyk
+from schemas import Sale
 
-def total_per_place(orders: DataFrame[Order]) -> DataFrame:
-    return orders.groupBy("place_code").agg(F.sum("price").alias("total"))
+def revenue_by_region(sales: DataFrame[Sale]) -> DataFrame:
+    return sales.groupBy("region").agg(F.sum("amount").alias("total"))
 ```
 
-See the [Quickstart](/pykrete/getting-started/quickstart/) for the gradual-adoption path.
+One schema, imported wherever the dataframe shows up. See the [Quickstart](/pykrete/getting-started/quickstart/) for the gradual-adoption path.

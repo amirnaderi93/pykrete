@@ -3,9 +3,11 @@ title: Install
 description: Get pykrete onto your machine. Homebrew, prebuilt binaries, cargo install, or the Windows MSI — plus the VS Code extension.
 ---
 
+pykrete is two binaries — `pykrete` (the checker and transpiler) and `pykrete-lsp` (the language server your editor talks to). Both install together; pick whichever method fits your setup.
+
 ## CLI
 
-The `pykrete` CLI runs the static checker and the transpiler. The `pykrete-lsp` LSP server ships alongside it for editor integrations.
+Every install method below puts both `pykrete` and `pykrete-lsp` on your machine.
 
 ### Homebrew (macOS / Linux)
 
