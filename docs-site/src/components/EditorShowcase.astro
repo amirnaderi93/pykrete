@@ -179,6 +179,10 @@
     display: inline-flex;
     align-items: center;
     cursor: pointer;
+    /* `margin: 0` is load-bearing: Starlight's content styles give every
+       sibling after the first a `margin-top`, which (with align-items:
+       center) leaves the first tab sitting higher than the rest. */
+    margin: 0;
     padding: 0.4rem 0.75rem;
     border-radius: 6px;
     font-size: 0.85rem;
@@ -354,8 +358,10 @@
   .popup {
     width: max-content;
     max-width: calc(100% - 2rem);
-    margin-top: -0.35rem;
-    margin-bottom: 1rem;
+    /* Pulled up to hug the cursor line — cancels the code block's own
+       0.9rem bottom padding so the popup sits right under the caret. */
+    margin-top: -0.85rem;
+    margin-bottom: 0.5rem;
     background: #21252b;
     border: 1px solid #3a4150;
     border-radius: 6px;
