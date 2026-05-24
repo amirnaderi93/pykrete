@@ -4,7 +4,8 @@
 
 <p align="center">
   <strong>Python dataframes, done right.</strong><br>
-  Static type checking for dataframe schemas.
+  Static type checking for dataframe schemas.<br>
+  <sub>PySpark today (feature-complete); pandas and polars next.</sub>
 </p>
 
 <p align="center">
@@ -26,7 +27,7 @@
 
 Rename a column. Mistype it once, three transforms downstream. Nothing stops you — not the interpreter, not the linter, not your tests, unless one happens to assert on that exact name. The job runs, returns an empty dataframe or a column of nulls, and you find out hours later in a scheduled run or a dashboard that quietly went blank.
 
-pykrete catches it while you type.
+pykrete catches it before that. `sales.pyk` below is a strict superset of Python — the `Schema` class and the `DataFrame[Sale]` annotation are ordinary Python the runtime ignores; pykrete reads them as types.
 
 ```python
 class Sale(Schema):
@@ -44,7 +45,11 @@ $ pykrete check sales.pyk
 sales.pyk:8:26 - error unknownColumn: Column 'regoin' does not exist on schema 'Sale'. Did you mean 'region'?
 ```
 
-Tell pykrete the shape of a dataframe — a `Schema` class, a `DataFrame[Sale]` annotation — and it checks every column you touch, the whole way down the chain. It's TypeScript's idea, applied to dataframes: a type layer the runtime ignores, and a checker that runs while you write.
+The CLI runs in CI; with the [VS Code extension](#editor-integration), the same error appears as a red squiggle under `regoin` as you type — no command needed.
+
+Annotate a dataframe with its schema — a `Schema` class plus a `DataFrame[Sale]` parameter — and pykrete checks every column you touch through the whole transformation chain. It's TypeScript's idea, applied to dataframes: a type layer the runtime ignores, a checker that runs at edit time. If you've used [Pandera](https://pandera.readthedocs.io/), this is its edit-time counterpart — Pandera validates dataframes when your job runs; pykrete checks them before it does.
+
+Atomic types (`string`, `int`, `long`, `double`, `bool`, `date`, `timestamp`) and nested arrays / maps / structs are in the [Schemas reference](https://amirnaderi93.github.io/pykrete/reference/schemas/). The [full showcase](https://amirnaderi93.github.io/pykrete/) walks through autocomplete, hover, schema flow, and the rest.
 
 ## What you get
 
@@ -57,11 +62,13 @@ Tell pykrete the shape of a dataframe — a `Schema` class, a `DataFrame[Sale]` 
 
 ## Quickstart
 
-Install (full options in the [install guide](https://amirnaderi93.github.io/pykrete/getting-started/install/)):
+Install — macOS / Linux:
 
 ```bash
 brew install amirnaderi93/pykrete/pykrete
 ```
+
+Windows: the [latest release](https://github.com/amirnaderi93/pykrete/releases/latest) ships an MSI installer. Other options — prebuilt binaries, `cargo install` — are in the [install guide](https://amirnaderi93.github.io/pykrete/getting-started/install/).
 
 Then convert one file — rename `sales.py` to `sales.pyk` (it still runs unchanged), add a `Schema` class, annotate one function with `DataFrame[Schema]`, and check it:
 

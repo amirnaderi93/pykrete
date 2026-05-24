@@ -9,6 +9,8 @@ A mistyped column name in a PySpark job doesn't fail loudly — it returns an em
 
 New to pykrete? Start with the [documentation](https://amirnaderi93.github.io/pykrete/).
 
+A `.pyk` file is a strict superset of Python — the `Schema` class and the `DataFrame[…]` annotation below are ordinary Python that the runtime ignores; pykrete reads them as types.
+
 ```python
 class Sale(Schema):
     region: string
@@ -39,13 +41,13 @@ def revenue_by_region(sales: DataFrame[Sale]) -> DataFrame:
 
 ## Requirements
 
-The extension needs the `pykrete-lsp` binary on your `PATH`. Install pykrete with Homebrew:
+The extension needs the `pykrete-lsp` binary on your `PATH`. Install it via any of:
 
-```sh
-brew install amirnaderi93/pykrete/pykrete
-```
+- **Homebrew** (macOS / Linux): `brew install amirnaderi93/pykrete/pykrete`
+- **Windows**: download the MSI from the [latest release](https://github.com/amirnaderi93/pykrete/releases/latest)
+- **From source** (Rust ≥ 1.95): `cargo install --git https://github.com/amirnaderi93/pykrete pykrete pykrete-lsp`
 
-This installs both `pykrete` and `pykrete-lsp`. Other install options — prebuilt binaries, the Windows MSI, `cargo install` — are in the [install guide](https://amirnaderi93.github.io/pykrete/getting-started/install/). If you installed via Homebrew or the MSI, the binary is already on your `PATH` and you're done.
+Each installs both `pykrete` and `pykrete-lsp`. Homebrew and the MSI put the binary on your `PATH` automatically. Full options in the [install guide](https://amirnaderi93.github.io/pykrete/getting-started/install/).
 
 The bundled Python language server runs on **Node.js**. If `node` isn't on your `PATH`, pykrete's schema features still work fully — only the general Python features are unavailable.
 
@@ -55,7 +57,7 @@ The bundled Python language server runs on **Node.js**. If `node` isn't on your 
 - **Cursor / VSCodium / code-server / Theia** — search **pykrete** in the Extensions panel (served from the Open VSX Registry).
 - **Offline / locked-down environments** — every [pykrete release](https://github.com/amirnaderi93/pykrete/releases) attaches a `.vsix`; install it with **Extensions panel → ⋯ → Install from VSIX…**
 
-Open a `.pyk` file and the checks start immediately.
+Open a `.pyk` file and the checks start immediately. Have existing PySpark `.py` files? Rename one to `.pyk` — it's a strict superset of Python, so the file still runs unchanged. The [quickstart](https://amirnaderi93.github.io/pykrete/getting-started/quickstart/) walks through it in five minutes.
 
 ## Settings
 
