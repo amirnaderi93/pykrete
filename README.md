@@ -4,8 +4,7 @@
 
 <p align="center">
   <strong>Python dataframes, done right.</strong><br>
-  Static type checking for dataframe schemas.<br>
-  <sub>PySpark today (feature-complete); pandas and polars next.</sub>
+  Static type checking for dataframe schemas.
 </p>
 
 <p align="center">
@@ -23,46 +22,15 @@
 
 ---
 
-## The bug that reaches production
+pykrete is a strict superset of Python that adds a type layer for dataframes. Define a schema as a class, annotate a dataframe with `DataFrame[Schema]`, and pykrete checks every column you touch — at edit time, before your job runs. The runtime is plain Python; the type layer never executes. It's the same idea TypeScript brings to JavaScript, applied to dataframe code.
 
-Rename a column. Mistype it once, three transforms downstream. Nothing stops you — not the interpreter, not the linter, not your tests, unless one happens to assert on that exact name. The job runs, returns an empty dataframe or a column of nulls, and you find out hours later in a scheduled run or a dashboard that quietly went blank.
+<p align="center">
+  <img src="docs/assets/showcase-column-typos.png" alt="pykrete catching a misspelled column name in the editor — diagnostic: 'regoin' does not exist on schema 'Sale'. Did you mean 'region'?" width="720">
+</p>
 
-pykrete catches it before that. `sales.pyk` below is a strict superset of Python — the `Schema` class and the `DataFrame[Sale]` annotation are ordinary Python the runtime ignores; pykrete reads them as types.
+## Install
 
-```python
-class Sale(Schema):
-    region: string
-    product: string
-    amount: int
-    quantity: int
-
-def revenue_by_region(sales: DataFrame[Sale]) -> DataFrame:
-    return sales.groupBy("regoin").agg(F.sum("amount").alias("total"))
-```
-
-```console
-$ pykrete check sales.pyk
-sales.pyk:8:26 - error unknownColumn: Column 'regoin' does not exist on schema 'Sale'. Did you mean 'region'?
-```
-
-The CLI runs in CI; with the [VS Code extension](#editor-integration), the same error appears as a red squiggle under `regoin` as you type — no command needed.
-
-Annotate a dataframe with its schema — a `Schema` class plus a `DataFrame[Sale]` parameter — and pykrete checks every column you touch through the whole transformation chain. It's TypeScript's idea, applied to dataframes: a type layer the runtime ignores, a checker that runs at edit time. If you've used [Pandera](https://pandera.readthedocs.io/), this is its edit-time counterpart — Pandera validates dataframes when your job runs; pykrete checks them before it does.
-
-Atomic types (`string`, `int`, `long`, `double`, `bool`, `date`, `timestamp`) and nested arrays / maps / structs are in the [Schemas reference](https://amirnaderi93.github.io/pykrete/reference/schemas/). The [full showcase](https://amirnaderi93.github.io/pykrete/) walks through autocomplete, hover, schema flow, and the rest.
-
-## What you get
-
-- **Typos caught as you type** — every column reference, against the schema in scope, with a *did you mean*.
-- **Checks that follow the data** — `select` / `filter` / `withColumn` / `drop` / `join` / `groupBy` + `agg` / `pivot` / `union` and the rest; a reference to a column three transforms after it was dropped is still caught.
-- **Schema visibility** — hover a `DataFrame[…]` parameter to see its columns; go-to-definition jumps to the schema.
-- **Column-name autocomplete** in string arguments.
-- **Inline SQL checked too** — identifiers inside `filter("…")`, `selectExpr(...)`, `spark.sql("SELECT …")`.
-- **Zero runtime cost** — `.pyk` is a strict superset of Python; the deployed job is ordinary Python.
-
-## Quickstart
-
-Install — macOS / Linux:
+macOS / Linux:
 
 ```bash
 brew install amirnaderi93/pykrete/pykrete
@@ -70,13 +38,16 @@ brew install amirnaderi93/pykrete/pykrete
 
 Windows: the [latest release](https://github.com/amirnaderi93/pykrete/releases/latest) ships an MSI installer. Other options — prebuilt binaries, `cargo install` — are in the [install guide](https://amirnaderi93.github.io/pykrete/getting-started/install/).
 
-Then convert one file — rename `sales.py` to `sales.pyk` (it still runs unchanged), add a `Schema` class, annotate one function with `DataFrame[Schema]`, and check it:
+Each install gives you two binaries: `pykrete` (the checker, for CLI and CI) and `pykrete-lsp` (the language server for your editor).
 
-```bash
-pykrete check sales.pyk
-```
+## What you get
 
-The rest of your repo stays plain Python — pykrete only checks the functions you've annotated. The [quickstart](https://amirnaderi93.github.io/pykrete/getting-started/quickstart/) walks through it in five minutes.
+- **Typos caught as you type** — every column reference, against the schema in scope, with a _did you mean_.
+- **Checks that follow the data** — `select` / `filter` / `withColumn` / `drop` / `join` / `groupBy` + `agg` / `pivot` / `union` and the rest; a reference to a column three transforms after it was dropped is still caught.
+- **Schema visibility** — hover a `DataFrame[…]` parameter to see its columns; go-to-definition jumps to the schema.
+- **Column-name autocomplete** in string arguments.
+- **Inline SQL checked too** — identifiers inside `filter("…")`, `selectExpr(...)`, `spark.sql("SELECT …")`.
+- **Zero runtime cost** — `.pyk` is a strict superset of Python; the deployed job is ordinary Python.
 
 ## Editor integration
 
@@ -86,9 +57,9 @@ For Neovim, Helix, Emacs, and other LSP clients, see [docs/editors/](docs/editor
 
 ## Documentation
 
-Full documentation — schema reference, the diagnostic catalog, how it works, the roadmap — is at **[amirnaderi93.github.io/pykrete](https://amirnaderi93.github.io/pykrete/)**.
+Full documentation at **[amirnaderi93.github.io/pykrete](https://amirnaderi93.github.io/pykrete/)** — schema reference, diagnostic catalog, how it works, the roadmap.
 
-PySpark is supported today; pandas and polars are next. See the [roadmap](docs/roadmap.md).
+Today: PySpark, feature-complete. Next: pandas and polars — see the [roadmap](docs/roadmap.md).
 
 ## Repository layout
 
