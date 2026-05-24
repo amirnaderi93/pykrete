@@ -2,28 +2,21 @@
 
 **Static type checking for dataframe schemas — in your editor.**
 
-[![Visual Studio Marketplace](https://img.shields.io/visual-studio-marketplace/v/amirnaderi.pykrete?label=VS%20Marketplace)](https://marketplace.visualstudio.com/items?itemName=amirnaderi.pykrete)
 [![Open VSX](https://img.shields.io/open-vsx/v/amirnaderi/pykrete?label=Open%20VSX)](https://open-vsx.org/extension/amirnaderi/pykrete)
 
-A mistyped column name in a PySpark job doesn't fail loudly — it returns an empty dataframe or a column of nulls, and you find out in production. pykrete catches it while you type. This extension brings pykrete's schema checks into VS Code (and Cursor, VSCodium, code-server, Theia): live diagnostics, hover, completion, go-to-definition, and quick-fixes on `.pyk` files.
+pykrete is a strict superset of Python that adds a type layer for dataframes. This extension brings its schema checks into VS Code (and Cursor, VSCodium, code-server, Theia): live diagnostics, hover, completion, go-to-definition, and quick-fixes on `.pyk` files. New to pykrete? Start with the [documentation](https://amirnaderi93.github.io/pykrete/).
 
-New to pykrete? Start with the [documentation](https://amirnaderi93.github.io/pykrete/).
+<p align="center">
+  <img src="https://raw.githubusercontent.com/amirnaderi93/pykrete/main/docs/assets/showcase-column-typos.png" alt="pykrete catching a misspelled column name in the editor — diagnostic: 'regoin' does not exist on schema 'Sale'. Did you mean 'region'?" width="720">
+  <br>
+  <sub><em>A column typo, caught at edit time.</em></sub>
+</p>
 
-A `.pyk` file is a strict superset of Python — the `Schema` class and the `DataFrame[…]` annotation below are ordinary Python that the runtime ignores; pykrete reads them as types.
-
-```python
-class Sale(Schema):
-    region: string
-    product: string
-    amount: int
-    quantity: int
-
-def revenue_by_region(sales: DataFrame[Sale]) -> DataFrame:
-    return sales.groupBy("regoin").agg(F.sum("amount").alias("total"))
-    #                     ~~~~~~
-    # unknownColumn: Column 'regoin' does not exist on schema 'Sale'.
-    #                Did you mean 'region'?
-```
+<p align="center">
+  <img src="https://raw.githubusercontent.com/amirnaderi93/pykrete/main/docs/assets/showcase-schema-flow.png" alt="pykrete tracks the schema through a transformation chain — hovering the result shows the derived schema (region: string, total: long)." width="720">
+  <br>
+  <sub><em>The schema flows through every transform — hover the result to see the derived shape.</em></sub>
+</p>
 
 ## What it gives you
 
@@ -87,4 +80,3 @@ npx vsce package   # produces a .vsix
 During development the extension finds `pykrete-lsp` in the workspace's `target/release/` directory — run `cargo build --release -p pykrete-lsp` from the repo root first.
 
 MIT licensed.
-
