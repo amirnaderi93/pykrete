@@ -7,13 +7,13 @@
 pykrete is a strict superset of Python that adds a type layer for dataframes. This extension brings its schema checks into VS Code (and Cursor, VSCodium, code-server, Theia): live diagnostics, hover, completion, go-to-definition, and quick-fixes on `.pyk` files. New to pykrete? Start with the [documentation](https://amirnaderi93.github.io/pykrete/).
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/amirnaderi93/pykrete/main/docs/assets/showcase-column-typos.png" alt="pykrete catching a misspelled column name in the editor — diagnostic: 'regoin' does not exist on schema 'Sale'. Did you mean 'region'?" width="720">
+  <img src="images/showcase-column-typos.png" alt="pykrete catching a misspelled column name in the editor — diagnostic: 'regoin' does not exist on schema 'Sale'. Did you mean 'region'?" width="720">
   <br>
   <sub><em>A column typo, caught at edit time.</em></sub>
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/amirnaderi93/pykrete/main/docs/assets/showcase-schema-flow.png" alt="pykrete tracks the schema through a transformation chain — hovering the result shows the derived schema (region: string, total: long)." width="720">
+  <img src="images/showcase-schema-flow.png" alt="pykrete tracks the schema through a transformation chain — hovering the result shows the derived schema (region: string, total: long)." width="720">
   <br>
   <sub><em>The schema flows through every transform — hover the result to see the derived shape.</em></sub>
 </p>
