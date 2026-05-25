@@ -1422,12 +1422,11 @@ fn check_one_call_arg<'a>(
         return;
     };
 
-    // Resolve the argument's schema. We pass a discard sink for any
-    // diagnostics from the arg walk — column-ref errors inside the
-    // argument expression are the caller's responsibility to surface
-    // through the normal walker, not this check.
-    let mut discard: Vec<Diagnostic> = Vec::new();
-    let Some(arg_schema) = analyze_expr(arg, ctx, source, line_index, &mut discard) else {
+    // Resolve the argument's schema. Pass the real diagnostics sink so
+    // that nested calls inside this argument (e.g. `f(f(b))`) get their
+    // own D0051s reported — the normal walker doesn't recurse into call
+    // arguments, so this is the only path that visits them.
+    let Some(arg_schema) = analyze_expr(arg, ctx, source, line_index, diagnostics) else {
         return;
     };
 

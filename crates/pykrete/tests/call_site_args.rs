@@ -213,6 +213,44 @@ def caller(sales: DataFrame[Sale]) -> None:
 // don't accidentally fire on a method call to a function-named method.
 // ===========================================================================
 
+// ===========================================================================
+// Nested calls — the inner call's argument is checked too
+// ===========================================================================
+
+#[test]
+fn d0051_fires_for_nested_call_argument_mismatch() {
+    // `f(f(b))` — the outer call passes `f(b)`, whose return type is
+    // DataFrame[A], to a parameter declared DataFrame[A]: clean. But the
+    // inner `f(b)` passes DataFrame[B] to a parameter declared DataFrame[A]:
+    // mismatch. Exactly one D0051 should fire, on the inner call.
+    let result = check(
+        r#"
+class A(Schema):
+    x: int
+
+class B(Schema):
+    y: int
+
+def f(a: DataFrame[A]) -> DataFrame[A]:
+    return a
+
+def caller(b: DataFrame[B]) -> None:
+    f(f(b))
+"#,
+    );
+    let d0051s = result.diagnostics_with_code("D0051");
+    assert_eq!(
+        d0051s.len(),
+        1,
+        "expected exactly one D0051 for the inner `f(b)` call, got: {:?}",
+        d0051s.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+    assert_message_contains(&result, "D0051", "A");
+    assert_message_contains(&result, "D0051", "B");
+    assert_message_contains(&result, "D0051", "x"); // missing
+    assert_message_contains(&result, "D0051", "y"); // extra
+}
+
 #[test]
 fn method_calls_are_not_checked_as_free_function_calls() {
     let result = check(
