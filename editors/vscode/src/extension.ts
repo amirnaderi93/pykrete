@@ -11,11 +11,13 @@ import {
 let client: LanguageClient | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  const serverPath = resolveServerPath();
+  const serverPath = resolveServerPath(context);
   if (!serverPath) {
-    vscode.window.showErrorMessage(
-      "Pykrete: could not locate the pykrete-lsp binary. Set 'pykrete.serverPath' in settings, " +
-        "or run `cargo build --release -p pykrete-lsp` inside the workspace.",
+    void vscode.window.showErrorMessage(
+      "pykrete: the pykrete-lsp binary wasn't found. Reinstall the extension " +
+        "(it should ship with the right binary for your platform), or set " +
+        "`pykrete.serverPath` in settings to an absolute path. " +
+        "Manual install: https://amirnaderi93.github.io/pykrete/getting-started/install/",
     );
     return;
   }
@@ -75,7 +77,29 @@ export function deactivate(): Thenable<void> | undefined {
   return client?.stop();
 }
 
-function resolveServerPath(): string | undefined {
+/**
+ * Find the pykrete-lsp binary to launch.
+ *
+ * Order:
+ *   1. `pykrete.serverPath` setting — user override, must exist.
+ *   2. Binary bundled inside the .vsix at `server/pykrete-lsp{.exe}` —
+ *      the per-platform release workflow drops the matching binary
+ *      here so most users have nothing to install.
+ *   3. Workspace `target/release/pykrete-lsp` or `target/debug/...` —
+ *      contributors running `cargo build` against this repo.
+ *   4. `pykrete-lsp` on `PATH`, plus the common Homebrew prefixes
+ *      (`/opt/homebrew/bin`, `/usr/local/bin`) explicitly — GUI-launched
+ *      VS Code on macOS doesn't inherit the shell PATH, so the binary
+ *      installed via `brew install …/pykrete/pykrete` would otherwise
+ *      be invisible even though the user's terminal sees it.
+ *
+ * Returns `undefined` if nothing is found — the activate() error
+ * message then tells the user how to fix it.
+ */
+function resolveServerPath(context: vscode.ExtensionContext): string | undefined {
+  const exe = process.platform === "win32" ? "pykrete-lsp.exe" : "pykrete-lsp";
+
+  // 1. User override.
   const configured = vscode.workspace
     .getConfiguration("pykrete")
     .get<string>("serverPath", "")
@@ -84,20 +108,45 @@ function resolveServerPath(): string | undefined {
     return fs.existsSync(configured) ? configured : undefined;
   }
 
+  // 2. Bundled binary (shipped inside the .vsix by the release workflow).
+  const bundled = path.join(context.extensionPath, "server", exe);
+  if (fs.existsSync(bundled)) {
+    return bundled;
+  }
+
+  // 3. Workspace builds — contributors.
   for (const folder of vscode.workspace.workspaceFolders ?? []) {
     const root = folder.uri.fsPath;
-    const candidates = [
-      path.join(root, "target", "release", "pykrete-lsp"),
-      path.join(root, "target", "debug", "pykrete-lsp"),
-    ];
-    for (const candidate of candidates) {
+    for (const sub of ["release", "debug"]) {
+      const candidate = path.join(root, "target", sub, exe);
       if (fs.existsSync(candidate)) {
         return candidate;
       }
     }
   }
 
-  return "pykrete-lsp";
+  // 4. PATH + Homebrew-prefix fallback. We resolve explicitly rather
+  // than rely on `spawn`-with-PATH so a missing binary surfaces our
+  // helpful error instead of a raw ENOENT later.
+  const pathSep = process.platform === "win32" ? ";" : ":";
+  const pathDirs = new Set(
+    (process.env.PATH ?? "").split(pathSep).filter(Boolean),
+  );
+  if (process.platform === "darwin") {
+    pathDirs.add("/opt/homebrew/bin");
+    pathDirs.add("/usr/local/bin");
+  } else if (process.platform === "linux") {
+    pathDirs.add("/home/linuxbrew/.linuxbrew/bin");
+    pathDirs.add("/usr/local/bin");
+  }
+  for (const dir of pathDirs) {
+    const candidate = path.join(dir, exe);
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return undefined;
 }
 
 /**

@@ -95,11 +95,49 @@ jobs:
             pykrete-*.msi.sha256
           generate_release_notes: true
 
-  # Build the VS Code / Cursor / VSCodium extension as a `.vsix` and
-  # attach it to the GitHub Release for side-loading.
+      # Hand off `pykrete-lsp` to the vsix job — it bundles the
+      # platform-specific binary inside its matching .vsix.
+      - name: Stage pykrete-lsp for the vsix job
+        shell: bash
+        run: |
+          mkdir -p staged
+          if [ "${{ matrix.target }}" = "x86_64-pc-windows-msvc" ]; then
+            cp "target/${{ matrix.target }}/release/pykrete-lsp.exe" staged/
+          else
+            cp "target/${{ matrix.target }}/release/pykrete-lsp" staged/
+          fi
+      - name: Upload pykrete-lsp binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pykrete-lsp-${{ matrix.target }}
+          path: staged/
+          retention-days: 1
+
+  # Build the VS Code / Cursor / VSCodium extension as one .vsix per
+  # platform — each with the matching `pykrete-lsp` binary bundled
+  # inside so the user installs nothing else. Publishes per-target to
+  # VS Marketplace and Open VSX; the marketplaces serve each user the
+  # .vsix for their platform automatically.
   vsix:
-    name: VS Code extension (.vsix)
+    name: vsix · ${{ matrix.target }}
+    needs: build
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            rust_target: aarch64-apple-darwin
+            binary: pykrete-lsp
+          - target: darwin-x64
+            rust_target: x86_64-apple-darwin
+            binary: pykrete-lsp
+          - target: linux-x64
+            rust_target: x86_64-unknown-linux-gnu
+            binary: pykrete-lsp
+          - target: win32-x64
+            rust_target: x86_64-pc-windows-msvc
+            binary: pykrete-lsp.exe
     steps:
       - uses: actions/checkout@v4
         with:
@@ -110,20 +148,30 @@ jobs:
           node-version: '20'
           cache: npm
           cache-dependency-path: editors/vscode/package-lock.json
-      - name: Build and attach the .vsix
+      - name: Download pykrete-lsp binary
+        uses: actions/download-artifact@v4
+        with:
+          name: pykrete-lsp-${{ matrix.rust_target }}
+          path: editors/vscode/server/
+      - name: Mark the binary executable
+        # POSIX targets only; on Windows the .exe extension is what
+        # makes a file executable.
+        if: matrix.target != 'win32-x64'
+        run: chmod +x "editors/vscode/server/${{ matrix.binary }}"
+      - name: Package the .vsix
         run: |
           tag="${{ inputs.tag || github.ref_name }}"
-          vsix="pykrete-vscode-$tag.vsix"
+          vsix="pykrete-vscode-$tag-${{ matrix.target }}.vsix"
           ( cd editors/vscode && npm ci --no-audit --no-fund )
-          ( cd editors/vscode && npx vsce package --out "$GITHUB_WORKSPACE/$vsix" )
+          ( cd editors/vscode && npx vsce package --target ${{ matrix.target }} --out "$GITHUB_WORKSPACE/$vsix" )
           sha256sum "$vsix" | tee "$vsix.sha256"
       - name: Publish to the GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           files: |
-            pykrete-vscode-*.vsix
-            pykrete-vscode-*.vsix.sha256
+            pykrete-vscode-*-${{ matrix.target }}.vsix
+            pykrete-vscode-*-${{ matrix.target }}.vsix.sha256
           generate_release_notes: true
 
       # Open VSX is the registry Cursor, VSCodium, code-server and Theia
@@ -138,7 +186,7 @@ jobs:
             exit 0
           fi
           tag="${{ inputs.tag || github.ref_name }}"
-          vsix="pykrete-vscode-$tag.vsix"
+          vsix="pykrete-vscode-$tag-${{ matrix.target }}.vsix"
           set +e
           out=$(npx --yes ovsx publish "$vsix" -p "$OVSX_TOKEN" 2>&1)
           rc=$?
@@ -147,14 +195,15 @@ jobs:
           if [ "$rc" = 0 ]; then
             echo "::notice::Open VSX: published $vsix"
           elif echo "$out" | grep -qi 'already exists\|already published'; then
-            echo "::notice::Open VSX: $tag already on the registry, skipping"
+            echo "::notice::Open VSX: $tag/${{ matrix.target }} already on the registry, skipping"
           else
             echo "::warning::Open VSX publish failed (rc=$rc) — see log above; the GitHub Release upload already succeeded"
           fi
 
       # Visual Studio Marketplace (Microsoft) — vanilla VS Code's
       # default search/install source. The step is a no-op when
-      # VSCE_PAT isn't set.
+      # VSCE_PAT isn't set. The .vsix already carries the target in
+      # its manifest, so `vsce publish` picks it up automatically.
       - name: Publish to the Visual Studio Marketplace
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
@@ -164,7 +213,7 @@ jobs:
             exit 0
           fi
           tag="${{ inputs.tag || github.ref_name }}"
-          vsix="$GITHUB_WORKSPACE/pykrete-vscode-$tag.vsix"
+          vsix="$GITHUB_WORKSPACE/pykrete-vscode-$tag-${{ matrix.target }}.vsix"
           cd editors/vscode
           set +e
           out=$(npx vsce publish -p "$VSCE_PAT" --packagePath "$vsix" 2>&1)
@@ -172,9 +221,9 @@ jobs:
           set -e
           echo "$out"
           if [ "$rc" = 0 ]; then
-            echo "::notice::VS Marketplace: published"
+            echo "::notice::VS Marketplace: published ${{ matrix.target }}"
           elif echo "$out" | grep -qi 'already exists\|already published\|same version\|version.*already'; then
-            echo "::notice::VS Marketplace: this version is already published, skipping"
+            echo "::notice::VS Marketplace: $tag/${{ matrix.target }} already published, skipping"
           else
             echo "::warning::VS Marketplace publish failed (rc=$rc) — see log above; the GitHub Release upload already succeeded"
           fi
