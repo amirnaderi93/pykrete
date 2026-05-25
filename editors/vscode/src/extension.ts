@@ -22,6 +22,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return;
   }
 
+  // vsce/vsix packaging doesn't always preserve the executable bit through
+  // zip → install, so re-set it ourselves on POSIX. Best-effort: if we can't
+  // (permissions, read-only FS) spawn will fail next and surface the real error.
+  if (process.platform !== "win32") {
+    try {
+      fs.chmodSync(serverPath, 0o755);
+    } catch {
+      /* ignore */
+    }
+  }
+
   const serverOptions: ServerOptions = {
     run: { command: serverPath, transport: TransportKind.stdio },
     debug: { command: serverPath, transport: TransportKind.stdio },
@@ -77,25 +88,9 @@ export function deactivate(): Thenable<void> | undefined {
   return client?.stop();
 }
 
-/**
- * Find the pykrete-lsp binary to launch.
- *
- * Order:
- *   1. `pykrete.serverPath` setting — user override, must exist.
- *   2. Binary bundled inside the .vsix at `server/pykrete-lsp{.exe}` —
- *      the per-platform release workflow drops the matching binary
- *      here so most users have nothing to install.
- *   3. Workspace `target/release/pykrete-lsp` or `target/debug/...` —
- *      contributors running `cargo build` against this repo.
- *   4. `pykrete-lsp` on `PATH`, plus the common Homebrew prefixes
- *      (`/opt/homebrew/bin`, `/usr/local/bin`) explicitly — GUI-launched
- *      VS Code on macOS doesn't inherit the shell PATH, so the binary
- *      installed via `brew install …/pykrete/pykrete` would otherwise
- *      be invisible even though the user's terminal sees it.
- *
- * Returns `undefined` if nothing is found — the activate() error
- * message then tells the user how to fix it.
- */
+// Resolution order: user setting → bundled (per-platform .vsix) → workspace
+// cargo build → PATH + Homebrew prefixes. Returns undefined when nothing is
+// found; activate() surfaces a help message in that case.
 function resolveServerPath(context: vscode.ExtensionContext): string | undefined {
   const exe = process.platform === "win32" ? "pykrete-lsp.exe" : "pykrete-lsp";
 
@@ -125,21 +120,22 @@ function resolveServerPath(context: vscode.ExtensionContext): string | undefined
     }
   }
 
-  // 4. PATH + Homebrew-prefix fallback. We resolve explicitly rather
-  // than rely on `spawn`-with-PATH so a missing binary surfaces our
-  // helpful error instead of a raw ENOENT later.
+  // 4. PATH + Homebrew-prefix fallback. Resolve explicitly so a missing
+  // binary surfaces our help message instead of a raw ENOENT later. Order
+  // matters — preserve PATH ordering and dedupe.
   const pathSep = process.platform === "win32" ? ";" : ":";
-  const pathDirs = new Set(
-    (process.env.PATH ?? "").split(pathSep).filter(Boolean),
-  );
+  const candidates = (process.env.PATH ?? "").split(pathSep).filter(Boolean);
   if (process.platform === "darwin") {
-    pathDirs.add("/opt/homebrew/bin");
-    pathDirs.add("/usr/local/bin");
+    // GUI-launched VS Code on macOS doesn't inherit the shell PATH, so a
+    // pykrete-lsp installed via `brew` would otherwise be invisible here.
+    candidates.push("/opt/homebrew/bin", "/usr/local/bin");
   } else if (process.platform === "linux") {
-    pathDirs.add("/home/linuxbrew/.linuxbrew/bin");
-    pathDirs.add("/usr/local/bin");
+    candidates.push("/home/linuxbrew/.linuxbrew/bin", "/usr/local/bin");
   }
-  for (const dir of pathDirs) {
+  const seen = new Set<string>();
+  for (const dir of candidates) {
+    if (seen.has(dir)) continue;
+    seen.add(dir);
     const candidate = path.join(dir, exe);
     if (fs.existsSync(candidate)) {
       return candidate;
@@ -149,17 +145,8 @@ function resolveServerPath(context: vscode.ExtensionContext): string | undefined
   return undefined;
 }
 
-/**
- * Resolve how pykrete-lsp should launch the embedded Python engine.
- *
- *   1. `pykrete.pythonServer.path` — a user-supplied langserver binary,
- *      run directly as `<path> --stdio`.
- *   2. The basedpyright bundled in this extension's `node_modules`,
- *      run as `node <langserver.index.js> --stdio` (needs Node.js on
- *      PATH).
- *   3. `undefined` — pykrete-lsp searches PATH itself, and runs
- *      pykrete-only if nothing is found.
- */
+// Resolution order: user setting → bundled basedpyright (needs node on PATH) →
+// undefined (pykrete-lsp searches PATH itself, falls back to pykrete-only).
 function resolvePythonServer(
   context: vscode.ExtensionContext,
 ): { command: string; args: string[] } | undefined {
