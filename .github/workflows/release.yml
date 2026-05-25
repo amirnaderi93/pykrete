@@ -18,6 +18,15 @@ on:
 permissions:
   contents: write
 
+# Serialize runs for the same tag. Two concurrent runs (e.g. tag push +
+# a workflow_dispatch retry mid-flight) would race on GitHub Release
+# asset uploads and homebrew tap commits — the marketplace publish steps
+# tolerate duplicates, but those two don't. cancel-in-progress is false
+# so a manual retry waits rather than killing a half-published release.
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   build:
     name: ${{ matrix.target }}
@@ -111,7 +120,9 @@ jobs:
         with:
           name: pykrete-lsp-${{ matrix.target }}
           path: staged/
-          retention-days: 1
+          # 7 days so a vsix re-run a few days after a failed publish can
+          # still find its binary without re-running the whole build matrix.
+          retention-days: 7
 
   # Build the VS Code / Cursor / VSCodium extension as one .vsix per
   # platform — each with the matching `pykrete-lsp` binary bundled
@@ -234,6 +245,11 @@ jobs:
   # the matrix (linux-arm64, win32-arm64, musl, …) sees "no compatible
   # extension" and can't install at all, even though the extension's PATH
   # fallback would happily find a manually-installed pykrete-lsp.
+  #
+  # Assumes the extension's npm deps are platform-neutral (today: basedpyright
+  # is pure JS, no native bindings). If we ever add a dep with native code,
+  # `npm ci` on ubuntu would bake the Linux build into the universal .vsix —
+  # revisit this job at that point.
   vsix_universal:
     name: vsix · universal
     runs-on: ubuntu-latest

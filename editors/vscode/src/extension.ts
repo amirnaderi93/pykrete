@@ -1,4 +1,5 @@
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import {
@@ -13,12 +14,23 @@ let client: LanguageClient | undefined;
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const serverPath = resolveServerPath(context);
   if (!serverPath) {
-    void vscode.window.showErrorMessage(
-      "pykrete: the pykrete-lsp binary wasn't found. Reinstall the extension " +
-        "(it should ship with the right binary for your platform), or set " +
-        "`pykrete.serverPath` in settings to an absolute path. " +
-        "Manual install: https://amirnaderi93.github.io/pykrete/getting-started/install/",
+    // A `server/` directory inside the extension means this is the
+    // per-platform .vsix and the binary should have been there — most likely
+    // a packaging bug. Its absence means this is the universal .vsix served
+    // to platforms without a per-target build, and the user just needs to
+    // install pykrete-lsp themselves.
+    const isBundledVariant = fs.existsSync(
+      path.join(context.extensionPath, "server"),
     );
+    const message = isBundledVariant
+      ? "pykrete: the bundled pykrete-lsp binary is missing from this extension. " +
+        "Try reinstalling the extension, or set `pykrete.serverPath` in settings. " +
+        "Manual install: https://amirnaderi93.github.io/pykrete/getting-started/install/"
+      : "pykrete: no pykrete-lsp binary is bundled for your platform. " +
+        "Install it via `cargo install pykrete-lsp` or `brew install amirnaderi93/pykrete/pykrete`, " +
+        "or set `pykrete.serverPath` in settings. " +
+        "Manual install: https://amirnaderi93.github.io/pykrete/getting-started/install/";
+    void vscode.window.showErrorMessage(message);
     return;
   }
 
@@ -120,17 +132,27 @@ function resolveServerPath(context: vscode.ExtensionContext): string | undefined
     }
   }
 
-  // 4. PATH + Homebrew-prefix fallback. Resolve explicitly so a missing
-  // binary surfaces our help message instead of a raw ENOENT later. Order
-  // matters — preserve PATH ordering and dedupe.
+  // 4. PATH + common install-prefix fallback. Resolve explicitly so a missing
+  // binary surfaces our help message instead of a raw ENOENT later. GUI-launched
+  // VS Code (especially on macOS) doesn't inherit the shell PATH, so binaries
+  // installed via `cargo install` (~/.cargo/bin) or `brew` would otherwise be
+  // invisible. Order matters — preserve PATH ordering and dedupe.
   const pathSep = process.platform === "win32" ? ";" : ":";
   const candidates = (process.env.PATH ?? "").split(pathSep).filter(Boolean);
+  const home = os.homedir();
   if (process.platform === "darwin") {
-    // GUI-launched VS Code on macOS doesn't inherit the shell PATH, so a
-    // pykrete-lsp installed via `brew` would otherwise be invisible here.
-    candidates.push("/opt/homebrew/bin", "/usr/local/bin");
+    candidates.push(
+      path.join(home, ".cargo", "bin"),
+      "/opt/homebrew/bin",
+      "/usr/local/bin",
+    );
   } else if (process.platform === "linux") {
-    candidates.push("/home/linuxbrew/.linuxbrew/bin", "/usr/local/bin");
+    candidates.push(
+      path.join(home, ".cargo", "bin"),
+      path.join(home, ".local", "bin"),
+      "/home/linuxbrew/.linuxbrew/bin",
+      "/usr/local/bin",
+    );
   }
   const seen = new Set<string>();
   for (const dir of candidates) {
