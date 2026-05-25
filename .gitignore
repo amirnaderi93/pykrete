@@ -19,3 +19,8 @@ editors/*/*.vsix
 # Per-user VS Code workspace settings (interpreter paths, etc.)
 .vscode/
 examples/pykrete.py
+
+# Quarto preview output for any tracked Markdown file (README.html +
+# its sibling assets directory).
+/*.html
+/*_files/

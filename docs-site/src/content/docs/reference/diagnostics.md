@@ -29,6 +29,7 @@ The **rule name** (`unknownColumn`) is what the CLI prints and what the editor s
 | `D0030` | `unknownColumn` | A column reference doesn't exist on the schema in scope. |
 | `D0040` | `unionSchemaMismatch` | `union` / `intersect` / `subtract` between dataframes whose columns don't match. |
 | `D0050` | `returnColumnsMismatch` | A function's returned **columns** differ from its declared return schema. |
+| `D0051` | `argumentColumnsMismatch` | A call-site argument's schema differs from the parameter's declared `DataFrame[Schema]`. |
 | `D0060` | `missingJoinKey` | A join key isn't present on one side of the join. |
 | `D0070` | `unresolvedImport` | An `import` can't be resolved. |
 | `D0071` | `unexportedName` | An imported name isn't exported by the module. |
@@ -78,6 +79,18 @@ summary.pyk:8:5 - error returnColumnsMismatch: declared return DataFrame[SaleSum
 ```
 
 **Fix:** correct the body, or re-anchor an opaque chain (like `spark.read.parquet(...)`) with `.cast(DataFrame[Schema])` so pykrete knows the shape.
+
+### `argumentColumnsMismatch` — D0051
+
+The mirror of `returnColumnsMismatch`, one frame earlier: a `DataFrame[…]` argument at a call site has a schema that doesn't match the parameter's declared `DataFrame[Schema]`. Same missing / extra column reporting.
+
+```
+caller.pyk:13:13 - error argumentColumnsMismatch: Argument schema mismatch for parameter 'sales': expected DataFrame[Sale], got schema 'Refund'. Missing: [amount]; extra: [refund].
+```
+
+Arguments whose schema pykrete can't infer (an untyped local, an opaque `spark.read.json(...)` chain) are silently skipped — the checker degrades rather than false-flag.
+
+**Fix:** pass a dataframe with the expected shape, or re-anchor the argument with `.cast(DataFrame[Schema])` if the chain's schema was lost upstream.
 
 ### `missingJoinKey` — D0060
 

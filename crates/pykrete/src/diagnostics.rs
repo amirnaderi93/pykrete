@@ -187,6 +187,7 @@ pub fn rule_name(code: &str) -> &str {
         "D0030" => "unknownColumn",
         "D0040" => "unionSchemaMismatch",
         "D0050" => "returnColumnsMismatch",
+        "D0051" => "argumentColumnsMismatch",
         "D0060" => "missingJoinKey",
         "D0070" => "unresolvedImport",
         "D0071" => "unexportedName",
