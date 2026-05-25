@@ -8,10 +8,13 @@ Cargo.lock.bak
 .claude/settings.local.json
 
 # VS Code extension build artifacts (npm-installed deps, tsc output,
-# packaged VSIX bundles). The source files under editors/*/ are tracked.
+# packaged VSIX bundles, the platform-specific pykrete-lsp binary the
+# release workflow drops in for vsce package). The source files under
+# editors/*/ are tracked.
 editors/*/node_modules/
 editors/*/out/
 editors/*/*.vsix
+editors/vscode/server/
 
 # Claude Code scheduling lockfiles (per-session, not source-controlled)
 .claude/scheduled_tasks.lock
