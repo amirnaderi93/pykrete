@@ -444,3 +444,118 @@ def caller(sale: DataFrame[Sale], refund: DataFrame[Refund]) -> None:
     assert_message_contains(&result, "D0051", "Sale");
     assert_message_contains(&result, "D0051", "Refund");
 }
+
+// ===========================================================================
+// Tuple-unpack shadowing — LHS is `(name, junk) = ...`
+// ===========================================================================
+
+#[test]
+fn d0051_skipped_when_callee_shadowed_via_tuple_unpack() {
+    // `revenue` is a top-level function expecting DataFrame[Sale]; the
+    // caller rebinds the name locally via a tuple-unpack LHS. The
+    // subsequent call resolves to the local at runtime, not the top-level
+    // function — pykrete must not fire D0051 against the top-level signature.
+    let result = check(
+        r#"
+class Sale(Schema):
+    region: string
+    amount: int
+
+class Order(Schema):
+    qty: int
+
+def revenue(sales: DataFrame[Sale]) -> DataFrame[Sale]:
+    return sales
+
+def some_helper(o: DataFrame[Order]) -> DataFrame[Order]:
+    return o
+
+def caller(orders: DataFrame[Order]) -> None:
+    revenue, junk = some_helper(orders), 1
+    revenue(orders)
+"#,
+    );
+    let d0051s = result.diagnostics_with_code("D0051");
+    assert_eq!(
+        d0051s.len(),
+        0,
+        "expected no D0051 when the callee name is shadowed via tuple-unpack, got: {:?}",
+        d0051s.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+}
+
+// ===========================================================================
+// Walrus (:=) shadowing — name bound from inside an expression
+// ===========================================================================
+
+#[test]
+fn d0051_skipped_when_callee_shadowed_via_walrus() {
+    // The walrus operator (`(revenue := some_helper(orders))`) introduces
+    // a local binding from inside an expression. The subsequent call
+    // resolves to the local at runtime — pykrete must not fire D0051
+    // against the top-level signature.
+    let result = check(
+        r#"
+class Sale(Schema):
+    region: string
+    amount: int
+
+class Order(Schema):
+    qty: int
+
+def revenue(sales: DataFrame[Sale]) -> DataFrame[Sale]:
+    return sales
+
+def some_helper(o: DataFrame[Order]) -> DataFrame[Order]:
+    return o
+
+def caller(orders: DataFrame[Order]) -> None:
+    x = (revenue := some_helper(orders))
+    revenue(orders)
+"#,
+    );
+    let d0051s = result.diagnostics_with_code("D0051");
+    assert_eq!(
+        d0051s.len(),
+        0,
+        "expected no D0051 when the callee name is shadowed via walrus, got: {:?}",
+        d0051s.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+}
+
+// ===========================================================================
+// Duplicate-name kwarg — positional + same-name keyword on one slot
+// ===========================================================================
+
+#[test]
+fn d0051_does_not_double_fire_when_kwarg_duplicates_positional() {
+    // `f(wrong, a=wrong)` — Python rejects this as `TypeError: got
+    // multiple values for argument 'a'`. The schema mismatch is real,
+    // but it should fire exactly once (via the positional pass); the
+    // keyword arg targeting an already-consumed slot must be skipped.
+    let result = check(
+        r#"
+class A(Schema):
+    x: int
+
+class B(Schema):
+    y: int
+
+class Wrong(Schema):
+    z: int
+
+def f(a: DataFrame[A], b: DataFrame[B]) -> None:
+    return
+
+def caller(wrong: DataFrame[Wrong]) -> None:
+    f(wrong, a=wrong)
+"#,
+    );
+    let d0051s = result.diagnostics_with_code("D0051");
+    assert_eq!(
+        d0051s.len(),
+        1,
+        "expected exactly one D0051 on the positional `wrong` arg, got: {:?}",
+        d0051s.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+}

@@ -79,10 +79,13 @@ Already shipped (recorded here for completeness):
   `DataFrame[Wrong]` into a function that declares `DataFrame[Right]`
   is now flagged at the call site, with the same missing / extra column
   reporting as `returnColumnsMismatch`. v0.1.8 closes the edge cases:
-  local-name shadowing of a top-level function suppresses the check,
-  positional-only (`/`) and keyword-only (`*`) parameter markers are
-  honored when matching arguments, and `*args` / `**kwargs` variadics
-  are checked against every call-site argument routed to them.
+  local-name shadowing of a top-level function suppresses the check —
+  including tuple-unpack (`revenue, _ = …`) and walrus (`(revenue := …)`)
+  rebinds; positional-only (`/`) and keyword-only (`*`) parameter
+  markers are honored when matching arguments; `*args` / `**kwargs`
+  variadics are checked against every call-site argument routed to
+  them; and a parameter filled both positionally and by keyword
+  (Python's `TypeError`) is diagnosed once, not twice.
 - **Packaging.** GitHub Releases with prebuilt binaries for macOS
   (arm64/x64), Linux x64, and a Windows MSI installer; a Homebrew tap
   (`brew install amirnaderi93/pykrete/pykrete`); `cargo install --git`.
