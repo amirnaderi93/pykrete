@@ -90,6 +90,8 @@ caller.pyk:13:13 - error argumentColumnsMismatch: Argument schema mismatch for p
 
 Arguments whose schema pykrete can't infer (an untyped local, an opaque `spark.read.json(...)` chain) are silently skipped — the checker degrades rather than false-flag.
 
+D0051 also respects Python's calling rules: a local name that rebinds a top-level function shadows it (the call resolves to the local, so the top-level signature isn't checked), positional-only (`/`) and keyword-only (`*`) markers are honored when matching arguments to parameters, and `*args: DataFrame[Schema]` / `**kwargs: DataFrame[Schema]` variadics are checked against every argument that lands in them.
+
 **Fix:** pass a dataframe with the expected shape, or re-anchor the argument with `.cast(DataFrame[Schema])` if the chain's schema was lost upstream.
 
 ### `missingJoinKey` — D0060

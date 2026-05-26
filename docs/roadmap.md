@@ -78,7 +78,11 @@ Already shipped (recorded here for completeness):
   closes the function boundary on the input side. Passing a
   `DataFrame[Wrong]` into a function that declares `DataFrame[Right]`
   is now flagged at the call site, with the same missing / extra column
-  reporting as `returnColumnsMismatch`.
+  reporting as `returnColumnsMismatch`. v0.1.8 closes the edge cases:
+  local-name shadowing of a top-level function suppresses the check,
+  positional-only (`/`) and keyword-only (`*`) parameter markers are
+  honored when matching arguments, and `*args` / `**kwargs` variadics
+  are checked against every call-site argument routed to them.
 - **Packaging.** GitHub Releases with prebuilt binaries for macOS
   (arm64/x64), Linux x64, and a Windows MSI installer; a Homebrew tap
   (`brew install amirnaderi93/pykrete/pykrete`); `cargo install --git`.
