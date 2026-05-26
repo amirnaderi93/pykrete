@@ -61,21 +61,6 @@ variable in both a parameter slot `GenericClass[T]` and a return slot
 - **Chained class-method calls** — `builder.with_path("/x").read(SOURCE)`; only direct calls on a class-instance name dispatch through generic inference.
 - **Generic methods that aren't `[T] -> G[T]`-shaped** — e.g. `def cast_to[T](self, _: type[T]) -> DataFrame[T]`, where `T` is bound from a value of static type `type[T]`.
 
-## Call-site argument checking
-
-pykrete checks a function's body against its `DataFrame[Schema]`
-parameter, and its return value against the declared return type — but
-it does **not** yet check the *arguments at a call site*. Passing a
-`DataFrame[Refund]` into a function that declares a `DataFrame[Sale]`
-parameter goes unflagged.
-
-Planned: a new diagnostic that, at each call to a typed function,
-verifies the argument's schema against the parameter's — reporting
-missing and extra columns, the way return-type checking
-(`returnColumnsMismatch`) already does for the output side. This closes
-the function boundary in both directions: what goes in as well as what
-comes out.
-
 ## Quality-of-life
 
 - **User-facing language reference** ([`language-reference/`](language-reference/))
@@ -89,6 +74,11 @@ comes out.
 
 Already shipped (recorded here for completeness):
 
+- **Call-site argument checking** (`D0051 argumentColumnsMismatch`) —
+  closes the function boundary on the input side. Passing a
+  `DataFrame[Wrong]` into a function that declares `DataFrame[Right]`
+  is now flagged at the call site, with the same missing / extra column
+  reporting as `returnColumnsMismatch`.
 - **Packaging.** GitHub Releases with prebuilt binaries for macOS
   (arm64/x64), Linux x64, and a Windows MSI installer; a Homebrew tap
   (`brew install amirnaderi93/pykrete/pykrete`); `cargo install --git`.

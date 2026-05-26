@@ -215,6 +215,7 @@ accepts either).
 | `D0030` | `unknownColumn` | Column does not exist on the schema. |
 | `D0040` | `unionSchemaMismatch` | `union` / `unionByName` schema mismatch. |
 | `D0050` | `returnColumnsMismatch` | Return type mismatch — column *set* differs from the declared schema. |
+| `D0051` | `argumentColumnsMismatch` | Call-site argument's schema differs from the parameter's declared `DataFrame[Schema]`. |
 | `D0060` | `missingJoinKey` | Join key missing on one side. |
 | `D0070` | `unresolvedImport` | Unresolved import. |
 | `D0071` | `unexportedName` | Name not exported by a module. |

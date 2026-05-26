@@ -38,7 +38,7 @@ use ruff_text_size::{Ranged, TextRange};
 
 use crate::dataframe::{self, DataFrameAnnotation, SlotLabel, TypedSlot};
 use crate::diagnostics::{CheckMode, Diagnostic, Severity};
-use crate::registry::Registry;
+use crate::registry::{MethodParam, Registry};
 use crate::schema::{
     DerivedField, FieldPathResult, FieldResolution, Schema, SchemaView, resolve_path,
     suggest_field_name,
@@ -730,6 +730,11 @@ fn analyze_expr<'a>(
     match expr {
         Expr::Name(n) => ctx.lookup(n.id.as_str()),
         Expr::Call(call) => {
+            // Check arguments at the call site against the callee's
+            // declared `DataFrame[Schema]` parameters. Side-effect only —
+            // doesn't change what schema this call evaluates to.
+            check_call_argument_schemas(call, ctx, source, line_index, diagnostics);
+
             let result = analyze_method_call(call, ctx, source, line_index, diagnostics);
             // Record the call's result schema so completion can offer
             // the chain's columns at `<call>.<cursor>`.
@@ -1345,6 +1350,109 @@ fn check_transform_input(
         "D0070",
         message,
         range,
+        source,
+        line_index,
+    ));
+}
+
+/// Check the arguments of a free-function call against the callee's
+/// declared `DataFrame[Schema]` parameters. The mirror of return-type
+/// checking (`D0050`), one frame earlier: it catches `f(refunds)` when
+/// `f` was declared `def f(sales: DataFrame[Sale])` and `refunds`
+/// resolves to a different schema. Emits `D0051`
+/// (`argumentColumnsMismatch`).
+///
+/// Method calls (`df.method(...)`) go through `analyze_method_call`;
+/// `df.transform(fn)` has its own input check in `handle_transform`.
+/// This function only fires when `call.func` is a bare `Name` and that
+/// name resolves to a user-defined top-level function in the registry.
+///
+/// An argument whose schema can't be inferred (untyped local, an
+/// opaque `spark.read.json(...)` chain) is silently skipped — the same
+/// degrade-rather-than-false-flag stance the rest of the checker takes.
+fn check_call_argument_schemas<'a>(
+    call: &'a ExprCall,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(name_expr) = call.func.as_name_expr() else {
+        return;
+    };
+    let Some(sig) = ctx.registry().find_function(name_expr.id.as_str()) else {
+        return;
+    };
+
+    // Positional arguments — index-matched to parameters.
+    for (i, arg) in call.arguments.args.iter().enumerate() {
+        if let Some(param) = sig.params.get(i) {
+            check_one_call_arg(arg, param, ctx, source, line_index, diagnostics);
+        }
+    }
+
+    // Keyword arguments — name-matched.
+    for kw in &call.arguments.keywords {
+        let Some(name) = kw.arg.as_ref().map(|n| n.id.as_str()) else {
+            continue;
+        };
+        if let Some(param) = sig.params.iter().find(|p| p.name == name) {
+            check_one_call_arg(&kw.value, param, ctx, source, line_index, diagnostics);
+        }
+    }
+}
+
+fn check_one_call_arg<'a>(
+    arg: &'a Expr,
+    param: &MethodParam<'a>,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    // Only checks `DataFrame[Schema]` parameters — other annotation
+    // shapes (an unannotated param, a non-DataFrame type, `DataFrame`
+    // without a schema, a derived expression like `DataFrame[Pick[...]]`)
+    // fall through.
+    let Some(DataFrameAnnotation::Typed(pname)) = param.annotation.and_then(dataframe::recognize)
+    else {
+        return;
+    };
+    let Some(param_schema) = ctx.find_schema(pname) else {
+        return;
+    };
+
+    // Resolve the argument's schema. Pass the real diagnostics sink so
+    // that nested calls inside this argument (e.g. `f(f(b))`) get their
+    // own D0051s reported — the normal walker doesn't recurse into call
+    // arguments, so this is the only path that visits them.
+    let Some(arg_schema) = analyze_expr(arg, ctx, source, line_index, diagnostics) else {
+        return;
+    };
+
+    let arg_names: HashSet<&str> = arg_schema.field_names().into_iter().collect();
+    let param_names: HashSet<&str> = param_schema.fields().iter().map(|f| f.name).collect();
+    if arg_names == param_names {
+        return;
+    }
+    let mut missing: Vec<&str> = param_names.difference(&arg_names).copied().collect();
+    let mut extra: Vec<&str> = arg_names.difference(&param_names).copied().collect();
+    missing.sort();
+    extra.sort();
+    let message = format!(
+        "Argument schema mismatch for parameter '{}': expected DataFrame[{}], \
+         got {}. Missing: [{}]; extra: [{}].",
+        param.name,
+        param_schema.name(),
+        arg_schema.display_name(),
+        missing.join(", "),
+        extra.join(", "),
+    );
+    diagnostics.push(Diagnostic::at_range(
+        Severity::Error,
+        "D0051",
+        message,
+        arg.range(),
         source,
         line_index,
     ));
