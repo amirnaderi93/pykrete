@@ -123,3 +123,4 @@ once it reaches a stable release — a single native stack, replacing the
 basedpyright multiplexer. Because pykrete's analyzer is already built on
 `ruff_python_ast` (the AST `ty` uses), the schema-checking core ports
 cleanly; the multiplexer is interim scaffolding by design.
+
