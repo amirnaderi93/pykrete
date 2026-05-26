@@ -271,3 +271,176 @@ def caller(sales: DataFrame[Sale]) -> None:
     );
     assert_does_not_have_code(&result, "D0051");
 }
+
+// ===========================================================================
+// Local-name shadowing — a local rebind hides the top-level function
+// ===========================================================================
+
+#[test]
+fn d0051_skipped_when_callee_is_locally_shadowed() {
+    // `revenue` is a top-level function expecting DataFrame[Sale]; the
+    // caller rebinds the name locally. The subsequent call resolves to
+    // the local at runtime, not the top-level function — pykrete must
+    // not fire D0051 against the top-level signature.
+    let result = check(
+        r#"
+class Sale(Schema):
+    region: string
+    amount: int
+
+class Order(Schema):
+    qty: int
+
+def revenue(sales: DataFrame[Sale]) -> DataFrame[Sale]:
+    return sales
+
+def some_helper(o: DataFrame[Order]) -> DataFrame[Order]:
+    return o
+
+def caller(orders: DataFrame[Order]) -> None:
+    revenue = some_helper(orders)
+    revenue(orders)
+"#,
+    );
+    let d0051s = result.diagnostics_with_code("D0051");
+    assert_eq!(
+        d0051s.len(),
+        0,
+        "expected no D0051 when the callee name is locally shadowed, got: {:?}",
+        d0051s.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+}
+
+// ===========================================================================
+// Positional-only / keyword-only param markers — `/` and `*`
+// ===========================================================================
+
+#[test]
+fn d0051_does_not_match_keyword_arg_to_positional_only_param() {
+    // `a` is positional-only (trailing `/`). Calling `f(a=b)` is a Python
+    // TypeError. pykrete must not fire D0051 on this — the root cause
+    // isn't a schema mismatch, it's a calling-convention error.
+    let result = check(
+        r#"
+class A(Schema):
+    x: int
+
+class B(Schema):
+    y: int
+
+def f(a: DataFrame[A], /) -> None:
+    return
+
+def caller(b: DataFrame[B]) -> None:
+    f(a=b)
+"#,
+    );
+    let d0051s = result.diagnostics_with_code("D0051");
+    assert_eq!(
+        d0051s.len(),
+        0,
+        "expected no D0051 when a keyword arg targets a positional-only param, got: {:?}",
+        d0051s.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn d0051_does_not_match_positional_arg_to_kwonly_param() {
+    // `b` is keyword-only (after `*`). Calling `g(1, wrong)` positionally
+    // would TypeError in Python. pykrete must not fire D0051 — the second
+    // positional has no matching positional-or-regular slot.
+    let result = check(
+        r#"
+class A(Schema):
+    x: int
+
+class B(Schema):
+    y: int
+
+def g(x: int, *, b: DataFrame[A]) -> None:
+    return
+
+def caller(wrong: DataFrame[B]) -> None:
+    g(1, wrong)
+"#,
+    );
+    let d0051s = result.diagnostics_with_code("D0051");
+    assert_eq!(
+        d0051s.len(),
+        0,
+        "expected no D0051 when a positional arg slides past `*` into a kw-only param, got: {:?}",
+        d0051s.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+}
+
+// ===========================================================================
+// Variadics — `*args` / `**kwargs` typed as DataFrame[Schema]
+// ===========================================================================
+
+#[test]
+fn d0051_fires_for_each_vararg_with_wrong_schema() {
+    // `union_all(*items: DataFrame[Sale])`. The caller passes one matching
+    // arg (Sale) and one mismatching arg (Refund). pykrete must fire
+    // exactly one D0051 — for the Refund argument.
+    let result = check(
+        r#"
+class Sale(Schema):
+    region: string
+    amount: int
+
+class Refund(Schema):
+    region: string
+    refund: int
+
+def union_all(*items: DataFrame[Sale]) -> DataFrame[Sale]:
+    return items[0]
+
+def caller(sale: DataFrame[Sale], refund: DataFrame[Refund]) -> None:
+    union_all(sale, refund)
+"#,
+    );
+    let d0051s = result.diagnostics_with_code("D0051");
+    assert_eq!(
+        d0051s.len(),
+        1,
+        "expected exactly one D0051 for the Refund vararg, got: {:?}",
+        d0051s.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+    assert_message_contains(&result, "D0051", "Sale");
+    assert_message_contains(&result, "D0051", "Refund");
+    assert_message_contains(&result, "D0051", "amount"); // missing
+    assert_message_contains(&result, "D0051", "refund"); // extra
+}
+
+#[test]
+fn d0051_fires_for_kwarg_with_wrong_schema() {
+    // `pile(**parts: DataFrame[Sale])`. The caller passes one matching
+    // kwarg (Sale) and one mismatching kwarg (Refund). Exactly one
+    // D0051 — for the Refund keyword argument.
+    let result = check(
+        r#"
+class Sale(Schema):
+    region: string
+    amount: int
+
+class Refund(Schema):
+    region: string
+    refund: int
+
+def pile(**parts: DataFrame[Sale]) -> DataFrame[Sale]:
+    return parts["a"]
+
+def caller(sale: DataFrame[Sale], refund: DataFrame[Refund]) -> None:
+    pile(a=sale, b=refund)
+"#,
+    );
+    let d0051s = result.diagnostics_with_code("D0051");
+    assert_eq!(
+        d0051s.len(),
+        1,
+        "expected exactly one D0051 for the Refund kwarg, got: {:?}",
+        d0051s.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+    assert_message_contains(&result, "D0051", "Sale");
+    assert_message_contains(&result, "D0051", "Refund");
+}

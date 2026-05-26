@@ -57,6 +57,26 @@ pub struct MethodInfo<'a> {
 pub struct MethodParam<'a> {
     pub name: &'a str,
     pub annotation: Option<&'a Expr>,
+    pub kind: ParamKind,
+}
+
+/// Which segment of the parameter list a [`MethodParam`] belongs to. D0051
+/// uses this to refuse matches Python itself would reject — a keyword arg
+/// against a positional-only slot, or a positional arg sliding past `*`
+/// into a kw-only slot — and to route variadics (`*args` / `**kwargs`) to
+/// every remaining call-site arg of the right flavor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParamKind {
+    /// Before a `/` marker — positional only.
+    PositionalOnly,
+    /// Regular — can be passed positionally or by keyword.
+    Regular,
+    /// After a `*` or `*args` marker — keyword only.
+    KeywordOnly,
+    /// `*args` itself — soaks up trailing positional arguments.
+    VarPositional,
+    /// `**kwargs` itself — soaks up trailing keyword arguments.
+    VarKeyword,
 }
 
 /// Any top-level class definition. Schema-derived classes are also
@@ -321,16 +341,42 @@ fn build_method_info(def: &StmtFunctionDef) -> MethodInfo<'_> {
 
     let parameters = &def.parameters;
     let mut params: Vec<MethodParam<'_>> = Vec::new();
-    for pwd in parameters
-        .posonlyargs
-        .iter()
-        .chain(&parameters.args)
-        .chain(&parameters.kwonlyargs)
-    {
+    for pwd in &parameters.posonlyargs {
         let p = &pwd.parameter;
         params.push(MethodParam {
             name: p.name.id.as_str(),
             annotation: p.annotation.as_deref(),
+            kind: ParamKind::PositionalOnly,
+        });
+    }
+    for pwd in &parameters.args {
+        let p = &pwd.parameter;
+        params.push(MethodParam {
+            name: p.name.id.as_str(),
+            annotation: p.annotation.as_deref(),
+            kind: ParamKind::Regular,
+        });
+    }
+    if let Some(vararg) = parameters.vararg.as_deref() {
+        params.push(MethodParam {
+            name: vararg.name.id.as_str(),
+            annotation: vararg.annotation.as_deref(),
+            kind: ParamKind::VarPositional,
+        });
+    }
+    for pwd in &parameters.kwonlyargs {
+        let p = &pwd.parameter;
+        params.push(MethodParam {
+            name: p.name.id.as_str(),
+            annotation: p.annotation.as_deref(),
+            kind: ParamKind::KeywordOnly,
+        });
+    }
+    if let Some(kwarg) = parameters.kwarg.as_deref() {
+        params.push(MethodParam {
+            name: kwarg.name.id.as_str(),
+            annotation: kwarg.annotation.as_deref(),
+            kind: ParamKind::VarKeyword,
         });
     }
 
