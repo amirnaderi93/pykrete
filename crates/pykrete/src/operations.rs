@@ -38,7 +38,7 @@ use ruff_text_size::{Ranged, TextRange};
 
 use crate::dataframe::{self, DataFrameAnnotation, SlotLabel, TypedSlot};
 use crate::diagnostics::{CheckMode, Diagnostic, Severity};
-use crate::registry::{MethodParam, Registry};
+use crate::registry::{MethodParam, ParamKind, Registry};
 use crate::schema::{
     DerivedField, FieldPathResult, FieldResolution, Schema, SchemaView, resolve_path,
     suggest_field_name,
@@ -131,6 +131,15 @@ pub struct BodyContext<'a> {
     /// Function-parameter / local names that are class **instances** (not
     /// DataFrames). Maps `name` → class name (e.g. `"dal"` → `"DataAccessLayer"`).
     instance_bindings: HashMap<&'a str, &'a str>,
+    /// Every name that has been bound locally in this body — including
+    /// assignments whose RHS schema pykrete couldn't infer. D0051 consults
+    /// this to skip the top-level-function check when the callee name has
+    /// been shadowed locally, even if we can't say what schema it now
+    /// refers to.
+    ///
+    /// Held in a `RefCell` so the analysis pass can record a walrus-bound
+    /// name (`(x := expr)`) through an otherwise-immutable `&BodyContext`.
+    local_names: RefCell<HashSet<&'a str>>,
     schemas: &'a [Schema<'a>],
     registry: &'a Registry<'a>,
     /// Sites where `col("name")` (or the equivalent string-arg form) is
@@ -205,6 +214,7 @@ impl<'a> BodyContext<'a> {
         Self {
             df_bindings: HashMap::new(),
             instance_bindings: HashMap::new(),
+            local_names: RefCell::new(HashSet::new()),
             schemas,
             registry,
             column_refs: RefCell::new(Vec::new()),
@@ -301,7 +311,9 @@ impl<'a> BodyContext<'a> {
         // Non-DataFrame typed params — `dal: DataAccessLayer` etc. Look at
         // every positional parameter; if its annotation is a bare name and
         // that name is a known class in the registry, bind the parameter
-        // name as an instance of that class.
+        // name as an instance of that class. Every parameter (typed or
+        // not) is also tracked as a local name so a param-shadowed
+        // top-level function doesn't get D0051-checked.
         for pwd in func
             .def
             .parameters
@@ -311,6 +323,7 @@ impl<'a> BodyContext<'a> {
             .chain(&func.def.parameters.kwonlyargs)
         {
             let p = &pwd.parameter;
+            ctx.mark_local(p.name.id.as_str());
             let Some(ann) = p.annotation.as_deref() else {
                 continue;
             };
@@ -322,12 +335,65 @@ impl<'a> BodyContext<'a> {
                 ctx.instance_bindings.insert(p.name.id.as_str(), class_name);
             }
         }
+        if let Some(vararg) = func.def.parameters.vararg.as_deref() {
+            ctx.mark_local(vararg.name.id.as_str());
+        }
+        if let Some(kwarg) = func.def.parameters.kwarg.as_deref() {
+            ctx.mark_local(kwarg.name.id.as_str());
+        }
 
         ctx
     }
 
     pub fn bind_df(&mut self, name: &'a str, view: SchemaView<'a>) {
         self.df_bindings.insert(name, view);
+        self.mark_local(name);
+    }
+
+    /// Mark `name` as locally bound — even when the RHS schema is unknown.
+    /// Used by D0051 to spot a local rebind that shadows a top-level
+    /// function: the call resolves to the local at runtime, so the
+    /// top-level signature shouldn't be consulted.
+    ///
+    /// `&self` rather than `&mut self` so the analysis pass can mark a
+    /// walrus-bound name through an otherwise-immutable context — the
+    /// underlying set lives in a `RefCell`.
+    // TODO(d0051-nested-block-shadowing): the driver only walks top-level
+    // statements in the function body, so an assignment inside an `if` /
+    // `for` / `with` / `try` block doesn't mark its names as local. A
+    // shadowing assignment in a nested block followed by a call in the
+    // same (or deeper) block will still fall through to the top-level
+    // function signature.
+    pub fn mark_local(&self, name: &'a str) {
+        self.local_names.borrow_mut().insert(name);
+    }
+
+    /// Walk an assignment-target expression and mark every name it binds
+    /// as locally shadowed. Handles plain names, tuple/list unpack,
+    /// starred targets, and parenthesized targets; ignores subscript and
+    /// attribute targets (those mutate an existing object — they don't
+    /// introduce a new local name).
+    pub fn mark_local_target(&self, expr: &'a Expr) {
+        match expr {
+            Expr::Name(n) => self.mark_local(n.id.as_str()),
+            Expr::Tuple(t) => {
+                for elt in &t.elts {
+                    self.mark_local_target(elt);
+                }
+            }
+            Expr::List(l) => {
+                for elt in &l.elts {
+                    self.mark_local_target(elt);
+                }
+            }
+            Expr::Starred(s) => self.mark_local_target(&s.value),
+            _ => {}
+        }
+    }
+
+    /// Whether `name` has been bound locally in this body.
+    pub fn is_locally_bound(&self, name: &str) -> bool {
+        self.local_names.borrow().contains(name)
     }
 
     /// Bind a local name as an instance of `class_name`. Used to thread
@@ -336,6 +402,7 @@ impl<'a> BodyContext<'a> {
     /// rather than passed in as a typed parameter.
     pub fn bind_instance(&mut self, name: &'a str, class_name: &'a str) {
         self.instance_bindings.insert(name, class_name);
+        self.mark_local(name);
     }
 
     /// Resolve a name in the body's scope as a DataFrame value, if possible.
@@ -408,6 +475,14 @@ pub fn check_function_body<'a>(
         match stmt {
             Stmt::Assign(a) => {
                 let schema = analyze_expr(&a.value, ctx, source, line_index, diagnostics);
+                // Always walk every target to mark its names as locally
+                // bound — covers plain names, tuple/list unpack, and
+                // starred targets. Schema/instance binding below is the
+                // plain-name single-target case; tuple unpack falls
+                // through to mark-local-only.
+                for target in &a.targets {
+                    ctx.mark_local_target(target);
+                }
                 if let Some(schema) = schema {
                     for target in &a.targets {
                         if let Some(name) = target.as_name_expr() {
@@ -488,6 +563,7 @@ fn handle_ann_assign<'a>(
     };
     let target_name = target_expr.id.as_str();
     let target_range = target_expr.range;
+    ctx.mark_local(target_name);
 
     match dataframe::recognize(&ann.annotation) {
         Some(DataFrameAnnotation::Typed(schema_name)) => {
@@ -729,6 +805,18 @@ fn analyze_expr<'a>(
 ) -> Option<SchemaView<'a>> {
     match expr {
         Expr::Name(n) => ctx.lookup(n.id.as_str()),
+        Expr::Named(named) => {
+            // Walrus (`(target := value)`) — record the target as a local
+            // binding before descending, so a subsequent call on the same
+            // name within this body doesn't fall through to the
+            // top-level-function signature check. Python's grammar
+            // restricts the LHS to a single `Name`; anything else is
+            // a syntax error.
+            if let Some(target) = named.target.as_name_expr() {
+                ctx.mark_local(target.id.as_str());
+            }
+            analyze_expr(&named.value, ctx, source, line_index, diagnostics)
+        }
         Expr::Call(call) => {
             // Check arguments at the call site against the callee's
             // declared `DataFrame[Schema]` parameters. Side-effect only —
@@ -1175,6 +1263,13 @@ fn handle_class_method_call<'a>(
     // method's type variables from the corresponding argument's schema.
     // Even a single binding is enough for the simple v0.1 shape.
     let mut subst: HashMap<&str, &Schema<'a>> = HashMap::new();
+    // TODO(d0051-class-method-vararg): positional indexing here walks
+    // every parameter in declaration order, so a `*args` / kw-only /
+    // `**kwargs` slot interleaved before a generic-bearing param will
+    // mis-align the arg-to-param pairing. No test exercises this yet
+    // (real generic class methods are `def m[T](self, x: G[T]) -> G[T]`-
+    // shaped); revisit when a multi-param generic method needs the
+    // segment-aware matcher.
     for (i, mp) in method.params.iter().skip(1).enumerate() {
         let Some(arg) = call.arguments.args.get(i) else {
             continue;
@@ -1380,24 +1475,87 @@ fn check_call_argument_schemas<'a>(
     let Some(name_expr) = call.func.as_name_expr() else {
         return;
     };
+    // A local binding with the same name shadows the top-level function:
+    // the call resolves to the local at runtime, so checking the top-level
+    // signature would be a false positive. We check the broader
+    // `is_locally_bound` set rather than `lookup` because the shadowing
+    // assignment's RHS may have an un-inferred schema, yet still binds
+    // the name.
+    if ctx.is_locally_bound(name_expr.id.as_str()) {
+        return;
+    }
     let Some(sig) = ctx.registry().find_function(name_expr.id.as_str()) else {
         return;
     };
 
-    // Positional arguments — index-matched to parameters.
-    for (i, arg) in call.arguments.args.iter().enumerate() {
-        if let Some(param) = sig.params.get(i) {
+    // Walk positional args in lockstep with positional-or-regular params;
+    // overflow goes to `*args` if the function declared one. A positional
+    // arg that lands past `*` with no vararg slot is a Python TypeError —
+    // skip it rather than emit a misleading schema diagnostic.
+    //
+    // `consumed_positional` records which slots a positional arg filled
+    // (by parameter name). The kwarg loop consults it to skip any kwarg
+    // whose name targets an already-filled slot: that's Python's
+    // `TypeError: got multiple values for argument`, and firing D0051 a
+    // second time on the same slot is double-diagnosis, not double bugs.
+    let mut pos_idx = 0;
+    let mut consumed_positional: HashSet<&str> = HashSet::new();
+    for arg in &call.arguments.args {
+        let matched = match_positional(&sig.params, &mut pos_idx);
+        if let Some(param) = matched {
+            // VarPositional is sticky — every remaining positional arg
+            // lands in it. Don't record it as "consumed" for the kwarg
+            // dedupe, since `*args` and `**kwargs` are independent slots.
+            if !matches!(param.kind, ParamKind::VarPositional) {
+                consumed_positional.insert(param.name);
+            }
             check_one_call_arg(arg, param, ctx, source, line_index, diagnostics);
         }
     }
 
-    // Keyword arguments — name-matched.
+    // Keyword arguments — match by name against regular / kw-only params;
+    // unrecognized names fall through to `**kwargs` if present. A keyword
+    // arg whose name targets a positional-only param is a Python TypeError —
+    // skip it. Likewise, skip any kwarg whose name targets a slot already
+    // filled positionally (Python rejects this as a TypeError, and we'd
+    // otherwise re-diagnose the same parameter).
     for kw in &call.arguments.keywords {
         let Some(name) = kw.arg.as_ref().map(|n| n.id.as_str()) else {
             continue;
         };
-        if let Some(param) = sig.params.iter().find(|p| p.name == name) {
+        if consumed_positional.contains(name) {
+            continue;
+        }
+        let named = sig.params.iter().find(|p| {
+            p.name == name && matches!(p.kind, ParamKind::Regular | ParamKind::KeywordOnly)
+        });
+        let param = named.or_else(|| sig.params.iter().find(|p| p.kind == ParamKind::VarKeyword));
+        if let Some(param) = param {
             check_one_call_arg(&kw.value, param, ctx, source, line_index, diagnostics);
+        }
+    }
+}
+
+/// Pick the parameter slot a positional argument should bind to,
+/// advancing `cursor` past consumed positional-or-regular slots. A
+/// `*args` slot is sticky — every remaining positional arg lands in it.
+/// Returns `None` when the call has overflowed past `*` into kw-only
+/// territory: Python itself would TypeError, so a schema diagnostic
+/// would be the wrong cause to blame.
+fn match_positional<'a, 'p>(
+    params: &'p [MethodParam<'a>],
+    cursor: &mut usize,
+) -> Option<&'p MethodParam<'a>> {
+    let p = params.get(*cursor)?;
+    match p.kind {
+        ParamKind::PositionalOnly | ParamKind::Regular => {
+            *cursor += 1;
+            Some(p)
+        }
+        ParamKind::VarPositional => Some(p),
+        ParamKind::KeywordOnly | ParamKind::VarKeyword => {
+            *cursor = params.len();
+            None
         }
     }
 }
