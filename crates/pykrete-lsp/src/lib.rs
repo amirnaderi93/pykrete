@@ -24,6 +24,7 @@ pub mod virtualdoc;
 use std::collections::HashMap;
 use std::error::Error;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use lsp_server::{
     Connection, ErrorCode, Message, Notification, Request, RequestId, Response, ResponseError,
@@ -156,8 +157,24 @@ fn main_loop(
         .unwrap_or_else(crossbeam_channel::never);
 
     loop {
-        crossbeam_channel::select! {
-            recv(connection.receiver) -> msg => {
+        // If there's a fanned-out request in flight, cap the receive wait
+        // at its deadline — if the child doesn't reply in time we reap it
+        // and reply to the editor with pykrete's standalone result. With
+        // nothing pending the receive can block indefinitely.
+        let pending_deadline = multiplexer.next_pending_deadline();
+        let select_result = match pending_deadline {
+            Some(deadline) => crossbeam_channel::select! {
+                recv(connection.receiver) -> msg => SelectOutcome::Editor(msg),
+                recv(child_rx) -> msg => SelectOutcome::Child(msg),
+                default(deadline.saturating_duration_since(Instant::now())) => SelectOutcome::Timeout,
+            },
+            None => crossbeam_channel::select! {
+                recv(connection.receiver) -> msg => SelectOutcome::Editor(msg),
+                recv(child_rx) -> msg => SelectOutcome::Child(msg),
+            },
+        };
+        match select_result {
+            SelectOutcome::Editor(msg) => {
                 let Ok(msg) = msg else {
                     break; // editor disconnected
                 };
@@ -180,7 +197,7 @@ fn main_loop(
                     }
                 }
             }
-            recv(child_rx) -> msg => {
+            SelectOutcome::Child(msg) => {
                 let Ok(msg) = msg else {
                     // The embedded engine exited. Answer any in-flight
                     // fanned-out requests with pykrete's own result so
@@ -199,10 +216,43 @@ fn main_loop(
                 };
                 handle_child_message(&connection, &docs, &mut multiplexer, msg)?;
             }
+            SelectOutcome::Timeout => {}
+        }
+        // Reap any fanned-out requests whose deadline expired — most
+        // iterations this is a no-op (linear over a typically-empty map).
+        // When the child stays silent past its deadline (basedpyright
+        // sometimes never answers hover requests, see FANOUT_TIMEOUT) the
+        // editor gets pykrete's standalone result instead of hanging.
+        let now = Instant::now();
+        for pending in multiplexer.reap_expired_pending(now) {
+            // Re-use the merge path with `Null` as the child's result so
+            // each method's response shape stays correct (hover stays a
+            // hover, completion stays a completion list, …).
+            let merged = if pending.method == "textDocument/semanticTokens/full" {
+                multiplex::remap_semantic_tokens(pending.pykrete_result, pending.future_line)
+            } else {
+                multiplex::merge_child_response(
+                    &pending.method,
+                    pending.pykrete_result,
+                    serde_json::Value::Null,
+                )
+            };
+            connection.sender.send(Message::Response(Response {
+                id: pending.editor_id,
+                result: Some(merged),
+                error: None,
+            }))?;
         }
     }
     multiplexer.shutdown();
     Ok(())
+}
+
+/// Which arm of the main loop's `select!` fired.
+enum SelectOutcome {
+    Editor(Result<Message, crossbeam_channel::RecvError>),
+    Child(Result<serde_json::Value, crossbeam_channel::RecvError>),
+    Timeout,
 }
 
 /// Handle one message emitted by the embedded Python engine.

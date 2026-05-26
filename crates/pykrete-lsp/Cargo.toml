@@ -9,6 +9,15 @@ description = "LSP server for pykrete — speaks Language Server Protocol over s
 name = "pykrete-lsp"
 path = "src/main.rs"
 
+# Test-only "silent child" LSP: answers the `initialize` handshake, then
+# stays mute on every subsequent request. The hover-timeout integration
+# test points pykrete-lsp at this binary to reproduce basedpyright's
+# never-answers-hover behavior. Built like a normal bin so the
+# integration test locates it via `CARGO_BIN_EXE_silent-child-lsp`.
+[[bin]]
+name = "silent-child-lsp"
+path = "src/bin/silent_child_lsp.rs"
+
 [lib]
 path = "src/lib.rs"
 
