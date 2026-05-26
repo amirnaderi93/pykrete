@@ -17,6 +17,7 @@
 //!   [`merge_child_response`] combines the two answers.
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use lsp_server::RequestId;
 use lsp_types::{Diagnostic, NumberOrString, Url};
@@ -24,6 +25,16 @@ use serde_json::{Value, json};
 
 use crate::child::ChildLsp;
 use crate::virtualdoc;
+
+/// How long pykrete-lsp waits for the embedded engine to answer a fanned-out
+/// request before giving up and replying to the editor with pykrete's
+/// standalone result. basedpyright can silently never answer hover requests
+/// when its workspace has "No source files found" (common for `.pyk`-only
+/// workspaces); without a backstop the editor's hover popup hangs forever.
+///
+/// Two seconds is a snappy ceiling for hover and the rest of the fanned-out
+/// methods. Not user-tunable.
+pub const FANOUT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Per-URI merge of the two diagnostic sources. pykrete's set and the
 /// child's set are stored separately; [`merged`] returns their union,
@@ -145,6 +156,10 @@ pub struct PendingRequest {
     /// preamble region, so its semantic tokens come back on virtual
     /// line 0; this maps them back. `None` for documents without one.
     pub future_line: Option<u32>,
+    /// When this request must be answered by, child or no child. If the
+    /// child doesn't reply before `deadline`, the main loop reaps the entry
+    /// and replies to the editor with pykrete's standalone result.
+    pub deadline: Instant,
 }
 
 /// A request the child sent us that was proxied to the editor, awaiting
@@ -389,9 +404,36 @@ impl Multiplexer {
                 method: method.to_string(),
                 pykrete_result,
                 future_line,
+                deadline: Instant::now() + FANOUT_TIMEOUT,
             },
         );
         None
+    }
+
+    /// Remove every pending request whose deadline has passed. Called on
+    /// every main-loop iteration as a backstop against an embedded engine
+    /// that never answers — the caller replies to the editor with each
+    /// returned entry's pykrete-only result so the editor doesn't hang.
+    ///
+    /// Must be cheap: the implementation is a single linear scan.
+    pub fn reap_expired_pending(&mut self, now: Instant) -> Vec<PendingRequest> {
+        let expired_ids: Vec<String> = self
+            .pending
+            .iter()
+            .filter(|(_, pending)| pending.deadline <= now)
+            .map(|(id, _)| id.clone())
+            .collect();
+        expired_ids
+            .into_iter()
+            .filter_map(|id| self.pending.remove(&id))
+            .collect()
+    }
+
+    /// The soonest deadline across all pending requests, or `None` if
+    /// nothing is pending. Used by the main loop to bound how long it
+    /// blocks on the next message receive.
+    pub fn next_pending_deadline(&self) -> Option<Instant> {
+        self.pending.values().map(|p| p.deadline).min()
     }
 
     /// Look up and remove the pending request the child's response with
@@ -1270,6 +1312,68 @@ mod tests {
     fn take_pending_returns_none_for_an_unknown_id() {
         let mut mux = test_multiplexer();
         assert!(mux.take_pending("pykrete-req-999").is_none());
+    }
+
+    /// Park a `PendingRequest` directly in `mux.pending` for tests of the
+    /// reaper. `forward_request` is the production path but it requires
+    /// a live child subprocess; tests of the deadline bookkeeping only
+    /// need the table populated.
+    fn park_pending(mux: &mut Multiplexer, child_id: &str, editor_id: i32, deadline: Instant) {
+        mux.pending.insert(
+            child_id.to_string(),
+            PendingRequest {
+                editor_id: RequestId::from(editor_id),
+                method: "textDocument/hover".to_string(),
+                pykrete_result: hover("pykrete"),
+                future_line: None,
+                deadline,
+            },
+        );
+    }
+
+    #[test]
+    fn reap_expired_pending_returns_entries_past_their_deadline() {
+        let mut mux = test_multiplexer();
+        let now = Instant::now();
+        park_pending(&mut mux, "pykrete-req-1", 1, now - Duration::from_millis(1));
+        park_pending(&mut mux, "pykrete-req-2", 2, now + Duration::from_secs(60));
+
+        let reaped = mux.reap_expired_pending(now);
+        // Only the past-due entry comes out; the future-deadline one stays.
+        assert_eq!(reaped.len(), 1);
+        assert_eq!(reaped[0].editor_id, RequestId::from(1));
+        // The unexpired entry is still parked, ready for the child's reply.
+        assert!(mux.take_pending("pykrete-req-2").is_some());
+        assert!(mux.take_pending("pykrete-req-1").is_none());
+    }
+
+    #[test]
+    fn reap_expired_pending_returns_empty_when_nothing_is_past_due() {
+        let mut mux = test_multiplexer();
+        let now = Instant::now();
+        park_pending(&mut mux, "pykrete-req-1", 1, now + Duration::from_secs(60));
+        assert!(mux.reap_expired_pending(now).is_empty());
+        // The entry is still there — reaping doesn't disturb fresh requests.
+        assert!(mux.take_pending("pykrete-req-1").is_some());
+    }
+
+    #[test]
+    fn next_pending_deadline_is_none_when_nothing_is_pending() {
+        let mux = test_multiplexer();
+        assert!(mux.next_pending_deadline().is_none());
+    }
+
+    #[test]
+    fn next_pending_deadline_returns_the_earliest_deadline() {
+        let mut mux = test_multiplexer();
+        let base = Instant::now();
+        park_pending(&mut mux, "pykrete-req-1", 1, base + Duration::from_secs(5));
+        park_pending(&mut mux, "pykrete-req-2", 2, base + Duration::from_secs(1));
+        park_pending(&mut mux, "pykrete-req-3", 3, base + Duration::from_secs(3));
+        assert_eq!(
+            mux.next_pending_deadline(),
+            Some(base + Duration::from_secs(1)),
+        );
     }
 
     // -----------------------------------------------------------------------

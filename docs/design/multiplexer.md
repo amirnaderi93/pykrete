@@ -114,6 +114,11 @@ Phased:
 - Child is slow → pykrete's own results are never blocked on the child;
   we publish pykrete diagnostics immediately and amend with the child's
   when they arrive.
+- Child silently drops a fanned-out request (basedpyright sometimes
+  never answers `hover` when its workspace has "No source files found",
+  common for `.pyk`-only workspaces) → after a 2-second timeout the main
+  loop reaps the pending entry and replies to the editor with pykrete's
+  standalone result, so the editor never hangs.
 
 ## Build order
 
