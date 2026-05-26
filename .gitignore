@@ -7,6 +7,11 @@ Cargo.lock.bak
 .cargo/config.toml
 .claude/settings.local.json
 
+# Claude Code multi-agent setup — local-only for now (TM/developer/reviewer
+# subagents + project CLAUDE.md describing the workflow).
+.claude/agents/
+CLAUDE.md
+
 # VS Code extension build artifacts (npm-installed deps, tsc output,
 # packaged VSIX bundles, the platform-specific pykrete-lsp binary the
 # release workflow drops in for vsce package). The source files under
