@@ -636,6 +636,14 @@ pub fn merge_child_response(method: &str, pykrete_result: Value, child_result: V
 /// are stacked, pykrete first, separated by a horizontal rule.
 fn merge_hover(pykrete: Value, child: Value) -> Value {
     let child = remap_hover_to_editor(child);
+    // Schema hovers already include the schema name in their heading;
+    // the embedded engine's "(class) Foo" echo is redundant and crowds
+    // the popup bottom. Skip the merge for schemas only. If
+    // `render_schema_hover` in crates/pykrete/src/hover.rs ever changes
+    // its `**schema** ` prefix, revisit `is_schema_hover` below.
+    if is_schema_hover(&pykrete) && hover_text(&pykrete).is_some() {
+        return pykrete;
+    }
     match (hover_text(&pykrete), hover_text(&child)) {
         (None, None) => Value::Null,
         (Some(_), None) => pykrete,
@@ -657,6 +665,13 @@ fn merge_hover(pykrete: Value, child: Value) -> Value {
             out
         }
     }
+}
+
+/// Whether a hover value is one of pykrete's schema-class hovers — i.e.
+/// its rendered markdown starts with the `**schema** ` heading marker
+/// `render_schema_hover` (crates/pykrete/src/hover.rs) emits.
+fn is_schema_hover(pykrete_value: &Value) -> bool {
+    hover_text(pykrete_value).is_some_and(|t| t.starts_with("**schema** "))
 }
 
 /// Extract a hover's text content as a string, or `None` if the value
@@ -1209,6 +1224,31 @@ mod tests {
         assert!(text.starts_with("**pykrete:** schema info"));
         assert!(text.contains("\n\n---\n\n"));
         assert!(text.ends_with("**python:** type info"));
+    }
+
+    #[test]
+    fn merge_hover_suppresses_child_when_pykrete_is_schema_hover() {
+        // pykrete's schema hover already names the schema in its
+        // heading; the child's "(class) Foo" echo would crowd the popup.
+        let pykrete = hover("**schema** `Foo`\n\n```python\nclass Foo(Schema):\n    x: Long\n```");
+        let merged =
+            merge_child_response("textDocument/hover", pykrete.clone(), hover("(class) Foo"));
+        assert_eq!(merged, pykrete);
+    }
+
+    #[test]
+    fn merge_hover_keeps_existing_stack_behavior_for_non_schema_hovers() {
+        // A non-schema pykrete hover (here a column hover) still stacks
+        // with the child's contribution under the `---` rule.
+        let merged = merge_child_response(
+            "textDocument/hover",
+            hover("**column** `x`"),
+            hover("(parameter) x: int"),
+        );
+        let text = merged["contents"]["value"].as_str().expect("markdown");
+        assert!(text.contains("**column** `x`"));
+        assert!(text.contains("(parameter) x: int"));
+        assert!(text.contains("\n\n---\n\n"));
     }
 
     #[test]
