@@ -1,0 +1,145 @@
+# Extension version guard
+#
+# WHY THIS EXISTS
+# ---------------
+# The v0.1.10 release silently failed to republish the VS Code extension.
+# `editors/vscode/package.json`'s `"version"` was not bumped along with the
+# Rust workspace version, so `vsce publish` / `ovsx publish` saw 0.2.7 was
+# already on the marketplaces and logged "0.2.7 already published, skipping".
+# The GitHub release attached the freshly-built .vsix, but the marketplaces
+# kept serving the older binary. End users who reinstalled got the stale
+# extension and never saw the new hover format.
+#
+# This workflow blocks the same failure from recurring. On every PR, it
+# inspects the diff: if anything that ships inside the .vsix (extension TS
+# source, the bundled pykrete-lsp binary which is the Cargo workspace
+# version, or extension deps) changed, then `editors/vscode/package.json`'s
+# top-level `"version"` line must also change. Otherwise the PR fails.
+#
+# EXAMPLES
+# --------
+# Fails (extension src touched, no version bump):
+#   diff --git a/editors/vscode/src/extension.ts b/editors/vscode/src/extension.ts
+#   -   client.start();
+#   +   await client.start();
+#   (no change to editors/vscode/package.json)
+#
+# Passes (extension src touched, version bumped):
+#   diff --git a/editors/vscode/src/extension.ts b/editors/vscode/src/extension.ts
+#   -   client.start();
+#   +   await client.start();
+#   diff --git a/editors/vscode/package.json b/editors/vscode/package.json
+#   -   "version": "0.2.7",
+#   +   "version": "0.2.8",
+#
+# Passes (no extension-impacting changes — docs-only PR, etc.):
+#   diff --git a/README.md b/README.md
+#   ...
+#
+# NOTE
+# ----
+# After this workflow is merged, add it to the branch protection rule's
+# "required status checks" list so it actually blocks merges.
+
+name: Extension version guard
+
+on:
+  pull_request:
+
+jobs:
+  check:
+    name: extension version bumped when extension code changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check extension version bump
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          echo "Base: $BASE_SHA"
+          echo "Head: $HEAD_SHA"
+
+          changed_files=$(git diff --name-only "$BASE_SHA...$HEAD_SHA")
+          echo "Changed files:"
+          echo "$changed_files"
+
+          # Does any changed file impact what ships inside the .vsix?
+          #
+          # - editors/vscode/src/**           — extension TS source
+          # - crates/pykrete/**               — bundled pykrete-lsp behavior
+          # - crates/pykrete-lsp/**           — bundled pykrete-lsp behavior
+          # - Cargo.toml (workspace version)  — bumps the bundled binary
+          # - editors/vscode/package.json     — only counts if a non-version
+          #                                     line (e.g. dependencies)
+          #                                     changed; the version line
+          #                                     itself is handled separately
+          extension_impacting=0
+
+          if echo "$changed_files" | grep -qE '^editors/vscode/src/'; then
+            extension_impacting=1
+            echo "Extension-impacting change: editors/vscode/src/**"
+          fi
+
+          if echo "$changed_files" | grep -qE '^crates/pykrete(-lsp)?/'; then
+            extension_impacting=1
+            echo "Extension-impacting change: crates/pykrete{,-lsp}/**"
+          fi
+
+          # Top-level Cargo.toml workspace version line.
+          if echo "$changed_files" | grep -qxF 'Cargo.toml'; then
+            if git diff "$BASE_SHA...$HEAD_SHA" -- Cargo.toml \
+                | grep -qE '^[+-][[:space:]]*version[[:space:]]*='; then
+              extension_impacting=1
+              echo "Extension-impacting change: Cargo workspace version"
+            fi
+          fi
+
+          # editors/vscode/package.json: count any change that is NOT the
+          # top-level "version" line. Easiest is to look for added/removed
+          # lines containing `"dependencies"` / `"devDependencies"` blocks
+          # — but the safest signal is "any +/- line that isn't the
+          # top-level version line".
+          if echo "$changed_files" | grep -qxF 'editors/vscode/package.json'; then
+            non_version_changes=$(
+              git diff "$BASE_SHA...$HEAD_SHA" -- editors/vscode/package.json \
+                | grep -E '^[+-]' \
+                | grep -vE '^(\+\+\+|---)' \
+                | grep -vE '^[+-][[:space:]]*"version"[[:space:]]*:' \
+                || true
+            )
+            if [ -n "$non_version_changes" ]; then
+              extension_impacting=1
+              echo "Extension-impacting change: editors/vscode/package.json (non-version line)"
+            fi
+          fi
+
+          if [ "$extension_impacting" -eq 0 ]; then
+            echo "No extension-impacting changes detected — version bump not required."
+            exit 0
+          fi
+
+          # Did the top-level "version" line in editors/vscode/package.json
+          # change? Look for +/- lines matching `"version":` in that file's
+          # diff. The field only appears once at the top level of the
+          # package.json we care about, so a literal match is safe.
+          version_line_diff=$(
+            git diff "$BASE_SHA...$HEAD_SHA" -- editors/vscode/package.json \
+              | grep -E '^[+-][[:space:]]*"version"[[:space:]]*:' \
+              | grep -vE '^(\+\+\+|---)' \
+              || true
+          )
+
+          if [ -n "$version_line_diff" ]; then
+            echo "editors/vscode/package.json version line was bumped:"
+            echo "$version_line_diff"
+            exit 0
+          fi
+
+          echo "::error::This PR modifies code that ships inside the VS Code extension, but editors/vscode/package.json version was not bumped. The marketplace will silently skip republishing. Bump the patch number."
+          exit 1
