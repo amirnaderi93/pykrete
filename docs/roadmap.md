@@ -74,6 +74,14 @@ variable in both a parameter slot `GenericClass[T]` and a return slot
 
 Already shipped (recorded here for completeness):
 
+- **`Column` method chain recognition.** `.isNull` / `.isNotNull` /
+  `.isin` / `.between` / `.like` / `.rlike` / `.ilike` / `.contains` /
+  `.startswith` / `.endswith` are now recognized as boolean-returning
+  Column predicates that preserve the chain; `.getField` resolves the
+  nested struct field's type and fires `D0030` on a field-name typo;
+  `.getItem` returns the array element / map value type;
+  `.withField` and `.dropFields` track the receiver's struct shape
+  forward with the field added, replaced, or removed.
 - **Set ops, `F.broadcast`, and terminal recognizers.** `intersect`,
   `intersectAll`, `subtract`, `exceptAll` are recognized set operations
   sharing the same schema-mismatch check (`D0040`) as `union` /

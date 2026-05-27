@@ -340,13 +340,16 @@ generic walker.
 | `.alias` / `.name` | ✅ | Used as output name in `select` / `agg` |
 | `.cast` | ✅ | Type follows `from_spark_name`; nullability carried |
 | `.over` | ✅ | Passes type through |
-| `.isNull`, `.isNotNull` | ⚠️ | Unmodeled |
-| `.isin` | ⚠️ | Unmodeled |
-| `.between` | ⚠️ | Unmodeled |
-| `.like`, `.rlike`, `.ilike`, `.contains`, `.startswith`, `.endswith` | ⚠️ | Unmodeled |
+| `.isNull`, `.isNotNull` | ✅ | → bool; chain preserved |
+| `.isin` | ✅ | → bool; value-arg column refs checked |
+| `.between` | ✅ | → bool; chain preserved |
+| `.like`, `.rlike`, `.ilike`, `.contains`, `.startswith`, `.endswith` | ✅ | → bool; chain preserved |
 | `.asc`, `.desc` | ⚠️ | Unmodeled |
 | `.eqNullSafe` | ⚠️ | Unmodeled |
-| `.getField`, `.getItem`, `.dropFields`, `.withField` | ⚠️ | Unmodeled |
+| `.getField` | ✅ | → nested struct field's type; D0030 on field-name typo |
+| `.getItem` | ✅ | → array element / map value type |
+| `.withField` | ✅ | → receiver struct with field added or replaced |
+| `.dropFields` | ✅ | → receiver struct with fields removed |
 | `.substr` | ⚠️ | Unmodeled |
 
 ## Window / Spec
@@ -364,30 +367,35 @@ generic walker.
 A short list of the unmodeled methods most worth filling in next, ordered
 by how commonly real PySpark code uses them.
 
-1. **`Column` method chains — `.isNull`, `.isin`, `.between`,
-   `.startswith`, `.contains`, `.like`** — extremely common in `filter` /
-   `withColumn`; today recognized only via the generic-walker fallthrough,
-   so a typo on a `Column` method goes uncaught.
-2. **`when` / `otherwise`** — pivotal in `withColumn` pipelines. Column
+1. **`when` / `otherwise`** — pivotal in `withColumn` pipelines. Column
    refs in the predicate/branches are reached today, but the result
    type isn't inferred and a bad ref in the `otherwise` branch can be
    masked by the mixed-arg shape.
-3. **`F.struct` / `F.named_struct`** — needed to type a struct-valued
+2. **`F.struct` / `F.named_struct`** — needed to type a struct-valued
    `withColumn` and to chain `getField` / dotted nav onto it.
-4. **`melt` / `unpivot`** — Spark 3.4+; small but unmodeled, and the
+3. **`melt` / `unpivot`** — Spark 3.4+; small but unmodeled, and the
    output schema is fully determinable from the args.
-5. **`F.to_date` / `to_timestamp` / `date_format`** — already typed, but
+4. **`F.to_date` / `to_timestamp` / `date_format`** — already typed, but
    not in `COLUMN_REF_FUNCTIONS`, so a typo on the column arg slips
    through; widen the allowlist carefully (first arg only).
-6. **`createOrReplaceTempView`** — terminal in practice but pairs with
+5. **`createOrReplaceTempView`** — terminal in practice but pairs with
    `spark.sql("…")`; recording the registered view name would let
    pykrete check `spark.sql("SELECT … FROM view_name")` queries.
-7. **Chain-after-terminal flag** — terminals are now recognized, so
+6. **Chain-after-terminal flag** — terminals are now recognized, so
    the next polish step is to flag a call chained after one (almost
    always a bug) instead of silently returning None.
 
 ## Recently closed
 
+- **`Column` method chains.** `.isNull`, `.isNotNull`, `.isin`,
+  `.between`, `.like`, `.rlike`, `.ilike`, `.contains`, `.startswith`,
+  `.endswith` are now recognized as boolean-returning Column predicates;
+  `.getField` resolves the nested struct field's type (and fires D0030
+  on a field-name typo); `.getItem` returns the element type of an
+  array or the value type of a map; `.withField` / `.dropFields` track
+  the receiver's struct shape forward with the field added, replaced,
+  or removed. The previous behavior leaked the receiver's whole type
+  forward without modeling these methods at all.
 - **Set ops, `F.broadcast`, and terminal recognizers** —
   `intersect` / `intersectAll` / `subtract` / `exceptAll` are recognized
   set operations sharing the `union` schema-mismatch check (D0040);

@@ -43,7 +43,7 @@ use crate::schema::{
     DerivedField, FieldPathResult, FieldResolution, Schema, SchemaView, resolve_path,
     suggest_field_name,
 };
-use crate::types::ColumnType;
+use crate::types::{ColumnType, StructField};
 use crate::walk::DiscoveredFunction;
 
 // ---------------------------------------------------------------------------
@@ -2322,6 +2322,77 @@ fn infer_expr_type<'a>(
                             target
                         });
                     }
+                    // Boolean-returning Column predicates. Every one of
+                    // these reduces a column expression to a boolean —
+                    // `col("x").isNull()`, `.isin(...)`, `.between(lo, hi)`,
+                    // `.like("…")`, `.rlike("…")`, `.ilike("…")`,
+                    // `.contains("…")`, `.startswith("…")`, `.endswith("…")`.
+                    // The receiver's column refs are reached by the
+                    // generic walker; here we just publish the result type.
+                    "isNull" | "isNotNull" | "isin" | "between" | "like" | "rlike" | "ilike"
+                    | "contains" | "startswith" | "endswith" => {
+                        return Some(ColumnType::Bool);
+                    }
+                    // `<struct-col>.getField("name")` — the nested
+                    // field's type. Falls through (None) when the
+                    // receiver isn't a known struct or the name isn't a
+                    // string literal (computed access), staying
+                    // permissive.
+                    "getField" => {
+                        let recv_ty = infer_expr_type(&attr.value, schema, tcx)?;
+                        let field_name = call
+                            .arguments
+                            .args
+                            .first()
+                            .and_then(|a| a.as_string_literal_expr())?
+                            .value
+                            .to_str();
+                        return struct_field_type(&recv_ty, field_name);
+                    }
+                    // `<array-col>.getItem(0)` → element type;
+                    // `<map-col>.getItem("k")` → value type. Index /
+                    // key shape doesn't matter to the result type.
+                    "getItem" => {
+                        let recv_ty = infer_expr_type(&attr.value, schema, tcx)?;
+                        return collection_element_type(&recv_ty);
+                    }
+                    // `<struct-col>.withField("name", expr)` returns a
+                    // struct column with `name` added (or replaced) and
+                    // its type set to `expr`'s inferred type. Carries
+                    // the receiver's struct shape forward — `.withField`
+                    // is how PySpark code threads a new field into a
+                    // nested struct without losing the rest.
+                    "withField" => {
+                        let recv_ty = infer_expr_type(&attr.value, schema, tcx)?;
+                        let field_name = call
+                            .arguments
+                            .args
+                            .first()
+                            .and_then(|a| a.as_string_literal_expr())?
+                            .value
+                            .to_str();
+                        let value_ty = call
+                            .arguments
+                            .args
+                            .get(1)
+                            .and_then(|v| infer_expr_type(v, schema, tcx));
+                        return Some(struct_with_field(&recv_ty, field_name, value_ty));
+                    }
+                    // `<struct-col>.dropFields("a", "b", …)` returns a
+                    // struct column with those fields removed. Names
+                    // that aren't string literals are ignored — pykrete
+                    // can't verify them and falls back to returning the
+                    // receiver's struct unchanged.
+                    "dropFields" => {
+                        let recv_ty = infer_expr_type(&attr.value, schema, tcx)?;
+                        let drop: Vec<&str> = call
+                            .arguments
+                            .args
+                            .iter()
+                            .filter_map(|a| a.as_string_literal_expr().map(|s| s.value.to_str()))
+                            .collect();
+                        return Some(struct_drop_fields(&recv_ty, &drop));
+                    }
                     _ => {}
                 }
             }
@@ -2466,6 +2537,138 @@ fn function_result_type(name: &str, first_arg: Option<ColumnType>) -> Option<Col
 }
 
 /// The pykrete type of a Python literal used as a column value.
+/// The type of a struct field — what `<col>.getField(name)` returns.
+/// Walks through `Nullable` so an `Optional[Address]` is still
+/// navigable. `None` when the receiver isn't a struct, or when the
+/// field name doesn't appear, or when the field's type isn't known.
+fn struct_field_type(recv_ty: &ColumnType, field: &str) -> Option<ColumnType> {
+    match recv_ty {
+        ColumnType::Struct(fields) => fields
+            .iter()
+            .find(|f| f.name == field)
+            .and_then(|f| f.ty.clone()),
+        ColumnType::Nullable(inner) => struct_field_type(inner, field),
+        _ => None,
+    }
+}
+
+/// The element / value type of an `array` or `map` — what
+/// `<col>.getItem(...)` returns. `None` when the receiver isn't a
+/// collection or the inner type is unknown.
+fn collection_element_type(recv_ty: &ColumnType) -> Option<ColumnType> {
+    match recv_ty {
+        ColumnType::Array(Some(elem)) => Some(*elem.clone()),
+        ColumnType::Map(_, Some(value)) => Some(*value.clone()),
+        ColumnType::Nullable(inner) => collection_element_type(inner),
+        _ => None,
+    }
+}
+
+/// Build the result of `<col>.withField(name, value)` — the receiver's
+/// struct with `name` added (or its type replaced if already present).
+/// If the receiver isn't a struct (Spark would error at runtime), keep
+/// the type as-is rather than mint a fictional shape.
+fn struct_with_field(recv_ty: &ColumnType, name: &str, value_ty: Option<ColumnType>) -> ColumnType {
+    match recv_ty {
+        ColumnType::Struct(fields) => {
+            let mut out = fields.clone();
+            if let Some(existing) = out.iter_mut().find(|f| f.name == name) {
+                existing.ty = value_ty;
+            } else {
+                out.push(StructField {
+                    name: name.to_string(),
+                    ty: value_ty,
+                });
+            }
+            ColumnType::Struct(out)
+        }
+        ColumnType::Nullable(inner) => {
+            ColumnType::Nullable(Box::new(struct_with_field(inner, name, value_ty)))
+        }
+        other => other.clone(),
+    }
+}
+
+/// Build the result of `<col>.dropFields("a", "b", …)` — the
+/// receiver's struct with those names removed. Non-struct receivers
+/// fall through unchanged (a Spark runtime error, not pykrete's to
+/// flag here).
+fn struct_drop_fields(recv_ty: &ColumnType, drop: &[&str]) -> ColumnType {
+    match recv_ty {
+        ColumnType::Struct(fields) => ColumnType::Struct(
+            fields
+                .iter()
+                .filter(|f| !drop.contains(&f.name.as_str()))
+                .cloned()
+                .collect(),
+        ),
+        ColumnType::Nullable(inner) => {
+            ColumnType::Nullable(Box::new(struct_drop_fields(inner, drop)))
+        }
+        other => other.clone(),
+    }
+}
+
+/// Emit `D0030` when `<col>.getField("name")` is called against a
+/// known struct that doesn't have `name`. A non-struct receiver
+/// (Spark would error at runtime, but pykrete can't always tell) is
+/// silenced rather than risk a false positive.
+fn report_get_field_typo(
+    recv_ty: &ColumnType,
+    lit: &ruff_python_ast::ExprStringLiteral,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let fields = match recv_ty {
+        ColumnType::Struct(fields) => fields,
+        ColumnType::Nullable(inner) => {
+            return report_get_field_typo(inner, lit, source, line_index, diagnostics);
+        }
+        _ => return,
+    };
+    let name = lit.value.to_str();
+    if fields.iter().any(|f| f.name == name) {
+        return;
+    }
+    let candidates: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
+    let suggestion = closest_name(name, &candidates);
+    let mut message = format!("Field '{name}' does not exist on the nested struct.");
+    if let Some(s) = &suggestion {
+        message.push_str(&format!(" Did you mean '{s}'?"));
+    }
+    diagnostics.push(
+        Diagnostic::at_range(
+            Severity::Error,
+            "D0030",
+            message,
+            lit.range(),
+            source,
+            line_index,
+        )
+        .with_suggestion(suggestion),
+    );
+}
+
+/// Find the closest match to `target` among `candidates` by Levenshtein
+/// distance, with the same `max(1, len/3)` threshold used elsewhere for
+/// "Did you mean?" suggestions. Returns `None` if no candidate is close
+/// enough.
+fn closest_name(target: &str, candidates: &[&str]) -> Option<String> {
+    let threshold = std::cmp::max(1, target.len() / 3);
+    let mut best: Option<(&str, usize)> = None;
+    for &candidate in candidates {
+        let d = crate::schema::levenshtein(target, candidate);
+        if d > threshold {
+            continue;
+        }
+        if best.is_none_or(|(_, b)| d < b) {
+            best = Some((candidate, d));
+        }
+    }
+    best.map(|(name, _)| name.to_string())
+}
+
 fn python_literal_type(expr: &Expr) -> Option<ColumnType> {
     match expr {
         Expr::StringLiteral(_) => Some(ColumnType::String),
@@ -2633,6 +2836,21 @@ fn report_expr_type_errors<'a>(
             }
         }
         Expr::Call(call) => {
+            // `<col>.getField("name")` — flag a typo on the field name
+            // against the receiver's struct type. Stays quiet on a
+            // non-struct receiver or a non-literal name (computed access
+            // pykrete can't verify).
+            if let Some(attr) = call.func.as_attribute_expr()
+                && attr.attr.id.as_str() == "getField"
+                && let Some(lit) = call
+                    .arguments
+                    .args
+                    .first()
+                    .and_then(Expr::as_string_literal_expr)
+                && let Some(recv_ty) = infer_expr_type(&attr.value, schema, tcx)
+            {
+                report_get_field_typo(&recv_ty, lit, source, line_index, diagnostics);
+            }
             report_expr_type_errors(&call.func, schema, tcx, source, line_index, diagnostics);
             for arg in &call.arguments.args {
                 report_expr_type_errors(arg, schema, tcx, source, line_index, diagnostics);
