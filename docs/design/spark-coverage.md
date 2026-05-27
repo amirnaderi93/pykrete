@@ -27,9 +27,6 @@ The headline gaps:
 
 - **Reshaping** — `melt` / `unpivot` / `transpose` are unmodeled; `pivot`
   is column-checked but its output schema is data-dependent (deliberate).
-- **`spark.read.*` / `DataFrameReader`** — `dal.read(SOURCE)` is the
-  intended path; bare `spark.read.parquet(...)` returns Unknown and the
-  chain dies until a `.cast(DataFrame[X])` re-anchors it.
 - **Set operations** — `intersect`, `intersectAll`, `subtract`,
   `exceptAll` aren't recognized (only `union` / `unionByName` are).
 - **Streaming** — `readStream` / `writeStream` / `isStreaming` are
@@ -149,8 +146,9 @@ The headline gaps:
 | Method | State | Notes |
 | --- | --- | --- |
 | `dal.read(SOURCE)` | ✅ | Generic class-method substitution; the intended path |
-| `spark.read` / `.parquet` / `.csv` / `.json` / `.orc` / `.text` | ⚠️ | Returns Unknown; chain dies |
-| `spark.table` | ⚠️ | Unmodeled |
+| `spark.read` / `.parquet` / `.csv` / `.json` / `.orc` / `.text` / `.load` | ✅ | Recognized as opaque source; returns Unknown — re-anchor with `.cast(DataFrame[X])` or a typed variable annotation |
+| `spark.read.format(...).load(...)` / `.schema(...).<format>(...)` | ✅ | Builder forms recognized; same opaque-source treatment |
+| `spark.table` | ✅ | Recognized as opaque source; same re-anchor pattern |
 | `write` (`.parquet` / `.csv` / …) | ⚠️ | Unmodeled (terminal in practice) |
 | `writeTo` | ⚠️ | Unmodeled |
 | `saveAsTable` | ⚠️ | Unmodeled (terminal) |
@@ -370,32 +368,39 @@ generic walker.
 A short list of the unmodeled methods most worth filling in next, ordered
 by how commonly real PySpark code uses them.
 
-1. **`spark.read.<format>(path)`** — recognize the `DataFrameReader`
-   chain and return Unknown with a hint to re-anchor via
-   `.cast(DataFrame[X])`, or model a `read.<format>` → Unknown sink
-   uniformly. Today every codebase outside the `dal.read(SOURCE)` pattern
-   loses its chain at line one.
-2. **`intersect` / `subtract` / `intersectAll` / `exceptAll`** — set-shape
+1. **`intersect` / `subtract` / `intersectAll` / `exceptAll`** — set-shape
    companions to `union`; same schema-mismatch check as `unionByName`.
-3. **`Column` method chains — `.isNull`, `.isin`, `.between`,
+2. **`Column` method chains — `.isNull`, `.isin`, `.between`,
    `.startswith`, `.contains`, `.like`** — extremely common in `filter` /
    `withColumn`; today recognized only via the generic-walker fallthrough,
    so a typo on a `Column` method goes uncaught.
-4. **`when` / `otherwise`** — pivotal in `withColumn` pipelines. Column
+3. **`when` / `otherwise`** — pivotal in `withColumn` pipelines. Column
    refs in the predicate/branches are reached today, but the result
    type isn't inferred and a bad ref in the `otherwise` branch can be
    masked by the mixed-arg shape.
-5. **`F.struct` / `F.named_struct`** — needed to type a struct-valued
+4. **`F.struct` / `F.named_struct`** — needed to type a struct-valued
    `withColumn` and to chain `getField` / dotted nav onto it.
-6. **`melt` / `unpivot`** — Spark 3.4+; small but unmodeled, and the
+5. **`melt` / `unpivot`** — Spark 3.4+; small but unmodeled, and the
    output schema is fully determinable from the args.
-7. **`broadcast`** — semantically a pass-through; today the chain dies.
-8. **`F.to_date` / `to_timestamp` / `date_format`** — already typed, but
+6. **`broadcast`** — semantically a pass-through; today the chain dies.
+7. **`F.to_date` / `to_timestamp` / `date_format`** — already typed, but
    not in `COLUMN_REF_FUNCTIONS`, so a typo on the column arg slips
    through; widen the allowlist carefully (first arg only).
-9. **`createOrReplaceTempView`** — terminal in practice but pairs with
+8. **`createOrReplaceTempView`** — terminal in practice but pairs with
    `spark.sql("…")`; recording the registered view name would let
    pykrete check `spark.sql("SELECT … FROM view_name")` queries.
-10. **Terminal recognizers (`count`, `collect`, `first`, `show`,
-    `printSchema`, `explain`)** — model them as terminal so a chain
-    after them is flagged (probably a bug) rather than silently dying.
+9. **Terminal recognizers (`count`, `collect`, `first`, `show`,
+   `printSchema`, `explain`)** — model them as terminal so a chain
+   after them is flagged (probably a bug) rather than silently dying.
+
+## Recently closed
+
+- **`spark.read.<format>(path)` / `spark.table(name)`** —
+  `DataFrameReader` chains (`spark.read.parquet(...)`,
+  `spark.read.format(...).load(...)`, `spark.read.schema(...).<format>(...)`)
+  and bare `spark.table(...)` are recognized as opaque IO sources. The
+  result is still Unknown — the schema is genuinely runtime data — but
+  the user re-anchors with `.cast(DataFrame[Schema])` or
+  `name: DataFrame[Schema] = spark.read.parquet(...)` and downstream
+  column checks resume. Before this change, every codebase outside the
+  `dal.read(SOURCE)` pattern lost its chain at line one.

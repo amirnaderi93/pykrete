@@ -74,6 +74,15 @@ variable in both a parameter slot `GenericClass[T]` and a return slot
 
 Already shipped (recorded here for completeness):
 
+- **`spark.read.<format>(path)` / `spark.table(name)` opaque-source
+  recognition.** `DataFrameReader` chains (`spark.read.parquet(...)`,
+  `spark.read.format(...).load(...)`, `spark.read.schema(...).<format>(...)`)
+  and bare `spark.table(...)` are now recognized as opaque IO sources.
+  The result is still Unknown — the schema is genuinely runtime data —
+  but the user re-anchors the chain with `.cast(DataFrame[Schema])` or a
+  typed variable annotation (`raw: DataFrame[Schema] = spark.read.parquet(...)`)
+  and downstream column checks resume. Closes the headline gap where
+  real PySpark codebases lost their chain at line one.
 - **Call-site argument checking** (`D0051 argumentColumnsMismatch`) —
   closes the function boundary on the input side. Passing a
   `DataFrame[Wrong]` into a function that declares `DataFrame[Right]`
