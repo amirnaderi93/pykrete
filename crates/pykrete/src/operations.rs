@@ -122,15 +122,18 @@ fn is_dataframe_reader_format(method: &str) -> bool {
     )
 }
 
-/// Whether `expr` is a `DataFrameReader` — the `spark.read` attribute, or
-/// a builder-chain extension of it (`spark.read.format(...)`,
-/// `spark.read.option(...)`, `spark.read.options(...)`,
-/// `spark.read.schema(...)`). Anchored on the `.read` attribute and not on
-/// any specific session-variable name — real codebases use `spark`, `ss`,
-/// `session`, … and the shape is the same either way.
+/// Whether `expr` is a `DataFrameReader` — i.e. `<X>.read` or a chain of
+/// recognized builder methods (`format`, `option`, `options`, `schema`) on
+/// top of one. Match `<X>.read` (the base reader attribute) OR a chain of
+/// recognized builder methods on top of one. We deliberately don't
+/// restrict `<X>` to the literal `spark` name — codebases name their
+/// session variable many ways (`spark`, `ss`, `sess`). As a side effect,
+/// an unrelated `myloader.read.parquet(...)` API would also be
+/// intercepted, but that just yields Unknown — same as falling through —
+/// so no incorrect behavior surfaces.
 fn is_dataframe_reader_expr(expr: &Expr) -> bool {
     match expr {
-        // `<anything>.read` — the base reader.
+        // `<X>.read` — the base reader attribute.
         Expr::Attribute(a) => a.attr.id.as_str() == "read",
         // Builder methods chain reader → reader.
         Expr::Call(call) => {
@@ -168,8 +171,11 @@ fn is_spark_opaque_source_call(call: &ExprCall) -> bool {
         return true;
     }
     // `spark.table("db.x")` — SparkSession method that bypasses the reader.
-    // Distinguished from `<df>.<table>` by the receiver being a Name (the
-    // session variable), not an expression that could be a DataFrame.
+    // Match `<X>.table(<args>)`. The check is structural — we don't verify
+    // `<X>` is a SparkSession by lookup; in practice it's the session
+    // variable, but a user calling `df.table(...)` (not a real DataFrame
+    // method) would also match. Either way we return Unknown, so no
+    // incorrect behavior surfaces.
     if method == "table" && attr.value.is_name_expr() {
         return true;
     }

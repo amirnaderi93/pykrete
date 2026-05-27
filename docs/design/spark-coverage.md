@@ -146,7 +146,7 @@ The headline gaps:
 | Method | State | Notes |
 | --- | --- | --- |
 | `dal.read(SOURCE)` | ✅ | Generic class-method substitution; the intended path |
-| `spark.read` / `.parquet` / `.csv` / `.json` / `.orc` / `.text` / `.load` | ✅ | Recognized as opaque source; returns Unknown — re-anchor with `.cast(DataFrame[X])` or a typed variable annotation |
+| `spark.read` / `.parquet` / `.csv` / `.json` / `.orc` / `.text` / `.xml` / `.jdbc` / `.load` | ✅ | Recognized as opaque source; returns Unknown — re-anchor with `.cast(DataFrame[X])` or a typed variable annotation |
 | `spark.read.format(...).load(...)` / `.schema(...).<format>(...)` | ✅ | Builder forms recognized; same opaque-source treatment |
 | `spark.table` | ✅ | Recognized as opaque source; same re-anchor pattern |
 | `write` (`.parquet` / `.csv` / …) | ⚠️ | Unmodeled (terminal in practice) |
