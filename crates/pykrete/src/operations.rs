@@ -961,7 +961,12 @@ fn analyze_expr<'a>(
             // doesn't change what schema this call evaluates to.
             check_call_argument_schemas(call, ctx, source, line_index, diagnostics);
 
-            let result = analyze_method_call(call, ctx, source, line_index, diagnostics);
+            let result = analyze_method_call(call, ctx, source, line_index, diagnostics)
+                // Free-function fallback — `my_join(orders, refunds)` on a
+                // generic `def my_join[A, B](...)`. Tried only when the
+                // callee isn't a method on something (the attribute path
+                // above already handled that).
+                .or_else(|| handle_free_function_call(call, ctx, source, line_index, diagnostics));
             // Record the call's result schema so completion can offer
             // the chain's columns at `<call>.<cursor>`.
             if let Some(schema) = &result {
@@ -1458,16 +1463,22 @@ fn is_pass_through_method(method: &str) -> bool {
 /// Resolve a method call on a class instance — `dal.read(...)`.
 ///
 /// Looks up the method on the receiver's class, and if the method is
-/// generic, binds the type parameter from one of the arguments and
-/// substitutes through the return annotation.
+/// generic, binds each type variable independently from the matching
+/// argument's schema, then substitutes through the return annotation.
 ///
-/// Scope cuts in v0.1:
-/// - Only `def m[T](self, x: Generic[T]) -> Generic[T]`-shaped methods are
-///   inferable. The return annotation must be `Generic[T]` where `T` is
-///   one of the method's type parameters; the parameter annotation must
-///   match the same shape against an argument whose schema we can resolve.
-/// - Non-generic methods, or generic methods we can't pattern-match
-///   against this shape, return `None`.
+/// Scope:
+/// - Multiple type variables — `def m[A, B](x: G[A], y: G[B]) -> G[A]` —
+///   each parameter slot binds its own TypeVar; the return is substituted
+///   per-TypeVar.
+/// - Nested generic parameter shapes — `List[G[T]]`, `Dict[str, G[T]]`,
+///   `Optional[G[T]]`, `List[List[G[T]]]` — the matcher recurses through
+///   subscript layers and into the matching argument-literal elements.
+/// - Return annotations of shape `G[T]` resolve to `T`'s bound schema; an
+///   N-arg subscript like `G[Joined[A, B]]` is treated like `Merge[A, B]`
+///   under the substituted names (fields concatenated, first occurrence
+///   wins), with the display name carrying the substituted form.
+/// - Non-generic methods, or shapes that fail to bind, return `None` —
+///   degrade quietly rather than emit a false-positive diagnostic.
 fn handle_class_method_call<'a>(
     class_name: &'a str,
     method_name: &str,
@@ -1479,46 +1490,369 @@ fn handle_class_method_call<'a>(
 ) -> Option<SchemaView<'a>> {
     let class_info = ctx.registry().find_class(class_name)?;
     let method = class_info.methods.get(method_name)?;
+    let subst = bind_type_vars(
+        &method.params,
+        method.type_params.as_slice(),
+        &call.arguments.args,
+        true,
+        ctx,
+        source,
+        line_index,
+        diagnostics,
+    );
+    resolve_return_type(method.return_annotation?, &method.type_params, &subst, ctx)
+}
 
-    // No type params → nothing to substitute. We don't infer non-generic
-    // method results yet (would require fully resolving the static return
-    // annotation, which v0.1 only does for DataFrame[Schema] forms — and
-    // we already cover that path via DataFrame-receiver methods).
-    if method.type_params.is_empty() {
+/// Resolve a top-level free-function call — `my_join(orders, refunds)`.
+///
+/// Same machinery as [`handle_class_method_call`], but with no `self`
+/// parameter to skip and a Name-keyed registry lookup. Used to type the
+/// result of a generic `def my_join[A, B](left: DataFrame[A], right:
+/// DataFrame[B]) -> DataFrame[Joined[A, B]]` so the downstream chain
+/// sees `Joined[Orders, Refunds]` columns rather than going Unknown.
+fn handle_free_function_call<'a>(
+    call: &'a ExprCall,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<SchemaView<'a>> {
+    let name_expr = call.func.as_name_expr()?;
+    // A local binding (an assignment, a walrus) shadows the top-level
+    // function; resolving against the registry would then be a false
+    // positive.
+    if ctx.is_locally_bound(name_expr.id.as_str()) {
         return None;
     }
+    let sig = ctx.registry().find_function(name_expr.id.as_str())?;
+    if sig.type_params.is_empty() {
+        return None;
+    }
+    let subst = bind_type_vars(
+        &sig.params,
+        sig.type_params.as_slice(),
+        &call.arguments.args,
+        false,
+        ctx,
+        source,
+        line_index,
+        diagnostics,
+    );
+    resolve_return_type(sig.return_annotation?, &sig.type_params, &subst, ctx)
+}
 
-    // Try each method parameter (skipping self) to bind one of the
-    // method's type variables from the corresponding argument's schema.
-    // Even a single binding is enough for the simple v0.1 shape.
-    let mut subst: HashMap<&str, &Schema<'a>> = HashMap::new();
-    // TODO(d0051-class-method-vararg): positional indexing here walks
+/// Walk each parameter / argument pair to bind every TypeVar that
+/// appears in the parameter annotations. The mapping is independent per
+/// TypeVar — `def f[A, B](x: G[A], y: G[B])` collects `A` from `x`'s
+/// argument and `B` from `y`'s, each unaffected by the other.
+///
+/// `skip_self` drops the first parameter (for class-method calls). The
+/// per-param walker [`bind_type_vars_from_annotation`] handles the
+/// nested-generic / multi-subscript shapes.
+#[allow(clippy::too_many_arguments)]
+fn bind_type_vars<'a>(
+    params: &[MethodParam<'a>],
+    type_params: &[&'a str],
+    args: &'a [Expr],
+    skip_self: bool,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> HashMap<&'a str, &'a Schema<'a>> {
+    let mut subst: HashMap<&'a str, &'a Schema<'a>> = HashMap::new();
+    // Names of TypeVars that have already seen a conflicting binding —
+    // poisoning is sticky. A later element/slot that would otherwise
+    // re-bind the same name must instead leave it unbound, so the
+    // return type degrades to Unknown rather than silently reviving an
+    // earlier (now-rejected) schema. See `bind_type_vars_from_annotation`.
+    let mut poisoned: HashSet<&'a str> = HashSet::new();
+    if type_params.is_empty() {
+        return subst;
+    }
+    let skip = usize::from(skip_self);
+    // TODO(d0051-class-method-vararg): positional pairing here walks
     // every parameter in declaration order, so a `*args` / kw-only /
     // `**kwargs` slot interleaved before a generic-bearing param will
-    // mis-align the arg-to-param pairing. No test exercises this yet
-    // (real generic class methods are `def m[T](self, x: G[T]) -> G[T]`-
-    // shaped); revisit when a multi-param generic method needs the
-    // segment-aware matcher.
-    for (i, mp) in method.params.iter().skip(1).enumerate() {
-        let Some(arg) = call.arguments.args.get(i) else {
-            continue;
-        };
-        let Some(pann) = mp.annotation else {
-            continue;
-        };
-        if let Some(tv) = extract_type_var_from_subscript(pann, &method.type_params)
-            && let Some(schema) = arg_schema(arg, ctx, source, line_index, diagnostics)
-        {
-            subst.insert(tv, schema);
+    // mis-align the arg-to-param pairing. No test exercises this yet;
+    // revisit when a real generic shape needs the segment-aware matcher.
+    for (i, mp) in params.iter().skip(skip).enumerate() {
+        let Some(arg) = args.get(i) else { continue };
+        let Some(pann) = mp.annotation else { continue };
+        bind_type_vars_from_annotation(
+            pann,
+            arg,
+            type_params,
+            &mut subst,
+            &mut poisoned,
+            ctx,
+            source,
+            line_index,
+            diagnostics,
+        );
+    }
+    subst
+}
+
+/// Match one parameter annotation against one argument expression, and
+/// record any TypeVar bindings the pairing implies.
+///
+/// Base case: the annotation is `G[T]` for some declared TypeVar `T` —
+/// the argument's schema is bound to `T`. Recursive cases:
+///
+/// - `List[X]` / `Tuple[X, …]` / `Sequence[X]` / `Set[X]` — recurse `X`
+///   against each list/tuple/set literal element.
+/// - `Dict[K, V]` / `Mapping[K, V]` — recurse `V` against each dict
+///   literal value (the key slot is not modeled).
+/// - `Optional[X]` — recurse `X` against the same argument (the `None`
+///   case is degenerate and binds nothing).
+///
+/// An element whose schema doesn't agree with the existing binding for
+/// the same TypeVar poisons the binding — degrade to Unknown rather
+/// than fabricate a join. Poisoning is sticky: once a TypeVar conflicts
+/// at any element/slot, later elements/slots cannot revive it (their
+/// would-be binding is ignored). Without stickiness, three elements
+/// `[Orders, Refunds, Orders]` would leave T = Orders after the third
+/// element silently re-binds the conflict-cleared key.
+#[allow(clippy::too_many_arguments)]
+fn bind_type_vars_from_annotation<'a>(
+    ann: &'a Expr,
+    arg: &'a Expr,
+    type_params: &[&'a str],
+    subst: &mut HashMap<&'a str, &'a Schema<'a>>,
+    poisoned: &mut HashSet<&'a str>,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    // Base case — `G[T]`. The arg's schema is T's binding (if compatible
+    // with any earlier binding of the same T).
+    if let Some(tv) = extract_type_var_from_subscript(ann, type_params)
+        && let Some(schema) = arg_schema(arg, ctx, source, line_index, diagnostics)
+    {
+        if poisoned.contains(tv) {
+            // Already poisoned by an earlier conflict — refuse to revive.
+            return;
         }
+        match subst.get(tv) {
+            None => {
+                subst.insert(tv, schema);
+            }
+            Some(existing) if (*existing).name() == schema.name() => {
+                // Consistent re-binding — keep it.
+            }
+            Some(_) => {
+                // Conflicting bindings — poison T and drop the prior
+                // binding so the return type degrades to Unknown rather
+                // than pretend one of the schemas wins.
+                subst.remove(tv);
+                poisoned.insert(tv);
+            }
+        }
+        return;
     }
 
-    // Substitute through the return annotation. Expecting
-    // `GenericClass[T]` where T was bound above.
-    let return_ann = method.return_annotation?;
-    let tv = extract_type_var_from_subscript(return_ann, &method.type_params)?;
-    let schema = subst.get(tv)?;
-    Some(SchemaView::Declared(schema))
+    // Recursive case — strip a collection wrapper and recurse into the
+    // matching argument literal.
+    let Some(sub) = ann.as_subscript_expr() else {
+        return;
+    };
+    let Some(base) = sub.value.as_name_expr() else {
+        return;
+    };
+    match base.id.as_str() {
+        // Single-element collection — `List[X]`, `Sequence[X]`, `Set[X]`.
+        // The slice is the element annotation; the arg is a list/tuple
+        // literal whose elements we recurse against.
+        "List" | "list" | "Sequence" | "Iterable" | "Set" | "set" | "FrozenSet" | "frozenset" => {
+            let inner = sub.slice.as_ref();
+            for elem in arg_iter_elements(arg) {
+                bind_type_vars_from_annotation(
+                    inner,
+                    elem,
+                    type_params,
+                    subst,
+                    poisoned,
+                    ctx,
+                    source,
+                    line_index,
+                    diagnostics,
+                );
+            }
+        }
+        // Tuple — `Tuple[X, ...]` (variadic) or `Tuple[X, Y, Z]` (fixed).
+        // The variadic form treats every element as `X`; the fixed form
+        // pairs each annotation slot with the corresponding element.
+        "Tuple" | "tuple" => {
+            let slots: Vec<&Expr> = match sub.slice.as_ref() {
+                Expr::Tuple(t) => t.elts.iter().collect(),
+                single => vec![single],
+            };
+            if let [inner, Expr::EllipsisLiteral(_)] = slots.as_slice() {
+                for elem in arg_iter_elements(arg) {
+                    bind_type_vars_from_annotation(
+                        inner,
+                        elem,
+                        type_params,
+                        subst,
+                        poisoned,
+                        ctx,
+                        source,
+                        line_index,
+                        diagnostics,
+                    );
+                }
+            } else {
+                for (slot, elem) in slots.iter().zip(arg_iter_elements(arg).iter()) {
+                    bind_type_vars_from_annotation(
+                        slot,
+                        elem,
+                        type_params,
+                        subst,
+                        poisoned,
+                        ctx,
+                        source,
+                        line_index,
+                        diagnostics,
+                    );
+                }
+            }
+        }
+        // Mapping — `Dict[K, V]` / `Mapping[K, V]`. Key types aren't
+        // carriers of schemas in this PR — recurse into value only. A
+        // TypeVar that only appears as a Dict key annotation stays
+        // unbound (silent degrade to Unknown — never a false positive).
+        "Dict" | "dict" | "Mapping" => {
+            let value_ann = match sub.slice.as_ref() {
+                Expr::Tuple(t) if t.elts.len() == 2 => &t.elts[1],
+                _ => return,
+            };
+            for value_expr in arg_dict_values(arg) {
+                bind_type_vars_from_annotation(
+                    value_ann,
+                    value_expr,
+                    type_params,
+                    subst,
+                    poisoned,
+                    ctx,
+                    source,
+                    line_index,
+                    diagnostics,
+                );
+            }
+        }
+        // Optional[X] — recurse `X` against the same arg. `None` is
+        // accepted at runtime but binds nothing.
+        "Optional" => {
+            if arg.is_none_literal_expr() {
+                return;
+            }
+            bind_type_vars_from_annotation(
+                sub.slice.as_ref(),
+                arg,
+                type_params,
+                subst,
+                poisoned,
+                ctx,
+                source,
+                line_index,
+                diagnostics,
+            );
+        }
+        _ => {
+            // Unknown wrapper — don't recurse blindly. The base case
+            // already covered the `G[T]` direct shape above.
+        }
+    }
+}
+
+/// Substitute the bound TypeVars through the return annotation and
+/// resolve it to a [`SchemaView`].
+///
+/// Shapes handled:
+/// - `G[T]` where `T` was bound — returns `T`'s schema as
+///   `SchemaView::Declared`.
+/// - `G[Merge[A, B, …]]` where each inner slot is a TypeVar (any subset
+///   of which may be bound) — returns the concatenated columns of every
+///   bound schema as `SchemaView::Derived` (first occurrence of each
+///   column name wins, preserving listed order). Unbound slots are
+///   silently dropped; the view carries no display name (Derived has no
+///   name field).
+fn resolve_return_type<'a>(
+    return_ann: &'a Expr,
+    type_params: &[&'a str],
+    subst: &HashMap<&'a str, &'a Schema<'a>>,
+    ctx: &BodyContext<'a>,
+) -> Option<SchemaView<'a>> {
+    // `G[T]` — direct TypeVar in the outer subscript.
+    if let Some(tv) = extract_type_var_from_subscript(return_ann, type_params) {
+        return subst.get(tv).copied().map(SchemaView::Declared);
+    }
+    // `G[Joined[A, B, …]]` — a parameterized inner shape. Outer subscript's
+    // slice is itself a subscript whose own slice lists TypeVars.
+    let outer = return_ann.as_subscript_expr()?;
+    let inner = outer.slice.as_subscript_expr()?;
+    let inner_args: Vec<&Expr> = match inner.slice.as_ref() {
+        Expr::Tuple(t) => t.elts.iter().collect(),
+        single => vec![single],
+    };
+    // Pull the schema bound to each inner TypeVar slot. An unbound slot
+    // (its arg-site value was Unknown) is silently dropped — the
+    // remaining bound schemas still contribute their fields, so a
+    // call where only one of two arguments resolved still produces a
+    // usable downstream view.
+    let mut bound_schemas: Vec<&'a Schema<'a>> = Vec::new();
+    let mut saw_typevar = false;
+    for arg in &inner_args {
+        let Some(name) = arg.as_name_expr() else {
+            // A non-TypeVar slot in the inner subscript (e.g. a bare
+            // schema name) isn't part of the substitution model
+            // pykrete handles; degrade.
+            return None;
+        };
+        if !type_params.contains(&name.id.as_str()) {
+            return None;
+        }
+        saw_typevar = true;
+        if let Some(s) = subst.get(name.id.as_str()) {
+            bound_schemas.push(*s);
+        }
+    }
+    if !saw_typevar || bound_schemas.is_empty() {
+        return None;
+    }
+    // Concatenate fields Merge-style — first occurrence of each column
+    // name wins, preserving the order the schemas were listed.
+    let mut fields: Vec<DerivedField<'a>> = Vec::new();
+    for s in &bound_schemas {
+        for field in SchemaView::Declared(s).typed_fields(ctx.schemas()) {
+            if !fields.iter().any(|f| f.name == field.name) {
+                fields.push(field);
+            }
+        }
+    }
+    Some(SchemaView::Derived(fields))
+}
+
+/// Iterate over the elements of a list/tuple-literal argument. Returns
+/// an empty slice for any other shape — `arg_schema` will silently fail
+/// downstream and the binding will degrade.
+fn arg_iter_elements(arg: &Expr) -> &[Expr] {
+    match arg {
+        Expr::List(l) => &l.elts,
+        Expr::Tuple(t) => &t.elts,
+        Expr::Set(s) => &s.elts,
+        _ => &[],
+    }
+}
+
+/// Iterate over the value expressions of a dict-literal argument.
+fn arg_dict_values(arg: &Expr) -> Vec<&Expr> {
+    match arg {
+        Expr::Dict(d) => d.items.iter().map(|item| &item.value).collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// Match `GenericClass[T]` where `T` is one of the supplied type variable

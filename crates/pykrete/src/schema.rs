@@ -694,6 +694,20 @@ pub fn resolve_derived_schema<'a>(
     }
 }
 
+/// Every bare-name argument of a derived-schema subscript expression —
+/// the named schemas inside `Pick[S, …]` / `Omit[S, …]` / `Merge[A, B,
+/// …]`. Used by the function-signature renderer to spot generic forms
+/// like `Merge[A, B]` whose names are TypeVars rather than schemas.
+/// Empty for inline-dict shapes or non-derived expressions.
+pub fn derived_arg_names(expr: &Expr) -> Vec<&str> {
+    let Some((_, args)) = derived_parts(expr) else {
+        return Vec::new();
+    };
+    args.iter()
+        .filter_map(|e| e.as_name_expr().map(|n| n.id.as_str()))
+        .collect()
+}
+
 /// Validation errors for a derived-schema expression — each a
 /// `(code, message, range)` triple ready to become a `Diagnostic`: a
 /// `Pick` / `Omit` column not on its base schema (`D0030`), an unknown
