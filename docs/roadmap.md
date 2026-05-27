@@ -74,6 +74,17 @@ variable in both a parameter slot `GenericClass[T]` and a return slot
 
 Already shipped (recorded here for completeness):
 
+- **`F.when` / `F.otherwise` result-type inference and `F.struct` /
+  `F.named_struct` schema construction.** `F.when(p, v).otherwise(e)`
+  chains now infer their result as the common type of the value
+  branches (atomic equality, then numeric widening — `int` < `long` <
+  `double`); chains without `.otherwise(...)` resolve to `Nullable(T)`
+  since unmatched rows yield null. `F.struct(col("a"), col("b"))` now
+  produces a `Struct({a: int, b: string})` whose field names come from
+  `.alias("x")` first then the column name, and whose types are each
+  arg's inferred type; `F.named_struct("k1", v1, "k2", v2)` uses the
+  string-literal name slots as field names. Composes with `.getField`,
+  so a freshly-constructed struct can be navigated immediately.
 - **`createOrReplaceTempView` + `spark.sql("SELECT … FROM view")`
   resolution.** `df.createOrReplaceTempView("v")` registers `df`'s
   schema against the view name in a per-file registry; a subsequent

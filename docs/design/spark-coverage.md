@@ -284,7 +284,7 @@ column's type is inferred (`infer_expr_type` / `function_result_type`).
 | `element_at` | ⚠️ | ✅ | Array elem or map value |
 | `size` | ✅ | ✅ | → int |
 | `arrays_zip` | ⚠️ | ✅ | → `array<struct>` |
-| `struct`, `named_struct` | ⚠️ | ⚠️ | Result struct fields not modeled |
+| `struct`, `named_struct` | ⚠️ | ✅ | Result struct fields modeled from arg names + types |
 | `create_map`, `map_from_arrays`, `map_from_entries`, `map_concat`, `str_to_map`, `transform_keys`, `transform_values`, `map_filter` | ⚠️ | ✅ | → map (K/V untyped) |
 | `map_keys`, `map_values` | ✅ | ✅ | → `array<K>` / `array<V>` |
 | `map_entries` | ✅ | ✅ | → array |
@@ -294,7 +294,7 @@ column's type is inferred (`infer_expr_type` / `function_result_type`).
 
 | Function | Ref | Typed | Notes |
 | --- | --- | --- | --- |
-| `when`, `otherwise` | ⚠️ | ⚠️ | Excluded from COLUMN_REF (mixed args); column refs inside arguments are still collected via recursion |
+| `when`, `otherwise` | ⚠️ | ✅ | Result type inferred from branches (common-type widening; nullable when no `.otherwise()`); column refs inside arguments are reached via the generic walker |
 | `coalesce`, `nvl`, `ifnull` | ✅ | ✅ | Drops nullability |
 | `nullif`, `nvl2` | ✅ | ⚠️ | Type not inferred |
 | `isnull`, `isnan` | ✅ | ✅ | → bool |
@@ -367,23 +367,34 @@ generic walker.
 A short list of the unmodeled methods most worth filling in next, ordered
 by how commonly real PySpark code uses them.
 
-1. **`when` / `otherwise`** — pivotal in `withColumn` pipelines. Column
-   refs in the predicate/branches are reached today, but the result
-   type isn't inferred and a bad ref in the `otherwise` branch can be
-   masked by the mixed-arg shape.
-2. **`F.struct` / `F.named_struct`** — needed to type a struct-valued
-   `withColumn` and to chain `getField` / dotted nav onto it.
-3. **`melt` / `unpivot`** — Spark 3.4+; small but unmodeled, and the
+1. **`melt` / `unpivot`** — Spark 3.4+; small but unmodeled, and the
    output schema is fully determinable from the args.
-4. **`F.to_date` / `to_timestamp` / `date_format`** — already typed, but
+2. **`F.to_date` / `to_timestamp` / `date_format`** — already typed, but
    not in `COLUMN_REF_FUNCTIONS`, so a typo on the column arg slips
    through; widen the allowlist carefully (first arg only).
-5. **Chain-after-terminal flag** — terminals are now recognized, so
+3. **Chain-after-terminal flag** — terminals are now recognized, so
    the next polish step is to flag a call chained after one (almost
    always a bug) instead of silently returning None.
 
 ## Recently closed
 
+- **`when` / `otherwise` result-type inference and `F.struct` /
+  `F.named_struct` schema construction.** A
+  `F.when(p, v).otherwise(e)` chain now infers its result type as the
+  common type of the branches (atomic equality first, then numeric
+  widening — `int` < `long` < `double`; heterogeneous branches that
+  can't reconcile stay Unknown, never a fabricated type). A chain
+  without `.otherwise(...)` is treated as `Nullable(T)` — unmatched
+  rows produce null at runtime. Chained predicates
+  (`.when(p1, v1).when(p2, v2).otherwise(e)`) walk back to the root
+  `F.when` and reconcile across every value branch. `F.struct(c1, c2)`
+  now produces a `Struct({a: int, b: string})` whose field names come
+  from `.alias("x")` first, then the `col` reference's name, and whose
+  field types are each arg's inferred type; `F.named_struct("k1", v1,
+  "k2", v2)` uses the string-literal name slots as field names, falling
+  back to Unknown when a name slot isn't a literal. Composes with the
+  existing `.getField`, so `F.struct(col("a"), col("b")).getField("a")`
+  resolves to `a`'s type.
 - **`createOrReplaceTempView` + `spark.sql("SELECT … FROM view")`.**
   A chain ending in `.createOrReplaceTempView("name")` registers the
   receiver's schema (Typed or Derived) against the view name in a

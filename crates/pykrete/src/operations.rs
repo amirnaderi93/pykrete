@@ -2465,6 +2465,27 @@ fn infer_expr_type<'a>(
                             .collect();
                         return Some(struct_drop_fields(&recv_ty, &drop));
                     }
+                    // `F.when(p, v).otherwise(e)` — common-type widen the
+                    // branch values; if any branch is Nullable, the
+                    // result is Nullable. `.otherwise()` is only valid
+                    // chained on a `when`, so the helper validates the
+                    // receiver shape and returns None on anything else.
+                    "otherwise" => {
+                        let else_ty = call
+                            .arguments
+                            .args
+                            .first()
+                            .and_then(|a| infer_expr_type(a, schema, tcx));
+                        return when_chain_result_type(&attr.value, Some(else_ty), schema, tcx);
+                    }
+                    // A `.when(...)` chained on an earlier `when` — model
+                    // it identically to a fresh `F.when(...)` chain that
+                    // has no `.otherwise()` (so the result is nullable).
+                    // Standalone `F.when(p, v)` falls into the `Name` /
+                    // `Attribute` arm below.
+                    "when" if is_when_chain(&attr.value) => {
+                        return when_chain_result_type(expr, None, schema, tcx);
+                    }
                     _ => {}
                 }
             }
@@ -2476,6 +2497,20 @@ fn infer_expr_type<'a>(
             // `F.lit(value)` — the literal's own type.
             if fname == "lit" {
                 return call.arguments.args.first().and_then(python_literal_type);
+            }
+            // `F.when(p, v)` without a trailing `.otherwise()` — the
+            // result is Nullable(common-type-of-value-branches) because
+            // unmatched rows produce null.
+            if fname == "when" {
+                return when_chain_result_type(expr, None, schema, tcx);
+            }
+            // `F.struct(...)` / `F.named_struct("k1", v1, ...)` — build a
+            // struct type from the args' inferred names and types.
+            if fname == "struct" {
+                return Some(infer_struct_type(call, schema, tcx));
+            }
+            if fname == "named_struct" {
+                return infer_named_struct_type(call, schema, tcx);
             }
             // A call to a user-defined UDF — its declared return type.
             if let Some(udf_ty) = tcx.registry.find_udf(fname) {
@@ -2606,6 +2641,176 @@ fn function_result_type(name: &str, first_arg: Option<ColumnType>) -> Option<Col
         },
         _ => None,
     }
+}
+
+/// True if `expr` is a `when`-chain expression: a chain of `.when(p, v)`
+/// calls rooted at a `F.when(...)` (or bare `when(...)`). Used to
+/// distinguish a chained `.when` (`F.when(p, v).when(p2, v2)`) from an
+/// unrelated `.when(...)` method on some other receiver.
+fn is_when_chain(expr: &Expr) -> bool {
+    let Some(call) = expr.as_call_expr() else {
+        return false;
+    };
+    if let Some(attr) = call.func.as_attribute_expr() {
+        if attr.attr.id.as_str() == "when" {
+            return is_when_chain(&attr.value);
+        }
+        return false;
+    }
+    match call.func.as_ref() {
+        Expr::Name(n) => n.id.as_str() == "when",
+        Expr::Attribute(a) => a.attr.id.as_str() == "when",
+        _ => false,
+    }
+}
+
+/// The result type of a `F.when(p, v)[.when(p2, v2)…][.otherwise(e)]`
+/// chain. Walks the chain back to the root `F.when(...)`, collects every
+/// branch value's type (and the `.otherwise` value's type if `else_ty`
+/// is `Some`), and returns the common type — or `None` when the branches
+/// don't reconcile (no false positive on downstream type-aware checks).
+///
+/// Nullability: any nullable branch — or the absence of an `.otherwise`
+/// (modeled by passing `else_ty = None`) — wraps the result in
+/// `Nullable(...)`. An explicit `.otherwise(F.lit(None))` carries
+/// `Nullable` through the same path.
+fn when_chain_result_type<'a>(
+    chain: &Expr,
+    else_ty: Option<Option<ColumnType>>,
+    schema: &SchemaView<'a>,
+    tcx: TypeCtx<'a>,
+) -> Option<ColumnType> {
+    let mut branch_types: Vec<Option<ColumnType>> = Vec::new();
+    let no_otherwise = else_ty.is_none();
+    if let Some(t) = else_ty {
+        branch_types.push(t);
+    }
+    let mut cursor = chain;
+    loop {
+        let call = cursor.as_call_expr()?;
+        let fname = match call.func.as_ref() {
+            Expr::Name(n) => n.id.as_str(),
+            Expr::Attribute(a) => a.attr.id.as_str(),
+            _ => return None,
+        };
+        if fname != "when" {
+            return None;
+        }
+        let value_ty = call
+            .arguments
+            .args
+            .get(1)
+            .and_then(|v| infer_expr_type(v, schema, tcx));
+        branch_types.push(value_ty);
+        // `.when(p, v)` chained on an earlier `.when(...)` — peel one
+        // layer and keep walking. A `Name("when")` callee (bare `when`)
+        // or an attribute callee whose receiver isn't itself a `when`
+        // chain (`F.when`) is the root.
+        if let Some(attr) = call.func.as_attribute_expr()
+            && is_when_chain(&attr.value)
+        {
+            cursor = &attr.value;
+            continue;
+        }
+        break;
+    }
+    let common = common_branch_type(&branch_types)?;
+    let any_nullable = branch_types
+        .iter()
+        .any(|t| t.as_ref().is_some_and(ColumnType::is_nullable));
+    Some(if no_otherwise || any_nullable {
+        ColumnType::Nullable(Box::new(common.base().clone()))
+    } else {
+        common
+    })
+}
+
+/// The common type of a list of `when`/`otherwise` branch types.
+///
+/// Rules: if every branch shares the same base (Nullable-stripped) type,
+/// that type. Numeric branches widen — `int` < `long` < `double`. Any
+/// branch with `None` is treated as "unknown but compatible" — it doesn't
+/// derail inference, but it can't pin the type down on its own. Returns
+/// `None` when the branches are heterogeneous in a way pykrete can't
+/// reconcile, so downstream checks stay permissive instead of firing on
+/// a fabricated common type.
+fn common_branch_type(branches: &[Option<ColumnType>]) -> Option<ColumnType> {
+    let mut acc: Option<ColumnType> = None;
+    let mut saw_known = false;
+    for ty in branches {
+        let Some(ty) = ty else { continue };
+        saw_known = true;
+        let base = ty.base().clone();
+        acc = Some(match acc {
+            None => base,
+            Some(prev) => widen_pair(&prev, &base)?,
+        });
+    }
+    if saw_known { acc } else { None }
+}
+
+/// Widen two atomic types: equal → that type, numerics widen to the
+/// widest (`int` < `long` < `double`). Everything else → `None`.
+/// Composite types compare structurally — same-shape arrays/maps/structs
+/// keep their shape; differing composites can't be reconciled here.
+fn widen_pair(a: &ColumnType, b: &ColumnType) -> Option<ColumnType> {
+    if a == b {
+        return Some(a.clone());
+    }
+    use ColumnType::{Double, Int, Long};
+    match (a, b) {
+        (Double, Int | Long) | (Int | Long, Double) => Some(Double),
+        (Long, Int) | (Int, Long) => Some(Long),
+        _ => None,
+    }
+}
+
+/// Build the result type of `F.struct(arg1, arg2, ...)` — a `Struct`
+/// whose fields are the args' inferred names and types. The name of each
+/// field comes from the same logic that names columns in `select` /
+/// `withColumn`: an explicit `.alias("x")` first, otherwise the `col`
+/// reference's name. Args without a discoverable name degrade to a
+/// best-effort empty name (Spark itself would synthesize one); their
+/// types are still recorded so downstream `.getField("known")` lookups
+/// can succeed when the names line up.
+fn infer_struct_type<'a>(call: &ExprCall, schema: &SchemaView<'a>, tcx: TypeCtx<'a>) -> ColumnType {
+    let fields: Vec<StructField> = call
+        .arguments
+        .args
+        .iter()
+        .map(|arg| {
+            let name = select_output_name(arg).unwrap_or("").to_string();
+            let ty = select_arg_type(arg, schema, tcx);
+            StructField { name, ty }
+        })
+        .collect();
+    ColumnType::Struct(fields)
+}
+
+/// Build the result type of `F.named_struct("k1", v1, "k2", v2, ...)` —
+/// the names are string-literal positional args at even indices, the
+/// values are the column expressions at odd indices. If a name slot
+/// isn't a string literal pykrete can't resolve it statically, so the
+/// whole call degrades to `None` (Unknown) rather than mint a struct
+/// with fabricated names.
+fn infer_named_struct_type<'a>(
+    call: &ExprCall,
+    schema: &SchemaView<'a>,
+    tcx: TypeCtx<'a>,
+) -> Option<ColumnType> {
+    let mut fields: Vec<StructField> = Vec::new();
+    let mut iter = call.arguments.args.iter();
+    while let Some(name_arg) = iter.next() {
+        let name = name_arg
+            .as_string_literal_expr()?
+            .value
+            .to_str()
+            .to_string();
+        let value_arg = iter.next()?;
+        let ty = select_arg_type(value_arg, schema, tcx);
+        fields.push(StructField { name, ty });
+    }
+    Some(ColumnType::Struct(fields))
 }
 
 /// The pykrete type of a Python literal used as a column value.
