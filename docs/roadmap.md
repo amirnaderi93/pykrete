@@ -52,12 +52,9 @@ setting; the single value also drives the embedded Python engine.
 
 ## Generic-inference extensions
 
-pykrete infers generic-function results for the simplest shape: one type
-variable in both a parameter slot `GenericClass[T]` and a return slot
-`GenericClass[T]`. Larger patterns, listed so they're not forgotten:
+pykrete infers generic-function results across multiple TypeVars and
+nested-generic parameter shapes. Two patterns remain on the backlog:
 
-- **Multiple type parameters** — `def join[A, B](left: DataFrame[A], right: DataFrame[B]) -> DataFrame[Joined[A, B]]`.
-- **Nested generics** — `List[DataSource[T]]`; the matcher handles one subscript level only.
 - **Chained class-method calls** — `builder.with_path("/x").read(SOURCE)`; only direct calls on a class-instance name dispatch through generic inference.
 - **Generic methods that aren't `[T] -> G[T]`-shaped** — e.g. `def cast_to[T](self, _: type[T]) -> DataFrame[T]`, where `T` is bound from a value of static type `type[T]`.
 
@@ -74,6 +71,17 @@ variable in both a parameter slot `GenericClass[T]` and a return slot
 
 Already shipped (recorded here for completeness):
 
+- **Generic-inference: multiple TypeVars + nested-generic parameters.**
+  `def join[A, B](left: DataFrame[A], right: DataFrame[B]) -> DataFrame[Merge[A, B]]`
+  now binds each TypeVar from its own argument slot and substitutes
+  through the return — same call (free function or class method)
+  produces a derived view with the concatenated columns. Nested
+  parameter shapes are unwrapped during binding: `List[DataSource[T]]`,
+  `Optional[DataSource[T]]`, `Dict[str, DataSource[T]]`, and arbitrary
+  re-nesting (`List[List[DataSource[T]]]`) all reach the inner
+  `G[T]` shape. Incompatible bindings (a list whose elements carry
+  different T values) degrade the offending TypeVar to Unknown rather
+  than fabricate a result, keeping the no-false-positive stance.
 - **`melt` / `unpivot` output-schema modeling.** Spark 3.4+'s
   wide-to-long reshape (`df.melt(ids, values, variableColumnName,
   valueColumnName)` and its alias `df.unpivot(...)`) now produces a

@@ -63,8 +63,8 @@ use crate::operations::{
 };
 use crate::registry::Registry;
 use crate::schema::{
-    FieldResolution, Schema, SchemaView, derived_schema_errors, discover_schemas,
-    resolve_derived_schema, schema_base_chain,
+    FieldResolution, Schema, SchemaView, derived_arg_names, derived_schema_errors,
+    discover_schemas, resolve_derived_schema, schema_base_chain,
 };
 use crate::temp_views::TempViewRegistry;
 use crate::types::COLUMN_TYPE_NAMES;
@@ -908,6 +908,26 @@ fn render_function(
     )
     .unwrap();
 
+    // PEP-695 type parameters declared by this function — `def f[T, U]`.
+    // A `DataFrame[T]` annotation whose inner name is one of these is
+    // generic, not a schema reference, so the D0020 "unknown schema"
+    // check must skip it. The generic-inference path in operations.rs
+    // substitutes T against the call-site argument.
+    let func_type_params: Vec<&str> = func
+        .def
+        .type_params
+        .as_deref()
+        .map(|tp| {
+            tp.type_params
+                .iter()
+                .filter_map(|p| match p {
+                    ruff_python_ast::TypeParam::TypeVar(tv) => Some(tv.name.id.as_str()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     for slot in slots {
         let ann_range = slot.annotation.range();
         let raw_text = &source[ann_range];
@@ -920,6 +940,10 @@ fn render_function(
             DataFrameAnnotation::Typed(name) => {
                 if schemas.iter().any(|s| s.name() == name) {
                     writeln!(out, "{prefix}DataFrame[{name}]").unwrap();
+                } else if func_type_params.contains(&name) {
+                    // `DataFrame[T]` where T is a TypeVar on this
+                    // function — generic, resolved at call sites.
+                    writeln!(out, "{prefix}DataFrame[{name}]  (generic)").unwrap();
                 } else {
                     writeln!(out, "{prefix}{raw_text}  (unresolved)").unwrap();
                     diagnostics.push(Diagnostic::at_range(
@@ -936,6 +960,20 @@ fn render_function(
                 }
             }
             DataFrameAnnotation::Derived(expr) => {
+                // `Merge[A, B]` / `Pick[T, …]` with TypeVar args — generic,
+                // resolved at call sites. Skip both the resolution attempt
+                // and the error reporter (which would otherwise flag the
+                // TypeVar names as "unknown schema"). The check below
+                // matches when EVERY bare-name arg is a known TypeVar.
+                let is_generic_derived = derived_arg_names(expr).iter().all(|n| {
+                    func_type_params.contains(n) || schemas.iter().any(|s| s.name() == *n)
+                }) && derived_arg_names(expr)
+                    .iter()
+                    .any(|n| func_type_params.contains(n));
+                if is_generic_derived {
+                    writeln!(out, "{prefix}{raw_text}  (generic)").unwrap();
+                    continue;
+                }
                 if resolve_derived_schema(expr, schemas).is_some() {
                     writeln!(out, "{prefix}{raw_text}").unwrap();
                 } else {
