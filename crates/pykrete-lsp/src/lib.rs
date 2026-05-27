@@ -1184,7 +1184,9 @@ mod tests {
     #[test]
     fn handle_hover_returns_markdown_hover_for_a_schema_class_name() {
         // didOpen sets the doc text; hover on the Schema class name
-        // returns a Hover with markdown content listing the fields.
+        // returns a Hover with markdown content rendering the schema as
+        // a Python class block. Field names of varying length so the
+        // colon-alignment is visible.
         let mut docs: HashMap<Url, String> = HashMap::new();
         let uri = Url::parse("file:///t.pyk").unwrap();
         let src = "class Orders(Schema):\n    place_code: int\n    price: int\n";
@@ -1195,8 +1197,29 @@ mod tests {
         let result = handle_hover(&docs, hover_params_at(&uri, 0, 6)).expect("hover");
         match result.contents {
             HoverContents::Markup(m) => {
-                assert!(m.value.contains("Orders"));
-                assert!(m.value.contains("place_code"));
+                let md = &m.value;
+                assert!(
+                    md.contains("**schema** `Orders`"),
+                    "unexpected heading, got {md:?}",
+                );
+                assert!(
+                    md.contains("```python"),
+                    "expected fenced python block, got {md:?}"
+                );
+                assert!(
+                    md.contains("class Orders(Schema):"),
+                    "missing class line, got {md:?}"
+                );
+                // place_code is the longer field name; price gets padded
+                // so its type column lines up with Int.
+                assert!(
+                    md.contains("    place_code: Int"),
+                    "place_code row wrong, got {md:?}"
+                );
+                assert!(
+                    md.contains("    price:      Int"),
+                    "price row wrong (alignment?), got {md:?}"
+                );
             }
             _ => panic!("expected MarkupContent"),
         }

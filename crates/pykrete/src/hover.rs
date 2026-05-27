@@ -399,26 +399,27 @@ fn column_type_label(view: &SchemaView<'_>, name: &str, schemas: &[Schema<'_>]) 
 
 fn render_schema_hover(schema: &Schema<'_>, all_schemas: &[Schema<'_>]) -> HoverInfo {
     let mut md = String::new();
-    writeln!(md, "**schema `{}`**", schema.name()).unwrap();
+    writeln!(md, "**schema** `{}`", schema.name()).unwrap();
     let fields = schema.fields();
     if fields.is_empty() {
         writeln!(md).unwrap();
         writeln!(md, "_no fields_").unwrap();
     } else {
         writeln!(md).unwrap();
-        writeln!(md, "Fields:").unwrap();
-        writeln!(md).unwrap();
+        writeln!(md, "```python").unwrap();
+        writeln!(md, "class {}(Schema):", schema.name()).unwrap();
+        let max_name_len = fields.iter().map(|f| f.name.len()).max().unwrap_or(0);
         for field in fields {
-            let type_label = match field.resolve(all_schemas) {
-                FieldResolution::Resolved(ct) => format!("`{}`", ct.as_str()),
-                FieldResolution::ResolvedNested(nested) => {
-                    format!("`{}` (nested)", nested.name())
-                }
-                FieldResolution::UnknownType { name } => format!("`{name}` (unresolved)"),
-                FieldResolution::NotABareName => "_unresolved_".to_string(),
+            let type_text = match field.resolve(all_schemas) {
+                FieldResolution::Resolved(ct) => ct.as_str().to_string(),
+                FieldResolution::ResolvedNested(nested) => nested.name().to_string(),
+                FieldResolution::UnknownType { name } => name.to_string(),
+                FieldResolution::NotABareName => "Unknown".to_string(),
             };
-            writeln!(md, "- `{}`: {}", field.name, type_label).unwrap();
+            let padding = " ".repeat(max_name_len - field.name.len());
+            writeln!(md, "    {}:{} {}", field.name, padding, type_text).unwrap();
         }
+        writeln!(md, "```").unwrap();
     }
     HoverInfo { markdown: md }
 }
