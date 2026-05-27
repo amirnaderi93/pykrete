@@ -1,0 +1,394 @@
+---
+title: Operations
+description: Every PySpark operation pykrete recognizes — what it checks, what it carries forward, and where chains end.
+---
+
+This page is the answer to "does pykrete model the Spark operation I care about?". For each operation, it tells you whether pykrete tracks the schema through it, validates the column names you pass, or steps out of the way and lets the chain end. Read it the way you'd read a language reference: scan the table, drill into the section that matters.
+
+Every operation is marked with one of five status tags. They describe what you'll observe in the editor, not what's happening internally.
+
+## Legend
+
+| Tag | Meaning |
+| --- | --- |
+| **modeled** | pykrete computes the output schema and checks every column reference and (where applicable) type. The next call in the chain is fully checked too. |
+| **pass-through** | pykrete carries the receiver's schema forward unchanged. Correct for ops that don't reshape (`cache`, `orderBy`, `limit`, ...). The chain keeps flowing. |
+| **column-check only** | pykrete checks the column names you pass but doesn't re-derive the output schema. Typos still fire [`unknownColumn`](/pykrete/reference/diagnostics/#unknowncolumn--d0030); chains after this point may degrade. |
+| **unmodeled** | pykrete doesn't understand the call. Column refs inside arguments may still be caught via the generic walker, but the chain after this point loses its schema. |
+| **opaque** | Intentionally returns an unknown type — usually because the result genuinely depends on runtime data (UDF outputs, pandas conversions, RDD ops). Re-anchor with [`.cast(DataFrame[X])`](#cast--the-re-anchor-primitive) if you want checking to resume. |
+
+If you see a method below tagged something other than **modeled**, the operation itself still works at runtime — pykrete just won't catch typos *past* that point in the chain. Re-anchoring with `.cast(DataFrame[X])` or a typed local annotation restores checking.
+
+The rest of this page walks each operation category. For the workhorse methods there's a short worked example; for the long tail, a table suffices.
+
+## Projection / column shaping
+
+The headline operations — these are what makes a typo fireable.
+
+```python
+class Sale(Schema):
+    region: string
+    product: string
+    amount: int
+    quantity: int
+
+def f(sales: DataFrame[Sale]) -> DataFrame:
+    return (
+        sales
+        .select("region", "amount")          # modeled — output is {region, amount}
+        .withColumn("doubled", F.col("amount") * 2)   # modeled — adds 'doubled: int'
+        .drop("region")                       # modeled — output is {amount, doubled}
+    )
+```
+
+A typo anywhere in that chain — `.select("regoin", ...)`, `.drop("amunt")` — fires [`unknownColumn`](/pykrete/reference/diagnostics/#unknowncolumn--d0030) against the schema at that point in the chain, not the original `Sale`.
+
+| Method | Status | Notes |
+| --- | --- | --- |
+| `select` | modeled | `"*"` expands; output names come from `.alias()`, `F.col(...)`, or the string literal. |
+| `selectExpr` | modeled | SQL parsed best-effort; identifiers checked. |
+| `withColumn` | modeled | Replaces an existing column or appends a new one. |
+| `withColumns` | modeled | Dict literal of name → expression (Spark 3.3+). |
+| `withColumnRenamed` | modeled | Old name checked; type carried over to the new name. |
+| `withColumnsRenamed` | modeled | Dict of renames (Spark 3.4+). |
+| `drop` | modeled | String, `Column`, and `df.col` forms accepted. |
+| `toDF` | modeled | Positional rename — types carried by position. |
+| `alias` | pass-through | DataFrame alias for self-joins; schema unchanged. |
+| `colRegex` | unmodeled | Returns an opaque column. |
+| `withMetadata` | unmodeled | Metadata edits aren't tracked. |
+
+## Filtering
+
+| Method | Status | Notes |
+| --- | --- | --- |
+| `filter` | modeled | Column expression or SQL string — identifiers checked against the schema. |
+| `where` | modeled | Alias of `filter`. |
+| `dropDuplicates` | modeled | `subset=` keys checked; schema preserved. |
+| `drop_duplicates` | column-check only | `subset=` keys checked; schema not re-derived. |
+| `distinct` | pass-through | No columns named, no shape change. |
+| `dropDuplicatesWithinWatermark` | unmodeled | Streaming-only. |
+
+```python
+def adults(people: DataFrame[Person]) -> DataFrame:
+    return people.filter(F.col("age") >= 18)   # 'age' checked against Person
+```
+
+SQL strings count too — `people.filter("age >= 18")` parses the predicate and checks each identifier.
+
+## Joins / set operations
+
+```python
+class Sale(Schema):
+    region: string
+    amount: int
+
+class Region(Schema):
+    region: string
+    manager: string
+
+def with_manager(sales: DataFrame[Sale], regions: DataFrame[Region]) -> DataFrame:
+    return sales.join(regions, "region", how="inner")
+```
+
+A wrong key — `.join(regions, "regoin")` — fires [`missingJoinKey`](/pykrete/reference/diagnostics/#missingjoinkey--d0060). A `union` between two dataframes whose columns don't agree fires [`unionSchemaMismatch`](/pykrete/reference/diagnostics/#unionschemamismatch--d0040).
+
+| Method | Status | Notes |
+| --- | --- | --- |
+| `join` | modeled | Join keys checked (D0060); `how=` controls nullability of the right side. |
+| `crossJoin` | modeled | Concatenates both schemas. |
+| `union` | modeled | Schema-mismatch check (D0040). |
+| `unionByName` | modeled | Same check as `union`, name-aligned. |
+| `unionAll` | modeled | Deprecated alias for `union`; same check. |
+| `intersect` | modeled | Same check as `union`; preserves the receiver's schema. |
+| `intersectAll` | modeled | Like `intersect` but preserves duplicates. |
+| `subtract` | modeled | Same check as `union`; preserves the receiver's schema. |
+| `exceptAll` | modeled | Like `subtract` but preserves duplicates. |
+
+## Aggregation
+
+```python
+class Sale(Schema):
+    region: string
+    amount: int
+
+def revenue_by_region(sales: DataFrame[Sale]) -> DataFrame:
+    return (
+        sales
+        .groupBy("region")
+        .agg(F.sum("amount").alias("total"))
+    )
+# Output schema: { region: string, total: long }
+```
+
+The result schema is the grouping keys plus each aggregation, named by `.alias(...)` or by the column being aggregated. Drop the alias and `total` would be named `sum(amount)` — both forms are tracked.
+
+| Method | Status | Notes |
+| --- | --- | --- |
+| `groupBy` | modeled | Returns a grouped view; `agg` builds the output from keys + alias names. |
+| `cube` | modeled | Same shape as `groupBy`. |
+| `rollup` | modeled | Same shape as `groupBy`. |
+| `agg` | modeled | Output = grouping keys + each aggregation's alias or referenced column. |
+| `groupingSets` | unmodeled | Output schema not tracked. |
+
+## Reshaping
+
+| Method | Status | Notes |
+| --- | --- | --- |
+| `pivot` | column-check only | Pivot column checked; output columns depend on runtime data, so the schema becomes opaque. |
+| `unpivot` | unmodeled | Not yet tracked. Re-anchor downstream with `.cast(DataFrame[X])`. |
+| `melt` | unmodeled | Same as `unpivot` (Spark 3.4+). |
+| `transpose` | unmodeled | Spark 4.0+; unmodeled. |
+
+`pivot` is the deliberate compromise here — its column names depend on the data, so pykrete checks what it can (the pivot key) and steps out of the way for the result. Use `.cast(DataFrame[PivotedSchema])` when you're ready to resume checking on the pivoted output.
+
+## Sampling / ordering / limits
+
+All of these change rows or row order, never columns. The schema flows straight through.
+
+| Method | Status | Notes |
+| --- | --- | --- |
+| `orderBy` | pass-through | Schema preserved (key not re-checked). |
+| `sort` | pass-through | Same. |
+| `sortWithinPartitions` | pass-through | Same. |
+| `limit` | pass-through | Same. |
+| `offset` | pass-through | Same. |
+| `sample` | pass-through | Same. |
+| `sampleBy` | unmodeled | Stratified sampling; not yet tracked. |
+| `randomSplit` | unmodeled | Returns a list of frames — special-cased shape. |
+
+## Caching / partitioning
+
+Spark execution hints. None of them reshape data — schemas flow through.
+
+| Method | Status | Notes |
+| --- | --- | --- |
+| `cache` | pass-through | |
+| `persist` | pass-through | |
+| `unpersist` | pass-through | |
+| `checkpoint` | pass-through | |
+| `localCheckpoint` | pass-through | |
+| `coalesce` | pass-through | Partition count, not the column function. |
+| `repartition` | pass-through | |
+| `repartitionByRange` | pass-through | |
+| `hint` | pass-through | |
+| `storageLevel` | unmodeled | Property, not a schema-shaping op. |
+
+## Type / schema introspection
+
+### `.cast` — the re-anchor primitive
+
+`.cast(DataFrame[X])` is pykrete-specific. It tells the checker "treat this dataframe as having schema `X` from here on". It's how you bring an opaque chain back under checking:
+
+```python
+class Sale(Schema):
+    region: string
+    amount: int
+
+def f(spark) -> DataFrame:
+    return (
+        spark.read.parquet("s3://...")          # opaque source → schema unknown
+        .cast(DataFrame[Sale])                   # re-anchored: schema = Sale
+        .select("region", "amount")              # checked against Sale
+    )
+```
+
+Equivalent forms work too — a typed local annotation does the same job:
+
+```python
+sales: DataFrame[Sale] = spark.read.parquet("s3://...")
+sales.select("region", "amount")   # checked
+```
+
+Use `.cast(DataFrame[X])` after any operation tagged **opaque** or **unmodeled** to resume checking. It's not a runtime cast — at runtime it's an identity no-op.
+
+### Other introspection methods
+
+| Method | Status | Notes |
+| --- | --- | --- |
+| `cast(DataFrame[X])` | modeled | See above. Re-anchors the chain. |
+| `printSchema` | modeled | Recognized terminal — returns None; the chain ends. |
+| `explain` | modeled | Recognized terminal — returns None; the chain ends. |
+| `schema` | unmodeled | Property. |
+| `columns` | unmodeled | Property. |
+| `dtypes` | unmodeled | Property. |
+| `isLocal` | unmodeled | Property. |
+| `isEmpty` | unmodeled | Property. |
+
+## IO (read / write / table / views)
+
+Reading from external storage is intentionally opaque — pykrete can't see the parquet's actual schema. The expected pattern is `.cast(DataFrame[X])` or a typed local annotation right after the read:
+
+```python
+class Sale(Schema):
+    region: string
+    amount: int
+
+# Re-anchor pattern (preferred):
+sales: DataFrame[Sale] = spark.read.parquet("s3://sales/")
+sales.select("region")           # checked
+
+# Or chained:
+spark.read.parquet("s3://sales/").cast(DataFrame[Sale]).select("region")
+```
+
+`createOrReplaceTempView` is special — it registers the chain's schema against the view name, and a later `spark.sql("SELECT … FROM name")` in the same file resolves identifiers against that schema:
+
+```python
+sales.createOrReplaceTempView("sales_view")
+spark.sql("SELECT region FROM sales_view WHERE amount > 0")   # checked
+spark.sql("SELECT regoin FROM sales_view")
+# error unknownColumn: Column 'regoin' does not exist on schema 'Sale'. Did you mean 'region'?
+```
+
+| Method | Status | Notes |
+| --- | --- | --- |
+| `dal.read(SOURCE)` | modeled | Generic class-method substitution; the schema-aware path. |
+| `spark.read.parquet` / `.csv` / `.json` / `.orc` / `.text` / `.xml` / `.jdbc` / `.load` | opaque | Returns unknown — re-anchor with `.cast(DataFrame[X])`. |
+| `spark.read.format(...).load(...)` | opaque | Same. |
+| `spark.read.schema(...).<format>(...)` | opaque | Same. |
+| `spark.table` | opaque | Same. |
+| `createOrReplaceTempView` | modeled | Registers receiver's schema; resolved by `spark.sql` in the same file. |
+| `spark.sql("SELECT … FROM view")` | modeled | Single-table SELECT, within-file. Checks identifiers in SELECT / WHERE / GROUP BY / ORDER BY / HAVING. |
+| `write` (`.parquet` / `.csv` / ...) | unmodeled | Terminal in practice. |
+| `writeTo` | unmodeled | |
+| `saveAsTable` | unmodeled | Terminal. |
+| `createTempView` / `createGlobalTempView` | unmodeled | Use `createOrReplaceTempView` for view-based checking. |
+| `registerTempTable` | unmodeled | Deprecated. |
+
+`spark.sql` is single-table-SELECT only — joins, subqueries, and cross-file views fall back to best-effort behavior. If you need richer SQL checking, lean on the dataframe API instead.
+
+## Streaming
+
+Structured streaming is a runtime concern — pykrete is a static schema checker, so this surface is out of scope by design.
+
+| Method | Status | Notes |
+| --- | --- | --- |
+| `readStream` | unmodeled | |
+| `writeStream` | unmodeled | |
+| `isStreaming` | unmodeled | |
+| `awaitTermination` | unmodeled | |
+
+## Pandas-on-Spark / Arrow interop
+
+These cross out of the dataframe world. Their results genuinely aren't dataframes (pandas Series, Arrow tables, UDF outputs), so pykrete returns an opaque type rather than guess.
+
+| Method | Status | Notes |
+| --- | --- | --- |
+| `toPandas` | opaque | Result is a pandas frame. |
+| `toArrow` | opaque | Result is an Arrow table. |
+| `to_pandas_on_spark` | opaque | |
+| `pandas_api` | opaque | |
+| `mapInPandas` | opaque | UDF-shaped. |
+| `applyInPandas` | opaque | UDF-shaped. |
+| `mapInArrow` | opaque | UDF-shaped. |
+| `mapPartitions` | opaque | RDD-level. |
+| `foreach` / `foreachPartition` | unmodeled | Terminal. |
+
+## Other (na, stat, transform, terminals)
+
+```python
+class Sale(Schema):
+    region: string
+    amount: Optional[int]
+
+def with_defaults(sales: DataFrame[Sale]) -> DataFrame:
+    return sales.fillna({"amount": 0})   # 'amount' checked; nullability cleared
+```
+
+`fillna` / `dropna` clear nullability on the affected columns. `replace` doesn't — it's value substitution, not null handling. `transform` resolves the function argument and checks its input + output against the surrounding schema.
+
+| Method | Status | Notes |
+| --- | --- | --- |
+| `na.fill` | modeled | `subset=` checked; clears nullability. |
+| `na.drop` | modeled | Same. |
+| `na.replace` | modeled | `subset=` checked; preserves nullability. |
+| `fillna` | modeled | Same as `na.fill`. |
+| `dropna` | modeled | Same as `na.drop`. |
+| `replace` | pass-through | Value-substitution; schema unchanged. |
+| `transform` | modeled | `fn` argument resolved; input + output checked. |
+| `count` | modeled | Recognized terminal (returns `long`). |
+| `collect` / `first` / `head` / `take` / `tail` | modeled | Recognized terminals. |
+| `show` | modeled | Recognized terminal (returns None). |
+| `stat.crosstab` / `freqItems` / `approxQuantile` / `corr` / `cov` | unmodeled | |
+| `summary` | unmodeled | |
+| `describe` | unmodeled | |
+| `observe` | unmodeled | |
+| `inputFiles` | unmodeled | |
+| `sameSemantics` / `semanticHash` | unmodeled | |
+| `rdd` | opaque | RDD-level. |
+
+Terminal methods — `count`, `collect`, `first`, `head`, `take`, `tail`, `show`, `printSchema`, `explain` — are recognized as "the chain ends here". They return scalars, lists, or `None`, not dataframes.
+
+## Column functions (`F.*`)
+
+Functions in `pyspark.sql.functions` show up inside the operations above — `df.select(F.upper("name"))`, `df.agg(F.sum("amount"))`. pykrete recognizes about 140 of them. Two things to know:
+
+1. **Column refs are always checked.** A string-literal argument to a recognized `F.*` function is treated as a column reference. `F.sum("amunt")` fires [`unknownColumn`](/pykrete/reference/diagnostics/#unknowncolumn--d0030) the same way `df.select("amunt")` does.
+2. **Result types are inferred for ~80 of them** — enough to power [`returnTypeMismatch`](/pykrete/reference/diagnostics/#type-checking-diagnostics) and downstream `.cast(...)` / arithmetic checks. The rest produce a typed-but-untyped result (the chain keeps flowing, but the column's type is unknown until you re-anchor it).
+
+A spot-check of the families:
+
+| Family | Examples | Column refs | Result type |
+| --- | --- | --- | --- |
+| Aggregate | `sum`, `avg`, `count`, `min`, `max`, `collect_list`, `stddev` | checked | inferred (e.g. `sum(int) → long`, `avg(*) → double`, `collect_list(T) → array<T>`) |
+| Window | `row_number`, `rank`, `dense_rank`, `lag`, `lead` | checked | inferred (rank ops → int) |
+| Math | `abs`, `round`, `sqrt`, `log`, `pow`, `sin`, `floor` | checked | inferred |
+| String | `length`, `lower`, `upper`, `trim`, `concat`, `regexp_replace`, `split` | mostly checked | inferred |
+| Date/time | `year`, `month`, `to_date`, `date_format`, `date_add`, `datediff`, `date_trunc` | first-arg checked | inferred |
+| Collection | `array`, `explode`, `size`, `array_distinct`, `map_keys` | checked | inferred |
+| Higher-order | `transform`, `filter`, `aggregate`, `exists`, `forall` | first-arg checked | inferred (lambda body resolved best-effort) |
+| Conditional | `when` / `otherwise`, `coalesce`, `isnull` | walked | `when/otherwise` inferred from branches; `coalesce` drops nullability |
+| Struct | `struct`, `named_struct` | walked | inferred — field names from `.alias()` / `F.col(...)` / literal name slots |
+| Hash / id | `md5`, `sha1`, `sha2`, `monotonically_increasing_id` | checked | inferred |
+| Sort helpers | `asc`, `desc`, `asc_nulls_first`, ... | checked | sort spec |
+
+A handful of misc functions — `bin`, `conv`, `decode`, `encode`, `to_json`, `from_json`, `assert_true` — are unmodeled. So is `expr(...)` beyond the SQL identifier check.
+
+### Column methods (`.alias`, `.cast`, `.isNull`, ...)
+
+These are methods on a `Column` expression rather than `F.*` calls. The headline ones are all recognized:
+
+| Method | Status | Notes |
+| --- | --- | --- |
+| `.alias` / `.name` | modeled | Used as the output column name in `select` / `agg`. |
+| `.cast` | modeled | Result type follows the target name; nullability carried. |
+| `.over` | modeled | Type passes through. |
+| `.isNull` / `.isNotNull` | modeled | → bool. |
+| `.isin` | modeled | → bool; value-arg column refs checked. |
+| `.between` | modeled | → bool. |
+| `.like` / `.rlike` / `.ilike` / `.contains` / `.startswith` / `.endswith` | modeled | → bool. |
+| `.getField` | modeled | Resolves the nested struct field's type; D0030 on a field-name typo. |
+| `.getItem` | modeled | → array element type or map value type. |
+| `.withField` | modeled | → receiver struct with the field added or replaced. |
+| `.dropFields` | modeled | → receiver struct with fields removed. |
+| `.asc` / `.desc` | unmodeled | Sort spec; not currently a chain target. |
+| `.eqNullSafe` | unmodeled | |
+| `.substr` | unmodeled | |
+
+### Window specs
+
+| Form | Status | Notes |
+| --- | --- | --- |
+| `Window.partitionBy("k")` | modeled | Keys checked when `.over(...)` is applied to a known schema. |
+| `Window.orderBy("k")` | modeled | Same. |
+| `Window.partitionBy(...).orderBy(...)` chain | modeled | Builder walked end-to-end. |
+| `Window.rowsBetween` / `rangeBetween` | unmodeled | No column refs to check. |
+| `Window.unboundedPreceding` / `unboundedFollowing` / `currentRow` | unmodeled | Constants. |
+
+## What's not modeled — by design
+
+Some of the surface is intentionally outside pykrete's reach. These aren't gaps to fill — they're runtime concerns, not schema concerns:
+
+- **Structured streaming** (`readStream`, `writeStream`, `isStreaming`). pykrete is a static checker against declared schemas; streaming state is a runtime construct.
+- **Pandas-on-Spark and Arrow conversions** (`toPandas`, `toArrow`, `mapInPandas`, `pandas_api`, ...). The result isn't a Spark dataframe anymore; pandas/polars support is on the [roadmap](/pykrete/about/roadmap/) as its own typed surface (`PandasFrame[X]`).
+- **RDD-level operations** (`rdd`, `mapPartitions`, `foreach`). These drop below the dataframe abstraction by design.
+- **Runtime introspection** (`describe`, `summary`, `stat.*`). These return shape-of-data summaries, not schemas.
+- **UDF internals**. The decorator's return type is honored, but the body is opaque.
+
+For all of these, the chain ends or becomes opaque at the call site. Downstream code that needs to be checked can resume with [`.cast(DataFrame[X])`](#cast--the-re-anchor-primitive) or a typed local annotation.
+
+## See also
+
+- [Schemas](/pykrete/reference/schemas/) — how to declare the shapes the operations above check against.
+- [Diagnostics](/pykrete/reference/diagnostics/) — the full list of errors, including [`D0030 unknownColumn`](/pykrete/reference/diagnostics/#unknowncolumn--d0030) (the workhorse), [`D0040 unionSchemaMismatch`](/pykrete/reference/diagnostics/#unionschemamismatch--d0040), and [`D0060 missingJoinKey`](/pykrete/reference/diagnostics/#missingjoinkey--d0060).
+- [Configuration](/pykrete/reference/configuration/) — turn individual rules into warnings or off.

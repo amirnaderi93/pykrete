@@ -38,6 +38,7 @@ export default defineConfig({
           label: 'Reference',
           items: [
             { label: 'Schemas', slug: 'reference/schemas' },
+            { label: 'Operations', slug: 'reference/operations' },
             { label: 'Diagnostics', slug: 'reference/diagnostics' },
             { label: 'Configuration', slug: 'reference/configuration' },
           ],
