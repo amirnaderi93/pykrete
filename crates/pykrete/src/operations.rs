@@ -4314,13 +4314,7 @@ const SECOND_ARG_COLUMN_FUNCTIONS: &[&str] = &["date_trunc"];
 /// parameter still resolve against the surrounding schema via the
 /// default walker. `zip_with(left, right, fn)` is two-column and not
 /// listed here — its column args descend through the generic walker.
-const ARRAY_HOF_FUNCTIONS: &[&str] = &[
-    "transform",
-    "filter",
-    "aggregate",
-    "exists",
-    "forall",
-];
+const ARRAY_HOF_FUNCTIONS: &[&str] = &["transform", "filter", "aggregate", "exists", "forall"];
 
 fn collect_col_refs<'a>(
     expr: &'a Expr,
