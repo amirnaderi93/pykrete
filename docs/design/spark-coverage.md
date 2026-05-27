@@ -25,8 +25,9 @@ of those additionally produce a typed result.
 
 The headline gaps:
 
-- **Reshaping** — `melt` / `unpivot` / `transpose` are unmodeled; `pivot`
-  is column-checked but its output schema is data-dependent (deliberate).
+- **Reshaping** — `transpose` is unmodeled; `pivot` is column-checked but
+  its output schema is data-dependent (deliberate). `melt` / `unpivot`
+  now model their output schemas.
 - **Streaming** — `readStream` / `writeStream` / `isStreaming` are
   entirely unmodeled.
 - **Pandas / Arrow interop** — `toPandas`, `toArrow`, `mapInPandas`,
@@ -92,8 +93,8 @@ The headline gaps:
 | Method | State | Notes |
 | --- | --- | --- |
 | `pivot` | 🔍 | Column checked; output data-dependent, returns Unknown |
-| `unpivot` | ⚠️ | Unmodeled |
-| `melt` | ⚠️ | Unmodeled |
+| `unpivot` | ✅ | Output schema = ids + variable + value (common type of values columns; nullable if any value is). |
+| `melt` | ✅ | Output schema = ids + variable + value (common type of values columns; nullable if any value is). |
 | `transpose` | ⚠️ | Unmodeled |
 
 ### Sampling / ordering / limits
@@ -369,14 +370,21 @@ generic walker.
 A short list of the unmodeled methods most worth filling in next, ordered
 by how commonly real PySpark code uses them.
 
-1. **`melt` / `unpivot`** — Spark 3.4+; small but unmodeled, and the
-   output schema is fully determinable from the args.
-2. **Chain-after-terminal flag** — terminals are now recognized, so
+1. **Chain-after-terminal flag** — terminals are now recognized, so
    the next polish step is to flag a call chained after one (almost
    always a bug) instead of silently returning None.
 
 ## Recently closed
 
+- **`melt` / `unpivot` output-schema modeling.** Spark 3.4+'s
+  wide-to-long reshape now infers its result schema: the `ids` columns
+  are preserved with their declared types and nullability, the variable
+  column is `string`, and the value column is the common type across the
+  `values` columns (with numeric widening — `int` < `long` < `double` —
+  and `Nullable(T)` when any value column is nullable). `values=None` /
+  omitted unpivots every non-`ids` column. Typos in `ids` or `values`
+  fire `D0030`; heterogeneous value types degrade to Unknown rather than
+  fabricate a common type. `unpivot` is treated as an alias of `melt`.
 - **Date/time first-arg column checking + array higher-order function
   recognition.** `F.to_date`, `F.to_timestamp`, `F.date_format`,
   `F.trunc`, `F.next_day`, `F.from_utc_timestamp`, `F.to_utc_timestamp`,
