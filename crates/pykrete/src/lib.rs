@@ -964,12 +964,15 @@ fn render_function(
                 // resolved at call sites. Skip both the resolution attempt
                 // and the error reporter (which would otherwise flag the
                 // TypeVar names as "unknown schema"). The check below
-                // matches when EVERY bare-name arg is a known TypeVar.
-                let is_generic_derived = derived_arg_names(expr).iter().all(|n| {
-                    func_type_params.contains(n) || schemas.iter().any(|s| s.name() == *n)
-                }) && derived_arg_names(expr)
-                    .iter()
-                    .any(|n| func_type_params.contains(n));
+                // matches when every bare-name arg is either a known
+                // TypeVar or a known schema AND at least one is a TypeVar
+                // (a pure all-schemas form like `Merge[Orders, Refunds]`
+                // resolves now, not at call sites).
+                let arg_names = derived_arg_names(expr);
+                let is_generic_derived =
+                    arg_names.iter().all(|n| {
+                        func_type_params.contains(n) || schemas.iter().any(|s| s.name() == *n)
+                    }) && arg_names.iter().any(|n| func_type_params.contains(n));
                 if is_generic_derived {
                     writeln!(out, "{prefix}{raw_text}  (generic)").unwrap();
                     continue;

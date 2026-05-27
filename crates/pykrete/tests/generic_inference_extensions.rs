@@ -415,3 +415,75 @@ def f(x: DataFrame[Anchor]):
     );
     assert_count(&result, "D0030", 0);
 }
+
+/// Three-element conflict via list nesting must STAY Unknown across
+/// further elements. A buggy "remove on conflict" without poisoning lets
+/// element 3 silently re-bind T to ORDERS_SRC's schema, after which a
+/// downstream typo would fire a false D0030. With sticky poisoning, T
+/// stays Unknown for the whole call and a made-up column emits 0 D0030.
+#[test]
+fn nested_generic_3plus_elements_with_revival_stays_unknown() {
+    let result = check(
+        r#"
+class Anchor(Schema):
+    a: int
+
+class Orders(Schema):
+    order_id: int
+
+class Refunds(Schema):
+    refund_id: int
+
+class DataSource[T]:
+    def __init__(self, path): pass
+
+ORDERS_SRC: DataSource[Orders] = DataSource("/o")
+REFUNDS_SRC: DataSource[Refunds] = DataSource("/r")
+
+def merge_sources[T](srcs: List[DataSource[T]]) -> DataFrame[T]:
+    pass
+
+def f(x: DataFrame[Anchor]):
+    # Element 1 binds T=Orders. Element 2 conflicts and poisons T.
+    # Element 3 must NOT revive T=Orders — sticky poisoning required.
+    result = merge_sources([ORDERS_SRC, REFUNDS_SRC, ORDERS_SRC])
+    result.select(col("made_up_only_on_orders"))
+"#,
+    );
+    assert_count(&result, "D0030", 0);
+}
+
+/// Same revival hazard, but across three positional parameter slots
+/// instead of three list elements: `def g[T](x: G[T], y: G[T], z: G[T])`.
+/// Param 2 conflicts with param 1 and must poison T; param 3 must NOT
+/// revive a binding. With sticky poisoning, T stays Unknown and a
+/// downstream typo emits 0 D0030.
+#[test]
+fn multi_typevar_3plus_param_slots_with_revival_stays_unknown() {
+    let result = check(
+        r#"
+class Anchor(Schema):
+    a: int
+
+class Orders(Schema):
+    order_id: int
+
+class Refunds(Schema):
+    refund_id: int
+
+class DataSource[T]:
+    def __init__(self, path): pass
+
+ORDERS_SRC: DataSource[Orders] = DataSource("/o")
+REFUNDS_SRC: DataSource[Refunds] = DataSource("/r")
+
+def merge_three[T](x: DataSource[T], y: DataSource[T], z: DataSource[T]) -> DataFrame[T]:
+    pass
+
+def f(x: DataFrame[Anchor]):
+    result = merge_three(ORDERS_SRC, REFUNDS_SRC, ORDERS_SRC)
+    result.select(col("any_name"))
+"#,
+    );
+    assert_count(&result, "D0030", 0);
+}

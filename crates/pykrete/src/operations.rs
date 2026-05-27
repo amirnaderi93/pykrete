@@ -1561,6 +1561,12 @@ fn bind_type_vars<'a>(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> HashMap<&'a str, &'a Schema<'a>> {
     let mut subst: HashMap<&'a str, &'a Schema<'a>> = HashMap::new();
+    // Names of TypeVars that have already seen a conflicting binding —
+    // poisoning is sticky. A later element/slot that would otherwise
+    // re-bind the same name must instead leave it unbound, so the
+    // return type degrades to Unknown rather than silently reviving an
+    // earlier (now-rejected) schema. See `bind_type_vars_from_annotation`.
+    let mut poisoned: HashSet<&'a str> = HashSet::new();
     if type_params.is_empty() {
         return subst;
     }
@@ -1578,6 +1584,7 @@ fn bind_type_vars<'a>(
             arg,
             type_params,
             &mut subst,
+            &mut poisoned,
             ctx,
             source,
             line_index,
@@ -1601,14 +1608,19 @@ fn bind_type_vars<'a>(
 ///   case is degenerate and binds nothing).
 ///
 /// An element whose schema doesn't agree with the existing binding for
-/// the same TypeVar reverts the binding — degrade to Unknown rather
-/// than fabricate a join.
+/// the same TypeVar poisons the binding — degrade to Unknown rather
+/// than fabricate a join. Poisoning is sticky: once a TypeVar conflicts
+/// at any element/slot, later elements/slots cannot revive it (their
+/// would-be binding is ignored). Without stickiness, three elements
+/// `[Orders, Refunds, Orders]` would leave T = Orders after the third
+/// element silently re-binds the conflict-cleared key.
 #[allow(clippy::too_many_arguments)]
 fn bind_type_vars_from_annotation<'a>(
     ann: &'a Expr,
     arg: &'a Expr,
     type_params: &[&'a str],
     subst: &mut HashMap<&'a str, &'a Schema<'a>>,
+    poisoned: &mut HashSet<&'a str>,
     ctx: &BodyContext<'a>,
     source: &str,
     line_index: &LineIndex,
@@ -1619,6 +1631,10 @@ fn bind_type_vars_from_annotation<'a>(
     if let Some(tv) = extract_type_var_from_subscript(ann, type_params)
         && let Some(schema) = arg_schema(arg, ctx, source, line_index, diagnostics)
     {
+        if poisoned.contains(tv) {
+            // Already poisoned by an earlier conflict — refuse to revive.
+            return;
+        }
         match subst.get(tv) {
             None => {
                 subst.insert(tv, schema);
@@ -1627,9 +1643,11 @@ fn bind_type_vars_from_annotation<'a>(
                 // Consistent re-binding — keep it.
             }
             Some(_) => {
-                // Conflicting bindings — degrade T to Unknown rather
+                // Conflicting bindings — poison T and drop the prior
+                // binding so the return type degrades to Unknown rather
                 // than pretend one of the schemas wins.
                 subst.remove(tv);
+                poisoned.insert(tv);
             }
         }
         return;
@@ -1655,6 +1673,7 @@ fn bind_type_vars_from_annotation<'a>(
                     elem,
                     type_params,
                     subst,
+                    poisoned,
                     ctx,
                     source,
                     line_index,
@@ -1677,6 +1696,7 @@ fn bind_type_vars_from_annotation<'a>(
                         elem,
                         type_params,
                         subst,
+                        poisoned,
                         ctx,
                         source,
                         line_index,
@@ -1690,6 +1710,7 @@ fn bind_type_vars_from_annotation<'a>(
                         elem,
                         type_params,
                         subst,
+                        poisoned,
                         ctx,
                         source,
                         line_index,
@@ -1698,8 +1719,10 @@ fn bind_type_vars_from_annotation<'a>(
                 }
             }
         }
-        // Mapping — `Dict[K, V]` / `Mapping[K, V]`. Only the value slot
-        // is recursed; key types aren't (yet) carriers of schemas.
+        // Mapping — `Dict[K, V]` / `Mapping[K, V]`. Key types aren't
+        // carriers of schemas in this PR — recurse into value only. A
+        // TypeVar that only appears as a Dict key annotation stays
+        // unbound (silent degrade to Unknown — never a false positive).
         "Dict" | "dict" | "Mapping" => {
             let value_ann = match sub.slice.as_ref() {
                 Expr::Tuple(t) if t.elts.len() == 2 => &t.elts[1],
@@ -1711,6 +1734,7 @@ fn bind_type_vars_from_annotation<'a>(
                     value_expr,
                     type_params,
                     subst,
+                    poisoned,
                     ctx,
                     source,
                     line_index,
@@ -1729,6 +1753,7 @@ fn bind_type_vars_from_annotation<'a>(
                 arg,
                 type_params,
                 subst,
+                poisoned,
                 ctx,
                 source,
                 line_index,
@@ -1748,10 +1773,12 @@ fn bind_type_vars_from_annotation<'a>(
 /// Shapes handled:
 /// - `G[T]` where `T` was bound — returns `T`'s schema as
 ///   `SchemaView::Declared`.
-/// - `G[Joined[A, B, …]]` where every inner TypeVar was bound — returns
-///   the concatenated columns of each bound schema (first occurrence
-///   wins), `SchemaView::Derived`, with a display-name string
-///   substituted as `Joined[Orders, Refunds]`.
+/// - `G[Merge[A, B, …]]` where each inner slot is a TypeVar (any subset
+///   of which may be bound) — returns the concatenated columns of every
+///   bound schema as `SchemaView::Derived` (first occurrence of each
+///   column name wins, preserving listed order). Unbound slots are
+///   silently dropped; the view carries no display name (Derived has no
+///   name field).
 fn resolve_return_type<'a>(
     return_ann: &'a Expr,
     type_params: &[&'a str],
