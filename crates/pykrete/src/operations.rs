@@ -1353,6 +1353,16 @@ fn analyze_method_call<'a>(
             diagnostics,
         ));
     }
+    if matches!(method, "melt" | "unpivot") {
+        return Some(apply_melt(
+            call,
+            &receiver,
+            ctx,
+            source,
+            line_index,
+            diagnostics,
+        ));
+    }
     if let Some(shape) = column_method_shape(method) {
         check_column_method_args(
             call,
@@ -2232,6 +2242,172 @@ fn apply_with_columns_renamed<'a>(
         })
         .collect();
     SchemaView::Derived(fields)
+}
+
+/// Model `df.melt(ids, values, variableColumnName, valueColumnName)` and
+/// its alias `df.unpivot(...)` (Spark 3.4+). Reshapes a wide table into a
+/// long one: the `ids` columns are preserved, each `values` column is
+/// emitted as a row whose key (= the original column name) goes into the
+/// `variable` column and whose payload goes into the `value` column.
+///
+/// Result schema: the `ids` columns (preserved with their declared types
+/// and nullability), the variable column (`string`, non-nullable), and
+/// the value column (common type across all `values` columns;
+/// `Nullable(T)` if any of them is nullable).
+///
+/// `values=None` (or omitted) means "unpivot every non-`ids` column" — the
+/// value column's common type is computed across those.
+///
+/// `variableColumnName` / `valueColumnName` default to Spark's `"variable"`
+/// / `"value"` when not given. If `ids` or `values` aren't a static list
+/// of string literals, or the variable/value names aren't strings, the
+/// call falls back to the receiver schema rather than fabricate one.
+fn apply_melt<'a>(
+    call: &'a ExprCall,
+    recv: &SchemaView<'a>,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> SchemaView<'a> {
+    let ids_arg = melt_arg(call, "ids", 0);
+    let values_arg = melt_arg(call, "values", 1);
+    let var_name_arg = melt_arg(call, "variableColumnName", 2);
+    let val_name_arg = melt_arg(call, "valueColumnName", 3);
+
+    // `ids` is required and must be a list of string literals.
+    let Some(ids) = ids_arg.and_then(parse_string_list) else {
+        return recv.clone();
+    };
+    // `values` may be omitted or `None` → unpivot all non-`ids` columns.
+    let values: Option<Vec<(&'a str, TextRange)>> =
+        match values_arg.map(|e| (e, parse_string_list(e), expr_is_none_literal(e))) {
+            None => None,
+            Some((_, _, true)) => None,
+            Some((_, Some(list), _)) => Some(list),
+            // Non-literal `values` expr — bail out to receiver.
+            Some((_, None, _)) => return recv.clone(),
+        };
+
+    // Validate ids + (if present) values column refs against the receiver.
+    let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
+    refs.extend(ids.iter().copied());
+    if let Some(ref vs) = values {
+        refs.extend(vs.iter().copied());
+    }
+    report_column_refs(&refs, recv, ctx, source, line_index, diagnostics);
+
+    // Variable / value column names — string literals only, or Spark defaults.
+    let var_name: &'a str = match var_name_arg {
+        Some(e) => match e.as_string_literal_expr() {
+            Some(s) => s.value.to_str(),
+            None => return recv.clone(),
+        },
+        None => "variable",
+    };
+    let val_name: &'a str = match val_name_arg {
+        Some(e) => match e.as_string_literal_expr() {
+            Some(s) => s.value.to_str(),
+            None => return recv.clone(),
+        },
+        None => "value",
+    };
+
+    let recv_fields = recv.typed_fields(ctx.schemas());
+    let id_set: HashSet<&str> = ids.iter().map(|(n, _)| *n).collect();
+
+    // Carry forward the ids' types and nullability from the receiver.
+    let mut out_fields: Vec<DerivedField<'a>> = Vec::new();
+    for (name, _) in &ids {
+        // Use the receiver field if we have it (preserves the borrowed
+        // schema-source &'a str). Skip silently if the name didn't
+        // resolve — `report_column_refs` already emitted D0030.
+        if let Some(f) = recv_fields.iter().find(|f| f.name == *name) {
+            out_fields.push(f.clone());
+        }
+    }
+
+    // The set of value columns whose types feed the common-type computation.
+    let value_field_types: Vec<Option<ColumnType>> = match values {
+        Some(vs) => vs
+            .iter()
+            .map(|(n, _)| {
+                recv_fields
+                    .iter()
+                    .find(|f| f.name == *n)
+                    .and_then(|f| f.ty.clone())
+            })
+            .collect(),
+        None => recv_fields
+            .iter()
+            .filter(|f| !id_set.contains(f.name))
+            .map(|f| f.ty.clone())
+            .collect(),
+    };
+
+    let value_ty = melt_value_column_type(&value_field_types);
+
+    // The variable column is always `string`, non-nullable.
+    out_fields.push(DerivedField {
+        name: var_name,
+        ty: Some(ColumnType::String),
+    });
+    out_fields.push(DerivedField {
+        name: val_name,
+        ty: value_ty,
+    });
+    SchemaView::Derived(out_fields)
+}
+
+/// Resolve `melt`'s named/positional arg at one shot — `melt` takes
+/// `ids, values, variableColumnName, valueColumnName` in that order, and
+/// every slot may also be passed by keyword.
+fn melt_arg<'a>(call: &'a ExprCall, kw: &str, pos: usize) -> Option<&'a Expr> {
+    call.arguments
+        .keywords
+        .iter()
+        .find(|k| k.arg.as_ref().is_some_and(|n| n.id.as_str() == kw))
+        .map(|k| &k.value)
+        .or_else(|| call.arguments.args.get(pos))
+}
+
+/// Parse `[<lit>, <lit>, ...]` (list or tuple) into a vec of
+/// `(name, range)` pairs. Returns `None` if the expression isn't a
+/// homogeneous list/tuple of string literals.
+fn parse_string_list(expr: &Expr) -> Option<Vec<(&str, TextRange)>> {
+    let elts: &[Expr] = match expr {
+        Expr::List(l) => &l.elts,
+        Expr::Tuple(t) => &t.elts,
+        _ => return None,
+    };
+    let mut out = Vec::with_capacity(elts.len());
+    for elt in elts {
+        let s = elt.as_string_literal_expr()?;
+        out.push((s.value.to_str(), s.range()));
+    }
+    Some(out)
+}
+
+/// `True` if `expr` is the Python literal `None`. `melt(values=None, ...)`
+/// is equivalent to omitting `values`.
+fn expr_is_none_literal(expr: &Expr) -> bool {
+    matches!(expr, Expr::NoneLiteral(_))
+}
+
+/// The common type of `melt`'s `values` columns. Atomic equality with
+/// numeric widening (`int` < `long` < `double`); any branch nullable →
+/// `Nullable(T)`. Returns `None` (Unknown) when no two branches share a
+/// reconcilable type, so downstream checks stay permissive.
+fn melt_value_column_type(branch_types: &[Option<ColumnType>]) -> Option<ColumnType> {
+    let common = common_branch_type(branch_types)?;
+    let any_nullable = branch_types
+        .iter()
+        .any(|t| t.as_ref().is_some_and(ColumnType::is_nullable));
+    Some(if any_nullable {
+        ColumnType::Nullable(Box::new(common.base().clone()))
+    } else {
+        common
+    })
 }
 
 /// Check the `subset=` keyword argument against the receiver schema.

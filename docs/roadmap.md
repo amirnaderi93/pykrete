@@ -74,6 +74,17 @@ variable in both a parameter slot `GenericClass[T]` and a return slot
 
 Already shipped (recorded here for completeness):
 
+- **`melt` / `unpivot` output-schema modeling.** Spark 3.4+'s
+  wide-to-long reshape (`df.melt(ids, values, variableColumnName,
+  valueColumnName)` and its alias `df.unpivot(...)`) now produces a
+  modeled result schema: the `ids` columns are preserved with their
+  declared types and nullability, the variable column is `string`, and
+  the value column carries the common type of the unpivoted `values`
+  columns (with numeric widening — `int` < `long` < `double` — and
+  `Nullable(T)` when any value column is nullable). `values=None` or
+  omitted unpivots every non-`ids` column. Typos in `ids` or `values`
+  fire `D0030`; heterogeneous value types degrade to Unknown rather than
+  fabricate a common type, so downstream checks stay permissive.
 - **Date/time first-arg column checking + array higher-order function
   recognition.** The single-column date helpers — `F.to_date`,
   `F.to_timestamp`, `F.date_format`, `F.trunc`, `F.next_day`,
