@@ -819,8 +819,9 @@ pub fn suggest_field_name(target: &str, view: &SchemaView<'_>) -> Option<String>
 }
 
 /// Plain Levenshtein distance between `a` and `b`. Used by
-/// [`suggest_field_name`] to rank column candidates.
-fn levenshtein(a: &str, b: &str) -> usize {
+/// [`suggest_field_name`] to rank column candidates, and reused by
+/// `operations.rs` for "did you mean?" hints on struct-field typos.
+pub(crate) fn levenshtein(a: &str, b: &str) -> usize {
     let a_chars: Vec<char> = a.chars().collect();
     let b_chars: Vec<char> = b.chars().collect();
     let n = a_chars.len();
