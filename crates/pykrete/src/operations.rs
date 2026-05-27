@@ -2516,6 +2516,17 @@ fn infer_expr_type<'a>(
             if let Some(udf_ty) = tcx.registry.find_udf(fname) {
                 return Some(udf_ty);
             }
+            // Array higher-order functions — `F.transform(col, fn)` /
+            // `F.filter` / `F.aggregate` / `F.exists` / `F.forall`. Pykrete
+            // doesn't fully evaluate the lambda body; the return type is
+            // modeled per-function with a best-effort lambda-body type
+            // heuristic that falls back to Unknown rather than fabricating.
+            if matches!(
+                fname,
+                "transform" | "filter" | "aggregate" | "exists" | "forall"
+            ) {
+                return array_hof_result_type(fname, call, schema, tcx);
+            }
             // Any other recognized `pyspark.sql.functions` call — look its
             // result type up in the catalog, resolving the first argument
             // (a column name or expression) for the input-dependent ones.
@@ -2571,7 +2582,9 @@ fn function_result_type(name: &str, first_arg: Option<ColumnType>) -> Option<Col
         "lower" | "upper" | "initcap" | "trim" | "ltrim" | "rtrim" | "reverse" | "concat_ws"
         | "substring" | "substring_index" | "regexp_replace" | "regexp_extract" | "lpad"
         | "rpad" | "translate" | "repeat" | "soundex" | "base64" | "format_string"
-        | "format_number" | "hex" | "sha1" | "sha2" | "md5" => return Some(String),
+        | "format_number" | "hex" | "sha1" | "sha2" | "md5" | "date_format" | "from_unixtime" => {
+            return Some(String);
+        }
         "to_date" | "current_date" | "last_day" | "next_day" | "date_add" | "date_sub"
         | "add_months" | "trunc" => return Some(Date),
         "to_timestamp" | "current_timestamp" | "date_trunc" | "from_utc_timestamp"
@@ -2639,6 +2652,74 @@ fn function_result_type(name: &str, first_arg: Option<ColumnType>) -> Option<Col
             Some(Map(_, value)) => Some(Array(value)),
             _ => Some(Array(None)),
         },
+        _ => None,
+    }
+}
+
+/// Best-effort return-type inference for a lambda `lambda x: <body>`
+/// passed to an array higher-order function. `schema` is the surrounding
+/// DataFrame schema, so `lambda x: col("y")` against `y: int` resolves
+/// to int. The lambda parameters are not bound — `lambda x: x + 1`
+/// can't be evaluated without modeling `x` itself, which is out of scope
+/// for v0.1; the heuristic falls back to None in that case (Unknown).
+fn lambda_body_type<'a>(
+    arg: Option<&Expr>,
+    schema: &SchemaView<'a>,
+    tcx: TypeCtx<'a>,
+) -> Option<ColumnType> {
+    let lam = arg?.as_lambda_expr()?;
+    // A `col("y")` against the surrounding schema, or a bare Python
+    // literal. References to the lambda parameter aren't traced —
+    // pykrete doesn't bind lambda params yet.
+    infer_expr_type(&lam.body, schema, tcx)
+}
+
+/// The result [`ColumnType`] of an array higher-order function:
+/// `F.transform(col, fn)`, `F.filter(col, fn)`, `F.aggregate(col, zero,
+/// fn, [finish])`, `F.exists(col, fn)`, `F.forall(col, fn)`.
+///
+/// Lambda bodies aren't fully evaluated. The heuristic captures the
+/// common shapes (`lambda x: 1`, `lambda x: col("y")`) and falls back
+/// to a permissive default — `array<unknown>` for `transform`, the
+/// input array type for `filter`, Unknown for `aggregate` — when the
+/// body's type can't be read.
+fn array_hof_result_type<'a>(
+    name: &str,
+    call: &ExprCall,
+    schema: &SchemaView<'a>,
+    tcx: TypeCtx<'a>,
+) -> Option<ColumnType> {
+    use ColumnType::{Array, Bool};
+    match name {
+        // Boolean predicates — always bool, regardless of lambda body.
+        "exists" | "forall" => Some(Bool),
+        // `F.filter(col, fn)` preserves the element type of `col`.
+        "filter" => {
+            let input_ty = call
+                .arguments
+                .args
+                .first()
+                .and_then(|a| select_arg_type(a, schema, tcx));
+            match input_ty {
+                Some(arr @ Array(_)) => Some(arr),
+                _ => Some(Array(None)),
+            }
+        }
+        // `F.transform(col, fn)` → array of fn's return type.
+        "transform" => {
+            let body_ty = lambda_body_type(call.arguments.args.get(1), schema, tcx);
+            Some(Array(body_ty.map(Box::new)))
+        }
+        // `F.aggregate(col, zero, fn, [finish])` → fn's return type
+        // (or `finish`'s if provided). The arg layout is fixed:
+        // index 2 is the merge lambda, index 3 the optional finalizer.
+        "aggregate" => {
+            let finish_ty = lambda_body_type(call.arguments.args.get(3), schema, tcx);
+            if finish_ty.is_some() {
+                return finish_ty;
+            }
+            lambda_body_type(call.arguments.args.get(2), schema, tcx)
+        }
         _ => None,
     }
 }
@@ -4200,6 +4281,41 @@ const COLUMN_REF_FUNCTIONS: &[&str] = &[
     "map_entries",
 ];
 
+/// Date/time helpers shaped `F.fn(col, format)` — the FIRST positional
+/// arg is the column reference; remaining positional args are formats /
+/// timezones / values, NOT column names. Listing them in the generic
+/// `COLUMN_REF_FUNCTIONS` allowlist would false-positive on those format
+/// strings; this list narrows the rule to position 0 only. Non-string
+/// args after the first still descend through the generic walker so that
+/// `col("…")` inside is reached normally.
+const FIRST_ARG_COLUMN_FUNCTIONS: &[&str] = &[
+    "to_date",
+    "to_timestamp",
+    "date_format",
+    "trunc",
+    "next_day",
+    "from_utc_timestamp",
+    "to_utc_timestamp",
+    "from_unixtime",
+    "unix_timestamp",
+];
+
+/// `F.date_trunc(format, col)` reverses the usual layout — the format is
+/// the first arg, the column is the SECOND. A list-of-one is overkill,
+/// but keeping the pattern symmetric with `FIRST_ARG_COLUMN_FUNCTIONS`
+/// makes adding any future position-2 entries trivial.
+const SECOND_ARG_COLUMN_FUNCTIONS: &[&str] = &["date_trunc"];
+
+/// Array higher-order functions — `F.transform(col, fn)` and friends.
+/// The FIRST positional arg is the column (an array); subsequent args
+/// are lambdas / accumulator literals which aren't column references.
+/// Pykrete doesn't model the lambda's parameter binding, so column refs
+/// like `col("y")` inside the lambda body that AREN'T the lambda's own
+/// parameter still resolve against the surrounding schema via the
+/// default walker. `zip_with(left, right, fn)` is two-column and not
+/// listed here — its column args descend through the generic walker.
+const ARRAY_HOF_FUNCTIONS: &[&str] = &["transform", "filter", "aggregate", "exists", "forall"];
+
 fn collect_col_refs<'a>(
     expr: &'a Expr,
     ctx: &BodyContext<'a>,
@@ -4249,6 +4365,48 @@ fn collect_col_refs<'a>(
             Expr::Attribute(a) => Some(a.attr.id.as_str()),
             _ => None,
         };
+        // Position-restricted recognizers — date/time and array HOFs
+        // where only ONE positional slot carries a column reference. The
+        // remaining args (format strings, timezones, lambdas) descend
+        // through the default walker so embedded `col("…")` references
+        // are still reached.
+        if let Some(name) = func_name {
+            let position = if FIRST_ARG_COLUMN_FUNCTIONS.contains(&name)
+                || ARRAY_HOF_FUNCTIONS.contains(&name)
+            {
+                Some(0)
+            } else if SECOND_ARG_COLUMN_FUNCTIONS.contains(&name) {
+                Some(1)
+            } else {
+                None
+            };
+            if let Some(col_idx) = position {
+                for (i, arg) in call.arguments.args.iter().enumerate() {
+                    if i == col_idx {
+                        if let Some(s) = arg.as_string_literal_expr() {
+                            out.push((s.value.to_str(), s.range()));
+                        } else {
+                            collect_col_refs(arg, ctx, out);
+                        }
+                    } else {
+                        // Other args may carry nested column references
+                        // (e.g. an `F.col(...)` inside a lambda body),
+                        // but bare string literals are values/formats
+                        // and must NOT be treated as column names.
+                        if arg.as_string_literal_expr().is_none() {
+                            collect_col_refs(arg, ctx, out);
+                        }
+                    }
+                }
+                for kw in &call.arguments.keywords {
+                    if kw.value.as_string_literal_expr().is_none() {
+                        collect_col_refs(&kw.value, ctx, out);
+                    }
+                }
+                collect_col_refs(&call.func, ctx, out);
+                return;
+            }
+        }
         if let Some(name) = func_name
             && COLUMN_REF_FUNCTIONS.contains(&name)
         {

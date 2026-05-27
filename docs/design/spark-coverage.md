@@ -265,10 +265,11 @@ column's type is inferred (`infer_expr_type` / `function_result_type`).
 | `last_day` | ✅ | ✅ | → date |
 | `date_add`, `date_sub`, `add_months` | ✅ | ✅ | → date |
 | `datediff`, `months_between` | ✅ | ✅ | → int / double |
-| `to_date`, `to_timestamp` | ⚠️ | ✅ | Mixed-arg (format); not in COLUMN_REF |
+| `to_date`, `to_timestamp` | ✅ | ✅ | First-arg column ref checked; format arg ignored |
 | `current_date`, `current_timestamp` | ⚠️ | ✅ | No-arg |
-| `date_format`, `date_trunc`, `trunc`, `next_day` | ⚠️ | ✅ | Mixed-arg |
-| `from_utc_timestamp`, `to_utc_timestamp`, `from_unixtime`, `unix_timestamp` | ⚠️ | ✅ | Mixed-arg |
+| `date_format`, `trunc`, `next_day` | ✅ | ✅ | First-arg column ref checked |
+| `date_trunc` | ✅ | ✅ | `(format, col)` — second-arg column ref checked |
+| `from_utc_timestamp`, `to_utc_timestamp`, `from_unixtime`, `unix_timestamp` | ✅ | ✅ | First-arg column ref checked; tz / format ignored |
 | `window`, `session_window` | ⚠️ | ⚠️ | Unmodeled |
 
 ### Collection (array, map, struct)
@@ -288,7 +289,8 @@ column's type is inferred (`infer_expr_type` / `function_result_type`).
 | `create_map`, `map_from_arrays`, `map_from_entries`, `map_concat`, `str_to_map`, `transform_keys`, `transform_values`, `map_filter` | ⚠️ | ✅ | → map (K/V untyped) |
 | `map_keys`, `map_values` | ✅ | ✅ | → `array<K>` / `array<V>` |
 | `map_entries` | ✅ | ✅ | → array |
-| `transform`, `filter`, `aggregate`, `zip_with`, `exists`, `forall` (higher-order) | ⚠️ | ⚠️ | Unmodeled |
+| `transform`, `filter`, `aggregate`, `exists`, `forall` (higher-order) | ✅ | ✅ | First-arg column ref checked; return type modeled per function — `transform` → `array<lambda body>`, `filter` → input array type, `aggregate` → lambda body (or `finish`), `exists` / `forall` → bool. Lambda body inferred best-effort (literals, `col("y")` against surrounding schema) |
+| `zip_with` (higher-order) | ⚠️ | ⚠️ | Unmodeled (two-column form; column refs reached only when written as `col("…")`) |
 
 ### Conditional
 
@@ -369,15 +371,28 @@ by how commonly real PySpark code uses them.
 
 1. **`melt` / `unpivot`** — Spark 3.4+; small but unmodeled, and the
    output schema is fully determinable from the args.
-2. **`F.to_date` / `to_timestamp` / `date_format`** — already typed, but
-   not in `COLUMN_REF_FUNCTIONS`, so a typo on the column arg slips
-   through; widen the allowlist carefully (first arg only).
-3. **Chain-after-terminal flag** — terminals are now recognized, so
+2. **Chain-after-terminal flag** — terminals are now recognized, so
    the next polish step is to flag a call chained after one (almost
    always a bug) instead of silently returning None.
 
 ## Recently closed
 
+- **Date/time first-arg column checking + array higher-order function
+  recognition.** `F.to_date`, `F.to_timestamp`, `F.date_format`,
+  `F.trunc`, `F.next_day`, `F.from_utc_timestamp`, `F.to_utc_timestamp`,
+  `F.from_unixtime`, and `F.unix_timestamp` now check their FIRST
+  positional arg as a column reference (a typo fires `D0030`) while
+  treating the second arg as a format / timezone string;
+  `F.date_trunc(format, col)` does the same with the column in the
+  SECOND position. `date_format` and `from_unixtime` are also now typed
+  in the result catalog (→ string). The array higher-order functions
+  `F.transform`, `F.filter`, `F.aggregate`, `F.exists`, `F.forall` are
+  recognized at the surface — the first-arg column is checked and the
+  return type is modeled per function (`transform` → `array<lambda
+  body>`, `filter` → input array, `aggregate` → lambda body or `finish`,
+  `exists` / `forall` → bool). Lambda bodies are inferred best-effort
+  (literals and `col("y")` against the surrounding schema) and fall
+  back to Unknown rather than fabricate a type.
 - **`when` / `otherwise` result-type inference and `F.struct` /
   `F.named_struct` schema construction.** A
   `F.when(p, v).otherwise(e)` chain now infers its result type as the

@@ -74,6 +74,20 @@ variable in both a parameter slot `GenericClass[T]` and a return slot
 
 Already shipped (recorded here for completeness):
 
+- **Date/time first-arg column checking + array higher-order function
+  recognition.** The single-column date helpers — `F.to_date`,
+  `F.to_timestamp`, `F.date_format`, `F.trunc`, `F.next_day`,
+  `F.from_utc_timestamp`, `F.to_utc_timestamp`, `F.from_unixtime`,
+  `F.unix_timestamp`, and the position-2 variant `F.date_trunc(format,
+  col)` — now flag `D0030` on a typo in the column slot while the
+  format / timezone string is left alone. `date_format` and
+  `from_unixtime` joined the typed result catalog (→ string). The array
+  higher-order functions `F.transform`, `F.filter`, `F.aggregate`,
+  `F.exists`, `F.forall` are recognized — first-arg column ref checked,
+  return type modeled per function (`array<lambda body>` for
+  `transform`, input array preserved for `filter`, lambda body type for
+  `aggregate`, bool for `exists` / `forall`). Lambda bodies are
+  inferred best-effort and fall back to Unknown when not traceable.
 - **`F.when` / `F.otherwise` result-type inference and `F.struct` /
   `F.named_struct` schema construction.** `F.when(p, v).otherwise(e)`
   chains now infer their result as the common type of the value
