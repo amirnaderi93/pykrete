@@ -11,20 +11,33 @@
 # extension and never saw the new hover format.
 #
 # This workflow blocks the same failure from recurring. On every PR, it
-# inspects the diff: if anything that ships inside the .vsix (extension TS
-# source, the bundled pykrete-lsp binary which is the Cargo workspace
-# version, or extension deps) changed, then `editors/vscode/package.json`'s
-# top-level `"version"` line must also change. Otherwise the PR fails.
+# inspects the diff SINCE THE LAST RELEASE TAG: if anything that ships
+# inside the .vsix (extension TS source, the bundled pykrete-lsp binary
+# which is the Cargo workspace version, or extension deps) changed in
+# that range, then `editors/vscode/package.json`'s top-level `"version"`
+# line must also have changed in that range. Otherwise the PR fails.
+#
+# WHY "SINCE LAST TAG", NOT "PR DIFF"
+# -----------------------------------
+# A single package.json bump per release cycle is sufficient — typically
+# it lands in the release PR alongside the Cargo.toml bump. Comparing
+# only the PR's own diff caused the guard to fire on every feature PR
+# that touched extension-impacting code, even though the upcoming
+# release PR would bump the version once for the whole cycle. Comparing
+# against the last release tag instead means: as soon as any merged
+# commit since the tag bumped the version, subsequent feature PRs pass.
 #
 # EXAMPLES
 # --------
-# Fails (extension src touched, no version bump):
+# Fails (extension src touched in this PR, no version bump anywhere
+# since the last release tag):
 #   diff --git a/editors/vscode/src/extension.ts b/editors/vscode/src/extension.ts
 #   -   client.start();
 #   +   await client.start();
-#   (no change to editors/vscode/package.json)
+#   (no change to editors/vscode/package.json in the range)
 #
-# Passes (extension src touched, version bumped):
+# Passes (extension src touched, version was bumped earlier in the
+# cycle — either in this PR or a previously merged one since the tag):
 #   diff --git a/editors/vscode/src/extension.ts b/editors/vscode/src/extension.ts
 #   -   client.start();
 #   +   await client.start();
@@ -32,7 +45,8 @@
 #   -   "version": "0.2.7",
 #   +   "version": "0.2.8",
 #
-# Passes (no extension-impacting changes — docs-only PR, etc.):
+# Passes (no extension-impacting changes since the last tag — docs-only
+# work, CI tweaks, etc.):
 #   diff --git a/README.md b/README.md
 #   ...
 #
@@ -65,7 +79,23 @@ jobs:
           echo "Base: $BASE_SHA"
           echo "Head: $HEAD_SHA"
 
-          changed_files=$(git diff --name-only "$BASE_SHA...$HEAD_SHA")
+          # Determine the diff range. Prefer "<latest release tag>..HEAD"
+          # so the guard reflects whether the *cycle* (since the last
+          # published release) bumped the extension version — not just
+          # this PR in isolation. Falls back to the PR's own diff when
+          # there are no release tags yet (fresh repo).
+          git fetch --tags --force origin >/dev/null 2>&1 || true
+
+          if latest_tag=$(git describe --tags --abbrev=0 --match='v[0-9]*' 2>/dev/null); then
+            diff_spec="$latest_tag..$HEAD_SHA"
+            echo "Latest release tag: $latest_tag"
+            echo "Diff range: $diff_spec (since last release tag)"
+          else
+            diff_spec="$BASE_SHA...$HEAD_SHA"
+            echo "No release tags found — falling back to PR diff range: $diff_spec"
+          fi
+
+          changed_files=$(git diff --name-only "$diff_spec")
           echo "Changed files:"
           echo "$changed_files"
 
@@ -99,7 +129,7 @@ jobs:
 
           # Top-level Cargo.toml workspace version line.
           if echo "$changed_files" | grep -qxF 'Cargo.toml'; then
-            if git diff "$BASE_SHA...$HEAD_SHA" -- Cargo.toml \
+            if git diff "$diff_spec" -- Cargo.toml \
                 | grep -qE '^[+-][[:space:]]*version[[:space:]]*='; then
               extension_impacting=1
               echo "Extension-impacting change: Cargo workspace version"
@@ -122,7 +152,7 @@ jobs:
           # compare the top-level `.version` field across base and head.
           if echo "$changed_files" | grep -qxF 'editors/vscode/package.json'; then
             non_version_changes=$(
-              git diff "$BASE_SHA...$HEAD_SHA" -- editors/vscode/package.json \
+              git diff "$diff_spec" -- editors/vscode/package.json \
                 | grep -E '^[+-]' \
                 | grep -vE '^(\+\+\+|---)' \
                 | grep -vE '^[+-][[:space:]]*"version"[[:space:]]*:' \
@@ -172,7 +202,7 @@ jobs:
           # diff. The field only appears once at the top level of the
           # package.json we care about, so a literal match is safe.
           version_line_diff=$(
-            git diff "$BASE_SHA...$HEAD_SHA" -- editors/vscode/package.json \
+            git diff "$diff_spec" -- editors/vscode/package.json \
               | grep -E '^[+-][[:space:]]*"version"[[:space:]]*:' \
               | grep -vE '^(\+\+\+|---)' \
               || true
