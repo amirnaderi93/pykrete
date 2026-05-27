@@ -148,7 +148,7 @@ The headline gaps:
 | `write` (`.parquet` / `.csv` / …) | ⚠️ | Unmodeled (terminal in practice) |
 | `writeTo` | ⚠️ | Unmodeled |
 | `saveAsTable` | ⚠️ | Unmodeled (terminal) |
-| `createOrReplaceTempView` | ⚠️ | Unmodeled (terminal) |
+| `createOrReplaceTempView` | ✅ | Registers the receiver's schema against the view name; within-file resolution |
 | `createTempView` / `createGlobalTempView` | ⚠️ | Unmodeled |
 | `registerTempTable` | ⚠️ | Deprecated; unmodeled |
 
@@ -186,7 +186,7 @@ The headline gaps:
 | `dropna` | ✅ | Same as `na.drop` |
 | `replace` | ⚙️ | Pass-through |
 | `transform` | ✅ | `fn` arg resolved; input + output checked |
-| `spark.sql("…")` | ✅ | Projection columns inferred best-effort |
+| `spark.sql("…")` | ✅ | Projection columns inferred best-effort; looks up registered tempViews by name and checks column refs (SELECT / WHERE / GROUP BY / ORDER BY / HAVING) against the view's schema |
 | `stat.crosstab` / `freqItems` / `approxQuantile` / `corr` / `cov` | ⚠️ | Unmodeled |
 | `summary` | ⚠️ | Unmodeled |
 | `describe` | ⚠️ | Unmodeled |
@@ -378,15 +378,23 @@ by how commonly real PySpark code uses them.
 4. **`F.to_date` / `to_timestamp` / `date_format`** — already typed, but
    not in `COLUMN_REF_FUNCTIONS`, so a typo on the column arg slips
    through; widen the allowlist carefully (first arg only).
-5. **`createOrReplaceTempView`** — terminal in practice but pairs with
-   `spark.sql("…")`; recording the registered view name would let
-   pykrete check `spark.sql("SELECT … FROM view_name")` queries.
-6. **Chain-after-terminal flag** — terminals are now recognized, so
+5. **Chain-after-terminal flag** — terminals are now recognized, so
    the next polish step is to flag a call chained after one (almost
    always a bug) instead of silently returning None.
 
 ## Recently closed
 
+- **`createOrReplaceTempView` + `spark.sql("SELECT … FROM view")`.**
+  A chain ending in `.createOrReplaceTempView("name")` registers the
+  receiver's schema (Typed or Derived) against the view name in a
+  per-file registry. A subsequent `spark.sql("SELECT … FROM name")` in
+  the same file looks the view up and checks every column identifier in
+  the query — projection, `WHERE`, `GROUP BY`, `ORDER BY`, `HAVING` —
+  against the view's schema, firing `D0030` on a typo. The result
+  schema is the projection columns when readable, or the view's full
+  schema for `SELECT *`. **Scope:** single-table SELECT only (no joins,
+  no subqueries), within-file only (cross-file views fall back to the
+  pre-tempView best-effort behavior).
 - **`Column` method chains.** `.isNull`, `.isNotNull`, `.isin`,
   `.between`, `.like`, `.rlike`, `.ilike`, `.contains`, `.startswith`,
   `.endswith` are now recognized as boolean-returning Column predicates;

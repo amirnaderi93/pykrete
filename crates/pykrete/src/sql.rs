@@ -12,7 +12,9 @@
 
 use core::ops::ControlFlow;
 
-use sqlparser::ast::{Expr, visit_expressions};
+use sqlparser::ast::{
+    Expr, ObjectNamePart, Query, SetExpr, Statement, TableFactor, visit_expressions,
+};
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 
@@ -28,6 +30,74 @@ use sqlparser::parser::Parser;
 pub fn column_refs(fragment: &str) -> Vec<String> {
     let wrapped = format!("SELECT {fragment}");
     let Ok(statements) = Parser::parse_sql(&GenericDialect {}, &wrapped) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = Vec::new();
+    let _ = visit_expressions(&statements, |expr| {
+        if let Expr::Identifier(ident) = expr
+            && !names.iter().any(|n| n == &ident.value)
+        {
+            names.push(ident.value.clone());
+        }
+        ControlFlow::<()>::Continue(())
+    });
+    names
+}
+
+/// The single-table FROM-clause name of a top-level `SELECT … FROM x`
+/// query, used to look up a registered tempView.
+///
+/// Returns `None` when the query has no FROM, more than one FROM table,
+/// any JOIN, or anything other than a bare named table — a subquery,
+/// a function call, an UNNEST. Aliases (`FROM orders_view o`) are
+/// ignored: only the underlying name is returned, since pykrete doesn't
+/// model aliasing yet.
+///
+/// The returned name is an owned `String` because the sqlparser AST it
+/// comes from is allocated inside this call and dropped on return.
+pub fn single_from_table(query: &str) -> Option<String> {
+    let statements = Parser::parse_sql(&GenericDialect {}, query).ok()?;
+    let stmt = statements.into_iter().next()?;
+    let Statement::Query(q) = stmt else {
+        return None;
+    };
+    select_single_from(&q)
+}
+
+fn select_single_from(query: &Query) -> Option<String> {
+    let SetExpr::Select(select) = query.body.as_ref() else {
+        return None;
+    };
+    if select.from.len() != 1 {
+        return None;
+    }
+    let table_with_joins = &select.from[0];
+    if !table_with_joins.joins.is_empty() {
+        return None;
+    }
+    let TableFactor::Table { name, .. } = &table_with_joins.relation else {
+        return None;
+    };
+    // Single-segment unqualified name only — `db.table` (two parts)
+    // would need a catalog model pykrete doesn't have.
+    let [ObjectNamePart::Identifier(ident)] = name.0.as_slice() else {
+        return None;
+    };
+    Some(ident.value.clone())
+}
+
+/// Every column identifier in a full `SELECT` query — across the
+/// projection, the `WHERE` clause, `GROUP BY`, `ORDER BY`, and `HAVING`.
+/// Used to check `spark.sql("SELECT a FROM v WHERE b > 0")` against a
+/// view schema: every name in the query must exist on the view, not
+/// just the projected ones.
+///
+/// Deduplicated, in first-seen order. Table-qualified names like `t.col`
+/// are intentionally skipped — the qualifier names a table pykrete
+/// doesn't model, and the bare column would already be checked anyway.
+/// An unparseable query yields an empty list (lenient).
+pub fn query_column_refs(query: &str) -> Vec<String> {
+    let Ok(statements) = Parser::parse_sql(&GenericDialect {}, query) else {
         return Vec::new();
     };
     let mut names: Vec<String> = Vec::new();
@@ -262,5 +332,71 @@ mod tests {
             None
         );
         assert_eq!(select_projection_columns("not sql at all"), None);
+    }
+
+    #[test]
+    fn single_from_table_reads_a_bare_named_relation() {
+        assert_eq!(
+            single_from_table("SELECT a FROM orders_view"),
+            Some("orders_view".to_string()),
+        );
+    }
+
+    #[test]
+    fn single_from_table_keeps_the_underlying_name_under_an_alias() {
+        // Aliases are ignored — pykrete doesn't model aliasing yet, but
+        // the underlying name is what the tempView registry is keyed on.
+        assert_eq!(
+            single_from_table("SELECT a FROM orders_view AS o"),
+            Some("orders_view".to_string()),
+        );
+    }
+
+    #[test]
+    fn single_from_table_bails_on_a_join() {
+        assert_eq!(
+            single_from_table("SELECT a FROM x JOIN y ON x.k = y.k"),
+            None
+        );
+    }
+
+    #[test]
+    fn single_from_table_bails_on_a_subquery() {
+        assert_eq!(single_from_table("SELECT a FROM (SELECT 1) AS s"), None,);
+    }
+
+    #[test]
+    fn single_from_table_bails_on_a_qualified_name() {
+        // `db.table` — two segments; pykrete has no catalog model.
+        assert_eq!(single_from_table("SELECT a FROM db.orders"), None);
+    }
+
+    #[test]
+    fn single_from_table_bails_with_no_from() {
+        assert_eq!(single_from_table("SELECT 1"), None);
+    }
+
+    #[test]
+    fn single_from_table_bails_on_an_unparseable_query() {
+        assert_eq!(single_from_table("!! not sql at all"), None);
+    }
+
+    #[test]
+    fn query_column_refs_collects_select_where_group_by_order_by() {
+        // Projection, WHERE, GROUP BY, ORDER BY identifiers all picked up,
+        // deduplicated in first-seen order. The table-qualified `t.k` in
+        // the FROM is skipped (it's a CompoundIdentifier, not Identifier).
+        let names = query_column_refs(
+            "SELECT region, sum(amount) AS total FROM v \
+             WHERE amount > 0 GROUP BY region ORDER BY total",
+        );
+        assert!(names.iter().any(|n| n == "region"));
+        assert!(names.iter().any(|n| n == "amount"));
+        assert!(names.iter().any(|n| n == "total"));
+    }
+
+    #[test]
+    fn query_column_refs_yields_nothing_on_an_unparseable_query() {
+        assert!(query_column_refs("!! garbage @@").is_empty());
     }
 }

@@ -32,6 +32,7 @@ pub mod registry;
 pub mod schema;
 pub mod sql;
 pub mod symbols;
+pub mod temp_views;
 pub mod transpiler;
 pub mod types;
 pub mod walk;
@@ -65,6 +66,7 @@ use crate::schema::{
     FieldResolution, Schema, SchemaView, derived_schema_errors, discover_schemas,
     resolve_derived_schema, schema_base_chain,
 };
+use crate::temp_views::TempViewRegistry;
 use crate::types::COLUMN_TYPE_NAMES;
 use crate::walk::{
     DiscoveredClass, DiscoveredFunction, discover_top_level_classes, discover_top_level_functions,
@@ -697,6 +699,12 @@ fn analyze_module<'a>(
         .filter(|(_, slots)| !slots.is_empty())
         .collect();
 
+    // One tempView registry per file, shared across every typed
+    // function in the file — so a view created in one function is
+    // visible to `spark.sql(...)` in another. Cross-file resolution is
+    // deliberately not supported: each file gets a fresh registry.
+    let temp_views = TempViewRegistry::new();
+
     for (func, slots) in &typed_functions {
         render_function(
             func,
@@ -708,7 +716,8 @@ fn analyze_module<'a>(
             &mut diagnostics,
         );
         let declared_return = declared_return_schema(slots, all_schemas);
-        let mut ctx = BodyContext::from_function(func, slots, all_schemas, registry);
+        let mut ctx = BodyContext::from_function(func, slots, all_schemas, registry)
+            .with_temp_views(&temp_views);
         check_function_body(
             func,
             declared_return,
@@ -782,6 +791,13 @@ pub(crate) fn collect_module_traces<'a>(
     schemas: &'a [Schema<'a>],
     registry: &'a Registry<'a>,
 ) -> ModuleTraces<'a> {
+    // The LSP-facing trace collector doesn't need a tempView registry —
+    // hover / go-to-definition fire on individual column refs, and the
+    // result-of-`spark.sql` schema attribution lands in `call_results`
+    // regardless of view registration. Skipping the registry here also
+    // dodges a lifetime tangle: `ModuleTraces<'a>` borrows `schemas`,
+    // and threading a stack-local `TempViewRegistry` through `ctx`
+    // would over-constrain its borrow.
     let mut traces = ModuleTraces::default();
     for func in functions {
         let slots = typed_slots(func);
