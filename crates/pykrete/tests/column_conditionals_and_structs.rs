@@ -193,6 +193,157 @@ def f(d: DataFrame[In]) -> DataFrame[Out]:
     assert_count(&result, "D0030", 0);
 }
 
+#[test]
+fn when_chained_3_arms_collects_all_branches_heterogeneous() {
+    // 3-arm chain with a heterogeneous outermost branch: string, int,
+    // int, otherwise int. The outermost arm being a string means common
+    // typing fails and the result degrades to Unknown. Declaring
+    // `result: int` (or `result: string`) in Out → no D0080, because
+    // Unknown is permissive. The point of the test is to PIN that the
+    // outermost branch is actually collected — if it were dropped (the
+    // old bug), the remaining branches widen to int and a `result: int`
+    // declaration would pass for the wrong reason, while a
+    // `result: string` declaration would fire a false-positive D0080.
+    let src_int = format!(
+        r#"{SCHEMAS}
+class Out(Schema):
+    x: int
+    int_col: int
+    long_col: long
+    double_col: double
+    name: string
+    result: int
+
+def f(d: DataFrame[In]) -> DataFrame[Out]:
+    return d.withColumn(
+        "result",
+        F.when(col("x") > 100, F.lit("a"))
+         .when(col("x") > 10, col("int_col"))
+         .otherwise(col("int_col")),
+    )
+"#
+    );
+    let result_int = check_strict(&src_int);
+    assert_count(&result_int, "D0080", 0);
+    assert_count(&result_int, "D0030", 0);
+
+    let src_string = format!(
+        r#"{SCHEMAS}
+class Out(Schema):
+    x: int
+    int_col: int
+    long_col: long
+    double_col: double
+    name: string
+    result: string
+
+def f(d: DataFrame[In]) -> DataFrame[Out]:
+    return d.withColumn(
+        "result",
+        F.when(col("x") > 100, F.lit("a"))
+         .when(col("x") > 10, col("int_col"))
+         .otherwise(col("int_col")),
+    )
+"#
+    );
+    let result_string = check_strict(&src_string);
+    assert_count(&result_string, "D0080", 0);
+    assert_count(&result_string, "D0030", 0);
+}
+
+#[test]
+fn when_chained_3_arms_widens_numerics_across_all_arms() {
+    // 3-arm chain across `int`, `long`, `int`, otherwise `double`. The
+    // common type should widen to `double`. Pykrete's `types_compatible`
+    // treats numerics interchangeably (`D0080` doesn't fire across
+    // int/long/double), so the signal for "all branches were collected
+    // AND a numeric common type was found" is: declaring `result:
+    // string` fires D0080 (numeric vs string), declaring `result:
+    // double` does not. If any one arm were dropped the answer would
+    // still be numeric and the same diagnostic would fire — so this
+    // test is a smoke check; the rigorous pin against the round-1 I1
+    // bug is the nullable test below.
+    let src_double = format!(
+        r#"{SCHEMAS}
+class Out(Schema):
+    x: int
+    int_col: int
+    long_col: long
+    double_col: double
+    name: string
+    result: double
+
+def f(d: DataFrame[In]) -> DataFrame[Out]:
+    return d.withColumn(
+        "result",
+        F.when(col("x") > 100, col("int_col"))
+         .when(col("x") > 10, col("long_col"))
+         .when(col("x") > 0, col("int_col"))
+         .otherwise(col("double_col")),
+    )
+"#
+    );
+    let result_double = check_strict(&src_double);
+    assert_count(&result_double, "D0080", 0);
+    assert_count(&result_double, "D0030", 0);
+
+    let src_string = format!(
+        r#"{SCHEMAS}
+class Out(Schema):
+    x: int
+    int_col: int
+    long_col: long
+    double_col: double
+    name: string
+    result: string
+
+def f(d: DataFrame[In]) -> DataFrame[Out]:
+    return d.withColumn(
+        "result",
+        F.when(col("x") > 100, col("int_col"))
+         .when(col("x") > 10, col("long_col"))
+         .when(col("x") > 0, col("int_col"))
+         .otherwise(col("double_col")),
+    )
+"#
+    );
+    let result_string = check_strict(&src_string);
+    assert_count(&result_string, "D0080", 1);
+}
+
+#[test]
+fn when_chained_3_arms_outer_branch_nullable_propagates() {
+    // The outermost `.when(...)` value is a nullable column. The result
+    // type must therefore be `Nullable(string)`, even though the inner
+    // branches and `.otherwise` are all non-null string literals.
+    // Declaring `result: string` (non-null) → D0083 fires.
+    //
+    // This is the strongest pin against the round-1 bug: if outer
+    // branches were dropped, `nullable_str` would never reach
+    // `common_branch_type`, the result would be plain `string`, and
+    // D0083 would NOT fire.
+    let src = r#"
+class In(Schema):
+    x: int
+    nullable_str: Optional[string]
+
+class Out(Schema):
+    x: int
+    nullable_str: Optional[string]
+    result: string
+
+def f(d: DataFrame[In]) -> DataFrame[Out]:
+    return d.withColumn(
+        "result",
+        F.when(col("x") > 100, col("nullable_str"))
+         .when(col("x") > 10, F.lit("x"))
+         .otherwise(F.lit("z")),
+    )
+"#;
+    let result = check_strict(src);
+    assert_count(&result, "D0083", 1);
+}
+
 // ===========================================================================
 // F.struct / F.named_struct
 // ===========================================================================
@@ -294,6 +445,38 @@ def f(d: DataFrame[In]) -> DataFrame[Out]:
     let result = check_strict(&src);
     assert_count(&result, "D0080", 0);
     assert_count(&result, "D0030", 0);
+}
+
+#[test]
+fn f_struct_with_unnamed_args_uses_col_index_convention() {
+    // `F.struct(F.lit(1), F.lit("y"))` — neither arg has a discoverable
+    // name (no alias, not a `col(...)`). Spark synthesizes `col1`,
+    // `col2`, ...; pykrete should do the same so `.getField("col1")`
+    // resolves and `.getField("")` does NOT. Pin both shapes with the
+    // same struct value.
+    let src_ok = r#"
+class In(Schema):
+    a: int
+
+def f(d: DataFrame[In]) -> DataFrame:
+    return d.withColumn("first", F.struct(F.lit(1), F.lit("y")).getField("col1"))
+"#;
+    let result_ok = check_strict(src_ok);
+    assert_count(&result_ok, "D0030", 0);
+
+    // `.getField("")` against a struct whose synthetic field names are
+    // `col1`, `col2` — empty name doesn't match, so D0030 fires. (The
+    // old code minted a `name = ""` field that would have silently
+    // matched, hiding the bug.)
+    let src_bad = r#"
+class In(Schema):
+    a: int
+
+def f(d: DataFrame[In]) -> DataFrame:
+    return d.withColumn("first", F.struct(F.lit(1), F.lit("y")).getField(""))
+"#;
+    let result_bad = check_strict(src_bad);
+    assert_count(&result_bad, "D0030", 1);
 }
 
 #[test]

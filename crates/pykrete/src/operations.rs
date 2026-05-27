@@ -2651,15 +2651,24 @@ fn is_when_chain(expr: &Expr) -> bool {
     let Some(call) = expr.as_call_expr() else {
         return false;
     };
-    if let Some(attr) = call.func.as_attribute_expr() {
-        if attr.attr.id.as_str() == "when" {
-            return is_when_chain(&attr.value);
-        }
-        return false;
-    }
     match call.func.as_ref() {
+        // Bare `when(...)` — root.
         Expr::Name(n) => n.id.as_str() == "when",
-        Expr::Attribute(a) => a.attr.id.as_str() == "when",
+        // `X.when(...)` — either the root `F.when(...)` (or
+        // `pyspark.sql.functions.when(...)`, etc.) or a `.when` chained
+        // on an earlier `.when`. If the receiver is itself a `.when(...)`
+        // call, peel and recurse; otherwise this IS the root.
+        Expr::Attribute(a) if a.attr.id.as_str() == "when" => match a.value.as_call_expr() {
+            Some(inner)
+                if matches!(
+                    inner.func.as_ref(),
+                    Expr::Attribute(ia) if ia.attr.id.as_str() == "when",
+                ) =>
+            {
+                is_when_chain(&a.value)
+            }
+            _ => true,
+        },
         _ => false,
     }
 }
@@ -2769,17 +2778,20 @@ fn widen_pair(a: &ColumnType, b: &ColumnType) -> Option<ColumnType> {
 /// whose fields are the args' inferred names and types. The name of each
 /// field comes from the same logic that names columns in `select` /
 /// `withColumn`: an explicit `.alias("x")` first, otherwise the `col`
-/// reference's name. Args without a discoverable name degrade to a
-/// best-effort empty name (Spark itself would synthesize one); their
-/// types are still recorded so downstream `.getField("known")` lookups
-/// can succeed when the names line up.
+/// reference's name. Args without a discoverable name fall back to
+/// Spark's positional convention — `col1`, `col2`, … (1-indexed) — so a
+/// downstream `.getField("col1")` resolves cleanly and we never mint a
+/// bogus empty-name field that `.getField("")` could match against.
 fn infer_struct_type<'a>(call: &ExprCall, schema: &SchemaView<'a>, tcx: TypeCtx<'a>) -> ColumnType {
     let fields: Vec<StructField> = call
         .arguments
         .args
         .iter()
-        .map(|arg| {
-            let name = select_output_name(arg).unwrap_or("").to_string();
+        .enumerate()
+        .map(|(i, arg)| {
+            let name = select_output_name(arg)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("col{}", i + 1));
             let ty = select_arg_type(arg, schema, tcx);
             StructField { name, ty }
         })
