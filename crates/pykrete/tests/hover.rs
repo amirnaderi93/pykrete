@@ -33,22 +33,71 @@ fn cursor_at(source: &str, needle: &str) -> (usize, usize) {
 
 #[test]
 fn hover_on_schema_class_name_returns_fields() {
+    // Schema with field names of varying length so the colon-alignment
+    // padding is visible — a non-aligned implementation would put the
+    // type names at different columns.
     let src = r#"
-class Orders(Schema):
-    place_code: int
-    price: int
+class RawOrders(Schema):
+    order_id: int
+    City: string
+    amount: double
+    quantity: int
+    status: string
 "#;
-    let (line, col) = cursor_at(src, "Orders");
+    let (line, col) = cursor_at(src, "RawOrders");
     let info = hover(src, line, col).expect("expected hover info");
-    assert!(info.markdown.contains("schema"));
-    assert!(info.markdown.contains("Orders"));
-    assert!(info.markdown.contains("place_code"));
-    assert!(info.markdown.contains("price"));
-    assert!(info.markdown.contains("Int"));
+    let md = &info.markdown;
+
+    // Heading: bold "schema" followed by inline-code class name.
+    assert!(
+        md.contains("**schema** `RawOrders`"),
+        "unexpected heading, got {md:?}",
+    );
+
+    // Body is a fenced python code block with a Schema class def.
+    assert!(
+        md.contains("```python"),
+        "expected fenced python block, got {md:?}"
+    );
+    assert!(
+        md.contains("class RawOrders(Schema):"),
+        "missing class line, got {md:?}"
+    );
+
+    // Each field appears on its own indented line as `name: Type` with
+    // the colon padded so the type column lines up. Longest field name
+    // is `quantity` (8 chars), so shorter names get trailing spaces.
+    assert!(
+        md.contains("    order_id: Int"),
+        "order_id row wrong, got {md:?}"
+    );
+    assert!(
+        md.contains("    City:     String"),
+        "City row wrong (alignment?), got {md:?}"
+    );
+    assert!(
+        md.contains("    amount:   Double"),
+        "amount row wrong (alignment?), got {md:?}"
+    );
+    assert!(
+        md.contains("    quantity: Int"),
+        "quantity row wrong, got {md:?}"
+    );
+    assert!(
+        md.contains("    status:   String"),
+        "status row wrong (alignment?), got {md:?}"
+    );
+
+    // Old bulleted format must be gone.
+    assert!(
+        !md.contains("Fields:"),
+        "old 'Fields:' header still present: {md:?}"
+    );
+    assert!(!md.contains("- `"), "old bullet rows still present: {md:?}");
 }
 
 #[test]
-fn hover_on_schema_with_nested_field_marks_the_field_as_nested() {
+fn hover_on_schema_with_nested_field_renders_the_nested_schema_name() {
     let src = r#"
 class Address(Schema):
     street: string
@@ -60,8 +109,18 @@ class User(Schema):
     let (line, col) = cursor_at(src, "class User");
     // Cursor on "User" (skip past "class ")
     let info = hover(src, line, col + "class ".len()).expect("expected hover info");
-    assert!(info.markdown.contains("address"));
-    assert!(info.markdown.contains("nested"));
+    let md = &info.markdown;
+    assert!(
+        md.contains("class User(Schema):"),
+        "missing class line, got {md:?}"
+    );
+    // Nested-struct field shows the nested schema's name as the type —
+    // i.e. it reads as actual Python (`address: Address`), no extra tag.
+    assert!(md.contains("address:"), "missing address field, got {md:?}");
+    assert!(
+        md.contains("Address"),
+        "missing nested type name, got {md:?}"
+    );
 }
 
 // ===========================================================================
