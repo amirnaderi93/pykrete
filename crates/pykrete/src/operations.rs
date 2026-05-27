@@ -110,6 +110,78 @@ fn two_df_method(method: &str) -> Option<TwoDfMethod> {
     }
 }
 
+/// Whether `method` is a `DataFrameReader` terminal that lands a
+/// DataFrame (the `<format>` call at the end of a `spark.read.<format>(...)`
+/// chain, or `.load(...)` from the builder form). The result schema is
+/// genuinely runtime data — pykrete returns Unknown and expects the user
+/// to re-anchor via `.cast(DataFrame[X])` or a typed variable annotation.
+fn is_dataframe_reader_format(method: &str) -> bool {
+    matches!(
+        method,
+        "parquet" | "csv" | "json" | "orc" | "text" | "table" | "load" | "jdbc" | "xml"
+    )
+}
+
+/// Whether `expr` is a `DataFrameReader` — i.e. `<X>.read` or a chain of
+/// recognized builder methods (`format`, `option`, `options`, `schema`) on
+/// top of one. Match `<X>.read` (the base reader attribute) OR a chain of
+/// recognized builder methods on top of one. We deliberately don't
+/// restrict `<X>` to the literal `spark` name — codebases name their
+/// session variable many ways (`spark`, `ss`, `sess`). As a side effect,
+/// an unrelated `myloader.read.parquet(...)` API would also be
+/// intercepted, but that just yields Unknown — same as falling through —
+/// so no incorrect behavior surfaces.
+fn is_dataframe_reader_expr(expr: &Expr) -> bool {
+    match expr {
+        // `<X>.read` — the base reader attribute.
+        Expr::Attribute(a) => a.attr.id.as_str() == "read",
+        // Builder methods chain reader → reader.
+        Expr::Call(call) => {
+            let Some(attr) = call.func.as_attribute_expr() else {
+                return false;
+            };
+            matches!(
+                attr.attr.id.as_str(),
+                "format" | "option" | "options" | "schema"
+            ) && is_dataframe_reader_expr(&attr.value)
+        }
+        _ => false,
+    }
+}
+
+/// Whether this call is an opaque Spark IO source — a `DataFrameReader`
+/// terminal (`spark.read.parquet(...)`, `spark.read.format(...).load(...)`,
+/// …) or a bare `spark.table(...)` / `spark.read.table(...)`. These all
+/// return a DataFrame whose schema can't be inferred statically; the user
+/// re-anchors with `.cast(DataFrame[X])` or `name: DataFrame[X] = …`.
+///
+/// Recognized centrally rather than left to fall through the
+/// DataFrame-receiver path as Unknown — keeps the intent visible, and is
+/// the natural seam to emit a "re-anchor your chain" hint at when we
+/// have an informational-severity track. Today we just return None; a
+/// `TODO(spark-read-rehint)` placeholder is left for that polish pass.
+fn is_spark_opaque_source_call(call: &ExprCall) -> bool {
+    let Some(attr) = call.func.as_attribute_expr() else {
+        return false;
+    };
+    let method = attr.attr.id.as_str();
+    // `spark.read.<format>(...)` / `spark.read.format(...).load(...)` /
+    // `spark.read.schema(...).<format>(...)` — receiver is a reader.
+    if is_dataframe_reader_format(method) && is_dataframe_reader_expr(&attr.value) {
+        return true;
+    }
+    // `spark.table("db.x")` — SparkSession method that bypasses the reader.
+    // Match `<X>.table(<args>)`. The check is structural — we don't verify
+    // `<X>` is a SparkSession by lookup; in practice it's the session
+    // variable, but a user calling `df.table(...)` (not a real DataFrame
+    // method) would also match. Either way we return Unknown, so no
+    // incorrect behavior surfaces.
+    if method == "table" && attr.value.is_name_expr() {
+        return true;
+    }
+    false
+}
+
 fn role_at(shape: &ColumnMethodShape, index: usize) -> ArgRole {
     match shape {
         ColumnMethodShape::AllColumnName => ArgRole::ColumnName,
@@ -942,6 +1014,23 @@ fn analyze_method_call<'a>(
         {
             return Some(SchemaView::derived_untyped(cols));
         }
+        return None;
+    }
+
+    // `spark.read.<format>(path)` / `spark.read.format(...).load(...)` /
+    // `spark.table(name)` — opaque IO sources. The schema is genuinely
+    // runtime data; we return Unknown and rely on `.cast(DataFrame[X])`
+    // or a typed variable annotation to re-anchor the chain.
+    //
+    // Recognized explicitly (rather than left to fall through the
+    // DataFrame-receiver path) so the intent is visible in the code and
+    // so this site is the natural place to emit a re-anchor hint once
+    // we have an informational-severity track.
+    // TODO(spark-read-rehint): when an informational/hint diagnostic
+    // channel exists, emit a hint here when this call's result isn't
+    // re-anchored downstream by `.cast(DataFrame[X])` or a typed
+    // variable annotation.
+    if is_spark_opaque_source_call(call) {
         return None;
     }
 
