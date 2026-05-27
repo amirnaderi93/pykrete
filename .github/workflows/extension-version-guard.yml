@@ -71,7 +71,13 @@ jobs:
 
           # Does any changed file impact what ships inside the .vsix?
           #
-          # - editors/vscode/src/**           — extension TS source
+          # - editors/vscode/**               — anything shipped in the .vsix
+          #                                     (src/, syntaxes/, README.md,
+          #                                     CHANGELOG.md, icon.png,
+          #                                     language-configuration.json,
+          #                                     package-lock.json, …),
+          #                                     minus files excluded by
+          #                                     .vscodeignore or not tracked
           # - crates/pykrete/**               — bundled pykrete-lsp behavior
           # - crates/pykrete-lsp/**           — bundled pykrete-lsp behavior
           # - Cargo.toml (workspace version)  — bumps the bundled binary
@@ -81,11 +87,11 @@ jobs:
           #                                     itself is handled separately
           extension_impacting=0
 
-          if echo "$changed_files" | grep -qE '^editors/vscode/src/'; then
-            extension_impacting=1
-            echo "Extension-impacting change: editors/vscode/src/**"
-          fi
-
+          # crates/pykrete{,-lsp}/** — note: tests/** under these also fires
+          # the guard. That's a known false-positive (test-only PRs would
+          # require an extension version bump). Fine for now — bumping a
+          # patch on a test-only PR is cheap and the alternative is brittle
+          # excludes. Revisit if it becomes annoying.
           if echo "$changed_files" | grep -qE '^crates/pykrete(-lsp)?/'; then
             extension_impacting=1
             echo "Extension-impacting change: crates/pykrete{,-lsp}/**"
@@ -105,6 +111,15 @@ jobs:
           # lines containing `"dependencies"` / `"devDependencies"` blocks
           # — but the safest signal is "any +/- line that isn't the
           # top-level version line".
+          #
+          # NOTE: the `"version":` anchor here is "+/- line whose first
+          # non-whitespace token is the version key". If we ever introduce
+          # a nested `"version"` key inside this package.json (e.g. under
+          # a dependency entry), this regex would also match it and the
+          # guard would mis-classify that change as a version bump. Not a
+          # real risk today — top-level package.json only has one
+          # `"version"` line. Future-proof option: parse with `jq` and
+          # compare the top-level `.version` field across base and head.
           if echo "$changed_files" | grep -qxF 'editors/vscode/package.json'; then
             non_version_changes=$(
               git diff "$BASE_SHA...$HEAD_SHA" -- editors/vscode/package.json \
@@ -117,6 +132,34 @@ jobs:
               extension_impacting=1
               echo "Extension-impacting change: editors/vscode/package.json (non-version line)"
             fi
+          fi
+
+          # Broad editors/vscode/** matcher — catches everything else that
+          # ends up inside the .vsix: TextMate grammar (syntaxes/), the
+          # marketplace listing (README.md), the update-time notes
+          # (CHANGELOG.md), language-configuration.json, icon.png, etc.
+          #
+          # Exclusions mirror .vscodeignore plus a few items that are
+          # gitignored or are handled by the earlier package.json-specific
+          # block:
+          #   - out/                — gitignored (build artifact)
+          #   - node_modules/       — gitignored
+          #   - .vscode/            — .vscodeignore
+          #   - .vscode-test/       — .vscodeignore
+          #   - .gitignore          — .vscodeignore
+          #   - tsconfig.json       — .vscodeignore (**/tsconfig.json)
+          #   - *.map               — .vscodeignore (**/*.map)
+          #   - .eslintrc.json      — .vscodeignore (**/.eslintrc.json)
+          #   - package.json        — handled by the dedicated block above
+          # Note: src/** is intentionally NOT excluded — it's listed in
+          # .vscodeignore because TS gets compiled to out/ before packaging,
+          # but a change to src/** still changes what ships.
+          if echo "$changed_files" \
+              | grep -E '^editors/vscode/' \
+              | grep -vE '^editors/vscode/(out/|node_modules/|\.vscode/|\.vscode-test/|\.gitignore|package\.json$|.*tsconfig\.json$|.*\.map$|.*\.eslintrc\.json$)' \
+              | grep -q .; then
+            extension_impacting=1
+            echo "Extension-impacting change: editors/vscode/** (shipped in .vsix)"
           fi
 
           if [ "$extension_impacting" -eq 0 ]; then
