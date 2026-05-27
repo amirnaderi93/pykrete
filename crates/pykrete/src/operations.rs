@@ -43,6 +43,7 @@ use crate::schema::{
     DerivedField, FieldPathResult, FieldResolution, Schema, SchemaView, resolve_path,
     suggest_field_name,
 };
+use crate::temp_views::TempViewRegistry;
 use crate::types::{ColumnType, StructField};
 use crate::walk::DiscoveredFunction;
 
@@ -272,6 +273,22 @@ pub struct BodyContext<'a> {
     /// one each time [`infer_transform_output`] recurses into a transform
     /// function's body. Caps runaway recursion on a `transform` cycle.
     infer_depth: u32,
+    /// File-scoped `createOrReplaceTempView` registrations, shared by
+    /// reference across every function-body context in the same file.
+    /// `None` means "no registry was wired in" — used by call sites that
+    /// build a throwaway context (the inference recursion in
+    /// `infer_transform_output`) or by future internal entry points
+    /// that don't care about view tracking; the tempView paths degrade
+    /// to no-ops in that case.
+    ///
+    /// The borrow's lifetime is allowed to be shorter than `'a` —
+    /// `'static` would otherwise pin the registry to live as long as
+    /// the source, which the per-file driver doesn't want. The
+    /// projection-style `*const _` is enough: the registry is only
+    /// touched while `analyze_expr` is running, which is shorter than
+    /// the call site that owns the registry. Modeled as `Option<&...>`
+    /// rather than `*const` so safe-Rust semantics survive.
+    temp_views: Option<&'a TempViewRegistry<'a>>,
 }
 
 /// Recursion ceiling for `transform`-body inference — deep enough for any
@@ -327,7 +344,22 @@ impl<'a> BodyContext<'a> {
             local_bindings: RefCell::new(Vec::new()),
             call_results: RefCell::new(Vec::new()),
             infer_depth: 0,
+            temp_views: None,
         }
+    }
+
+    /// Wire `temp_views` as this context's tempView registry — the
+    /// shared per-file map that `createOrReplaceTempView` writes into
+    /// and `spark.sql("… FROM view")` reads from. Returns `self` for
+    /// fluent construction in [`Self::from_function`].
+    pub fn with_temp_views(mut self, temp_views: &'a TempViewRegistry<'a>) -> Self {
+        self.temp_views = Some(temp_views);
+        self
+    }
+
+    /// The file-scoped tempView registry, if one is wired in.
+    pub fn temp_views(&self) -> Option<&'a TempViewRegistry<'a>> {
+        self.temp_views
     }
 
     /// Record a method-call site and the schema it produced. Drained by
@@ -1036,6 +1068,14 @@ fn analyze_method_call<'a>(
     // query's projection columns. A query pykrete can't read cleanly (a
     // `WITH` clause, a `*` wildcard, an unaliased computed column)
     // yields no schema; the user annotates the result in that case.
+    //
+    // If the query's single FROM table names a registered tempView
+    // (`df.createOrReplaceTempView("v")` earlier in the file), the
+    // query's column references — projection, WHERE, GROUP BY, ORDER
+    // BY, HAVING — are all checked against the view's schema. A
+    // `SELECT *` against a known view also returns the view's full
+    // schema rather than degrading.
+    //
     // `.sql(...)` is a SparkSession method, so the receiver isn't a
     // DataFrame — this is handled before the DataFrame-receiver path.
     if method == "sql" {
@@ -1044,9 +1084,16 @@ fn analyze_method_call<'a>(
             .args
             .first()
             .and_then(|a| a.as_string_literal_expr())
-            && let Some(cols) = crate::sql::select_projection_columns(lit.value.to_str())
         {
-            return Some(SchemaView::derived_untyped(cols));
+            let query = lit.value.to_str();
+            return resolve_spark_sql_call(
+                query,
+                lit.range(),
+                ctx,
+                source,
+                line_index,
+                diagnostics,
+            );
         }
         return None;
     }
@@ -1104,6 +1151,28 @@ fn analyze_method_call<'a>(
     }
 
     let receiver = analyze_expr(&attr.value, ctx, source, line_index, diagnostics)?;
+
+    // `df.createOrReplaceTempView("name")` — register `df`'s schema
+    // against `name` in the file's tempView registry, so a later
+    // `spark.sql("SELECT … FROM name")` in the same file can resolve
+    // its column references. Registration is silent — Spark's view
+    // call returns None, and so does pykrete's chain (`None` below);
+    // no result schema to track. If the receiver is Unknown (a chain
+    // off `spark.read.parquet(...)` that wasn't re-anchored, say),
+    // analysis already returned earlier via the `?` above, so we
+    // never reach here — Unknown receivers don't register, matching
+    // the brief.
+    if method == "createOrReplaceTempView"
+        && let Some(tv) = ctx.temp_views()
+        && let Some(lit) = call
+            .arguments
+            .args
+            .first()
+            .and_then(|a| a.as_string_literal_expr())
+    {
+        tv.register(lit.value.to_str(), receiver.clone());
+        return None;
+    }
 
     // Terminal recognizers — `count`, `collect`, `show`, …. Spark
     // semantics: each returns something other than a DataFrame (a
@@ -1553,6 +1622,9 @@ fn infer_transform_output<'a>(
     let param_name = first.parameter.name.id.as_str();
 
     let mut child = BodyContext::new(ctx.schemas(), ctx.registry());
+    if let Some(tv) = ctx.temp_views() {
+        child = child.with_temp_views(tv);
+    }
     child.infer_depth = ctx.infer_depth + 1;
     child.bind_df(param_name, input);
 
@@ -3076,6 +3148,71 @@ fn split_sql_alias(item: &str) -> Option<&str> {
     let idx = item.to_ascii_lowercase().rfind(" as ")?;
     let alias = item[idx + 4..].trim().trim_matches(['`', '"', '\'']);
     (!alias.is_empty()).then_some(alias)
+}
+
+/// Resolve `spark.sql(query)` against the file's tempView registry.
+///
+/// Two paths:
+///
+/// 1. **View hit.** The query's single FROM table is a registered
+///    tempView. Every column identifier in the query (projection,
+///    WHERE, GROUP BY, ORDER BY, HAVING) is checked against the view's
+///    schema — typos fire `D0030`. The result schema is the projection
+///    (`SELECT a, b`) when pykrete can read it, or the whole view
+///    (`SELECT *`) otherwise. If the projection has an unaliased
+///    computed column the result degrades to `None`, same as the
+///    no-view fallback.
+///
+/// 2. **No view (or unknown view).** Best-effort fallback: infer the
+///    result schema from the projection columns alone — what pykrete
+///    did before tempView resolution existed. No column-existence
+///    checks happen, because there's no schema to check against.
+///
+/// `range` is the source range of the SQL string literal; D0030
+/// diagnostics anchor there.
+fn resolve_spark_sql_call<'a>(
+    query: &'a str,
+    range: TextRange,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<SchemaView<'a>> {
+    let view_schema = ctx
+        .temp_views()
+        .and_then(|tv| crate::sql::single_from_table(query).and_then(|name| tv.lookup(&name)));
+
+    if let Some(view) = view_schema {
+        // Every identifier in the query is checked against the view —
+        // `query_column_refs` walks the whole AST, so WHERE / GROUP BY /
+        // ORDER BY / HAVING references come along for the ride.
+        for name in crate::sql::query_column_refs(query) {
+            if view.has_field(&name) {
+                continue;
+            }
+            let suggestion = suggest_field_name(&name, &view);
+            let mut message =
+                format!("Column '{name}' does not exist on {}.", view.display_name(),);
+            if let Some(s) = &suggestion {
+                message.push_str(&format!(" Did you mean '{s}'?"));
+            }
+            diagnostics.push(
+                Diagnostic::at_range(Severity::Error, "D0030", message, range, source, line_index)
+                    .with_suggestion(suggestion),
+            );
+        }
+        // `SELECT *` against a known view returns the view's columns
+        // directly. Otherwise read the projection.
+        return Some(match crate::sql::select_projection_columns(query) {
+            Some(cols) => SchemaView::derived_untyped(cols),
+            None => view,
+        });
+    }
+
+    // No registered view — fall back to the pre-tempView behavior:
+    // infer the result schema from the projection columns, with no
+    // column-existence checks (there's no schema to check against).
+    crate::sql::select_projection_columns(query).map(SchemaView::derived_untyped)
 }
 
 /// Check the column identifiers inside a SQL expression string against

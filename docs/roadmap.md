@@ -74,6 +74,14 @@ variable in both a parameter slot `GenericClass[T]` and a return slot
 
 Already shipped (recorded here for completeness):
 
+- **`createOrReplaceTempView` + `spark.sql("SELECT … FROM view")`
+  resolution.** `df.createOrReplaceTempView("v")` registers `df`'s
+  schema against the view name in a per-file registry; a subsequent
+  `spark.sql("SELECT … FROM v")` in the same file checks every column
+  identifier in the query (projection, `WHERE`, `GROUP BY`, `ORDER BY`,
+  `HAVING`) against the view's schema, firing `D0030` on a typo, and
+  returns either the projected columns or the view's full schema for
+  `SELECT *`. Single-table SELECT only, within-file only.
 - **`Column` method chain recognition.** `.isNull` / `.isNotNull` /
   `.isin` / `.between` / `.like` / `.rlike` / `.ilike` / `.contains` /
   `.startswith` / `.endswith` are now recognized as boolean-returning
