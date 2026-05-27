@@ -101,13 +101,47 @@ fn column_method_shape(method: &str) -> Option<ColumnMethodShape> {
 
 fn two_df_method(method: &str) -> Option<TwoDfMethod> {
     match method {
-        "union" => Some(TwoDfMethod::Union),
+        // `unionAll` is a Spark 1.x deprecated alias for `union` — same
+        // shape, same schema-mismatch check; treat it identically. The
+        // D0040 message uses the alias name the user actually wrote.
+        "union" | "unionAll" => Some(TwoDfMethod::Union),
         "unionByName" => Some(TwoDfMethod::UnionByName),
         "intersect" | "intersectAll" | "subtract" | "exceptAll" => Some(TwoDfMethod::SetOp),
         "join" => Some(TwoDfMethod::Join),
         "crossJoin" => Some(TwoDfMethod::CrossJoin),
         _ => None,
     }
+}
+
+/// Methods that are typically the last step in a chain — they return
+/// something other than a DataFrame (a row, a list of rows, a scalar,
+/// None). Recognizing them centrally rather than letting them fall
+/// through serves two purposes:
+///
+/// 1. The intent ("this is a terminal") is visible in the code.
+/// 2. It's the natural seam to flag a chained call after a terminal
+///    (almost always a bug) once that diagnostic lands — v0.1.16's
+///    polish-pass work.
+///
+/// Today the behavior is the same as falling through: return `None`
+/// so the chain dies cleanly. No new diagnostic.
+fn is_terminal_method(method: &str) -> bool {
+    matches!(
+        method,
+        // → long
+        "count"
+        // → list of Row
+        | "collect"
+        | "take"
+        | "tail"
+        // → None
+        | "show"
+        | "printSchema"
+        | "explain"
+        // → Row
+        | "first"
+        | "head"
+    )
 }
 
 /// Whether `method` is a `DataFrameReader` terminal that lands a
@@ -1034,6 +1068,20 @@ fn analyze_method_call<'a>(
         return None;
     }
 
+    // `F.broadcast(df)` (or any `<X>.broadcast(df)`) — a join hint that
+    // tells Spark to broadcast the dataframe; the schema is the
+    // argument's, unchanged. Handled before the receiver-must-be-a-
+    // DataFrame guard because `F` isn't a DataFrame; the schema lives
+    // on the argument. Used as the start of a chain
+    // (`F.broadcast(df).select(col("x"))`) or as a join arg
+    // (`df1.join(F.broadcast(df2), "key")`) — both reach this path
+    // through `analyze_expr` on the call.
+    if method == "broadcast"
+        && let Some(arg) = call.arguments.args.first()
+    {
+        return analyze_expr(arg, ctx, source, line_index, diagnostics);
+    }
+
     // Class-instance receiver: `dal.read(...)` where `dal` is bound as an
     // instance of a known class. Look the method up on the class and do
     // generic substitution. We try this BEFORE the DataFrame-receiver
@@ -1056,6 +1104,19 @@ fn analyze_method_call<'a>(
     }
 
     let receiver = analyze_expr(&attr.value, ctx, source, line_index, diagnostics)?;
+
+    // Terminal recognizers — `count`, `collect`, `show`, …. Spark
+    // semantics: each returns something other than a DataFrame (a
+    // scalar, a row, a list of rows, None), so the chain dies cleanly
+    // here. Recognized centrally (rather than allowed to fall through)
+    // both for self-documentation and as the seam for a future
+    // "chain-after-terminal" diagnostic.
+    // TODO(chain-after-terminal): once an informational/hint channel
+    // exists, flag a method call chained after one of these — almost
+    // always a bug.
+    if is_terminal_method(method) {
+        return None;
+    }
 
     // Several methods take a `subset=` of column names — check it
     // uniformly, before the per-method dispatch.
