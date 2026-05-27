@@ -27,16 +27,12 @@ The headline gaps:
 
 - **Reshaping** — `melt` / `unpivot` / `transpose` are unmodeled; `pivot`
   is column-checked but its output schema is data-dependent (deliberate).
-- **Set operations** — `intersect`, `intersectAll`, `subtract`,
-  `exceptAll` aren't recognized (only `union` / `unionByName` are).
 - **Streaming** — `readStream` / `writeStream` / `isStreaming` are
   entirely unmodeled.
 - **Pandas / Arrow interop** — `toPandas`, `toArrow`, `mapInPandas`,
   `applyInPandas` are opaque by design.
-- **Introspection / terminal ops** — `count`, `collect`, `show`,
-  `printSchema`, `explain`, `describe`, `summary`, `first`, `take`,
-  `head` aren't recognized as terminals, but they are typically the
-  last step so the chain-death is moot in practice.
+- **Introspection / describe** — `describe`, `summary`, and most
+  `stat.*` helpers are unmodeled.
 
 ## DataFrame methods
 
@@ -75,11 +71,11 @@ The headline gaps:
 | `crossJoin` | ✅ | Concatenates both schemas |
 | `union` | ✅ | Schema-mismatch check (D0040) |
 | `unionByName` | ✅ | Same check as union |
-| `unionAll` | ⚠️ | Deprecated alias; unmodeled |
-| `intersect` | ⚠️ | Unmodeled |
-| `intersectAll` | ⚠️ | Unmodeled |
-| `subtract` | ⚠️ | Unmodeled |
-| `exceptAll` | ⚠️ | Unmodeled |
+| `unionAll` | ✅ | Deprecated alias for `union`; same check |
+| `intersect` | ✅ | Same check as union; preserves receiver schema |
+| `intersectAll` | ✅ | Same as `intersect` (preserves duplicates) |
+| `subtract` | ✅ | Same check as union; preserves receiver schema |
+| `exceptAll` | ✅ | Same as `subtract` (preserves duplicates) |
 
 ### Aggregation
 
@@ -133,13 +129,13 @@ The headline gaps:
 | Method | State | Notes |
 | --- | --- | --- |
 | `cast(DataFrame[X])` | ✅ | pykrete-only; re-anchors the chain |
-| `printSchema` | ⚠️ | Unmodeled (terminal in practice) |
+| `printSchema` | ✅ | Recognized terminal; returns None, chain ends |
 | `schema` | ⚠️ | Property, unmodeled |
 | `columns` | ⚠️ | Property, unmodeled |
 | `dtypes` | ⚠️ | Property, unmodeled |
 | `isLocal` | ⚠️ | Unmodeled |
 | `isEmpty` | ⚠️ | Unmodeled |
-| `explain` | ⚠️ | Unmodeled (terminal in practice) |
+| `explain` | ✅ | Recognized terminal; returns None, chain ends |
 
 ### IO (read/write)
 
@@ -194,9 +190,9 @@ The headline gaps:
 | `stat.crosstab` / `freqItems` / `approxQuantile` / `corr` / `cov` | ⚠️ | Unmodeled |
 | `summary` | ⚠️ | Unmodeled |
 | `describe` | ⚠️ | Unmodeled |
-| `count` | ⚠️ | Returns long, terminal in practice |
-| `collect` / `first` / `head` / `take` / `tail` | ⚠️ | Terminal, unmodeled |
-| `show` | ⚠️ | Terminal, unmodeled |
+| `count` | ✅ | Recognized terminal (returns long) |
+| `collect` / `first` / `head` / `take` / `tail` | ✅ | Recognized terminals |
+| `show` | ✅ | Recognized terminal (returns None) |
 | `observe` | ⚠️ | Unmodeled |
 | `inputFiles` | ⚠️ | Unmodeled |
 | `sameSemantics` / `semanticHash` | ⚠️ | Unmodeled |
@@ -325,7 +321,7 @@ column's type is inferred (`infer_expr_type` / `function_result_type`).
 | `col`, `column` | ✅ | ✅ | Resolves against the active schema |
 | `lit` | ⚠️ | ✅ | Python-literal type; `lit(None)` tracked as nullable |
 | `expr` | ⚠️ | ⚠️ | SQL parsed via `sqlparser`; idents D0030-checked |
-| `broadcast` | ⚠️ | ⚠️ | Unmodeled (would be pass-through) |
+| `broadcast` | ⚙️ | ⚙️ | Pass-through: `F.broadcast(df)` carries `df`'s schema |
 | `udf`, `pandas_udf` | 🚫 | ✅ | UDF return type from decorator / functional form |
 | `assert_true`, `raise_error` | ⚠️ | ⚠️ | Unmodeled |
 | `bitwiseNOT`, `shiftLeft`, `shiftRight`, `shiftRightUnsigned`, `bitwise_*` | ⚠️ | ⚠️ | Unmodeled |
@@ -368,33 +364,40 @@ generic walker.
 A short list of the unmodeled methods most worth filling in next, ordered
 by how commonly real PySpark code uses them.
 
-1. **`intersect` / `subtract` / `intersectAll` / `exceptAll`** — set-shape
-   companions to `union`; same schema-mismatch check as `unionByName`.
-2. **`Column` method chains — `.isNull`, `.isin`, `.between`,
+1. **`Column` method chains — `.isNull`, `.isin`, `.between`,
    `.startswith`, `.contains`, `.like`** — extremely common in `filter` /
    `withColumn`; today recognized only via the generic-walker fallthrough,
    so a typo on a `Column` method goes uncaught.
-3. **`when` / `otherwise`** — pivotal in `withColumn` pipelines. Column
+2. **`when` / `otherwise`** — pivotal in `withColumn` pipelines. Column
    refs in the predicate/branches are reached today, but the result
    type isn't inferred and a bad ref in the `otherwise` branch can be
    masked by the mixed-arg shape.
-4. **`F.struct` / `F.named_struct`** — needed to type a struct-valued
+3. **`F.struct` / `F.named_struct`** — needed to type a struct-valued
    `withColumn` and to chain `getField` / dotted nav onto it.
-5. **`melt` / `unpivot`** — Spark 3.4+; small but unmodeled, and the
+4. **`melt` / `unpivot`** — Spark 3.4+; small but unmodeled, and the
    output schema is fully determinable from the args.
-6. **`broadcast`** — semantically a pass-through; today the chain dies.
-7. **`F.to_date` / `to_timestamp` / `date_format`** — already typed, but
+5. **`F.to_date` / `to_timestamp` / `date_format`** — already typed, but
    not in `COLUMN_REF_FUNCTIONS`, so a typo on the column arg slips
    through; widen the allowlist carefully (first arg only).
-8. **`createOrReplaceTempView`** — terminal in practice but pairs with
+6. **`createOrReplaceTempView`** — terminal in practice but pairs with
    `spark.sql("…")`; recording the registered view name would let
    pykrete check `spark.sql("SELECT … FROM view_name")` queries.
-9. **Terminal recognizers (`count`, `collect`, `first`, `show`,
-   `printSchema`, `explain`)** — model them as terminal so a chain
-   after them is flagged (probably a bug) rather than silently dying.
+7. **Chain-after-terminal flag** — terminals are now recognized, so
+   the next polish step is to flag a call chained after one (almost
+   always a bug) instead of silently returning None.
 
 ## Recently closed
 
+- **Set ops, `F.broadcast`, and terminal recognizers** —
+  `intersect` / `intersectAll` / `subtract` / `exceptAll` are recognized
+  set operations sharing the `union` schema-mismatch check (D0040);
+  `unionAll` is wired as a deprecated alias for `union`. `F.broadcast(df)`
+  is treated as a pass-through, so chains like
+  `df1.join(F.broadcast(df2), "k")` and `F.broadcast(df).select(...)`
+  keep their schemas. The nine terminal methods (`count`, `collect`,
+  `show`, `printSchema`, `explain`, `first`, `take`, `head`, `tail`) are
+  now recognized centrally — the chain dies cleanly, and a future
+  "chain-after-terminal" diagnostic has a single seam to attach to.
 - **`spark.read.<format>(path)` / `spark.table(name)`** —
   `DataFrameReader` chains (`spark.read.parquet(...)`,
   `spark.read.format(...).load(...)`, `spark.read.schema(...).<format>(...)`)

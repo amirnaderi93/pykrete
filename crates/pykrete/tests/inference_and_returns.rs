@@ -345,6 +345,42 @@ def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame[A]:
     assert_message_contains(&result, "D0040", "subtract");
 }
 
+#[test]
+fn unionAll_behaves_like_union_with_matching_schemas() {
+    // `unionAll` is a Spark 1.x deprecated alias for `union` — same shape,
+    // same schema-set check, no separate diagnostic.
+    let result = check(
+        r#"
+class Orders(Schema):
+    place_code: int
+    price: int
+
+def f(a: DataFrame[Orders], b: DataFrame[Orders]) -> DataFrame[Orders]:
+    return a.unionAll(b)
+"#,
+    );
+    assert_does_not_have_code(&result, "D0040");
+}
+
+#[test]
+fn unionAll_fires_D0040_just_like_union() {
+    let result = check(
+        r#"
+class A(Schema):
+    x: int
+
+class B(Schema):
+    y: int
+
+def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame[A]:
+    return a.unionAll(b)
+"#,
+    );
+    assert_has_code(&result, "D0040");
+    // The diagnostic message names the alias the user actually wrote.
+    assert_message_contains(&result, "D0040", "unionAll");
+}
+
 // ===========================================================================
 // D0050 — return-type validation
 // ===========================================================================

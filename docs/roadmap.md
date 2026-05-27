@@ -74,6 +74,16 @@ variable in both a parameter slot `GenericClass[T]` and a return slot
 
 Already shipped (recorded here for completeness):
 
+- **Set ops, `F.broadcast`, and terminal recognizers.** `intersect`,
+  `intersectAll`, `subtract`, `exceptAll` are recognized set operations
+  sharing the same schema-mismatch check (`D0040`) as `union` /
+  `unionByName`; `unionAll` is wired as a deprecated alias for `union`.
+  `F.broadcast(df)` is treated as a pass-through, so chains like
+  `df1.join(F.broadcast(df2), "k")` keep tracking the schema. The nine
+  terminal methods (`count`, `collect`, `show`, `printSchema`, `explain`,
+  `first`, `take`, `head`, `tail`) are recognized centrally — the chain
+  dies cleanly and a future "chain-after-terminal" diagnostic has a
+  single seam to attach to.
 - **`spark.read.<format>(path)` / `spark.table(name)` opaque-source
   recognition.** `DataFrameReader` chains (`spark.read.parquet(...)`,
   `spark.read.format(...).load(...)`, `spark.read.schema(...).<format>(...)`)
