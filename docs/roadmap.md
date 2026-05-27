@@ -50,14 +50,6 @@ overrides — `off` / `warning` / `error`, keyed by readable rule name).
 For the LSP, `pykrete.json`'s `typeCheckingMode` overrides the editor's
 setting; the single value also drives the embedded Python engine.
 
-## Generic-inference extensions
-
-pykrete infers generic-function results across multiple TypeVars and
-nested-generic parameter shapes. Two patterns remain on the backlog:
-
-- **Chained class-method calls** — `builder.with_path("/x").read(SOURCE)`; only direct calls on a class-instance name dispatch through generic inference.
-- **Generic methods that aren't `[T] -> G[T]`-shaped** — e.g. `def cast_to[T](self, _: type[T]) -> DataFrame[T]`, where `T` is bound from a value of static type `type[T]`.
-
 ## Quality-of-life
 
 - **User-facing language reference** ([`language-reference/`](language-reference/))
@@ -71,17 +63,26 @@ nested-generic parameter shapes. Two patterns remain on the backlog:
 
 Already shipped (recorded here for completeness):
 
-- **Generic-inference: multiple TypeVars + nested-generic parameters.**
+- **Generic-inference: full coverage of the four extension patterns.**
+  Multi-TypeVar binding —
   `def join[A, B](left: DataFrame[A], right: DataFrame[B]) -> DataFrame[Merge[A, B]]`
-  now binds each TypeVar from its own argument slot and substitutes
-  through the return — same call (free function or class method)
-  produces a derived view with the concatenated columns. Nested
-  parameter shapes are unwrapped during binding: `List[DataSource[T]]`,
-  `Optional[DataSource[T]]`, `Dict[str, DataSource[T]]`, and arbitrary
-  re-nesting (`List[List[DataSource[T]]]`) all reach the inner
-  `G[T]` shape. Incompatible bindings (a list whose elements carry
-  different T values) degrade the offending TypeVar to Unknown rather
-  than fabricate a result, keeping the no-false-positive stance.
+  binds each TypeVar from its own argument slot and substitutes through
+  the return, producing a derived view with the concatenated columns.
+  Nested parameter shapes are unwrapped during binding:
+  `List[DataSource[T]]`, `Optional[DataSource[T]]`,
+  `Dict[str, DataSource[T]]`, and arbitrary re-nesting
+  (`List[List[DataSource[T]]]`) all reach the inner `G[T]` shape.
+  Chained class-method calls —
+  `dal.with_path("/x").read(SOURCE)` — preserve class identity through
+  any intermediate method whose return annotation is the class itself
+  (`-> "DataAccessLayer"`, `-> DataAccessLayer`, or `-> Self`), so the
+  trailing generic call still dispatches. `type[T]`-shaped parameters —
+  `def cast_to[T](self, _: type[T]) -> DataFrame[T]` called as
+  `dal.cast_to(Orders)` — bind T from the arg's class identifier
+  rather than its runtime value. Incompatible bindings (a list whose
+  elements carry different T values, a non-class arg in a `type[T]`
+  slot) degrade the offending TypeVar to Unknown rather than fabricate
+  a result, keeping the no-false-positive stance.
 - **`melt` / `unpivot` output-schema modeling.** Spark 3.4+'s
   wide-to-long reshape (`df.melt(ids, values, variableColumnName,
   valueColumnName)` and its alias `df.unpivot(...)`) now produces a

@@ -1139,11 +1139,12 @@ fn analyze_method_call<'a>(
     // generic substitution. We try this BEFORE the DataFrame-receiver
     // path because the same name can't be both — instance bindings and
     // DataFrame bindings live in disjoint maps.
-    if let Some(class_name) = attr
-        .value
-        .as_name_expr()
-        .and_then(|n| ctx.lookup_instance(n.id.as_str()))
-    {
+    //
+    // [`lookup_receiver_class`] also walks a self-returning method chain
+    // — `dal.with_path("/x").read(SOURCE)` resolves through `with_path`'s
+    // `-> "DataAccessLayer"` return so the outer `.read` still sees the
+    // class.
+    if let Some(class_name) = lookup_receiver_class(&attr.value, ctx) {
         return handle_class_method_call(
             class_name,
             method,
@@ -1460,6 +1461,45 @@ fn is_pass_through_method(method: &str) -> bool {
     )
 }
 
+/// Walk a receiver expression and report the class name its result
+/// carries, if any. The base case is a `Name` bound as a class instance
+/// in this body. The recursive case is a method call whose method
+/// returns the same class — `dal.with_path("/x")` returns
+/// `DataAccessLayer`, so the chain stays anchored to the class and the
+/// next `.read(SOURCE)` can dispatch through generic inference. The
+/// chain breaks at any boundary where the return type isn't the same
+/// class as the receiver (a different class, a generic, an Unknown).
+fn lookup_receiver_class<'a>(expr: &'a Expr, ctx: &BodyContext<'a>) -> Option<&'a str> {
+    if let Some(name) = expr.as_name_expr() {
+        return ctx.lookup_instance(name.id.as_str());
+    }
+    let call = expr.as_call_expr()?;
+    let attr = call.func.as_attribute_expr()?;
+    let inner_class = lookup_receiver_class(&attr.value, ctx)?;
+    let class_info = ctx.registry().find_class(inner_class)?;
+    let method = class_info.methods.get(attr.attr.id.as_str())?;
+    if method_return_targets_class(method.return_annotation?, inner_class) {
+        Some(inner_class)
+    } else {
+        None
+    }
+}
+
+/// Does this return annotation name the given class itself? Matches
+/// `-> ClassName` (a bare Name), `-> "ClassName"` (the PEP 484 forward
+/// reference string), and `-> Self`. Other shapes — a subscript, a
+/// different name, an Optional/Union wrapper — return false; pykrete
+/// degrades to Unknown rather than guess.
+fn method_return_targets_class(ann: &Expr, class_name: &str) -> bool {
+    if let Some(name) = ann.as_name_expr() {
+        return name.id.as_str() == class_name || name.id.as_str() == "Self";
+    }
+    if let Some(lit) = ann.as_string_literal_expr() {
+        return lit.value.to_str() == class_name;
+    }
+    false
+}
+
 /// Resolve a method call on a class instance — `dal.read(...)`.
 ///
 /// Looks up the method on the receiver's class, and if the method is
@@ -1626,30 +1666,24 @@ fn bind_type_vars_from_annotation<'a>(
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    // `type[T]` / `Type[T]` — the arg is a class object (its static type
+    // is `type[Schema]`), not a value of the schema's type. Match the
+    // shape before the generic base case so the schema is read from the
+    // arg's identifier (`OrdersSchema`) rather than from its runtime
+    // value (which would be Unknown — a class isn't a DataFrame).
+    if let Some(tv) = extract_type_var_from_type_subscript(ann, type_params)
+        && let Some(schema) = type_arg_schema(arg, ctx)
+    {
+        record_binding(tv, schema, subst, poisoned);
+        return;
+    }
+
     // Base case — `G[T]`. The arg's schema is T's binding (if compatible
     // with any earlier binding of the same T).
     if let Some(tv) = extract_type_var_from_subscript(ann, type_params)
         && let Some(schema) = arg_schema(arg, ctx, source, line_index, diagnostics)
     {
-        if poisoned.contains(tv) {
-            // Already poisoned by an earlier conflict — refuse to revive.
-            return;
-        }
-        match subst.get(tv) {
-            None => {
-                subst.insert(tv, schema);
-            }
-            Some(existing) if (*existing).name() == schema.name() => {
-                // Consistent re-binding — keep it.
-            }
-            Some(_) => {
-                // Conflicting bindings — poison T and drop the prior
-                // binding so the return type degrades to Unknown rather
-                // than pretend one of the schemas wins.
-                subst.remove(tv);
-                poisoned.insert(tv);
-            }
-        }
+        record_binding(tv, schema, subst, poisoned);
         return;
     }
 
@@ -1864,6 +1898,67 @@ fn extract_type_var_from_subscript<'a>(expr: &'a Expr, type_params: &[&'a str]) 
         Some(inner)
     } else {
         None
+    }
+}
+
+/// Match `type[T]` / `Type[T]` where `T` is one of the supplied type
+/// variable names. Returns `T` if matched. Used for `def m[T](_:
+/// type[T]) -> DataFrame[T]` — the arg is a class object whose static
+/// type is `type[T]`, so T binds from the arg's identifier name.
+fn extract_type_var_from_type_subscript<'a>(
+    expr: &'a Expr,
+    type_params: &[&'a str],
+) -> Option<&'a str> {
+    let sub = expr.as_subscript_expr()?;
+    let base = sub.value.as_name_expr()?.id.as_str();
+    if base != "type" && base != "Type" {
+        return None;
+    }
+    let inner = sub.slice.as_name_expr()?.id.as_str();
+    if type_params.contains(&inner) {
+        Some(inner)
+    } else {
+        None
+    }
+}
+
+/// Resolve a `type[T]`-positioned argument to the schema it names.
+///
+/// The arg must be a bare `Name` whose identifier matches a known
+/// schema. Anything else — a string literal, a subscript, an
+/// arbitrary expression — degrades to `None` (the binding is skipped
+/// and T silently goes Unknown, never a false positive).
+fn type_arg_schema<'a>(arg: &'a Expr, ctx: &BodyContext<'a>) -> Option<&'a Schema<'a>> {
+    let name = arg.as_name_expr()?;
+    ctx.find_schema(name.id.as_str())
+}
+
+/// Apply a `T → schema` binding with the project's sticky-poisoning
+/// semantics. A conflict between the new schema and an existing
+/// binding of the same T poisons T: the prior binding is dropped and
+/// no future call to this helper can revive T from a later arg/slot,
+/// so the return type degrades to Unknown rather than silently
+/// fabricate a join.
+fn record_binding<'a>(
+    tv: &'a str,
+    schema: &'a Schema<'a>,
+    subst: &mut HashMap<&'a str, &'a Schema<'a>>,
+    poisoned: &mut HashSet<&'a str>,
+) {
+    if poisoned.contains(tv) {
+        return;
+    }
+    match subst.get(tv) {
+        None => {
+            subst.insert(tv, schema);
+        }
+        Some(existing) if (*existing).name() == schema.name() => {
+            // Consistent re-binding — keep it.
+        }
+        Some(_) => {
+            subst.remove(tv);
+            poisoned.insert(tv);
+        }
     }
 }
 
