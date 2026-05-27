@@ -14,7 +14,7 @@ Every operation is marked with one of five status tags. They describe what you'l
 | **modeled** | pykrete computes the output schema and checks every column reference and (where applicable) type. The next call in the chain is fully checked too. |
 | **pass-through** | pykrete carries the receiver's schema forward unchanged. Correct for ops that don't reshape (`cache`, `orderBy`, `limit`, ...). The chain keeps flowing. |
 | **column-check only** | pykrete checks the column names you pass but doesn't re-derive the output schema. Typos still fire [`unknownColumn`](/pykrete/reference/diagnostics/#unknowncolumn--d0030); chains after this point may degrade. |
-| **unmodeled** | pykrete doesn't understand the call. Column refs inside arguments may still be caught via the generic walker, but the chain after this point loses its schema. |
+| **unmodeled** | pykrete doesn't understand the call. Column references inside the arguments may still be caught, but the chain after this point loses its schema. |
 | **opaque** | Intentionally returns an unknown type — usually because the result genuinely depends on runtime data (UDF outputs, pandas conversions, RDD ops). Re-anchor with [`.cast(DataFrame[X])`](#cast--the-re-anchor-primitive) if you want checking to resume. |
 
 If you see a method below tagged something other than **modeled**, the operation itself still works at runtime — pykrete just won't catch typos *past* that point in the chain. Re-anchoring with `.cast(DataFrame[X])` or a typed local annotation restores checking.
@@ -324,7 +324,7 @@ Terminal methods — `count`, `collect`, `first`, `head`, `take`, `tail`, `show`
 Functions in `pyspark.sql.functions` show up inside the operations above — `df.select(F.upper("name"))`, `df.agg(F.sum("amount"))`. pykrete recognizes about 140 of them. Two things to know:
 
 1. **Column refs are always checked.** A string-literal argument to a recognized `F.*` function is treated as a column reference. `F.sum("amunt")` fires [`unknownColumn`](/pykrete/reference/diagnostics/#unknowncolumn--d0030) the same way `df.select("amunt")` does.
-2. **Result types are inferred for ~80 of them** — enough to power [`returnTypeMismatch`](/pykrete/reference/diagnostics/#type-checking-diagnostics) and downstream `.cast(...)` / arithmetic checks. The rest produce a typed-but-untyped result (the chain keeps flowing, but the column's type is unknown until you re-anchor it).
+2. **Result types are inferred for ~80 of them** — enough to power [`returnTypeMismatch`](/pykrete/reference/diagnostics/#type-checking-diagnostics) and downstream `.cast(...)` / arithmetic checks. The rest produce a column whose type is unknown until you re-anchor it — the chain keeps flowing, but downstream type checks against that column can't fire.
 
 A spot-check of the families:
 
@@ -342,7 +342,28 @@ A spot-check of the families:
 | Hash / id | `md5`, `sha1`, `sha2`, `monotonically_increasing_id` | checked | inferred |
 | Sort helpers | `asc`, `desc`, `asc_nulls_first`, ... | checked | sort spec |
 
-A handful of misc functions — `bin`, `conv`, `decode`, `encode`, `to_json`, `from_json`, `assert_true` — are unmodeled. So is `expr(...)` beyond the SQL identifier check.
+A handful of misc functions — `bin`, `conv`, `decode`, `encode`, `to_json`, `from_json`, `assert_true` — are unmodeled. `expr(...)` is partially modeled: its SQL string is parsed for column references (so typos still fire), but the result type isn't tracked.
+
+### `F.broadcast` — join optimization hint
+
+`F.broadcast(df)` is a pass-through: it tells Spark to broadcast the dataframe in a join, but pykrete carries the wrapped frame's schema through unchanged. It's the only `F.*` function that operates on a whole dataframe rather than column expressions.
+
+```python
+class Sale(Schema):
+    region: string
+    amount: int
+
+class Region(Schema):
+    region: string
+    manager: string
+
+def with_manager(sales: DataFrame[Sale], regions: DataFrame[Region]) -> DataFrame:
+    return sales.join(F.broadcast(regions), "region", how="inner")   # 'region' checked on both sides
+```
+
+| Function | Status | Notes |
+| --- | --- | --- |
+| `F.broadcast` | pass-through | Wraps a dataframe for broadcast-join hinting; receiver's schema preserved. |
 
 ### Column methods (`.alias`, `.cast`, `.isNull`, ...)
 
