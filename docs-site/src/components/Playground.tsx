@@ -572,6 +572,21 @@ export default function Playground() {
             // fields lose their bottom half. Lifting overlay widgets
             // to the body lets the popup extend anywhere on the page.
             fixedOverflowWidgets: true,
+            // Pykrete's entire completion surface lives inside string
+            // literals — `col("…")`, `groupBy("…")`, `select("…")`,
+            // etc. Monaco's default is to SUPPRESS quick-suggestions
+            // inside strings (the rationale being that strings are
+            // usually prose, not code). Override: completions in
+            // strings are the whole point of the playground. Without
+            // this, none of pykrete's column-name completions ever
+            // surface and Ctrl+Space is also silenced for in-string
+            // positions.
+            quickSuggestions: {
+              other: true,
+              comments: false,
+              strings: true,
+            },
+            suggestOnTriggerCharacters: true,
           }}
         />
       </div>
