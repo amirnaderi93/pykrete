@@ -28,9 +28,9 @@ mlflow/
 
 CI runs `pykrete check` on every `**/annotated/**/*.pyk` file. pykrete itself is built fresh from `main` each run, so any regression in pykrete shows up here before it gets released.
 
-## What v0.1.6 fixed
+## What the pilot loop surfaced
 
-The pilot loop surfaced five real pykrete gaps; all of them shipped as fixes in v0.1.6.
+The first pass through the vendored codebases surfaced five real pykrete gaps; all of them shipped as fixes in v0.1.6.
 
 | Pilot | File | Gap surfaced | pykrete commit |
 |---|---|---|---|
@@ -40,7 +40,7 @@ The pilot loop surfaced five real pykrete gaps; all of them shipped as fixes in 
 | 4 | Spark `tests/.../test_column.py` | Chained Column-on-Column nested-field access (`df.r.X`) skipped | [`0b70d9c`](https://github.com/amirnaderi93/pykrete/commit/0b70d9c) |
 | 5 | Spark `examples/.../arrow.py` | Lowercase `groupby` alias not recognized | [`9a49bf6`](https://github.com/amirnaderi93/pykrete/commit/9a49bf6) |
 
-Each fix shipped with regression tests in the pykrete crate, so the same gap can't reopen silently.
+Each fix shipped with regression tests in the pykrete crate, so the same gap can't reopen silently. Subsequent releases (v0.1.7 → v0.1.15) continued the same pattern: every Spark coverage gap surfaced in pykrete-tests or against real PySpark codebases became a regression test in `crates/pykrete/tests/` and a checked-in fix. See the [CHANGELOG](https://github.com/amirnaderi93/pykrete/blob/main/CHANGELOG.md) for the per-release breakdown.
 
 ## Methodology per pilot
 

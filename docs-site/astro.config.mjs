@@ -47,6 +47,7 @@ export default defineConfig({
           label: 'About',
           items: [
             { label: 'How it works', slug: 'about/how-it-works' },
+            { label: 'Production readiness', slug: 'about/production-readiness' },
             { label: 'Roadmap', slug: 'about/roadmap' },
             { label: 'Real-codebase tests', slug: 'about/pykrete-tests' },
           ],

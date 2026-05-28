@@ -60,6 +60,8 @@ sales.pyk:10:18 - error unknownColumn: Column 'regoin' does not exist on schema 
 
 The message names the failing column and the schema it was checked against, with a *did you mean* when a close match exists.
 
+When a *did you mean* suggestion is attached, the LSP exposes it as a `QuickFix` code action — VS Code surfaces it as a lightbulb on the underlined token, and selecting the action replaces the bad literal with the suggested name. D0030 is the only diagnostic that ships a quick-fix today.
+
 ### `unionSchemaMismatch` — D0040
 
 `union`, `unionByName`, `intersect`, `intersectAll`, `subtract`, or `exceptAll` between two dataframes whose column-name sets don't agree.

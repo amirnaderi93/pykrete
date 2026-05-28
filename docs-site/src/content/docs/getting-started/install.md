@@ -40,15 +40,17 @@ cargo install --git https://github.com/amirnaderi93/pykrete pykrete
 cargo install --git https://github.com/amirnaderi93/pykrete pykrete-lsp
 ```
 
-This builds from `main`. For a pinned release, add `--tag v0.1.6`.
+This builds from `main`. For a pinned release, add `--tag` with the
+[latest release tag](https://github.com/amirnaderi93/pykrete/releases/latest)
+(e.g. `--tag v0.1.15`).
 
 ### Verify
 
 ```sh
 pykrete --version
-# pykrete 0.1.6
+# pykrete 0.1.15
 pykrete-lsp --version
-# pykrete-lsp 0.1.6
+# pykrete-lsp 0.1.15
 ```
 
 ## VS Code extension

@@ -28,7 +28,7 @@ pykrete is a strict superset of Python that adds a type layer for dataframes. Th
 
 **Autocomplete for column names.** Type a column name in a string argument and pykrete completes the ones that actually exist on the dataframe in scope.
 
-**Quick-fixes.** Accept a *did you mean* suggestion with a single action.
+**Quick-fixes.** When pykrete flags an unknown column with a *did you mean* suggestion, the lightbulb action swaps in the closest matching name.
 
 **Full Python support, included.** The extension bundles a Python language server, so you also get ordinary Python hover, completion, go-to-definition, find-references, and type diagnostics — for free, in the same extension. Nothing else to install, no `files.associations`, no configuration.
 

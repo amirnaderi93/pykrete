@@ -5,21 +5,30 @@ description: What's planned, in rough priority order. Tracking the project as it
 
 The canonical source is [docs/roadmap.md](https://github.com/amirnaderi93/pykrete/blob/main/docs/roadmap.md) in the repo. This page summarizes it for site visitors.
 
-## Where pykrete is now (v0.1.6)
+## Where pykrete is now
 
-The PySpark static checker is feature-complete for the v0.1 surface:
+The PySpark static checker is **feature-complete** as of [v0.1.15](https://github.com/amirnaderi93/pykrete/releases/tag/v0.1.15):
 
-- The full DataFrame operation surface (`select` / `filter` / `join` / `groupBy`+`agg` / `withColumn(s)` / `drop` / `union` / `cube` / `rollup` / `pivot` / `transform` / …) with result-schema inference through whole transformation chains.
-- Inline SQL (`F.expr`, `selectExpr`, string-`filter`) and raw `spark.sql("SELECT …")`.
+- The full DataFrame operation surface (`select` / `filter` / `join` / `groupBy`+`agg` / `withColumn(s)` / `drop` / `union` / `cube` / `rollup` / `pivot` / `transform` / `cast` / `toDF` / `df.na.*` / set ops / `melt` / `unpivot` / …) with result-schema inference through whole transformation chains.
+- Inline SQL (`F.expr`, `selectExpr`, string-`filter`) and raw `spark.sql("SELECT …")` — including `createOrReplaceTempView` + `spark.sql("SELECT … FROM v")` resolution within a file.
 - `Window` partition/order key checking.
-- Column existence (`D0030`) and column type (`D0080` / `D0081` / `D0082`) checking, including dotted nested-field paths.
-- Arbitrarily-nested `array` / `map` / `struct` columns.
-- `pyspark.sql.functions` result-type catalog and UDF return types.
+- Column-**existence** checking (`D0030`) and column-**type** checking — conservative (`D0080`, on by default) and strict (`D0081` / `D0082`, under `typeCheckingMode: strict`).
+- Arbitrarily-nested `array` / `map` / `struct` columns — declared, structurally type-checked, and navigated field-by-field (`col("orders.line.sku")`).
+- Column method chains — `.isNull` / `.isin` / `.between` / `.like` / `.getField` / `.getItem` / `.withField` / `.dropFields` — recognized and tracked through.
+- `F.when` / `F.otherwise` result-type inference and `F.struct` / `F.named_struct` schema construction. Date/time first-arg column checking on ten `F.*` functions. Array higher-order recognizers (`F.transform`, `F.filter`, `F.aggregate`, `F.exists`, `F.forall`).
+- `spark.read.<format>(path)` and `spark.table(name)` recognized as opaque sources — re-anchor with `.cast(DataFrame[Schema])` or a typed variable annotation to resume checking.
+- A `pyspark.sql.functions` result catalog (≈80 functions) and UDF return types.
+- Call-site argument checking (`D0051 argumentColumnsMismatch`) closes the function boundary on the input side.
+- Generic-inference: multi-TypeVar binding, nested generic shapes, chained class-method calls, and `type[T]` argument binding all dispatch correctly.
 - Cross-file imports and shared-schema modules.
 
-The LSP server delivers live diagnostics, hover, completion, document symbols, go-to-definition, find-references, rename, and semantic tokens. The VS Code extension wraps it; Neovim, Helix, Emacs and Zed setups are documented.
+The **LSP server** delivers live diagnostics, hover, completion (column names in bare-string arguments and on chain results), document symbols, go-to-definition, find-references, rename, semantic tokens, and `textDocument/codeAction` quick-fixes for `D0030` "did you mean" suggestions. It embeds a Python language server via an LSP multiplexer.
 
-The `.pyk` → `.py` transpiler is complete.
+The **VS Code extension** wraps it; Neovim, Helix, and Emacs setups are documented; a Zed extension is planned.
+
+The **`.pyk` → `.py` transpiler** is complete.
+
+For the full list of every shipped feature with diagnostics, see the [Operations reference](/pykrete/reference/operations/) and the [GitHub Releases page](https://github.com/amirnaderi93/pykrete/releases).
 
 ## Next up
 
@@ -35,7 +44,7 @@ Currently `Window.partitionBy("col")` keys aren't checked against any DataFrame 
 
 ### Column-expression type tracking
 
-Tracks the type of a Column through chains like `df["a"].cast("int").alias("x")`. Needed for `df[N]` integer-subscript bounds checks, `Column.withField` / `Column.dropFields` against nested struct columns, and warning when a Column's atomic type drives a function that expects a different type.
+Tracks the type of a Column through chains like `df["a"].cast("int").alias("x")`. Needed for `df[N]` integer-subscript bounds checks, fuller `Column.withField` / `Column.dropFields` against nested struct columns, and warning when a Column's atomic type drives a function that expects a different type.
 
 ## Larger structural moves
 

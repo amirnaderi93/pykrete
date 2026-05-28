@@ -17,7 +17,8 @@
   <a href="https://amirnaderi93.github.io/pykrete/"><strong>Docs</strong></a> ·
   <a href="https://amirnaderi93.github.io/pykrete/getting-started/install/">Install</a> ·
   <a href="https://amirnaderi93.github.io/pykrete/getting-started/quickstart/">Quickstart</a> ·
-  <a href="docs/roadmap.md">Roadmap</a>
+  <a href="docs/roadmap.md">Roadmap</a> ·
+  <a href="CHANGELOG.md">Changelog</a>
 </p>
 
 ---
@@ -84,7 +85,3 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow — feature 
 ## License
 
 MIT. See [LICENSE](LICENSE).
-
-## Built with Claude
-
-pykrete is developed with [Claude Code](https://claude.com/claude-code), Anthropic's agentic coding tool.
