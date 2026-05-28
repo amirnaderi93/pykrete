@@ -163,3 +163,16 @@
 .pk-diag-warning .pk-diag-button:focus-visible {
   background: rgba(229, 192, 123, 0.12);
 }
+
+/* Lift Monaco's overflow widgets (hover popup, suggest menu, parameter
+ * hints) above Starlight's right-hand "On this page" table-of-contents
+ * sidebar. With `fixedOverflowWidgets: true` in the editor options,
+ * Monaco renders these at the document body level so they can escape
+ * the editor's own `overflow: hidden`. That move puts them in the same
+ * stacking context as Starlight's sidebar, which sets `z-index: 9`
+ * on `.right-sidebar` — without this override, the hover gets covered
+ * by the TOC links. 1000 is generous; Monaco's own widgets use 4500+
+ * internally but only against their own container. */
+.monaco-editor-overflow-widgets-root {
+  z-index: 1000;
+}
