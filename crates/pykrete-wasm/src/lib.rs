@@ -99,8 +99,7 @@ pub fn check_source(source: &str) -> JsValue {
         // Fall back to an empty JS array, never null — JS code doing
         // `for (const d of result)` or `result.length` would crash on
         // null but handle `[]` cleanly.
-        serde_wasm_bindgen::to_value(&Vec::<DiagnosticOut>::new())
-            .expect("empty Vec serializes")
+        serde_wasm_bindgen::to_value(&Vec::<DiagnosticOut>::new()).expect("empty Vec serializes")
     })
 }
 
@@ -113,10 +112,9 @@ fn internal_error_diagnostic() -> DiagnosticOut {
         code: "D9999".to_string(),
         rule_name: "internalError".to_string(),
         severity: "error".to_string(),
-        message:
-            "pykrete panicked during analysis — please report this as a bug at \
+        message: "pykrete panicked during analysis — please report this as a bug at \
              github.com/amirnaderi93/pykrete/issues"
-                .to_string(),
+            .to_string(),
         line: 1,
         column: 1,
         end_line: 1,
