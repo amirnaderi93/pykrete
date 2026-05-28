@@ -166,6 +166,12 @@ def f(u: DataFrame[User]) -> DataFrame:
     ));
     assert_count(&result, "D0030", 1);
     assert_message_contains(&result, "D0030", "citi");
+    // Pin the "Did you mean 'city'?" suggestion that `closest_name`
+    // emits via Levenshtein — without this the test only catches that
+    // the typo was named, not that the helper actually proposed the
+    // right field.
+    assert_message_contains(&result, "D0030", "Did you mean");
+    assert_message_contains(&result, "D0030", "city");
 }
 
 #[test]
@@ -274,4 +280,72 @@ def f(d: DataFrame[UserZ]) -> DataFrame[User]:
     let result = check_strict(&src);
     assert_count(&result, "D0080", 0);
     assert_count(&result, "D0030", 0);
+}
+
+#[test]
+fn dropFields_on_typo_fires_diagnostic() {
+    // `.dropFields("zipcod")` against a struct that has `zipcode` — Spark
+    // 3.4+ silently leaves the field in place, so the user thinks they
+    // dropped it and didn't. Pykrete fires D0030 symmetric to the
+    // `.getField` typo handling and surfaces a "Did you mean?" hint.
+    let result = check(&format!(
+        r#"{NESTED_FOR_WITH_FIELD}
+def f(d: DataFrame[UserZ]) -> DataFrame[UserZ]:
+    return d.withColumn("address", col("address").dropFields("zipcod"))
+"#
+    ));
+    assert_count(&result, "D0030", 1);
+    assert_message_contains(&result, "D0030", "zipcod");
+    assert_message_contains(&result, "D0030", "Did you mean");
+    assert_message_contains(&result, "D0030", "zipcode");
+}
+
+#[test]
+fn dropFields_with_multiple_typos_fires_per_name() {
+    // A multi-arg `.dropFields("zipcod", "cty")` — each missing field
+    // gets its own diagnostic, not one aggregate message.
+    let result = check(&format!(
+        r#"{NESTED_FOR_WITH_FIELD}
+def f(d: DataFrame[UserZ]) -> DataFrame[UserZ]:
+    return d.withColumn("address", col("address").dropFields("zipcod", "cty"))
+"#
+    ));
+    assert_count(&result, "D0030", 2);
+    assert_message_contains(&result, "D0030", "zipcod");
+    assert_message_contains(&result, "D0030", "cty");
+}
+
+#[test]
+fn getField_on_non_struct_receiver_is_silent() {
+    // `col("amount").getField("a")` against a Double column — Spark would
+    // error at runtime, but pykrete can't always tell what an arbitrary
+    // receiver evaluates to, so it stays silent rather than risk a false
+    // positive. Pins that behavior so a future tightening of the
+    // receiver-type check doesn't accidentally start flagging it.
+    let result = check(
+        r#"
+class In(Schema):
+    amount: double
+
+def f(d: DataFrame[In]) -> DataFrame[In]:
+    return d.filter(col("amount").getField("a").isNotNull())
+"#,
+    );
+    assert_no_diagnostics(&result);
+}
+
+#[test]
+fn getItem_on_non_collection_receiver_is_silent() {
+    // Symmetric to `.getField` on a non-struct: `.getItem` against a
+    // scalar column produces no false-positive D0030.
+    let result = check(
+        r#"
+class In(Schema):
+    amount: double
+
+def f(d: DataFrame[In]) -> DataFrame[In]:
+    return d.filter(col("amount").getItem(0).isNotNull())
+"#,
+    );
+    assert_no_diagnostics(&result);
 }

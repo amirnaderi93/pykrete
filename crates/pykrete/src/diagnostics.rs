@@ -191,6 +191,7 @@ pub fn rule_name(code: &str) -> &str {
         "D0060" => "missingJoinKey",
         "D0070" => "unresolvedImport",
         "D0071" => "unexportedName",
+        "D0072" => "duplicateSchemaName",
         "D0080" => "returnTypeMismatch",
         "D0081" => "nonNumericArithmetic",
         "D0082" => "crossTypeComparison",

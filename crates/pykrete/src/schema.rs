@@ -292,6 +292,15 @@ pub(crate) fn schema_base_chain<'ast>(
 /// over the class list. Each resulting [`Schema`] carries its ancestor
 /// chain in [`Schema::bases`], so `fields()` surfaces inherited columns.
 pub fn discover_schemas<'ast>(classes: &'ast [DiscoveredClass<'ast>]) -> Vec<Schema<'ast>> {
+    // Build a `name -> index` index once and reuse it across the fixpoint
+    // sweep. The previous implementation did `classes.iter().position(...)`
+    // for every (class, base) pair on every pass — O(N² · depth). A direct
+    // lookup keeps each pass linear in the class count.
+    let name_to_idx: std::collections::HashMap<&str, usize> = classes
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.name(), i))
+        .collect();
     let mut is_schema: Vec<bool> = classes.iter().map(|c| c.has_base("Schema")).collect();
     loop {
         let mut changed = false;
@@ -299,12 +308,10 @@ pub fn discover_schemas<'ast>(classes: &'ast [DiscoveredClass<'ast>]) -> Vec<Sch
             if is_schema[i] {
                 continue;
             }
-            let extends_a_schema = classes[i].base_names().iter().any(|&base| {
-                classes
-                    .iter()
-                    .position(|c| c.name() == base)
-                    .is_some_and(|j| is_schema[j])
-            });
+            let extends_a_schema = classes[i]
+                .base_names()
+                .iter()
+                .any(|&base| name_to_idx.get(base).is_some_and(|&j| is_schema[j]));
             if extends_a_schema {
                 is_schema[i] = true;
                 changed = true;

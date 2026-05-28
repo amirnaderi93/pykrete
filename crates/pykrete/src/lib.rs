@@ -166,7 +166,10 @@ pub fn check_with_mode(path: &str, source: &str, mode: CheckMode) -> CheckResult
 ///   (`from pkg.X import Y`) are anchored at this root.
 /// - Directory walking happens at the CLI layer; this entry point still
 ///   takes `(path, source)` pairs.
-/// - Duplicate top-level names across files: not currently diagnosed.
+/// - Duplicate schema names across files surface as `D0072
+///   duplicateSchemaName` warnings on every duplicate past the first
+///   (sorted alphabetically by file path). Other top-level name
+///   duplicates (functions, constants) are not yet diagnosed.
 ///
 /// Runs at the default [`CheckMode::Standard`]; use
 /// [`check_project_with_mode`] to pick a strictness level.
@@ -230,8 +233,89 @@ fn check_project_unfiltered(files: &[(String, String)]) -> ProjectCheckResult {
         });
     }
 
+    // Project-wide D0072: warn when the same schema name is declared in
+    // more than one file. Fires once per duplicate, attached to the
+    // alphabetically-later file so the user sees the warning in a
+    // deterministic spot.
+    emit_duplicate_schema_diagnostics(files, &bundles, &mut file_results);
+
     ProjectCheckResult {
         files: file_results,
+    }
+}
+
+/// Post-process per-file results to add D0072 `duplicateSchemaName`
+/// warnings. Iterates every (schema_name, [(file_idx, range)]) group; for
+/// each group with more than one declaration, picks the alphabetically-
+/// later file path as the canonical "duplicate" site and emits a warning
+/// at the class declaration range there, naming every file that declared
+/// the same schema for context.
+fn emit_duplicate_schema_diagnostics(
+    files: &[(String, String)],
+    bundles: &[Option<FileBundle<'_>>],
+    file_results: &mut [ProjectFileResult],
+) {
+    use crate::diagnostics::CheckMode;
+    use std::collections::BTreeMap;
+
+    // schema name -> sorted list of (file_path, file_idx, decl_range).
+    // BTreeMap to get deterministic output order regardless of HashMap
+    // iteration order; the inner Vec is sorted by file path below.
+    let mut sites: BTreeMap<&str, Vec<(&str, usize, TextRange)>> = BTreeMap::new();
+    for (i, bundle) in bundles.iter().enumerate() {
+        let Some(bundle) = bundle else { continue };
+        // Only Schema-derived classes count — non-Schema classes can be
+        // duplicated freely (a `class Helper` in two files is fine; only
+        // the user's data-model schemas are project-wide singletons).
+        for schema in discover_schemas(&bundle.local_classes) {
+            sites.entry(schema.name()).or_default().push((
+                files[i].0.as_str(),
+                i,
+                schema.class.def.range,
+            ));
+        }
+    }
+    for (name, decls) in sites {
+        // Collapse to one entry per file — a class redeclared inside a
+        // single file is a separate concern (and would be reported by a
+        // future intra-file diagnostic), not D0072. Picking the first
+        // declaration's range per file keeps the warning on the topmost
+        // site in that file's source.
+        let mut by_file: BTreeMap<&str, (usize, TextRange)> = BTreeMap::new();
+        for (path, idx, range) in decls {
+            by_file.entry(path).or_insert((idx, range));
+        }
+        if by_file.len() < 2 {
+            continue;
+        }
+        // BTreeMap already iterates in sorted-path order, so the first
+        // entry is alphabetically earliest and acts as the "original";
+        // every later file gets a D0072 warning. With three or more
+        // declarations, each file past the first gets its own diagnostic.
+        let mut iter = by_file.into_iter();
+        let (first_path, _) = iter.next().expect("at least 2 entries");
+        for (dup_path, (dup_idx, dup_range)) in iter {
+            let dup_source = &files[dup_idx].1;
+            let dup_line_index = LineIndex::from_source_text(dup_source);
+            let message = format!(
+                "Schema '{name}' is declared in multiple files: {first_path}, {dup_path}.",
+            );
+            let diag = Diagnostic::at_range(
+                Severity::Warning,
+                "D0072",
+                message,
+                dup_range,
+                dup_source,
+                &dup_line_index,
+            )
+            .with_min_mode(CheckMode::Basic);
+            // The result Vec is sized to `files.len()` in input order, so
+            // indexing by the file's input index lands the warning in the
+            // right per-file bucket.
+            if let Some(target) = file_results.get_mut(dup_idx) {
+                target.result.diagnostics.push(diag);
+            }
+        }
     }
 }
 

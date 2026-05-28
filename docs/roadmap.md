@@ -55,13 +55,26 @@ setting; the single value also drives the embedded Python engine.
 - **User-facing language reference** ([`language-reference/`](language-reference/))
   — schema syntax, operation reference, error catalog, configuration,
   cookbook. The doc lives but is empty.
-- **Performance pass** — benchmark on large codebases; today every
-  `pykrete check` reparses the whole project.
-- **Duplicate-name detection** across files.
 - **Zed extension** — Neovim, Helix and Emacs setups are wired in
   [`editors/`](editors/); Zed needs a dedicated extension.
 
 Already shipped (recorded here for completeness):
+
+- **Performance pass.** Project-scope hot paths reviewed and
+  micro-optimized: schema-name resolution (previously a linear scan over
+  every project-wide schema) is now a `HashMap` index keyed by name on
+  the per-function `BodyContext`; the `discover_schemas` fixpoint sweep
+  uses a name → class-index table instead of an `O(N²)`
+  `iter().position(...)` per (class, base) pair. A `tests/perf.rs`
+  smoke test exercises a synthetic 50-file / 1500-schema project and
+  asserts the release-build wall-clock stays inside a generous budget
+  so an order-of-magnitude regression is caught in CI.
+- **Duplicate-name detection across files.** `D0072 duplicateSchemaName`
+  warns when the same `class X(Schema)` is declared in more than one
+  project file. The alphabetically-earliest declaration is treated as
+  the canonical site; every later one gets a warning that names both
+  files. Same-file redeclarations don't fire D0072 (different
+  concern), and function-name duplicates aren't covered yet.
 
 - **Generic-inference: full coverage of the four extension patterns.**
   Multi-TypeVar binding —

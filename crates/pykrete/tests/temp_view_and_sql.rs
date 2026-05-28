@@ -160,6 +160,146 @@ def f(orders: DataFrame[Orders], products: DataFrame[Products]) -> DataFrame:
 }
 
 #[test]
+fn spark_sql_select_star_returns_view_schema_and_supports_followups() {
+    // `SELECT *` against a registered view yields the view's full
+    // schema, so a downstream `.select(col("region"))` is checked
+    // cleanly and a typo on a view column fires D0030 just like a
+    // direct `spark.sql("SELECT region FROM …")` chain would.
+    let clean = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Orders]) -> DataFrame:
+    raw.createOrReplaceTempView(\"orders_view\")
+    return spark.sql(\"SELECT * FROM orders_view\").select(col(\"region\"))
+"
+    );
+    assert_no_diagnostics(&check(&clean));
+
+    let typo = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Orders]) -> DataFrame:
+    raw.createOrReplaceTempView(\"orders_view\")
+    return spark.sql(\"SELECT * FROM orders_view\").select(col(\"regoin\"))
+"
+    );
+    let r = check(&typo);
+    assert_count(&r, "D0030", 1);
+    assert_message_contains(&r, "D0030", "regoin");
+}
+
+#[test]
+fn spark_sql_join_or_subquery_falls_back_silently() {
+    // Per the v0.1.13 scope cut, multi-table FROM (JOINs, subqueries,
+    // qualified `db.table` names) bypass tempView resolution. The
+    // query parses, but `single_from_table` returns None, so pykrete
+    // degrades to the unknown-result-schema path — no D0030 even when
+    // the projection names a column the view doesn't have.
+    let with_join = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Orders]) -> DataFrame:
+    raw.createOrReplaceTempView(\"orders_view\")
+    return spark.sql(\"SELECT nonexistent FROM orders_view JOIN other ON orders_view.amount = other.amount\")
+"
+    );
+    assert!(
+        !check(&with_join).has_code("D0030"),
+        "JOIN should fall back silently — no D0030 expected"
+    );
+
+    let with_subquery = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Orders]) -> DataFrame:
+    raw.createOrReplaceTempView(\"orders_view\")
+    return spark.sql(\"SELECT nonexistent FROM (SELECT * FROM orders_view) x\")
+"
+    );
+    assert!(
+        !check(&with_subquery).has_code("D0030"),
+        "subquery FROM should fall back silently — no D0030 expected"
+    );
+
+    let qualified = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Orders]) -> DataFrame:
+    raw.createOrReplaceTempView(\"orders_view\")
+    return spark.sql(\"SELECT nonexistent FROM db.orders_view\")
+"
+    );
+    assert!(
+        !check(&qualified).has_code("D0030"),
+        "qualified `db.table` FROM should fall back silently — no D0030 expected"
+    );
+}
+
+#[test]
+fn tempview_registered_in_one_function_is_visible_to_another_in_the_same_file() {
+    // The file-scoped TempViewRegistry is shared across every typed
+    // function in the file. A view registered in `register` is visible
+    // to the `spark.sql(...)` call in `consume`, and a typo'd column
+    // there still fires D0030 against the originally-registered schema.
+    let src = format!(
+        "{SCHEMA}
+def register(raw: DataFrame[Orders]) -> None:
+    raw.createOrReplaceTempView(\"orders_view\")
+    return None
+
+def consume() -> DataFrame:
+    return spark.sql(\"SELECT regoin FROM orders_view\")
+"
+    );
+    let r = check(&src);
+    assert_count(&r, "D0030", 1);
+    assert_message_contains(&r, "D0030", "regoin");
+    assert_message_contains(&r, "D0030", "Orders");
+}
+
+#[test]
+fn re_registering_a_view_replaces_the_earlier_schema() {
+    // `df1.createOrReplaceTempView("v")` then `df2.createOrReplaceTempView("v")`
+    // — the second registration wins (matching Spark's
+    // CREATE OR REPLACE semantics). A subsequent `spark.sql` resolves
+    // against the second schema, so a column that exists only on the
+    // SECOND schema is clean and one that exists only on the FIRST
+    // fires D0030.
+    let clean_after_replace = "\
+class Orders(Schema):
+    region: string
+    amount: int
+
+class Products(Schema):
+    sku: string
+    price: int
+
+def f(orders: DataFrame[Orders], products: DataFrame[Products]) -> DataFrame:
+    orders.createOrReplaceTempView(\"v\")
+    products.createOrReplaceTempView(\"v\")
+    # `sku` exists on Products (the second registration), not Orders.
+    return spark.sql(\"SELECT sku FROM v\")
+";
+    assert_no_diagnostics(&check(clean_after_replace));
+
+    let stale_after_replace = "\
+class Orders(Schema):
+    region: string
+    amount: int
+
+class Products(Schema):
+    sku: string
+    price: int
+
+def f(orders: DataFrame[Orders], products: DataFrame[Products]) -> DataFrame:
+    orders.createOrReplaceTempView(\"v\")
+    products.createOrReplaceTempView(\"v\")
+    # `region` only existed on the FIRST schema (Orders); after the
+    # replace it's gone — D0030 fires against Products.
+    return spark.sql(\"SELECT region FROM v\")
+";
+    let r = check(stale_after_replace);
+    assert_count(&r, "D0030", 1);
+    assert_message_contains(&r, "D0030", "Products");
+    assert_message_contains(&r, "D0030", "region");
+}
+
+#[test]
 fn tempview_is_within_file_only() {
     // File A registers a view; file B references it via spark.sql.
     // Cross-file registration is deliberately not supported, so file

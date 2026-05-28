@@ -3826,6 +3826,22 @@ fn report_expr_type_errors<'a>(
             {
                 report_get_field_typo(&recv_ty, lit, source, line_index, diagnostics);
             }
+            // `<struct-col>.dropFields("a", "b", …)` — flag each literal
+            // string arg that isn't a field of the receiver struct.
+            // Symmetric to the `.getField` typo handling above; a silent
+            // miss here means the user thinks they removed a field and
+            // didn't (Spark 3.4+ matches that behavior at runtime, so it's
+            // a genuine footgun).
+            if let Some(attr) = call.func.as_attribute_expr()
+                && attr.attr.id.as_str() == "dropFields"
+                && let Some(recv_ty) = infer_expr_type(&attr.value, schema, tcx)
+            {
+                for arg in &call.arguments.args {
+                    if let Some(lit) = arg.as_string_literal_expr() {
+                        report_get_field_typo(&recv_ty, lit, source, line_index, diagnostics);
+                    }
+                }
+            }
             report_expr_type_errors(&call.func, schema, tcx, source, line_index, diagnostics);
             for arg in &call.arguments.args {
                 report_expr_type_errors(arg, schema, tcx, source, line_index, diagnostics);
