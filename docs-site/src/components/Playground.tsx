@@ -217,6 +217,11 @@ export default function Playground() {
   const debouncedSource = useDebounced(source, 300);
 
   const [wasmReady, setWasmReady] = useState(false);
+  /** True after Monaco's `onMount` callback fires. Tracked as state (not
+   * just a ref) so the provider-registration effect can re-run when the
+   * editor finishes loading — see the race-condition comment on that
+   * effect below. */
+  const [editorReady, setEditorReady] = useState(false);
   const [wasmError, setWasmError] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
 
@@ -319,8 +324,20 @@ export default function Playground() {
   // (`liveSourceRef`) lets the providers stay responsive without
   // re-registering on every keystroke. The wasm-ready flag gates
   // registration so we never call the wasm exports before they exist.
+  //
+  // RACE-CONDITION NOTE: `monacoRef.current` is populated by
+  // `handleMount` (Monaco's `onMount` callback), which does NOT
+  // trigger a React re-render. If this effect depended only on
+  // `wasmReady` it would run once when wasm becomes ready — and if
+  // Monaco hadn't mounted yet (the realistic case: wasm is tiny/cached
+  // while Monaco is a ~2MB CDN fetch), `monacoRef.current` would still
+  // be null, the effect would early-return, and would NEVER re-run —
+  // leaving the user without hover / completion / go-to-definition
+  // until a page refresh. Tracking `editorReady` as React STATE (set
+  // in `handleMount`) and listing it as a dep makes this effect re-run
+  // the moment Monaco finishes loading, regardless of which side wins.
   useEffect(() => {
-    if (!wasmReady) return;
+    if (!wasmReady || !editorReady) return;
     const monaco = monacoRef.current;
     if (!monaco) return;
     // Dispose any previously-registered providers first — React strict
@@ -422,11 +439,16 @@ export default function Playground() {
       for (const d of providerDisposablesRef.current) d.dispose();
       providerDisposablesRef.current = [];
     };
-  }, [wasmReady]);
+  }, [wasmReady, editorReady]);
 
   const handleMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
     monacoRef.current = monaco;
+    // Flip `editorReady` so the provider-registration effect re-runs
+    // even if `wasmReady` already turned true while Monaco was still
+    // loading its CDN bundle. See the race-condition note on that
+    // effect.
+    setEditorReady(true);
   };
 
   const handleChange: OnChange = (value) => {

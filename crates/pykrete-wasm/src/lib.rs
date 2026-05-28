@@ -538,6 +538,112 @@ def keep(df: DataFrame[Users]) -> DataFrame[Users]:
         );
     }
 
+    /// Helper for the bare-string-arg regression tests below: locate the
+    /// cursor inside the empty string at `needle` (which should be a
+    /// `"<method>(""` substring) and return the 1-indexed `(line, column)`
+    /// of the position between the two empty-string quotes. Computing the
+    /// position from the source — rather than hardcoding it — keeps the
+    /// tests robust against future edits to the schema scaffolding above
+    /// the body line.
+    fn cursor_inside_empty_string_after(source: &str, needle: &str) -> (usize, usize) {
+        let idx = source
+            .find(needle)
+            .unwrap_or_else(|| panic!("needle {needle:?} not found in source"))
+            + needle.len();
+        let prefix = &source[..idx];
+        let line = prefix.matches('\n').count() + 1;
+        let line_start = prefix.rfind('\n').map(|p| p + 1).unwrap_or(0);
+        let column = idx - line_start + 1;
+        (line, column)
+    }
+
+    /// The user's exact reported failure on the playground's "Column
+    /// typo" snippet: delete the typo'd column name in `groupBy("regoin")`
+    /// and the cursor lands inside `groupBy("")`. The completion
+    /// surface should fire and return the receiver dataframe's columns.
+    ///
+    /// Note: the analyzer's bare-string-arg completion path was already
+    /// wired before this round — `pykrete::completions` recognizes the
+    /// position via the column-ref trace that `groupBy(...)`'s D0030
+    /// pass records. What the playground was actually missing was the
+    /// provider-registration race fix in `Playground.tsx` (the
+    /// completion-provider effect early-returned when Monaco hadn't
+    /// mounted yet and never re-ran). This test pins the analyzer
+    /// guarantee so a future refactor doesn't silently drop the bare-
+    /// string surface and re-break the user's case from a different
+    /// angle.
+    #[test]
+    fn complete_inside_groupby_string_arg_returns_column_names() {
+        let source = "class Sale(Schema):\n    region: string\n    product: string\n    amount: int\n    quantity: int\n\ndef revenue_by_region(sales: DataFrame[Sale]):\n    return sales.groupBy(\"\").agg(F.sum(\"amount\"))\n";
+        let (line, column) = cursor_inside_empty_string_after(source, "groupBy(\"");
+        let items = run_completion(source, line, column);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(
+            labels.contains(&"region"),
+            "expected `region` in completions, got: {labels:?}"
+        );
+        assert!(
+            labels.contains(&"product") && labels.contains(&"amount"),
+            "expected every Sale column in completions, got: {labels:?}"
+        );
+        assert!(
+            items.iter().all(|i| i.kind == "field"),
+            "expected every item to be a field, got: {:?}",
+            items
+                .iter()
+                .map(|i| (&i.label, &i.kind))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// The same guarantee for `select("...")` — a bare-string arg to
+    /// `select` is a column-name position, and the completion list is
+    /// the receiver's schema.
+    #[test]
+    fn complete_inside_select_string_arg_returns_column_names() {
+        let source = "class Sale(Schema):\n    region: string\n    amount: int\n\ndef pick(sales: DataFrame[Sale]) -> DataFrame:\n    return sales.select(\"\")\n";
+        let (line, column) = cursor_inside_empty_string_after(source, "select(\"");
+        let items = run_completion(source, line, column);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(
+            labels.contains(&"region") && labels.contains(&"amount"),
+            "expected `region` and `amount`, got: {labels:?}"
+        );
+    }
+
+    /// The same guarantee for `F.sum("...")` inside an `agg(...)` call.
+    /// `F.sum` is a known aggregate that takes a column name as its
+    /// first positional arg; the relevant schema is the grouped
+    /// dataframe's underlying schema.
+    #[test]
+    fn complete_inside_f_sum_string_arg_returns_column_names() {
+        let source = "class Sale(Schema):\n    region: string\n    amount: int\n\ndef summarize(sales: DataFrame[Sale]) -> DataFrame:\n    return sales.groupBy(\"region\").agg(F.sum(\"\"))\n";
+        let (line, column) = cursor_inside_empty_string_after(source, "F.sum(\"");
+        let items = run_completion(source, line, column);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(
+            labels.contains(&"region") && labels.contains(&"amount"),
+            "expected `region` and `amount`, got: {labels:?}"
+        );
+    }
+
+    /// And `withColumnRenamed("...", "new")` — the FIRST arg is a
+    /// column-name reference (the existing column to rename), so the
+    /// completion list is the receiver's schema. The SECOND arg is the
+    /// new name and is deliberately NOT a completion surface (no test
+    /// here for it — completing a fresh name doesn't make sense).
+    #[test]
+    fn complete_inside_with_column_renamed_first_arg_returns_column_names() {
+        let source = "class Sale(Schema):\n    region: string\n    amount: int\n\ndef rename(sales: DataFrame[Sale]) -> DataFrame:\n    return sales.withColumnRenamed(\"\", \"r\")\n";
+        let (line, column) = cursor_inside_empty_string_after(source, "withColumnRenamed(\"");
+        let items = run_completion(source, line, column);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(
+            labels.contains(&"region") && labels.contains(&"amount"),
+            "expected `region` and `amount`, got: {labels:?}"
+        );
+    }
+
     /// Completion at a position where pykrete recognizes no surface
     /// returns an empty list — not an error. Matches the "empty on
     /// no-match" contract of `pykrete::completions`. The playground
