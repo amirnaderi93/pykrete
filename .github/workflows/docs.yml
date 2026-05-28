@@ -10,6 +10,13 @@ on:
     paths:
       - 'docs-site/**'
       - '.github/workflows/docs.yml'
+      # The playground page imports the pykrete-wasm package, which is
+      # rebuilt from these sources by docs-site's `prebuild` script.
+      # Trigger a docs rebuild when the wasm crate (or the analyzer it
+      # wraps) changes so the deployed playground tracks main.
+      - 'crates/pykrete-wasm/**'
+      - 'crates/pykrete/**'
+      - 'scripts/build-wasm.sh'
   workflow_dispatch:
 
 permissions:
@@ -38,10 +45,44 @@ jobs:
           # No lockfile (committed .gitignore excludes them so users
           # can pick npm/pnpm/yarn locally). CI uses npm install on a
           # fresh tree each run.
+
+      # The /playground page imports the local `pykrete-wasm` package,
+      # which docs-site's `prebuild` script regenerates by invoking
+      # `scripts/build-wasm.sh`. That script needs the wasm Rust target
+      # and the `wasm-pack` binary on PATH — install both before the
+      # site build runs.
+      - name: Install Rust (with wasm target)
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Cache cargo & target
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Share the cache with the dedicated WASM workflow so the
+          # docs build doesn't pay a cold compile cost.
+          workspaces: '. -> target'
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
       - uses: actions/configure-pages@v5
+
+      # Build the wasm package BEFORE `npm install` — the docs-site's
+      # package.json references it as a local `file:` dependency, and
+      # the output directory is gitignored, so a fresh checkout has
+      # nothing for npm to install from until we build it.
+      #
+      # Working directory is docs-site/ (job default), so step up to
+      # the repo root to invoke the build script.
+      - name: Build pykrete-wasm package
+        working-directory: .
+        run: ./scripts/build-wasm.sh
+
       - name: Install dependencies
         run: npm install
-      - name: Build
+      - name: Build site
+        # The `prebuild` hook re-runs the wasm build here too — cheap
+        # because cargo + wasm-pack are both cached at this point,
+        # and it keeps the local-vs-CI parity honest.
         run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:
