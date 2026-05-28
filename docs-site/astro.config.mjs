@@ -32,6 +32,7 @@ export default defineConfig({
             { label: 'Why pykrete', slug: 'getting-started/why' },
             { label: 'Install', slug: 'getting-started/install' },
             { label: 'Quickstart', slug: 'getting-started/quickstart' },
+            { label: 'Cookbook', slug: 'cookbook' },
           ],
         },
         {
