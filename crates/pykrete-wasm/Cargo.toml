@@ -24,3 +24,9 @@ wasm-bindgen = "0.2"
 # to convert it into a JS-side object across the boundary.
 serde = { version = "1", features = ["derive"] }
 serde-wasm-bindgen = "0.6"
+
+# Routes Rust panics to the browser's `console.error` instead of the
+# default wasm trap (which prints nothing useful). Installed once from
+# a `#[wasm_bindgen(start)]` initializer. Tiny — pulls in no runtime
+# overhead on the happy path.
+console_error_panic_hook = "0.1"

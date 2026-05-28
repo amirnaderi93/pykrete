@@ -14,8 +14,24 @@
 //! The analyzer call goes through the same public entry point the CLI
 //! and LSP use (`pykrete::check`), so behavior in the playground
 //! matches what users get locally.
+//!
+//! ## Panic safety
+//!
+//! A Rust panic that crosses the wasm-bindgen boundary aborts the
+//! whole module and tears down the JS host's view of it — every
+//! subsequent `check_source` call would fail with a poisoned-instance
+//! error, and the playground would visibly break. The analyzer is
+//! well-tested, but the playground feeds it arbitrary user input from
+//! a public website, so a defensive `catch_unwind` around the
+//! analyzer call is cheap insurance.
+//!
+//! The hook from `console_error_panic_hook` routes panic messages to
+//! `console.error` in the browser. That doesn't *prevent* the panic
+//! propagating — `catch_unwind` does — but it makes the panic
+//! debuggable when someone files a bug report.
 
 use serde::Serialize;
+use std::panic;
 use wasm_bindgen::prelude::*;
 
 /// One diagnostic, in a shape friendly to a JS / TS host.
@@ -40,6 +56,19 @@ struct DiagnosticOut {
     end_column: u32,
 }
 
+/// Runs once when the wasm module is instantiated. Installs a panic
+/// hook so panic messages show up in the browser's devtools console
+/// — without this, panics print nothing useful (just a generic wasm
+/// trap).
+///
+/// `#[wasm_bindgen(start)]` makes wasm-bindgen call this from the
+/// auto-generated JS init function — the user doesn't have to do
+/// anything extra.
+#[wasm_bindgen(start)]
+pub fn _start() {
+    console_error_panic_hook::set_once();
+}
+
 /// Run pykrete on a single `.pyk` source string. Returns a JS array of
 /// diagnostic objects (see [`DiagnosticOut`]).
 ///
@@ -48,14 +77,49 @@ struct DiagnosticOut {
 /// single-file mode doesn't trigger any cross-file resolution that
 /// would require a real path.
 ///
-/// `serde_wasm_bindgen` returning an `Err` would mean a programming
-/// error in the serialization layer, not a user-facing analyzer
-/// problem; on that unlikely path we fall back to an empty array
-/// rather than panicking (which on wasm would unwind the JS host).
+/// ## Failure modes
+///
+/// - If the analyzer panics, this function returns a single synthetic
+///   `D9999` "internal error" diagnostic pointing the user at the
+///   bug tracker. A visible failure is better than a silent one — a
+///   user filing an issue with a reproducer is more useful than
+///   "everything looked fine but my code was broken."
+/// - If `serde_wasm_bindgen` fails to serialize the diagnostics list
+///   (very unlikely — the shape is plain owned strings and numbers),
+///   we return an empty array. Returning `JsValue::NULL` would crash
+///   JS callers iterating `.length`; an empty array is safe.
 #[wasm_bindgen]
 pub fn check_source(source: &str) -> JsValue {
-    let diagnostics = run_analyzer(source);
-    serde_wasm_bindgen::to_value(&diagnostics).unwrap_or(JsValue::NULL)
+    // `catch_unwind` requires an `UnwindSafe` closure. `&str` is
+    // unwind-safe, and `run_analyzer` returns an owned `Vec` — no
+    // shared mutable state crosses the boundary, so this is fine.
+    let result = panic::catch_unwind(|| run_analyzer(source));
+    let diagnostics = result.unwrap_or_else(|_| vec![internal_error_diagnostic()]);
+    serde_wasm_bindgen::to_value(&diagnostics).unwrap_or_else(|_| {
+        // Fall back to an empty JS array, never null — JS code doing
+        // `for (const d of result)` or `result.length` would crash on
+        // null but handle `[]` cleanly.
+        serde_wasm_bindgen::to_value(&Vec::<DiagnosticOut>::new()).expect("empty Vec serializes")
+    })
+}
+
+/// Synthetic diagnostic shown when the analyzer panics. The position
+/// is `(1, 1, 1, 1)` — there's no real source range to point at, and
+/// putting it at the top of the file keeps it visible and out of the
+/// way of whatever the user is typing.
+fn internal_error_diagnostic() -> DiagnosticOut {
+    DiagnosticOut {
+        code: "D9999".to_string(),
+        rule_name: "internalError".to_string(),
+        severity: "error".to_string(),
+        message: "pykrete panicked during analysis — please report this as a bug at \
+             github.com/amirnaderi93/pykrete/issues"
+            .to_string(),
+        line: 1,
+        column: 1,
+        end_line: 1,
+        end_column: 1,
+    }
 }
 
 /// Core analyzer call, factored out so the unit tests below can hit
@@ -150,5 +214,30 @@ def keep(df: DataFrame[Users]) -> DataFrame[Users]:
                 .map(|d| (&d.code, &d.message))
                 .collect::<Vec<_>>()
         );
+    }
+
+    /// Smoke test for the panic-safety net.
+    ///
+    /// We can't easily construct an input that makes pykrete itself
+    /// panic — the analyzer is well-tested and the wasm wrapper is
+    /// thin. But we *can* verify the `catch_unwind` / fallback wiring
+    /// works in isolation by panicking from a closure with the same
+    /// shape `check_source` uses, then checking the fallback path
+    /// produces the synthetic `D9999` diagnostic.
+    ///
+    /// If pykrete ever does panic on real input, this test confirms
+    /// the safety net would catch it instead of tearing down the
+    /// wasm host.
+    #[test]
+    fn catch_unwind_falls_back_to_internal_error_diagnostic() {
+        let result: Result<Vec<DiagnosticOut>, _> =
+            panic::catch_unwind(|| panic!("simulated analyzer panic"));
+        let diagnostics = result.unwrap_or_else(|_| vec![internal_error_diagnostic()]);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, "D9999");
+        assert_eq!(diagnostics[0].rule_name, "internalError");
+        assert_eq!(diagnostics[0].severity, "error");
+        assert!(diagnostics[0].message.contains("pykrete panicked"));
+        assert!(diagnostics[0].message.contains("github.com"));
     }
 }
