@@ -42,6 +42,22 @@ import init, {
   complete_at,
   definition_at,
 } from 'pykrete-wasm';
+import type {
+  CompletionItem as LspCompletionItem,
+  CompletionList as LspCompletionList,
+  Definition as LspDefinition,
+  DefinitionLink as LspDefinitionLink,
+  Diagnostic as LspDiagnostic,
+  Hover as LspHover,
+  MarkupContent as LspMarkupContent,
+  Position as LspPosition,
+  Range as LspRange,
+} from 'vscode-languageserver-protocol';
+import {
+  createPyrightClient,
+  type PyrightClient,
+  type PyrightState,
+} from './pyrightClient';
 import './Playground.css';
 
 /** Diagnostic shape coming back from `check_source`. Must stay in sync
@@ -191,6 +207,217 @@ function completionKindFor(
   }
 }
 
+/** Map an LSP `CompletionItemKind` (numeric, from `vscode-languageserver-protocol`)
+ * to Monaco's `CompletionItemKind` enum. **They share names but disagree
+ * on every numeric value above 1** — naively casting an LSP number to
+ * Monaco's enum yields wrong icons (e.g. LSP Function=3 lands on
+ * Monaco's Field=3; LSP Class=7 lands on Monaco's Interface=7).
+ *
+ * Unknown / undefined inputs fall back to `Text`. */
+function lspToMonacoCompletionKind(
+  monaco: Monaco,
+  lspKind: number | undefined,
+): languages.CompletionItemKind {
+  const M = monaco.languages.CompletionItemKind;
+  // Numeric switch — LSP values from the LSP spec.
+  switch (lspKind) {
+    case 1:
+      return M.Text;
+    case 2:
+      return M.Method;
+    case 3:
+      return M.Function;
+    case 4:
+      return M.Constructor;
+    case 5:
+      return M.Field;
+    case 6:
+      return M.Variable;
+    case 7:
+      return M.Class;
+    case 8:
+      return M.Interface;
+    case 9:
+      return M.Module;
+    case 10:
+      return M.Property;
+    case 11:
+      return M.Unit;
+    case 12:
+      return M.Value;
+    case 13:
+      return M.Enum;
+    case 14:
+      return M.Keyword;
+    case 15:
+      return M.Snippet;
+    case 16:
+      return M.Color;
+    case 17:
+      return M.File;
+    case 18:
+      return M.Reference;
+    case 19:
+      return M.Folder;
+    case 20:
+      return M.EnumMember;
+    case 21:
+      return M.Constant;
+    case 22:
+      return M.Struct;
+    case 23:
+      return M.Event;
+    case 24:
+      return M.Operator;
+    case 25:
+      return M.TypeParameter;
+    default:
+      return M.Text;
+  }
+}
+
+/**
+ * Race a promise against a deadline. Returns the promise's resolved
+ * value, or `fallback` if it doesn't settle inside `timeoutMs`. Used
+ * for every pyright call — the multiplexer in `pykrete-lsp` enforces
+ * the same 2s ceiling on its embedded engine, and a stuck pyright
+ * worker should never hang the playground's hover popup or completion
+ * menu.
+ *
+ * Errors thrown by the wrapped promise are also collapsed to
+ * `fallback`. Per the multiplex contract ("never crash the
+ * playground"), the caller treats every non-success the same way:
+ * fall back to pykrete-only.
+ */
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  fallback: T,
+): Promise<T> {
+  return new Promise<T>((resolve) => {
+    const handle = setTimeout(() => resolve(fallback), timeoutMs);
+    promise
+      .then((value) => {
+        clearTimeout(handle);
+        resolve(value);
+      })
+      .catch(() => {
+        clearTimeout(handle);
+        resolve(fallback);
+      });
+  });
+}
+
+/** Pyright/LSP timeout budget for hover/completion/definition. Matches
+ * the multiplexer's 2 s ceiling in `crates/pykrete-lsp/src/multiplex.rs`
+ * — see the comment there about why basedpyright/pyright can silently
+ * never answer. */
+const PYRIGHT_REQUEST_TIMEOUT_MS = 2000;
+
+/** Convert Monaco's 1-indexed (lineNumber, column) to LSP's 0-indexed
+ * (line, character). Monaco's `column` is also 1-indexed (the cell to
+ * the LEFT of the column number is column 0 in LSP terms). */
+function toLspPosition(lineNumber: number, column: number): LspPosition {
+  return { line: lineNumber - 1, character: column - 1 };
+}
+
+/** Convert an LSP range to Monaco's `IRange` shape (1-indexed
+ * everything). LSP `end` is exclusive in the same sense Monaco's
+ * `endColumn` is exclusive, so a straight +1 on both ends works. */
+function toMonacoRange(monaco: Monaco, range: LspRange): import('monaco-editor').IRange {
+  return {
+    startLineNumber: range.start.line + 1,
+    startColumn: range.start.character + 1,
+    endLineNumber: range.end.line + 1,
+    endColumn: range.end.character + 1,
+  } as unknown as import('monaco-editor').IRange;
+  // The cast keeps this helper independent of the editor's runtime
+  // Monaco namespace — we only need the shape. (The `monaco` param is
+  // still there to give a stable signature if we ever construct a real
+  // `monaco.Range` instance.)
+}
+
+/** Flatten LSP `Hover.contents` (string | MarkedString | MarkupContent
+ * | array-of-those) into a single markdown string. Mirrors what
+ * `hover_contents_to_string` in `crates/pykrete-lsp/src/multiplex.rs`
+ * does for the LSP fan-out so the playground stays semantically aligned
+ * with the editor multiplexer. */
+function hoverContentsToString(contents: LspHover['contents']): string {
+  if (contents == null) return '';
+  if (typeof contents === 'string') return contents;
+  if (Array.isArray(contents)) {
+    return contents
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        // MarkedString { language, value } → fenced code block; the
+        // server may also return a bare `{ value }` MarkupContent here.
+        const language = (item as { language?: string }).language;
+        const value = (item as { value?: string }).value ?? '';
+        return language ? '```' + language + '\n' + value + '\n```' : value;
+      })
+      .filter((s) => s.length > 0)
+      .join('\n\n');
+  }
+  // MarkupContent — { kind: 'markdown' | 'plaintext', value }
+  return (contents as LspMarkupContent).value ?? '';
+}
+
+/** Is this a pykrete schema hover? Mirrors `is_schema_hover` in
+ * `crates/pykrete-lsp/src/multiplex.rs`: if the rendered markdown
+ * starts with `**schema** `, pykrete already owns the popup and
+ * pyright's "(class) Foo" echo is noise. The string comes from
+ * `render_schema_hover` in `crates/pykrete/src/hover.rs`; if that ever
+ * changes prefix, revisit both this check and the Rust counterpart. */
+function isPykreteSchemaHover(markdown: string): boolean {
+  return markdown.startsWith('**schema** ');
+}
+
+/** Map an LSP `DiagnosticSeverity` integer to the playground's
+ * stringly-typed shape so the existing renderer doesn't need to
+ * branch. Anything other than Warning/Information/Hint becomes
+ * `error` — matches the conservative-louder choice in
+ * `markerSeverity`. */
+function lspSeverityToString(
+  severity: number | undefined,
+): 'error' | 'warning' {
+  // LSP: 1=Error, 2=Warning, 3=Information, 4=Hint
+  if (severity === 2 || severity === 3 || severity === 4) return 'warning';
+  return 'error';
+}
+
+/** Convert an LSP diagnostic to the in-playground `Diagnostic` shape
+ * so pyright and pykrete share one render path. The code prefix
+ * (`py:`) distinguishes pyright's diagnostics in the panel from
+ * pykrete's `D\d\d\d\d` codes at a glance. */
+function lspDiagnosticToPlayground(d: LspDiagnostic): Diagnostic {
+  const code =
+    typeof d.code === 'string' || typeof d.code === 'number'
+      ? `py:${d.code}`
+      : 'py:type';
+  // LSP `source` is conventionally "pyright" here; fall back to the
+  // same so the panel's title attributes look sensible.
+  return {
+    code,
+    rule_name: d.source ?? 'pyright',
+    severity: lspSeverityToString(d.severity),
+    message: d.message,
+    line: d.range.start.line + 1,
+    column: d.range.start.character + 1,
+    end_line: d.range.end.line + 1,
+    end_column: d.range.end.character + 1,
+  };
+}
+
+/** Pull a uniform `CompletionItem[]` out of pyright's
+ * `CompletionList | CompletionItem[] | null` so the merge step
+ * doesn't have to branch on result shape. */
+function lspCompletionItems(
+  result: LspCompletionList | LspCompletionItem[] | null,
+): LspCompletionItem[] {
+  if (!result) return [];
+  return Array.isArray(result) ? result : result.items;
+}
+
 /**
  * Hook: returns a value that only updates `delay` ms after the
  * source stops changing. Keeps us from re-running the analyzer on
@@ -223,10 +450,31 @@ export default function Playground() {
    * effect below. */
   const [editorReady, setEditorReady] = useState(false);
   const [wasmError, setWasmError] = useState<string | null>(null);
+  /** Pykrete-side diagnostics. Pyright's are kept in a separate state
+   * (`pyrightDiagnostics`) and merged at render time — see the
+   * `mergedDiagnostics` memo below. Splitting the two means we don't
+   * have to rebuild pykrete's marker list just because pyright sent a
+   * new batch (and vice versa). */
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
+  const [pyrightDiagnostics, setPyrightDiagnostics] = useState<Diagnostic[]>([]);
+  /** Pyright lifecycle, surfaced in the status line and used to gate
+   * the multiplex paths. `loading` while the worker boots, `ready`
+   * after `initialize` + `didOpen` complete, `failed` if anything in
+   * that chain throws. */
+  const [pyrightState, setPyrightState] = useState<PyrightState>('loading');
+  const [pyrightError, setPyrightError] = useState<string | null>(null);
 
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<Monaco | null>(null);
+  /** Pyright client handle. Held in a ref (not state) because the
+   * language providers read from it lexically and re-rendering when
+   * the client *value* identity changes would be churn for no gain —
+   * lifecycle is communicated via `pyrightState`. */
+  const pyrightRef = useRef<PyrightClient | null>(null);
+  /** Mirror of `pyrightState` accessible from the language providers
+   * without re-registering them. JSX closures capture the state value
+   * at registration time, but a ref always sees the latest write. */
+  const pyrightStateRef = useRef<PyrightState>('loading');
   /** Language-provider disposables. Monaco registers providers
    * globally (per language ID, not per editor), so we keep handles to
    * dispose them on unmount — otherwise React fast-refresh + repeated
@@ -235,7 +483,8 @@ export default function Playground() {
   const providerDisposablesRef = useRef<{ dispose(): void }[]>([]);
   /** Latest editor source, kept in a ref so the language providers
    * (registered once, capture lexically) can read it without
-   * re-registering on every keystroke. */
+   * re-registering on every keystroke. Declared early because the
+   * pyright init effect reads it for the initial `didOpen` text. */
   const liveSourceRef = useRef<string>(activeSnippet.source);
 
   // wasm init runs once. The pykrete-wasm package's default export is
@@ -261,6 +510,91 @@ export default function Playground() {
     };
   }, []);
 
+  // pyright-browser init also runs once, in parallel with the wasm
+  // boot. The worker file is copied to `public/pyright.worker.js` at
+  // build/dev time (see scripts/copy-pyright-worker.mjs) and served at
+  // `<base>/pyright.worker.js`. We prefix with Astro's base URL so the
+  // playground works whether the site is deployed at the root or under
+  // a subpath (e.g. /pykrete).
+  //
+  // The whole pyright surface is best-effort: if init fails (worker
+  // 404'd, OOM, browser without Worker support), the playground keeps
+  // running on pykrete alone. The status-line indicator surfaces what
+  // happened.
+  useEffect(() => {
+    // import.meta.env.BASE_URL is Vite/Astro's runtime base path
+    // (ends with a trailing slash). Concatenating the worker filename
+    // gives the absolute URL Astro serves the static asset from.
+    const baseUrl =
+      (import.meta as unknown as { env?: { BASE_URL?: string } }).env
+        ?.BASE_URL ?? '/';
+    const workerUrl =
+      (baseUrl.endsWith('/') ? baseUrl : baseUrl + '/') +
+      'pyright.worker.js';
+
+    let cancelled = false;
+    let handle: ReturnType<typeof createPyrightClient> | null = null;
+
+    try {
+      handle = createPyrightClient(workerUrl, liveSourceRef.current);
+      pyrightRef.current = handle.client;
+      // Subscribe to diagnostics — pyright will publish an initial
+      // batch right after didOpen and then a fresh batch per
+      // didChange. The client replays the last batch on subscribe so
+      // we don't miss the initial one even if React mounts late.
+      const unsubscribe = handle.client.onDiagnostics((diags) => {
+        if (cancelled) return;
+        setPyrightDiagnostics(diags.map(lspDiagnosticToPlayground));
+      });
+      handle.ready
+        .then(() => {
+          if (cancelled) return;
+          setPyrightState('ready');
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          setPyrightError(
+            err instanceof Error ? err.message : String(err),
+          );
+          setPyrightState('failed');
+        });
+      return () => {
+        cancelled = true;
+        unsubscribe();
+        handle?.client.dispose();
+        pyrightRef.current = null;
+      };
+    } catch (err) {
+      // `createPyrightClient` itself can throw synchronously if the
+      // environment doesn't support Workers at all.
+      setPyrightError(err instanceof Error ? err.message : String(err));
+      setPyrightState('failed');
+      return () => {
+        cancelled = true;
+      };
+    }
+    // We intentionally depend on nothing — pyright is initialised
+    // exactly once per playground mount. The init runs in parallel
+    // with Monaco and the wasm boot; the multiplex paths each gate on
+    // `pyrightState === 'ready'` and degrade gracefully until then.
+  }, []);
+
+  // Forward every debounced source change to pyright so its
+  // diagnostics stay in sync with the editor. setText is a no-op
+  // until pyright is ready, so it's safe to fire before init
+  // completes; the `didOpen` text was already seeded with the initial
+  // source.
+  useEffect(() => {
+    pyrightRef.current?.setText(debouncedSource);
+  }, [debouncedSource, pyrightState]);
+
+  // Keep `pyrightStateRef` in sync so the language providers (closures
+  // captured at register-time) always read the latest state when
+  // Monaco invokes them.
+  useEffect(() => {
+    pyrightStateRef.current = pyrightState;
+  }, [pyrightState]);
+
   // Keep the live-source ref in sync with the source state so the
   // language providers (registered once, see the provider-registration
   // useEffect below) always see the freshest text without
@@ -270,8 +604,10 @@ export default function Playground() {
   }, [source]);
 
   // Re-run the analyzer whenever the debounced source or the wasm-ready
-  // flag changes. Surfaces both as in-editor markers and as a list
-  // below the editor.
+  // flag changes. Surfaces the diagnostics into local state — Monaco
+  // markers (pykrete's owner string) are managed by a separate effect
+  // below so pyright's diagnostics can ride along on their own marker
+  // owner.
   useEffect(() => {
     if (!wasmReady) return;
     let next: Diagnostic[];
@@ -295,28 +631,64 @@ export default function Playground() {
       ];
     }
     setDiagnostics(next);
+  }, [debouncedSource, wasmReady]);
 
-    // Push markers into Monaco so the user sees red squiggles at the
-    // right positions.
+  /** Merged diagnostics for both the panel and the marker effect.
+   * Pykrete first (matches the multiplexer's render order in the LSP),
+   * pyright second. Recomputed only when either source's list changes —
+   * not on every keystroke — because both `diagnostics` and
+   * `pyrightDiagnostics` are only updated by their respective debounced
+   * effects/notifications. */
+  const mergedDiagnostics = useMemo(
+    () => [...diagnostics, ...pyrightDiagnostics],
+    [diagnostics, pyrightDiagnostics],
+  );
+
+  // Push pykrete's markers into Monaco under owner `pykrete`. Separate
+  // owner string from pyright's so each can clear/update independently
+  // without trampling the other's markers (Monaco's `setModelMarkers`
+  // replaces the full set for a given owner).
+  useEffect(() => {
     const editor = editorRef.current;
     const monaco = monacoRef.current;
-    if (editor && monaco) {
-      const model = editor.getModel();
-      if (model) {
-        const markers = next.map((d) => ({
-          startLineNumber: d.line,
-          startColumn: d.column,
-          endLineNumber: d.end_line,
-          endColumn: d.end_column,
-          message: `${d.rule_name}: ${d.message}`,
-          severity: markerSeverity(monaco, d.severity),
-          code: d.code,
-          source: 'pykrete',
-        }));
-        monaco.editor.setModelMarkers(model, 'pykrete', markers);
-      }
-    }
-  }, [debouncedSource, wasmReady]);
+    if (!editor || !monaco) return;
+    const model = editor.getModel();
+    if (!model) return;
+    const markers = diagnostics.map((d) => ({
+      startLineNumber: d.line,
+      startColumn: d.column,
+      endLineNumber: d.end_line,
+      endColumn: d.end_column,
+      message: `${d.rule_name}: ${d.message}`,
+      severity: markerSeverity(monaco, d.severity),
+      code: d.code,
+      source: 'pykrete',
+    }));
+    monaco.editor.setModelMarkers(model, 'pykrete', markers);
+  }, [diagnostics, editorReady]);
+
+  // And pyright's markers under owner `pyright`. Same shape, separate
+  // bucket. Fires on every PublishDiagnostics notification (which
+  // pyright sends after each `didChange`); pykrete's markers above are
+  // untouched.
+  useEffect(() => {
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco) return;
+    const model = editor.getModel();
+    if (!model) return;
+    const markers = pyrightDiagnostics.map((d) => ({
+      startLineNumber: d.line,
+      startColumn: d.column,
+      endLineNumber: d.end_line,
+      endColumn: d.end_column,
+      message: `${d.rule_name}: ${d.message}`,
+      severity: markerSeverity(monaco, d.severity),
+      code: d.code,
+      source: 'pyright',
+    }));
+    monaco.editor.setModelMarkers(model, 'pyright', markers);
+  }, [pyrightDiagnostics, editorReady]);
 
   // Register pykrete's hover / completion / definition providers on
   // the `python` language. Monaco's provider API is global per
@@ -346,30 +718,91 @@ export default function Playground() {
     for (const d of providerDisposablesRef.current) d.dispose();
     providerDisposablesRef.current = [];
 
+    // Hover provider — multiplexed. Asks pykrete and pyright in
+    // parallel; merges per the rules in
+    // `crates/pykrete-lsp/src/multiplex.rs::merge_hover`:
+    //   - If pykrete returns a schema hover (`**schema** …`), suppress
+    //     pyright's contribution (its "(class) Foo" echo crowds the
+    //     popup bottom — same reasoning as the v0.1.10 LSP fix).
+    //   - Otherwise stack pykrete first, then a `---`, then pyright.
+    //   - If only one side answers, return that side alone.
+    //   - If neither, return null (Monaco hides the popup).
     const hover = monaco.languages.registerHoverProvider('python', {
-      provideHover(_model, position) {
-        try {
-          const out = hover_at(
-            liveSourceRef.current,
-            position.lineNumber,
-            position.column,
-          ) as HoverPayload | null;
-          if (!out) return null;
+      async provideHover(_model, position) {
+        // pykrete is synchronous (wasm); pyright is a Worker round-trip
+        // capped at PYRIGHT_REQUEST_TIMEOUT_MS. We launch both then
+        // merge, so a slow pyright never delays pykrete's hover.
+        const pykreteOut = (() => {
+          try {
+            return hover_at(
+              liveSourceRef.current,
+              position.lineNumber,
+              position.column,
+            ) as HoverPayload | null;
+          } catch {
+            return null;
+          }
+        })();
+
+        const pyrightOut =
+          pyrightRef.current && pyrightStateRef.current === 'ready'
+            ? await withTimeout(
+                pyrightRef.current.hover(
+                  toLspPosition(position.lineNumber, position.column),
+                ),
+                PYRIGHT_REQUEST_TIMEOUT_MS,
+                null as LspHover | null,
+              )
+            : null;
+
+        const pykreteText = pykreteOut?.contents ?? '';
+        const pyrightText = pyrightOut
+          ? hoverContentsToString(pyrightOut.contents)
+          : '';
+
+        // Suppress pyright if pykrete owns a schema hover. Same rule
+        // the LSP multiplexer enforces — the schema heading already
+        // covers everything pyright would echo.
+        const suppressPyright =
+          pykreteOut && isPykreteSchemaHover(pykreteText);
+
+        if (pykreteOut && (suppressPyright || pyrightText.length === 0)) {
           return {
             range: new monaco.Range(
-              out.line,
-              out.column,
-              out.end_line,
-              out.end_column,
+              pykreteOut.line,
+              pykreteOut.column,
+              pykreteOut.end_line,
+              pykreteOut.end_column,
             ),
-            contents: [{ value: out.contents }],
+            contents: [{ value: pykreteText }],
           };
-        } catch {
-          // wasm-bindgen glue can throw if the module is half-initialised
-          // (e.g. mid-reload). Returning null degrades to "no hover" — a
-          // noisy popup on every cursor move would be far worse.
-          return null;
         }
+        if (!pykreteOut && pyrightOut && pyrightText.length > 0) {
+          return {
+            range: pyrightOut.range
+              ? toMonacoRange(monaco, pyrightOut.range)
+              : undefined,
+            contents: [{ value: pyrightText }],
+          };
+        }
+        if (pykreteOut && pyrightOut && pyrightText.length > 0) {
+          // Both sides have content: stacked render with a horizontal
+          // rule between them. pykrete first (more specific) — same
+          // ordering as the LSP multiplexer.
+          const range = new monaco.Range(
+            pykreteOut.line,
+            pykreteOut.column,
+            pykreteOut.end_line,
+            pykreteOut.end_column,
+          );
+          return {
+            range,
+            contents: [
+              { value: pykreteText + '\n\n---\n\n' + pyrightText },
+            ],
+          };
+        }
+        return null;
       },
     });
 
@@ -387,67 +820,181 @@ export default function Playground() {
       // Ctrl+Space (manual trigger) always invokes the provider
       // regardless of trigger characters.
       triggerCharacters: ['"', "'", '(', '[', '.'],
-      provideCompletionItems(model, position) {
-        try {
-          const items = (complete_at(
-            liveSourceRef.current,
-            position.lineNumber,
-            position.column,
-          ) ?? []) as CompletionPayload[];
-          // Replace the "word at cursor" — Monaco will insert the
-          // suggestion in place of any partial identifier the user has
-          // typed so far. Inside a string literal `col("|")` the word
-          // is empty (startColumn === endColumn) and the suggestion is
-          // inserted at the cursor, which is the right behavior.
-          const word = model.getWordUntilPosition(position);
-          const range = new monaco.Range(
-            position.lineNumber,
-            word.startColumn,
-            position.lineNumber,
-            word.endColumn,
-          );
-          // Return `{ suggestions: [] }` (not `null`) even when there
-          // are no completions. Returning `null` makes Monaco treat the
-          // provider as having declined to answer for this position,
-          // which suppresses the "No suggestions" indicator on a
-          // user-initiated Ctrl+Space — making it look like the keybind
-          // does nothing.
-          return {
-            suggestions: items.map((item) => ({
+      async provideCompletionItems(model, position) {
+        // pykrete first (more specific — column names, schema names,
+        // DataFrame member methods). Then pyright (general Python —
+        // builtins, imported names, std-lib argument names). Order
+        // matches `crates/pykrete-lsp/src/multiplex.rs::merge_completion`.
+        const pykreteItems = (() => {
+          try {
+            return (complete_at(
+              liveSourceRef.current,
+              position.lineNumber,
+              position.column,
+            ) ?? []) as CompletionPayload[];
+          } catch {
+            return [] as CompletionPayload[];
+          }
+        })();
+
+        const pyrightResult =
+          pyrightRef.current && pyrightStateRef.current === 'ready'
+            ? await withTimeout(
+                pyrightRef.current.completion(
+                  toLspPosition(position.lineNumber, position.column),
+                ),
+                PYRIGHT_REQUEST_TIMEOUT_MS,
+                null,
+              )
+            : null;
+
+        // Pykrete suggestions replace the "word at cursor" — Monaco
+        // inserts the chosen item in place of any partial identifier
+        // the user has typed so far. Inside a string literal
+        // `col("|")` the word is empty and the suggestion is inserted
+        // at the cursor, which is the right behavior.
+        const word = model.getWordUntilPosition(position);
+        const fallbackRange = new monaco.Range(
+          position.lineNumber,
+          word.startColumn,
+          position.lineNumber,
+          word.endColumn,
+        );
+
+        const pykreteSuggestions: languages.CompletionItem[] =
+          pykreteItems.map((item) => ({
+            label: item.label,
+            detail: item.detail ?? undefined,
+            insertText: item.insert_text,
+            kind: completionKindFor(monaco, item.kind),
+            range: fallbackRange,
+          }));
+
+        const pyrightSuggestions: languages.CompletionItem[] =
+          lspCompletionItems(pyrightResult).map((item) => {
+            // pyright items often carry their own textEdit / range; if
+            // present, prefer it (it knows about the document model)
+            // so insertion replaces the right span. Fall back to the
+            // word-at-cursor range when missing.
+            const rawTextEdit = (item as { textEdit?: unknown }).textEdit;
+            const lspRange =
+              rawTextEdit && typeof rawTextEdit === 'object'
+                ? ((rawTextEdit as { range?: LspRange }).range ??
+                    (rawTextEdit as { insert?: LspRange }).insert)
+                : undefined;
+            const range = lspRange
+              ? toMonacoRange(monaco, lspRange)
+              : fallbackRange;
+            const insertText = item.insertText ?? item.label;
+            const detail =
+              item.detail ??
+              (typeof item.labelDetails?.description === 'string'
+                ? item.labelDetails.description
+                : undefined);
+            return {
+              // LSP `CompletionItem.label` is always a string —
+              // `CompletionItemLabelDetails` lives on the separate
+              // `labelDetails` field.
               label: item.label,
-              detail: item.detail ?? undefined,
-              insertText: item.insert_text,
-              kind: completionKindFor(monaco, item.kind),
+              detail,
+              insertText,
+              // LSP and Monaco's CompletionItemKind enums share names
+              // but disagree on every numeric value above 1 — naive
+              // casting yields wrong icons. Translate explicitly.
+              kind: lspToMonacoCompletionKind(monaco, item.kind),
               range,
-            })),
-          };
-        } catch {
-          return { suggestions: [] };
-        }
+              filterText: item.filterText,
+              sortText: item.sortText,
+              documentation:
+                item.documentation === undefined
+                  ? undefined
+                  : typeof item.documentation === 'string'
+                    ? item.documentation
+                    : { value: item.documentation.value },
+            };
+          });
+
+        // Concatenate pykrete first. Same ordering as the LSP
+        // multiplexer's merge_completion — pykrete's items are more
+        // specific so the user sees them at the top of the menu.
+        return {
+          suggestions: [...pykreteSuggestions, ...pyrightSuggestions],
+        };
       },
     });
 
     const definition = monaco.languages.registerDefinitionProvider('python', {
-      provideDefinition(model, position) {
+      async provideDefinition(model, position) {
+        // Prefer pykrete; fall back to pyright if pykrete returns
+        // nothing. Matches the multiplex policy
+        // (`merge_locations` in pykrete-lsp prefers pykrete when present).
+        let pykreteLoc: LocationPayload | null = null;
         try {
-          const loc = definition_at(
+          pykreteLoc = definition_at(
             liveSourceRef.current,
             position.lineNumber,
             position.column,
           ) as LocationPayload | null;
-          if (!loc) return null;
+        } catch {
+          pykreteLoc = null;
+        }
+        if (pykreteLoc) {
           return {
             uri: model.uri,
             range: new monaco.Range(
-              loc.line,
-              loc.column,
-              loc.end_line,
-              loc.end_column,
+              pykreteLoc.line,
+              pykreteLoc.column,
+              pykreteLoc.end_line,
+              pykreteLoc.end_column,
             ),
           };
-        } catch {
-          return null;
         }
+
+        if (!pyrightRef.current || pyrightStateRef.current !== 'ready') return null;
+
+        const pyrightDef = await withTimeout(
+          pyrightRef.current.definition(
+            toLspPosition(position.lineNumber, position.column),
+          ),
+          PYRIGHT_REQUEST_TIMEOUT_MS,
+          null as LspDefinition | LspDefinitionLink[] | null,
+        );
+        if (!pyrightDef) return null;
+        // Normalise to an array of locations; pyright may return a
+        // single Location, an array of Locations, or LocationLinks.
+        // Filter to definitions in the playground's own document —
+        // anything pointing at typeshed/stub URIs has no editor target.
+        const locations = Array.isArray(pyrightDef)
+          ? pyrightDef
+          : [pyrightDef];
+        const out = locations
+          .map((loc) => {
+            // LocationLink — { targetUri, targetRange, targetSelectionRange }
+            const link = loc as Partial<LspDefinitionLink> & {
+              targetUri?: string;
+              targetRange?: LspRange;
+              targetSelectionRange?: LspRange;
+            };
+            if (link.targetUri && link.targetRange) {
+              return {
+                uri: link.targetUri,
+                range: link.targetSelectionRange ?? link.targetRange,
+              };
+            }
+            // Location — { uri, range }
+            const l = loc as { uri?: string; range?: LspRange };
+            if (l.uri && l.range) return { uri: l.uri, range: l.range };
+            return null;
+          })
+          .filter((l): l is { uri: string; range: LspRange } => l !== null)
+          // pyright may point at typeshed stubs we don't surface in the
+          // editor; only return definitions inside the playground doc.
+          .filter((l) => l.uri.endsWith('/playground.py'));
+        if (out.length === 0) return null;
+        return out.map((l) => ({
+          uri: model.uri,
+          range: toMonacoRange(monaco, l.range),
+        }));
       },
     });
 
@@ -456,6 +1003,12 @@ export default function Playground() {
       for (const d of providerDisposablesRef.current) d.dispose();
       providerDisposablesRef.current = [];
     };
+    // `pyrightState` is intentionally NOT in the dep list. The
+    // providers read `pyrightState` and `pyrightRef.current` lexically
+    // every time Monaco invokes them, so they always see the current
+    // values — re-registering on every pyright state change (loading
+    // → ready, or transient `failed` flips) would only thrash
+    // Monaco's registry.
   }, [wasmReady, editorReady]);
 
   const handleMount: OnMount = (editor, monaco) => {
@@ -507,17 +1060,37 @@ export default function Playground() {
   const formatDiagnostic = (d: Diagnostic): string =>
     `<playground>.pyk:${d.line}:${d.column} - ${d.severity} ${d.rule_name}: ${d.message}`;
 
+  /** Main diagnostics-summary status line. Same shape as before:
+   * loading / error / counts / empty. Now spans the merged
+   * pykrete+pyright diagnostic set. */
   const statusLine = useMemo(() => {
     if (wasmError) return `wasm failed to load: ${wasmError}`;
     if (!wasmReady) return 'loading analyzer…';
-    if (diagnostics.length === 0) return 'no diagnostics — schema checks pass.';
-    const errors = diagnostics.filter((d) => d.severity === 'error').length;
-    const warnings = diagnostics.filter((d) => d.severity === 'warning').length;
+    if (mergedDiagnostics.length === 0) {
+      return 'no diagnostics — schema and type checks pass.';
+    }
+    const errors = mergedDiagnostics.filter((d) => d.severity === 'error').length;
+    const warnings = mergedDiagnostics.filter((d) => d.severity === 'warning').length;
     const parts: string[] = [];
     if (errors) parts.push(`${errors} error${errors === 1 ? '' : 's'}`);
     if (warnings) parts.push(`${warnings} warning${warnings === 1 ? '' : 's'}`);
     return parts.join(', ');
-  }, [wasmReady, wasmError, diagnostics]);
+  }, [wasmReady, wasmError, mergedDiagnostics]);
+
+  /** Pyright-specific status line. Lives next to the main status so
+   * the user gets a clear signal that Python-side help is loading or
+   * failed. Stays silent on the happy path — the main line covers
+   * diagnostics counts for both engines.
+   *
+   * `null` here means "render nothing" (collapsed line). The component
+   * skips the surrounding element entirely when the value is null. */
+  const pyrightStatusLine = useMemo<string | null>(() => {
+    if (pyrightState === 'loading') return 'loading pyright…';
+    if (pyrightState === 'failed') {
+      return `pyright failed: ${pyrightError ?? 'unknown error'}`;
+    }
+    return null;
+  }, [pyrightState, pyrightError]);
 
   return (
     <div className="pk-playground not-content">
@@ -596,12 +1169,26 @@ export default function Playground() {
       </div>
 
       <div className="pk-status">{statusLine}</div>
+      {pyrightStatusLine && (
+        // Second status line — only renders while pyright is still
+        // loading or after it failed. On the happy path it disappears
+        // entirely; the main `statusLine` above carries the
+        // diagnostics summary for both engines combined.
+        <div
+          className={`pk-status pk-status-pyright pk-status-pyright-${pyrightState}`}
+        >
+          {pyrightStatusLine}
+        </div>
+      )}
 
       <ol className="pk-diagnostics" aria-label="diagnostics">
-        {diagnostics.length === 0 && wasmReady && !wasmError && (
-          <li className="pk-empty">No diagnostics. Edit the source above to see pykrete in action.</li>
+        {mergedDiagnostics.length === 0 && wasmReady && !wasmError && (
+          <li className="pk-empty">
+            No diagnostics. Edit the source above to see pykrete and pyright
+            in action.
+          </li>
         )}
-        {diagnostics.map((d, i) => (
+        {mergedDiagnostics.map((d, i) => (
           <li
             key={`${d.code}-${i}-${d.line}-${d.column}`}
             className={`pk-diag pk-diag-${d.severity}`}

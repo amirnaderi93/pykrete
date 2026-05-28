@@ -13,3 +13,7 @@ dist/
 package-lock.json
 pnpm-lock.yaml
 yarn.lock
+
+# pyright-browser worker is copied from node_modules by
+# scripts/copy-pyright-worker.mjs at dev/build time. Don't commit it.
+public/pyright.worker.js
