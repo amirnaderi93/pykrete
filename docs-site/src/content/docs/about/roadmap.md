@@ -21,6 +21,7 @@ The PySpark static checker is **feature-complete** as of [v0.1.15](https://githu
 - Call-site argument checking (`D0051 argumentColumnsMismatch`) closes the function boundary on the input side.
 - Generic-inference: multi-TypeVar binding, nested generic shapes, chained class-method calls, and `type[T]` argument binding all dispatch correctly.
 - Cross-file imports and shared-schema modules.
+- Project-wide duplicate-schema-name detection (`D0072 duplicateSchemaName`, warning), and a performance-pass micro-optimization of the schema-name resolution hot path (with a release-build perf smoke test in CI).
 
 The **LSP server** delivers live diagnostics, hover, completion (column names in bare-string arguments and on chain results), document symbols, go-to-definition, find-references, rename, semantic tokens, and `textDocument/codeAction` quick-fixes for `D0030` "did you mean" suggestions. It embeds a Python language server via an LSP multiplexer.
 

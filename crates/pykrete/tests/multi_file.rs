@@ -264,3 +264,168 @@ def broken(:
     assert!(results[1].parse_error, "bad.pyk should have parse error");
     assert!(results[1].has_code("D0001"));
 }
+
+// ===========================================================================
+// D0072 duplicateSchemaName — same schema declared in two project files
+// ===========================================================================
+
+#[test]
+fn duplicate_schema_name_across_two_files_fires_D0072() {
+    // Both files declare `class Sale(Schema)`. The diagnostic fires once,
+    // at the schema declaration site in the alphabetically-later file
+    // (orders.pyk), naming both files for context.
+    let results = check_project_pairs(&[
+        (
+            "billing.pyk",
+            r#"
+class Sale(Schema):
+    region: string
+    amount: int
+"#,
+        ),
+        (
+            "orders.pyk",
+            r#"
+class Sale(Schema):
+    customer: string
+    total: int
+"#,
+        ),
+    ]);
+
+    // billing.pyk is the alphabetically-first declaration site, so it
+    // stays clean — the warning lands on the SECOND file.
+    assert!(
+        !results[0].has_code("D0072"),
+        "expected first file (billing.pyk) to be clean"
+    );
+    assert!(
+        results[1].has_code("D0072"),
+        "expected second file (orders.pyk) to carry D0072"
+    );
+    let d = results[1]
+        .diagnostics_with_code("D0072")
+        .into_iter()
+        .next()
+        .expect("at least one D0072");
+    assert_eq!(d.severity_label(), "warning");
+    assert!(d.message.contains("'Sale'"));
+    assert!(d.message.contains("billing.pyk"));
+    assert!(d.message.contains("orders.pyk"));
+    // Points at the SECOND file's class declaration (line 2 — the leading
+    // newline puts `class` on line 2).
+    assert_eq!(d.line, 2);
+}
+
+#[test]
+fn same_schema_name_within_one_file_is_an_existing_error_not_D0072() {
+    // Two `class Sale(Schema)` decls in the same file. D0072 is a
+    // project-level warning about cross-file ambiguity; within-file
+    // redeclarations are a different concern and should NOT trigger it.
+    let results = check_project_pairs(&[(
+        "only.pyk",
+        r#"
+class Sale(Schema):
+    a: int
+
+class Sale(Schema):
+    b: string
+"#,
+    )]);
+    assert!(
+        !results[0].has_code("D0072"),
+        "within-file duplicates must not fire D0072: got {:?}",
+        results[0]
+            .diagnostics_with_code("D0072")
+            .iter()
+            .map(|d| &d.message)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn differently_named_schemas_in_two_files_are_clean() {
+    let results = check_project_pairs(&[
+        (
+            "billing.pyk",
+            r#"
+class Invoice(Schema):
+    amount: int
+"#,
+        ),
+        (
+            "orders.pyk",
+            r#"
+class Sale(Schema):
+    total: int
+"#,
+        ),
+    ]);
+    assert!(!results[0].has_code("D0072"));
+    assert!(!results[1].has_code("D0072"));
+}
+
+#[test]
+fn duplicate_function_name_does_NOT_fire_D0072_in_this_PR() {
+    // D0072 is scoped to Schema-derived classes for v0.1.16. Two files
+    // declaring a top-level function of the same name don't trigger it —
+    // function-duplicate detection is a deferred follow-up.
+    let results = check_project_pairs(&[
+        (
+            "a.pyk",
+            r#"
+class A(Schema):
+    x: int
+
+def shared(df: DataFrame[A]) -> DataFrame[A]:
+    return df.select(col("x"))
+"#,
+        ),
+        (
+            "b.pyk",
+            r#"
+class B(Schema):
+    y: int
+
+def shared(df: DataFrame[B]) -> DataFrame[B]:
+    return df.select(col("y"))
+"#,
+        ),
+    ]);
+    assert!(!results[0].has_code("D0072"));
+    assert!(!results[1].has_code("D0072"));
+}
+
+#[test]
+fn duplicate_schema_in_three_files_fires_D0072_on_files_2_and_3() {
+    // a.pyk is the "original" alphabetically; b.pyk and c.pyk each
+    // carry a D0072 warning. Pins the every-later-file-warns behavior so
+    // future tweaks to "pick a single canonical site" don't quietly hide
+    // the third declaration.
+    let results = check_project_pairs(&[
+        (
+            "a.pyk",
+            r#"
+class Sale(Schema):
+    x: int
+"#,
+        ),
+        (
+            "b.pyk",
+            r#"
+class Sale(Schema):
+    y: int
+"#,
+        ),
+        (
+            "c.pyk",
+            r#"
+class Sale(Schema):
+    z: int
+"#,
+        ),
+    ]);
+    assert!(!results[0].has_code("D0072"));
+    assert!(results[1].has_code("D0072"));
+    assert!(results[2].has_code("D0072"));
+}

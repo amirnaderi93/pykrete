@@ -45,7 +45,7 @@ class DataSource[T]:
     def __init__(self, path): pass
 
 class DataAccessLayer:
-    def with_path(self, path: string) -> "DataAccessLayer": ...
+    def with_path(self, path: str) -> "DataAccessLayer": ...
     def read[T](self, source: DataSource[T]) -> DataFrame[T]: ...
 
 ORDERS_SRC: DataSource[Orders] = DataSource("/o")
@@ -68,7 +68,7 @@ class DataSource[T]:
     def __init__(self, path): pass
 
 class DataAccessLayer:
-    def with_path(self, path: string) -> "DataAccessLayer": ...
+    def with_path(self, path: str) -> "DataAccessLayer": ...
     def read[T](self, source: DataSource[T]) -> DataFrame[T]: ...
 
 ORDERS_SRC: DataSource[Orders] = DataSource("/o")
@@ -99,7 +99,7 @@ class DataSource[T]:
     def __init__(self, path): pass
 
 class DataAccessLayer:
-    def with_path(self, path: string) -> "DataAccessLayer": ...
+    def with_path(self, path: str) -> "DataAccessLayer": ...
     def with_options(self, opts) -> "DataAccessLayer": ...
     def read[T](self, source: DataSource[T]) -> DataFrame[T]: ...
 
@@ -130,7 +130,7 @@ class DataSource[T]:
     def __init__(self, path): pass
 
 class DataAccessLayer:
-    def with_path(self, path: string) -> "DataAccessLayer": ...
+    def with_path(self, path: str) -> "DataAccessLayer": ...
     def read[T](self, source: DataSource[T]) -> DataFrame[T]: ...
 
 ORDERS_SRC: DataSource[Orders] = DataSource("/o")
@@ -140,10 +140,14 @@ ORDERS_SRC: DataSource[Orders] = DataSource("/o")
 # preserve the class so `.read(ORDERS_SRC)` resolves and downstream
 # column refs land cleanly.
 def f(x: DataFrame[Anchor], dal: DataAccessLayer):
-    dal.with_path(123).read(ORDERS_SRC).select(col("order_id"))
+    dal.with_path(123).read(ORDERS_SRC).select(col("order_id"), col("order_nope"))
 "#,
     );
-    assert_count(&result, "D0030", 0);
+    // The good column is silent and the typo'd one fires — proves the
+    // chain DID preserve the schema (otherwise the result would be
+    // Unknown and BOTH refs would be silent on D0030).
+    assert_count(&result, "D0030", 1);
+    assert_message_contains(&result, "D0030", "order_nope");
 }
 
 /// `do_something` returns a *different* class than the receiver, so
@@ -279,6 +283,42 @@ def f(x: DataFrame[Anchor], dal: DataAccessLayer, some_var):
     assert_count(&result, "D0030", 0);
 }
 
+/// Two `type[T]` slots called with *different* schema identifiers —
+/// `def f[T](a: type[T], b: type[T])` invoked as `f(Orders, Products)`.
+/// The matcher's `record_binding` poisons T on the conflict instead of
+/// arbitrarily picking one schema, so the result degrades to Unknown
+/// rather than silently fabricating either Orders or Products as the
+/// answer. Both downstream `col("order_id")` and `col("sku")` end up
+/// against an Unknown receiver — no D0030 for either, no false
+/// positives either way.
+///
+/// This is defensive against future helper drift in `record_binding`:
+/// if the refactor regressed to first-wins or last-wins, one of the
+/// columns would mis-resolve and start firing D0030.
+#[test]
+fn type_T_sticky_poisoning_on_conflicting_bindings() {
+    let result = check(
+        r#"
+class Orders(Schema):
+    order_id: int
+
+class Products(Schema):
+    sku: string
+
+class DataAccessLayer:
+    def merge_into[T](self, a: type[T], b: type[T]) -> DataFrame[T]: ...
+
+def f(dal: DataAccessLayer):
+    dal.merge_into(Orders, Products).select(col("order_id"), col("sku"))
+"#,
+    );
+    // T is poisoned by the conflict; the result is Unknown. Neither
+    // column ref fires — pinning the no-false-positive guarantee
+    // `record_binding` is meant to provide. If T silently bound to
+    // EITHER Orders or Products, one of these refs would fire D0030.
+    assert_count(&result, "D0030", 0);
+}
+
 /// The arg is a string literal — not a class identifier. T stays
 /// unbound, result is Unknown, downstream typo emits 0 D0030.
 #[test]
@@ -313,7 +353,7 @@ class Orders(Schema):
     order_id: int
 
 class DataAccessLayer:
-    def with_path(self, path: string) -> "DataAccessLayer": ...
+    def with_path(self, path: str) -> "DataAccessLayer": ...
     def cast_to[T](self, _: type[T]) -> DataFrame[T]: ...
 
 def f(x: DataFrame[Anchor], dal: DataAccessLayer):

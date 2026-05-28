@@ -33,6 +33,7 @@ The **rule name** (`unknownColumn`) is what the CLI prints and what the editor s
 | `D0060` | `missingJoinKey` | A join key isn't present on one side of the join. |
 | `D0070` | `unresolvedImport` | An `import` can't be resolved. |
 | `D0071` | `unexportedName` | An imported name isn't exported by the module. |
+| `D0072` | `duplicateSchemaName` | The same schema name is declared in more than one project file. Warning. |
 | `D0080` | `returnTypeMismatch` | A returned column's **type** differs from the declared return schema. |
 | `D0081` | `nonNumericArithmetic` | Arithmetic on a non-numeric column. Strict mode only. |
 | `D0082` | `crossTypeComparison` | A comparison between unrelated types. Strict mode only. |
@@ -124,6 +125,7 @@ These fire before any schema checking — they mean pykrete couldn't read someth
 - **`unknownColumnType` / `invalidColumnType` — D0010 / D0011.** A `Schema` field's type annotation isn't a type pykrete recognizes.
 - **`unknownSchema` / `invalidSchemaExpression` — D0020 / D0021.** A `DataFrame[X]` annotation where `X` isn't a known schema, or isn't a schema name / valid operator at all — usually a typo or a missing import.
 - **`unresolvedImport` / `unexportedName` — D0070 / D0071.** An `import` that doesn't resolve, or a name the imported module doesn't export.
+- **`duplicateSchemaName` — D0072.** The same `class X(Schema)` is declared in more than one file in the project. Pykrete picks one for cross-file resolution (the alphabetically-earliest declaration site), but the ambiguity is usually unintentional — a forgotten old copy, or two teams converging on the same name. Fires as a **warning** at every duplicate past the first, naming both files for context. Same-file redeclarations don't fire D0072 — that's a different concern.
 
 ## Changing severity
 
