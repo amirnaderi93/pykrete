@@ -374,10 +374,19 @@ export default function Playground() {
     });
 
     const completion = monaco.languages.registerCompletionItemProvider('python', {
-      // pykrete fires on identifier chars and on the typical
-      // surfaces (`(`, `[`, `"`, `.`). Listing them all keeps Monaco
-      // from skipping the provider mid-token.
-      triggerCharacters: ['"', "'", '(', '[', '.', '_'],
+      // Auto-open completion when the user types one of the surfaces
+      // where a pykrete completion is meaningful:
+      //   - `"` and `'` — string column args, e.g. `col("…")`
+      //   - `(`        — opening any function call
+      //   - `[`        — `DataFrame[…]` schema slot
+      //   - `.`        — chain methods on a DataFrame
+      // Identifier chars (letters, `_`) are deliberately NOT trigger
+      // characters: Monaco already pops the menu mid-identifier, and
+      // listing them here would re-fire the provider on every keystroke
+      // inside any name (e.g. `df_filtered`), producing noisy popups.
+      // Ctrl+Space (manual trigger) always invokes the provider
+      // regardless of trigger characters.
+      triggerCharacters: ['"', "'", '(', '[', '.'],
       provideCompletionItems(model, position) {
         try {
           const items = (complete_at(
@@ -387,7 +396,9 @@ export default function Playground() {
           ) ?? []) as CompletionPayload[];
           // Replace the "word at cursor" — Monaco will insert the
           // suggestion in place of any partial identifier the user has
-          // typed so far.
+          // typed so far. Inside a string literal `col("|")` the word
+          // is empty (startColumn === endColumn) and the suggestion is
+          // inserted at the cursor, which is the right behavior.
           const word = model.getWordUntilPosition(position);
           const range = new monaco.Range(
             position.lineNumber,
@@ -395,6 +406,12 @@ export default function Playground() {
             position.lineNumber,
             word.endColumn,
           );
+          // Return `{ suggestions: [] }` (not `null`) even when there
+          // are no completions. Returning `null` makes Monaco treat the
+          // provider as having declined to answer for this position,
+          // which suppresses the "No suggestions" indicator on a
+          // user-initiated Ctrl+Space — making it look like the keybind
+          // does nothing.
           return {
             suggestions: items.map((item) => ({
               label: item.label,
@@ -444,6 +461,17 @@ export default function Playground() {
   const handleMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
     monacoRef.current = monaco;
+    // Swallow Cmd/Ctrl+S inside the editor. Monaco's default action is
+    // "save the editor model", which is a no-op in a browser
+    // playground — and without this binding, the browser handles the
+    // keystroke and pops its native "Save Page As…" dialog. Neither is
+    // what the user wants, so we bind the chord to a no-op command.
+    editor.addCommand(
+      monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
+      () => {
+        /* no-op: prevent browser save dialog inside the editor */
+      },
+    );
     // Flip `editorReady` so the provider-registration effect re-runs
     // even if `wasmReady` already turned true while Monaco was still
     // loading its CDN bundle. See the race-condition note on that
@@ -531,6 +559,38 @@ export default function Playground() {
             tabSize: 4,
             insertSpaces: true,
             automaticLayout: true,
+            // A little breathing room above the first line and below
+            // the last line. Default is 0/0, which makes the top of the
+            // file feel cramped against the editor border.
+            padding: { top: 8, bottom: 8 },
+            // Render hover, suggest, and other overlay widgets at the
+            // document body level instead of inside the editor's own
+            // DOM. Without this, the playground's wrapper has
+            // `overflow: hidden` (so the rounded border crops the
+            // editor cleanly), which also clips any hover popup that
+            // extends beyond the editor's box — schemas with many
+            // fields lose their bottom half. Lifting overlay widgets
+            // to the body lets the popup extend anywhere on the page.
+            fixedOverflowWidgets: true,
+            // Pykrete's entire completion surface lives inside string
+            // literals — `col("…")`, `groupBy("…")`, `select("…")`,
+            // etc. Monaco's default `quickSuggestions.strings: 'off'`
+            // suppresses the auto-trigger-on-typing path inside
+            // strings: with the cursor already inside `col("|")` and
+            // the user typing an identifier character, providers
+            // would not fire. Trigger characters (`"`, `(`, etc.) and
+            // manual Ctrl+Space invoke providers regardless of this
+            // setting — but identifier-char auto-trigger is what
+            // closes the IDE gap for users typing column names mid-
+            // string. Override to `strings: true`.
+            quickSuggestions: {
+              other: true,
+              comments: false,
+              strings: true,
+            },
+            // Default is already true, but explicit documents the
+            // intent for the trigger-character path (`"`, `(`, etc.).
+            suggestOnTriggerCharacters: true,
           }}
         />
       </div>
