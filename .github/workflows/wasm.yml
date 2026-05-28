@@ -1,0 +1,59 @@
+name: WASM build
+
+# Verifies the pykrete-wasm crate compiles to a usable npm-style
+# package via `wasm-pack`. Kept separate from `ci.yml` so the main
+# CI matrix stays focused on cargo build/test/clippy/fmt for the
+# native targets — wasm-pack pulls in extra toolchain (rust-std for
+# wasm32, the wasm-pack binary, an npm-style emit step) that's not
+# relevant to the rest of the workspace.
+#
+# This workflow only confirms the build succeeds and the expected
+# files exist. No publish step yet — the docs site (PR B) will pull
+# the artifact in, and a release-time publish-to-npm hook will land
+# alongside the actual v1 launch.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  build:
+    name: build pykrete-wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (with wasm target)
+        # Same toolchain pin as ci.yml so behavior matches the main
+        # build. `target` adds wasm32-unknown-unknown so wasm-pack
+        # can produce a `.wasm`.
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo & target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-pack
+        # The official installer script; faster than `cargo install
+        # wasm-pack` (which would rebuild it on a cold cache).
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build wasm package
+        run: ./scripts/build-wasm.sh
+
+      - name: Confirm wasm-pack output
+        # Sanity check — the three files the docs site will import.
+        run: |
+          out=docs-site/pykrete-wasm-pkg
+          test -f "$out/pykrete_wasm.js" || (echo "missing pykrete_wasm.js"; exit 1)
+          test -f "$out/pykrete_wasm_bg.wasm" || (echo "missing pykrete_wasm_bg.wasm"; exit 1)
+          test -f "$out/package.json" || (echo "missing package.json"; exit 1)
+          echo
+          echo "Artifact sizes:"
+          ls -lh "$out"

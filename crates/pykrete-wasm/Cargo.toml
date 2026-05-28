@@ -1,0 +1,26 @@
+[package]
+name = "pykrete-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WebAssembly wrapper around the pykrete analyzer — single-file `.pyk` checking from a JS host (browser playground)."
+
+[lib]
+# `cdylib` is what `wasm-pack` needs to emit a usable `.wasm`; `rlib`
+# keeps the crate importable from other Rust code so the
+# `#[cfg(test)]` module can exercise the analyzer call directly on
+# the host (no JS boundary).
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Reuse the analyzer. Same path-local dependency the LSP crate uses.
+pykrete = { path = "../pykrete" }
+
+# wasm-bindgen pins to the same minor most of the Rust-wasm ecosystem
+# tracks; wasm-pack handles the matching JS glue generation.
+wasm-bindgen = "0.2"
+
+# `serde` derive for the diagnostic struct, and `serde_wasm_bindgen`
+# to convert it into a JS-side object across the boundary.
+serde = { version = "1", features = ["derive"] }
+serde-wasm-bindgen = "0.6"

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/pykrete", "crates/pykrete-lsp"]
+members = ["crates/pykrete", "crates/pykrete-lsp", "crates/pykrete-wasm"]
 resolver = "2"
 
 [workspace.package]
