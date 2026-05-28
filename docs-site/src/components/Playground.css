@@ -1,0 +1,150 @@
+/*
+ * Styles for the /playground React component.
+ *
+ * The component lives in a Starlight content region (`.sl-markdown-content`),
+ * which applies a lot of typographic defaults — `.not-content` on the
+ * root opts the playground out, then we re-style what we need.
+ *
+ * Imported directly from Playground.tsx so the styles only ship with
+ * the playground bundle, not the rest of the docs site.
+ */
+
+.pk-playground {
+  margin: 1.5rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* Mobile-only nudge that Monaco won't be fun to type into on a phone. */
+.pk-mobile-notice {
+  display: none;
+  margin: 0;
+  padding: 0.6rem 0.8rem;
+  border-radius: 6px;
+  background: var(--sl-color-accent-low);
+  color: var(--sl-color-white);
+  font-size: 0.82rem;
+}
+@media (max-width: 40rem) {
+  .pk-mobile-notice {
+    display: block;
+  }
+}
+
+.pk-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.75rem 1.25rem;
+}
+
+.pk-snippet-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  color: var(--sl-color-white);
+}
+
+.pk-snippet-label {
+  color: var(--sl-color-gray-2);
+}
+
+.pk-snippet-picker select {
+  font: inherit;
+  padding: 0.3rem 0.5rem;
+  background: var(--sl-color-bg);
+  color: var(--sl-color-white);
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 4px;
+}
+
+.pk-snippet-description {
+  margin: 0;
+  flex: 1 1 18rem;
+  color: var(--sl-color-gray-3);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.pk-editor-wrap {
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 8px;
+  overflow: hidden;
+  /* Monaco computes its own internal height; the wrapper sets the
+     box. The `height="420px"` prop on Editor matches. */
+}
+
+.pk-status {
+  font-family: var(--sl-font-system-mono, ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace);
+  font-size: 0.8rem;
+  color: var(--sl-color-gray-3);
+}
+
+.pk-diagnostics {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 14rem;
+  overflow-y: auto;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 6px;
+  background: var(--sl-color-bg);
+}
+
+.pk-empty {
+  padding: 0.7rem 0.9rem;
+  color: var(--sl-color-gray-3);
+  font-size: 0.85rem;
+}
+
+.pk-diag {
+  border-bottom: 1px solid var(--sl-color-gray-6);
+}
+.pk-diag:last-child {
+  border-bottom: none;
+}
+
+/* The button-as-row pattern: clickable, keyboard-focusable, screen
+   readers announce it as an interactive control instead of plain
+   text. */
+.pk-diag-button {
+  display: block;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: none;
+  background: transparent;
+  text-align: left;
+  font-family: var(--sl-font-system-mono, ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--sl-color-white);
+  cursor: pointer;
+}
+.pk-diag-button:hover,
+.pk-diag-button:focus-visible {
+  background: var(--sl-color-gray-6);
+  outline: none;
+}
+.pk-diag-button:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--sl-color-accent);
+}
+
+.pk-diag-error .pk-diag-button {
+  /* Slight red wash on error rows — distinguishes them from warnings
+     without needing a separate icon. */
+  background: rgba(224, 108, 117, 0.06);
+}
+.pk-diag-error .pk-diag-button:hover,
+.pk-diag-error .pk-diag-button:focus-visible {
+  background: rgba(224, 108, 117, 0.14);
+}
+
+.pk-diag-warning .pk-diag-button {
+  background: rgba(229, 192, 123, 0.05);
+}
+.pk-diag-warning .pk-diag-button:hover,
+.pk-diag-warning .pk-diag-button:focus-visible {
+  background: rgba(229, 192, 123, 0.12);
+}
