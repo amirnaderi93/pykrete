@@ -132,15 +132,16 @@ interface Snippet {
  *
  * Add new names here (rather than touching the engine) when a Spark
  * builtin starts showing up as undefined in the playground. */
-const PLAYGROUND_PREAMBLE = `from typing import Any, Generic, TypeVar
-T = TypeVar("T")
+const PLAYGROUND_PREAMBLE = `from typing import Any
 
-class Schema: ...
+class Schema:
+    pass
 
-class DataFrame(Generic[T]):
+class DataFrame:
+    def __class_getitem__(cls, item: Any) -> Any: ...
     def __getattr__(self, _: str) -> Any: ...
 
-def col(_: str) -> Any: ...
+def col(_: Any) -> Any: ...
 def lit(_: Any) -> Any: ...
 
 class _F:
