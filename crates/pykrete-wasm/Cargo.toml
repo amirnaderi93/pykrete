@@ -3,7 +3,7 @@ name = "pykrete-wasm"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "WebAssembly wrapper around the pykrete analyzer — single-file `.pyk` checking from a JS host (browser playground)."
+description = "WebAssembly wrapper around the pykrete analyzer — single-file `.pyk` diagnostics, hover, completion, and go-to-definition from a JS host (browser playground)."
 
 [lib]
 # `cdylib` is what `wasm-pack` needs to emit a usable `.wasm`; `rlib`

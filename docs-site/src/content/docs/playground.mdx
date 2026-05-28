@@ -18,6 +18,20 @@ single-file analyzer. Diagnostics show up as squiggles in the editor
 and as one-liners in the panel below — the same format
 `pykrete check` prints in your terminal.
 
+The playground also wires pykrete's IDE capabilities into Monaco, so
+the editor behaves the way the VS Code extension does for `.pyk`
+files:
+
+- **Hover.** Hover a Schema class name to see its fields; hover a
+  `DataFrame[X]` annotation to see what `X` is; hover a local that
+  was bound to a chain (`summary = sales.withColumn(...)…`) to see
+  the schema pykrete tracked through it.
+- **Completion.** Type a column name inside `col("…")` to get
+  suggestions from the surrounding DataFrame's schema. In a
+  `DataFrame[…]` slot, you get every Schema declared in the source.
+- **Go-to-definition.** Cmd/Ctrl+click (or F12) on a `DataFrame[X]`
+  reference to jump to `class X(Schema):`.
+
 The wasm playground is single-file only: no cross-file resolution, no
 project config, no `.pyk-import` declarations. Everything you can do
 locally with `pykrete check path/to/file.pyk` works here; multi-file
@@ -25,6 +39,10 @@ projects need the CLI.
 
 ## Limits
 
+- **Pykrete features only.** Python-side LSP features (general
+  `def`/`class` go-to-definition, parameter info, imports) aren't
+  wired up here yet — they need the embedded Python language server
+  from the LSP multiplexer. That's queued for a follow-up release.
 - **No share-via-URL yet.** Refresh discards your edits. Bookmarkable
   snippet URLs are on the roadmap.
 - **Desktop-first.** Monaco editor is hard to use on a phone; the

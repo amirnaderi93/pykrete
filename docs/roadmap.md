@@ -60,6 +60,19 @@ setting; the single value also drives the embedded Python engine.
 
 Already shipped (recorded here for completeness):
 
+- **In-browser playground reaches pykrete IDE parity.** The Monaco
+  editor at [`/playground`](https://amirnaderi93.github.io/pykrete/playground/)
+  now serves the same pykrete capabilities the VS Code extension does
+  for `.pyk` files: hover on schema names, `DataFrame[X]` references,
+  and chain-bound locals; column-name completion inside `col("…")` and
+  schema-name completion inside `DataFrame[…]`; and go-to-definition
+  on Schema references. Wired through three new `pykrete-wasm` entry
+  points (`hover_at`, `complete_at`, `definition_at`) that delegate to
+  the same `pykrete::hover` / `pykrete::completions` / `pykrete::definition`
+  the LSP server uses, so playground behavior matches a local install.
+  Follow-up: the embedded Python language server (the multiplexer's
+  half) isn't reachable from the browser yet — Python-side hover,
+  parameter info, and imports still need the desktop install.
 - **Performance pass.** Project-scope hot paths reviewed and
   micro-optimized: schema-name resolution (previously a linear scan over
   every project-wide schema) is now a `HashMap` index keyed by name on

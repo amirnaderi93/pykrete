@@ -35,8 +35,13 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Editor, { type Monaco, type OnChange, type OnMount } from '@monaco-editor/react';
-import type { editor } from 'monaco-editor';
-import init, { check_source } from 'pykrete-wasm';
+import type { editor, languages } from 'monaco-editor';
+import init, {
+  check_source,
+  hover_at,
+  complete_at,
+  definition_at,
+} from 'pykrete-wasm';
 import './Playground.css';
 
 /** Diagnostic shape coming back from `check_source`. Must stay in sync
@@ -46,6 +51,34 @@ interface Diagnostic {
   rule_name: string;
   severity: 'error' | 'warning' | string;
   message: string;
+  line: number;
+  column: number;
+  end_line: number;
+  end_column: number;
+}
+
+/** Hover payload from `hover_at`. Mirrors `HoverOut` in
+ * `crates/pykrete-wasm/src/lib.rs`. */
+interface HoverPayload {
+  contents: string;
+  line: number;
+  column: number;
+  end_line: number;
+  end_column: number;
+}
+
+/** Completion item from `complete_at`. Mirrors `CompletionOut`. */
+interface CompletionPayload {
+  label: string;
+  detail: string | null;
+  insert_text: string;
+  /** `"field"` or `"schema"` today; stringly-typed so the wasm boundary
+   * doesn't leak Monaco's enum back across it. */
+  kind: string;
+}
+
+/** Definition location from `definition_at`. Mirrors `LocationOut`. */
+interface LocationPayload {
   line: number;
   column: number;
   end_line: number;
@@ -100,7 +133,7 @@ def revenue_by_region(sales: DataFrame[Sale]):
     id: 'schema-flow',
     label: 'Schema flow through a chain',
     description:
-      'pykrete tracks the schema through withColumn / drop / groupBy / agg.',
+      'Hover Sale, sales, or summary. Type col("…") inside the chain for column completions.',
     source: `class Sale(Schema):
     region: string
     product: string
@@ -108,6 +141,8 @@ def revenue_by_region(sales: DataFrame[Sale]):
     quantity: int
 
 def report(sales: DataFrame[Sale]):
+    # Hover \`Sale\` above to see its fields.
+    # Hover \`sales\` here to see the bound schema.
     summary = (
         sales
         .withColumn("revenue", F.col("amount") * F.col("quantity"))
@@ -115,8 +150,7 @@ def report(sales: DataFrame[Sale]):
         .groupBy("region")
         .agg(F.sum("revenue").alias("total"))
     )
-    # Hover \`summary\` in your editor (locally) — schema is
-    # \`region: string, product: string, total: long\`.
+    # Hover \`summary\` — pykrete tracked the schema through the chain.
     return summary
 `,
   },
@@ -138,6 +172,23 @@ function markerSeverity(monaco: Monaco, severity: string): number {
   // safer than silent for a diagnostic the user actually wants to
   // see.
   return monaco.MarkerSeverity.Error;
+}
+
+/** Map pykrete-wasm's stringly-typed completion kind to Monaco's
+ * `CompletionItemKind` enum. New kinds added on the Rust side fall
+ * back to `Text` so the icon is at worst neutral, never wrong. */
+function completionKindFor(
+  monaco: Monaco,
+  kind: string,
+): languages.CompletionItemKind {
+  switch (kind) {
+    case 'field':
+      return monaco.languages.CompletionItemKind.Field;
+    case 'schema':
+      return monaco.languages.CompletionItemKind.Class;
+    default:
+      return monaco.languages.CompletionItemKind.Text;
+  }
 }
 
 /**
@@ -166,11 +217,26 @@ export default function Playground() {
   const debouncedSource = useDebounced(source, 300);
 
   const [wasmReady, setWasmReady] = useState(false);
+  /** True after Monaco's `onMount` callback fires. Tracked as state (not
+   * just a ref) so the provider-registration effect can re-run when the
+   * editor finishes loading — see the race-condition comment on that
+   * effect below. */
+  const [editorReady, setEditorReady] = useState(false);
   const [wasmError, setWasmError] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
 
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<Monaco | null>(null);
+  /** Language-provider disposables. Monaco registers providers
+   * globally (per language ID, not per editor), so we keep handles to
+   * dispose them on unmount — otherwise React fast-refresh + repeated
+   * navigations would stack duplicate providers and Monaco would call
+   * each one once per hover/completion request. */
+  const providerDisposablesRef = useRef<{ dispose(): void }[]>([]);
+  /** Latest editor source, kept in a ref so the language providers
+   * (registered once, capture lexically) can read it without
+   * re-registering on every keystroke. */
+  const liveSourceRef = useRef<string>(activeSnippet.source);
 
   // wasm init runs once. The pykrete-wasm package's default export is
   // a function that fetches and instantiates the `.wasm` binary; it
@@ -194,6 +260,14 @@ export default function Playground() {
       cancelled = true;
     };
   }, []);
+
+  // Keep the live-source ref in sync with the source state so the
+  // language providers (registered once, see the provider-registration
+  // useEffect below) always see the freshest text without
+  // re-registering on every keystroke.
+  useEffect(() => {
+    liveSourceRef.current = source;
+  }, [source]);
 
   // Re-run the analyzer whenever the debounced source or the wasm-ready
   // flag changes. Surfaces both as in-editor markers and as a list
@@ -244,9 +318,137 @@ export default function Playground() {
     }
   }, [debouncedSource, wasmReady]);
 
+  // Register pykrete's hover / completion / definition providers on
+  // the `python` language. Monaco's provider API is global per
+  // language ID — registering once and reading the source from a ref
+  // (`liveSourceRef`) lets the providers stay responsive without
+  // re-registering on every keystroke. The wasm-ready flag gates
+  // registration so we never call the wasm exports before they exist.
+  //
+  // RACE-CONDITION NOTE: `monacoRef.current` is populated by
+  // `handleMount` (Monaco's `onMount` callback), which does NOT
+  // trigger a React re-render. If this effect depended only on
+  // `wasmReady` it would run once when wasm becomes ready — and if
+  // Monaco hadn't mounted yet (the realistic case: wasm is tiny/cached
+  // while Monaco is a ~2MB CDN fetch), `monacoRef.current` would still
+  // be null, the effect would early-return, and would NEVER re-run —
+  // leaving the user without hover / completion / go-to-definition
+  // until a page refresh. Tracking `editorReady` as React STATE (set
+  // in `handleMount`) and listing it as a dep makes this effect re-run
+  // the moment Monaco finishes loading, regardless of which side wins.
+  useEffect(() => {
+    if (!wasmReady || !editorReady) return;
+    const monaco = monacoRef.current;
+    if (!monaco) return;
+    // Dispose any previously-registered providers first — React strict
+    // mode runs effects twice, and a hot-reload could leave stale
+    // providers behind. The cleanup function handles the unmount case.
+    for (const d of providerDisposablesRef.current) d.dispose();
+    providerDisposablesRef.current = [];
+
+    const hover = monaco.languages.registerHoverProvider('python', {
+      provideHover(_model, position) {
+        try {
+          const out = hover_at(
+            liveSourceRef.current,
+            position.lineNumber,
+            position.column,
+          ) as HoverPayload | null;
+          if (!out) return null;
+          return {
+            range: new monaco.Range(
+              out.line,
+              out.column,
+              out.end_line,
+              out.end_column,
+            ),
+            contents: [{ value: out.contents }],
+          };
+        } catch {
+          // wasm-bindgen glue can throw if the module is half-initialised
+          // (e.g. mid-reload). Returning null degrades to "no hover" — a
+          // noisy popup on every cursor move would be far worse.
+          return null;
+        }
+      },
+    });
+
+    const completion = monaco.languages.registerCompletionItemProvider('python', {
+      // pykrete fires on identifier chars and on the typical
+      // surfaces (`(`, `[`, `"`, `.`). Listing them all keeps Monaco
+      // from skipping the provider mid-token.
+      triggerCharacters: ['"', "'", '(', '[', '.', '_'],
+      provideCompletionItems(model, position) {
+        try {
+          const items = (complete_at(
+            liveSourceRef.current,
+            position.lineNumber,
+            position.column,
+          ) ?? []) as CompletionPayload[];
+          // Replace the "word at cursor" — Monaco will insert the
+          // suggestion in place of any partial identifier the user has
+          // typed so far.
+          const word = model.getWordUntilPosition(position);
+          const range = new monaco.Range(
+            position.lineNumber,
+            word.startColumn,
+            position.lineNumber,
+            word.endColumn,
+          );
+          return {
+            suggestions: items.map((item) => ({
+              label: item.label,
+              detail: item.detail ?? undefined,
+              insertText: item.insert_text,
+              kind: completionKindFor(monaco, item.kind),
+              range,
+            })),
+          };
+        } catch {
+          return { suggestions: [] };
+        }
+      },
+    });
+
+    const definition = monaco.languages.registerDefinitionProvider('python', {
+      provideDefinition(model, position) {
+        try {
+          const loc = definition_at(
+            liveSourceRef.current,
+            position.lineNumber,
+            position.column,
+          ) as LocationPayload | null;
+          if (!loc) return null;
+          return {
+            uri: model.uri,
+            range: new monaco.Range(
+              loc.line,
+              loc.column,
+              loc.end_line,
+              loc.end_column,
+            ),
+          };
+        } catch {
+          return null;
+        }
+      },
+    });
+
+    providerDisposablesRef.current = [hover, completion, definition];
+    return () => {
+      for (const d of providerDisposablesRef.current) d.dispose();
+      providerDisposablesRef.current = [];
+    };
+  }, [wasmReady, editorReady]);
+
   const handleMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
     monacoRef.current = monaco;
+    // Flip `editorReady` so the provider-registration effect re-runs
+    // even if `wasmReady` already turned true while Monaco was still
+    // loading its CDN bundle. See the race-condition note on that
+    // effect.
+    setEditorReady(true);
   };
 
   const handleChange: OnChange = (value) => {
