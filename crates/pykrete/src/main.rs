@@ -8,21 +8,123 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+const TOP_LEVEL_HELP: &str = "\
+pykrete — Static schema checking for dataframes (PySpark today).
+
+Usage:
+    pykrete <COMMAND> [OPTIONS] [ARGS]
+
+Commands:
+    check       Check .pyk files for schema errors
+    transpile   Transpile .pyk to .py (for runtime execution)
+
+Options:
+    -V, --version    Show version and exit
+    -h, --help       Show this help and exit
+
+For help on a subcommand: pykrete <COMMAND> --help
+";
+
+const CHECK_HELP: &str = "\
+pykrete check — Check .pyk files for schema errors.
+
+Usage:
+    pykrete check [OPTIONS] <FILE_OR_DIR> [<FILE_OR_DIR> ...]
+
+Options:
+    -v, --verbose    Also print every schema declaration and typed
+                     function signature (default: summary line only).
+    -h, --help       Show this help and exit.
+
+Example:
+    pykrete check examples/orders.pyk
+";
+
+const TRANSPILE_HELP: &str = "\
+pykrete transpile — Transpile a .pyk file to .py on stdout.
+
+Usage:
+    pykrete transpile [OPTIONS] <FILE.pyk>
+
+Options:
+    -h, --help    Show this help and exit.
+
+Example:
+    pykrete transpile sales.pyk > sales.py
+";
+
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
+
+    // Top-level flags first — they short-circuit subcommand dispatch.
     match args.get(1).map(String::as_str) {
-        Some("check") if args.len() >= 3 => run_check(&args[2..]),
-        Some("transpile") if args.len() == 3 => run_transpile(&args[2]),
-        _ => {
-            eprintln!("usage:");
-            eprintln!("  pykrete check <file-or-dir> [<file-or-dir> ...]");
-            eprintln!("  pykrete transpile <file.pyk>");
+        None => {
+            print!("{TOP_LEVEL_HELP}");
+            return ExitCode::SUCCESS;
+        }
+        Some("-h" | "--help") => {
+            print!("{TOP_LEVEL_HELP}");
+            return ExitCode::SUCCESS;
+        }
+        Some("-V" | "--version") => {
+            println!("pykrete {VERSION}");
+            return ExitCode::SUCCESS;
+        }
+        _ => {}
+    }
+
+    match args.get(1).map(String::as_str) {
+        Some("check") => run_check(&args[2..]),
+        Some("transpile") => run_transpile(&args[2..]),
+        Some(cmd) => {
+            eprintln!("unknown command '{cmd}'; see `pykrete --help`");
             ExitCode::from(2)
         }
+        None => unreachable!("handled above"),
     }
 }
 
-fn run_check(paths: &[String]) -> ExitCode {
+/// Parse `check`'s flags and arguments. Returns the verbose flag and the
+/// list of path arguments, or an error message if a flag is unrecognized.
+/// Caller is expected to have already short-circuited on `-h` / `--help`.
+fn parse_check_args(args: &[String]) -> Result<(bool, Vec<String>), String> {
+    let mut verbose = false;
+    let mut paths: Vec<String> = Vec::new();
+    for a in args {
+        match a.as_str() {
+            "-v" | "--verbose" => verbose = true,
+            s if s.starts_with('-') => {
+                return Err(format!("unknown option '{s}'; see `pykrete check --help`"));
+            }
+            _ => paths.push(a.clone()),
+        }
+    }
+    Ok((verbose, paths))
+}
+
+fn run_check(args: &[String]) -> ExitCode {
+    // `--help` / `-h` short-circuit before any other parsing so that
+    // `pykrete check --help` works even with no file argument.
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        print!("{CHECK_HELP}");
+        return ExitCode::SUCCESS;
+    }
+
+    let (verbose, paths) = match parse_check_args(args) {
+        Ok(v) => v,
+        Err(msg) => {
+            eprintln!("{msg}");
+            return ExitCode::from(2);
+        }
+    };
+
+    if paths.is_empty() {
+        eprintln!("specify a file or directory; see `pykrete check --help`");
+        return ExitCode::from(2);
+    }
+
     // Project config — `pykrete.json`, found at or above the working
     // directory. Absent or malformed → defaults.
     let config = load_config();
@@ -30,7 +132,7 @@ fn run_check(paths: &[String]) -> ExitCode {
     // Phase 1: expand directories to .pyk files, then read every file.
     // If any path fails to expand or read, abort early with a usage-
     // style error rather than analyzing a partial project.
-    let mut expanded: Vec<PathBuf> = match expand_paths(paths) {
+    let mut expanded: Vec<PathBuf> = match expand_paths(&paths) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("{e}");
@@ -59,6 +161,10 @@ fn run_check(paths: &[String]) -> ExitCode {
 
     // Print per-file summary + body to stdout, in input order. Then dump
     // all diagnostics across all files to stderr at the end (TS-style).
+    //
+    // Default output is just the summary line — the verbose schema/function
+    // dump is gated behind `--verbose` so first-run output matches the
+    // promise in the quickstart docs.
     let mut had_diagnostics = false;
     for (i, file) in project.files.iter().enumerate() {
         let r = &file.result;
@@ -77,7 +183,7 @@ fn run_check(paths: &[String]) -> ExitCode {
                 r.typed_function_count,
                 r.diagnostics.len(),
             );
-            if !r.body.is_empty() {
+            if verbose && !r.body.is_empty() {
                 println!();
                 print!("{}", r.body);
             }
@@ -135,7 +241,34 @@ fn walk_pyk(dir: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
     Ok(())
 }
 
-fn run_transpile(path: &str) -> ExitCode {
+fn run_transpile(args: &[String]) -> ExitCode {
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        print!("{TRANSPILE_HELP}");
+        return ExitCode::SUCCESS;
+    }
+
+    // Strip unknown flags / collect the single positional arg.
+    let mut positional: Vec<&String> = Vec::new();
+    for a in args {
+        if a.starts_with('-') {
+            eprintln!("unknown option '{a}'; see `pykrete transpile --help`");
+            return ExitCode::from(2);
+        }
+        positional.push(a);
+    }
+
+    let path = match positional.as_slice() {
+        [p] => p.as_str(),
+        [] => {
+            eprintln!("specify a file; see `pykrete transpile --help`");
+            return ExitCode::from(2);
+        }
+        _ => {
+            eprintln!("transpile takes exactly one file; see `pykrete transpile --help`");
+            return ExitCode::from(2);
+        }
+    };
+
     let source = match fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {

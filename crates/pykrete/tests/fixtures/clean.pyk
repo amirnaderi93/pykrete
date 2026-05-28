@@ -1,0 +1,7 @@
+class Sale(Schema):
+    region: string
+    amount: int
+
+
+def revenue(sales: DataFrame[Sale]) -> DataFrame[Sale]:
+    return sales.select(col("region"), col("amount"))
