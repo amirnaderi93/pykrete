@@ -91,6 +91,30 @@ export const PLAYGROUND_URI = 'file:///playground.py';
  * indicator reads this. */
 export type PyrightState = 'loading' | 'ready' | 'failed';
 
+/** Optional hidden preamble configuration. The playground prepends a
+ * stub module that declares `Schema`, `DataFrame`, `col`, `F`, and the
+ * pykrete schema type aliases — so users can write idiomatic pykrete
+ * code in the sandbox without explicit imports. The preamble is sent
+ * to pyright but never shown in the editor; positions are offset at
+ * the LSP boundary so the user's view sees lines 1..N as line 1..N.
+ *
+ * - `text` is prepended to every `didOpen`/`didChange` payload.
+ * - `lines` is the number of newline characters in `text` (NOT
+ *   `split('\n').length` — beware: `'foo\nbar\n'.split('\n').length`
+ *   is 3, not 2, and the trailing empty element would over-offset by
+ *   one). For a preamble whose final character is `\n`, this is the
+ *   line number (0-indexed) where the user's line 0 lands inside the
+ *   combined source.
+ *
+ * Diagnostics whose line falls inside the preamble (line < offset)
+ * are dropped entirely — the user can't see preamble code. Hover and
+ * definition results that land in the preamble are also dropped (the
+ * editor has nowhere to point a "go-to-definition" at line -3). */
+export interface PyrightPreamble {
+  text: string;
+  lines: number;
+}
+
 /** Caller-side handle. Methods that take a position use 0-indexed
  * (line, character) — LSP convention. Monaco speaks 1-indexed
  * everything, so the playground translates at the call site. */
@@ -141,7 +165,52 @@ export interface PyrightHandle {
 export function createPyrightClient(
   workerUrl: string,
   initialText: string,
+  preamble?: PyrightPreamble,
 ): PyrightHandle {
+  // Offset applied at every position boundary with pyright. Zero when
+  // no preamble was passed — the math degenerates to a no-op, so the
+  // non-playground call sites stay unaffected.
+  const preambleText = preamble?.text ?? '';
+  const offset = preamble?.lines ?? 0;
+
+  /** Splice `preambleText` in front of `userText` for the wire. The
+   * preamble is purely for pyright's view of the document — the
+   * editor never sees it. */
+  const withPreamble = (userText: string): string =>
+    preambleText + userText;
+
+  /** Translate a user-space (line, character) into a pyright-space
+   * position by adding the preamble offset. Character is unchanged —
+   * the preamble doesn't shift columns. */
+  const toPyrightPosition = (position: Position): Position => ({
+    line: position.line + offset,
+    character: position.character,
+  });
+
+  /** Translate a pyright-space line back to user-space. Returns `null`
+   * if the result would be negative — i.e. pyright is pointing at the
+   * preamble, which the user can't see. Callers should treat `null`
+   * as "drop this result". */
+  const fromPyrightLine = (line: number): number | null => {
+    const userLine = line - offset;
+    return userLine < 0 ? null : userLine;
+  };
+
+  /** Translate a pyright range to user-space. Returns `null` when
+   * EITHER endpoint falls in the preamble — partial ranges that span
+   * the preamble/user boundary have no meaningful editor target. */
+  const rangeToUserSpace = (
+    range: { start: Position; end: Position } | undefined,
+  ): { start: Position; end: Position } | undefined => {
+    if (!range) return range;
+    const startLine = fromPyrightLine(range.start.line);
+    const endLine = fromPyrightLine(range.end.line);
+    if (startLine == null || endLine == null) return undefined;
+    return {
+      start: { line: startLine, character: range.start.character },
+      end: { line: endLine, character: range.end.character },
+    };
+  };
   // Diagnostic listeners. We hold them externally so the
   // PublishDiagnostics handler can fan out without coupling to React
   // state directly.
@@ -166,13 +235,16 @@ export function createPyrightClient(
       // worker died between renders), swallow — the diagnostics
       // listener will simply stop receiving updates and the next
       // render's setText() will try again.
+      //
+      // The preamble is spliced in transparently for pyright; the
+      // public `setText` contract still talks in user-space text.
       connection
         .sendNotification(DidChangeTextDocumentNotification.type, {
           textDocument: {
             uri: PLAYGROUND_URI,
             version: documentVersion,
           },
-          contentChanges: [{ text }],
+          contentChanges: [{ text: withPreamble(text) }],
         })
         .catch(() => {
           /* see comment above */
@@ -181,10 +253,19 @@ export function createPyrightClient(
     async hover(position) {
       if (client.state !== 'ready' || !connection) return null;
       try {
-        return await connection.sendRequest(HoverRequest.type, {
+        const hover = await connection.sendRequest(HoverRequest.type, {
           textDocument: { uri: PLAYGROUND_URI },
-          position,
+          position: toPyrightPosition(position),
         });
+        if (!hover) return hover;
+        // pyright may attach a range to the hover; translate it back
+        // to user-space. If the range falls in the preamble, drop the
+        // range (Monaco then highlights the word under the cursor)
+        // but keep the hover contents — the user still gets the type
+        // info for whatever they hovered (which is necessarily inside
+        // their own code, since `position` came from their view).
+        const userRange = rangeToUserSpace(hover.range);
+        return { ...hover, range: userRange };
       } catch {
         return null;
       }
@@ -192,10 +273,64 @@ export function createPyrightClient(
     async completion(position) {
       if (client.state !== 'ready' || !connection) return null;
       try {
-        return await connection.sendRequest(CompletionRequest.type, {
+        const result = await connection.sendRequest(CompletionRequest.type, {
           textDocument: { uri: PLAYGROUND_URI },
-          position,
+          position: toPyrightPosition(position),
         });
+        if (!result) return result;
+        // Each completion item may carry a textEdit with a range in
+        // pyright-space. Walk the list and translate; items whose
+        // edit range falls fully in the preamble are dropped (no
+        // valid editor target). Completion items without a textEdit
+        // are kept verbatim — the playground falls back to the
+        // word-at-cursor range.
+        const translate = (item: CompletionItem): CompletionItem | null => {
+          const rawTextEdit = item.textEdit;
+          if (!rawTextEdit) return item;
+          const range =
+            (rawTextEdit as { range?: { start: Position; end: Position } })
+              .range ??
+            (rawTextEdit as { insert?: { start: Position; end: Position } })
+              .insert;
+          if (!range) return item;
+          const userRange = rangeToUserSpace(range);
+          if (!userRange) return null;
+          // Reshape the textEdit with the user-space range. Preserve
+          // the discriminant so InsertReplaceEdit stays an
+          // InsertReplaceEdit.
+          const insertReplace = rawTextEdit as {
+            insert?: { start: Position; end: Position };
+            replace?: { start: Position; end: Position };
+            newText: string;
+          };
+          if (insertReplace.insert && insertReplace.replace) {
+            const replaceUser = rangeToUserSpace(insertReplace.replace);
+            if (!replaceUser) return null;
+            return {
+              ...item,
+              textEdit: {
+                insert: userRange,
+                replace: replaceUser,
+                newText: insertReplace.newText,
+              },
+            };
+          }
+          return {
+            ...item,
+            textEdit: { range: userRange, newText: insertReplace.newText },
+          };
+        };
+        if (Array.isArray(result)) {
+          return result
+            .map(translate)
+            .filter((i): i is CompletionItem => i !== null);
+        }
+        return {
+          ...result,
+          items: result.items
+            .map(translate)
+            .filter((i): i is CompletionItem => i !== null),
+        };
       } catch {
         return null;
       }
@@ -203,10 +338,46 @@ export function createPyrightClient(
     async definition(position) {
       if (client.state !== 'ready' || !connection) return null;
       try {
-        return await connection.sendRequest(DefinitionRequest.type, {
+        const def = await connection.sendRequest(DefinitionRequest.type, {
           textDocument: { uri: PLAYGROUND_URI },
-          position,
+          position: toPyrightPosition(position),
         });
+        if (!def) return def;
+        // Walk every location/link; translate ranges. Anything fully
+        // inside the preamble drops out — the user can't navigate
+        // there. If everything drops, return null so the playground
+        // falls back to "no pyright definition".
+        const locations = Array.isArray(def) ? def : [def];
+        const translated = locations
+          .map((loc) => {
+            const link = loc as Partial<DefinitionLink> & {
+              targetUri?: string;
+              targetRange?: { start: Position; end: Position };
+              targetSelectionRange?: { start: Position; end: Position };
+            };
+            if (link.targetUri && link.targetRange) {
+              const targetRange = rangeToUserSpace(link.targetRange);
+              const targetSelectionRange = rangeToUserSpace(
+                link.targetSelectionRange,
+              );
+              if (!targetRange) return null;
+              return {
+                ...link,
+                targetRange,
+                targetSelectionRange: targetSelectionRange ?? targetRange,
+              };
+            }
+            const l = loc as { uri?: string; range?: { start: Position; end: Position } };
+            if (l.uri && l.range) {
+              const userRange = rangeToUserSpace(l.range);
+              if (!userRange) return null;
+              return { uri: l.uri, range: userRange };
+            }
+            return null;
+          })
+          .filter((x): x is NonNullable<typeof x> => x !== null);
+        if (translated.length === 0) return null;
+        return translated as unknown as Definition | DefinitionLink[];
       } catch {
         return null;
       }
@@ -258,17 +429,25 @@ export function createPyrightClient(
       const writer = new BrowserMessageWriter(worker);
       connection = createMessageConnection(reader, writer);
 
-      // Diagnostics handler: just cache + fan out. pyright republishes
-      // the full list per document on every edit, so listeners can
-      // replace state wholesale.
+      // Diagnostics handler: translate ranges back to user-space and
+      // drop anything that falls inside the preamble (the user can't
+      // see preamble code, so a squiggle pointed there is noise).
+      // pyright republishes the full list per document on every edit,
+      // so listeners can replace state wholesale.
       connection.onNotification(
         PublishDiagnosticsNotification.type,
         (params: PublishDiagnosticsParams) => {
           if (params.uri !== PLAYGROUND_URI) return;
-          lastDiagnostics = params.diagnostics;
+          const translated: Diagnostic[] = [];
+          for (const d of params.diagnostics) {
+            const range = rangeToUserSpace(d.range);
+            if (!range) continue; // diagnostic lives in the preamble
+            translated.push({ ...d, range });
+          }
+          lastDiagnostics = translated;
           for (const listener of diagListeners) {
             try {
-              listener(params.diagnostics);
+              listener(translated);
             } catch {
               // A bad subscriber shouldn't bring down the loop.
             }
@@ -354,7 +533,12 @@ export function createPyrightClient(
             uri: PLAYGROUND_URI,
             languageId: 'python',
             version: documentVersion,
-            text: documentText,
+            // Prepend the preamble so pyright sees `Schema`,
+            // `DataFrame`, `col`, `F`, and the lowercase type aliases
+            // pre-declared. The user's editor view never includes the
+            // preamble — all position math at the LSP boundary is
+            // offset by `preamble.lines`.
+            text: withPreamble(documentText),
           },
         },
       );
