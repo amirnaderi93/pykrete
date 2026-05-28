@@ -574,18 +574,22 @@ export default function Playground() {
             fixedOverflowWidgets: true,
             // Pykrete's entire completion surface lives inside string
             // literals — `col("…")`, `groupBy("…")`, `select("…")`,
-            // etc. Monaco's default is to SUPPRESS quick-suggestions
-            // inside strings (the rationale being that strings are
-            // usually prose, not code). Override: completions in
-            // strings are the whole point of the playground. Without
-            // this, none of pykrete's column-name completions ever
-            // surface and Ctrl+Space is also silenced for in-string
-            // positions.
+            // etc. Monaco's default `quickSuggestions.strings: 'off'`
+            // suppresses the auto-trigger-on-typing path inside
+            // strings: with the cursor already inside `col("|")` and
+            // the user typing an identifier character, providers
+            // would not fire. Trigger characters (`"`, `(`, etc.) and
+            // manual Ctrl+Space invoke providers regardless of this
+            // setting — but identifier-char auto-trigger is what
+            // closes the IDE gap for users typing column names mid-
+            // string. Override to `strings: true`.
             quickSuggestions: {
               other: true,
               comments: false,
               strings: true,
             },
+            // Default is already true, but explicit documents the
+            // intent for the trigger-character path (`"`, `(`, etc.).
             suggestOnTriggerCharacters: true,
           }}
         />
