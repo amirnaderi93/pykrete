@@ -207,6 +207,75 @@ function completionKindFor(
   }
 }
 
+/** Map an LSP `CompletionItemKind` (numeric, from `vscode-languageserver-protocol`)
+ * to Monaco's `CompletionItemKind` enum. **They share names but disagree
+ * on every numeric value above 1** — naively casting an LSP number to
+ * Monaco's enum yields wrong icons (e.g. LSP Function=3 lands on
+ * Monaco's Field=3; LSP Class=7 lands on Monaco's Interface=7).
+ *
+ * Unknown / undefined inputs fall back to `Text`. */
+function lspToMonacoCompletionKind(
+  monaco: Monaco,
+  lspKind: number | undefined,
+): languages.CompletionItemKind {
+  const M = monaco.languages.CompletionItemKind;
+  // Numeric switch — LSP values from the LSP spec.
+  switch (lspKind) {
+    case 1:
+      return M.Text;
+    case 2:
+      return M.Method;
+    case 3:
+      return M.Function;
+    case 4:
+      return M.Constructor;
+    case 5:
+      return M.Field;
+    case 6:
+      return M.Variable;
+    case 7:
+      return M.Class;
+    case 8:
+      return M.Interface;
+    case 9:
+      return M.Module;
+    case 10:
+      return M.Property;
+    case 11:
+      return M.Unit;
+    case 12:
+      return M.Value;
+    case 13:
+      return M.Enum;
+    case 14:
+      return M.Keyword;
+    case 15:
+      return M.Snippet;
+    case 16:
+      return M.Color;
+    case 17:
+      return M.File;
+    case 18:
+      return M.Reference;
+    case 19:
+      return M.Folder;
+    case 20:
+      return M.EnumMember;
+    case 21:
+      return M.Constant;
+    case 22:
+      return M.Struct;
+    case 23:
+      return M.Event;
+    case 24:
+      return M.Operator;
+    case 25:
+      return M.TypeParameter;
+    default:
+      return M.Text;
+  }
+}
+
 /**
  * Race a promise against a deadline. Returns the promise's resolved
  * value, or `fallback` if it doesn't settle inside `timeoutMs`. Used
@@ -829,12 +898,10 @@ export default function Playground() {
               label: item.label,
               detail,
               insertText,
-              kind:
-                // LSP CompletionItemKind enum overlaps with Monaco's
-                // numerically (both follow LSP's spec values). Default
-                // unknown to Text so the icon is at worst neutral.
-                (item.kind ?? monaco.languages.CompletionItemKind.Text) as
-                  unknown as languages.CompletionItemKind,
+              // LSP and Monaco's CompletionItemKind enums share names
+              // but disagree on every numeric value above 1 — naive
+              // casting yields wrong icons. Translate explicitly.
+              kind: lspToMonacoCompletionKind(monaco, item.kind),
               range,
               filterText: item.filterText,
               sortText: item.sortText,
