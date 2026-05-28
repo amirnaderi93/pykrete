@@ -113,6 +113,65 @@ interface Snippet {
   source: string;
 }
 
+/** Hidden preamble prepended to whatever pyright sees, so the user
+ * can write `Schema`, `DataFrame[X]`, `col("…")`, `F.sum(…)` without
+ * explicit imports.
+ *
+ * We declare `Schema` and `DataFrame[T]` as plain Python classes (so
+ * `class Sale(Schema):` and `DataFrame[Sale]` resolve), and use
+ * `__getattr__` "open class" tricks to silence pyright on every
+ * Spark method we don't bother enumerating (e.g. `df.groupBy(...)`,
+ * `F.sum(...)`). The lowercase Spark-style type aliases (`string`,
+ * `double`, …) mirror the names pykrete's schema syntax uses.
+ *
+ * This text is NEVER shown in the editor — `pyrightClient.ts`
+ * prepends it before every `didOpen`/`didChange`, offsets positions
+ * by `PREAMBLE_LINES` at the LSP boundary in both directions, and
+ * drops diagnostics / hover / definition results that land inside
+ * the preamble.
+ *
+ * Add new names here (rather than touching the engine) when a Spark
+ * builtin starts showing up as undefined in the playground. */
+const PLAYGROUND_PREAMBLE = `from typing import Any, Generic, TypeVar
+T = TypeVar("T")
+
+class Schema: ...
+
+class DataFrame(Generic[T]):
+    def __getattr__(self, _: str) -> Any: ...
+
+def col(_: str) -> Any: ...
+def lit(_: Any) -> Any: ...
+
+class _F:
+    def __getattr__(self, _: str) -> Any: ...
+
+F: Any = _F()
+
+# pykrete schema type aliases (lowercase Spark-style)
+string = str
+double = float
+long = int
+short = int
+byte = int
+binary = bytes
+date = Any
+timestamp = Any
+decimal = Any
+
+`;
+
+/** Count of newline characters in the preamble — i.e. the line index
+ * (0-based) at which the user's source begins inside the combined
+ * document pyright sees.
+ *
+ * NOT `split('\n').length` — `'foo\nbar\n'.split('\n').length` is 3
+ * (the trailing empty element), which would over-offset by one. The
+ * count of `\n` characters is exactly the offset we want as long as
+ * the preamble ends in `\n` (which it must, otherwise the user's
+ * first line would be glued onto the preamble's last line). */
+const PREAMBLE_LINES = (PLAYGROUND_PREAMBLE.match(/\n/g) ?? []).length;
+
 /** Short blank-slate snippet — the "empty" option in the dropdown.
  * Just enough scaffolding (a Schema + a function stub) so a user can
  * start typing and immediately see diagnostics flow. */
@@ -536,7 +595,17 @@ export default function Playground() {
     let handle: ReturnType<typeof createPyrightClient> | null = null;
 
     try {
-      handle = createPyrightClient(workerUrl, liveSourceRef.current);
+      // The preamble is invisible to the editor — `createPyrightClient`
+      // splices it in front of every didOpen/didChange and offsets
+      // positions/ranges at the LSP boundary in both directions. The
+      // wasm-side `check_source`/`hover_at`/`complete_at`/`definition_at`
+      // calls below still receive the raw user source; pykrete already
+      // knows about `Schema`, `DataFrame`, `col`, and `F`, so no
+      // preamble is needed there.
+      handle = createPyrightClient(workerUrl, liveSourceRef.current, {
+        text: PLAYGROUND_PREAMBLE,
+        lines: PREAMBLE_LINES,
+      });
       pyrightRef.current = handle.client;
       // Subscribe to diagnostics — pyright will publish an initial
       // batch right after didOpen and then a fresh batch per

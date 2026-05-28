@@ -44,11 +44,15 @@ feature, the same way the LSP server does for the VS Code extension:
   with `py:` so you can tell them apart from pykrete's.
 
 The wasm playground is single-file only: no cross-file resolution, no
-project config, no `.pyk-import` declarations. Pyright also only sees
-the one file you're editing — third-party packages declared via
-`import` resolve against pyright's bundled typeshed stubs (so
-`import numpy as np` and hovering `np.array` works), but anything
-that needs cross-file project analysis needs the CLI.
+project config, no `.pyk-import` declarations.
+
+**No explicit imports needed.** `Schema`, `DataFrame`, `col`, `F`,
+and the lowercase PySpark-style type aliases (`string`, `double`,
+`long`, …) are pre-declared for you — just write the code. Pure
+Python and the Python standard library work as you'd expect. Other
+third-party packages (`numpy`, `pandas`, …) aren't bundled and will
+resolve as `Any`; pykrete and PySpark are the supported sandbox
+surface.
 
 ## Limits
 
