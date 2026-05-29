@@ -289,6 +289,12 @@ pub struct BodyContext<'a> {
     /// the call site that owns the registry. Modeled as `Option<&...>`
     /// rather than `*const` so safe-Rust semantics survive.
     temp_views: Option<&'a TempViewRegistry<'a>>,
+    /// Pool of leaked synthetic column names — the strings produced by
+    /// `groupBy.sum("amount")` style shortcuts (`sum(amount)`) that
+    /// need `&'a str`-shaped identity to flow through [`DerivedField`].
+    /// Deduplicated so we never leak the same value twice. See
+    /// [`Self::intern_synthetic`].
+    synthetic_names: RefCell<HashSet<&'static str>>,
 }
 
 /// Recursion ceiling for `transform`-body inference — deep enough for any
@@ -345,6 +351,7 @@ impl<'a> BodyContext<'a> {
             call_results: RefCell::new(Vec::new()),
             infer_depth: 0,
             temp_views: None,
+            synthetic_names: RefCell::new(HashSet::new()),
         }
     }
 
@@ -488,6 +495,26 @@ impl<'a> BodyContext<'a> {
         self.mark_local(name);
     }
 
+    /// Intern a synthetic column name (e.g. `sum(amount)` produced by
+    /// `groupBy.sum("amount")`) so it can be carried in a
+    /// [`DerivedField`] that needs a `&'a str`. The string is interned
+    /// once per distinct value and leaked — the set of synthetic names
+    /// is bounded by `(method, column)` pairs across the workspace, so
+    /// the leak stays small even over an LSP session.
+    ///
+    /// The synthesizer here is the only kind of name that doesn't
+    /// originate in the user's source; all other field names borrow
+    /// directly from the source, no allocation needed.
+    pub fn intern_synthetic(&self, name: String) -> &'a str {
+        let mut pool = self.synthetic_names.borrow_mut();
+        if let Some(existing) = pool.get(name.as_str()) {
+            return existing;
+        }
+        let leaked: &'static str = Box::leak(name.into_boxed_str());
+        pool.insert(leaked);
+        leaked
+    }
+
     /// Mark `name` as locally bound — even when the RHS schema is unknown.
     /// Used by D0051 to spot a local rebind that shadows a top-level
     /// function: the call resolves to the local at runtime, so the
@@ -496,12 +523,6 @@ impl<'a> BodyContext<'a> {
     /// `&self` rather than `&mut self` so the analysis pass can mark a
     /// walrus-bound name through an otherwise-immutable context — the
     /// underlying set lives in a `RefCell`.
-    // TODO(d0051-nested-block-shadowing): the driver only walks top-level
-    // statements in the function body, so an assignment inside an `if` /
-    // `for` / `with` / `try` block doesn't mark its names as local. A
-    // shadowing assignment in a nested block followed by a call in the
-    // same (or deeper) block will still fall through to the top-level
-    // function signature.
     pub fn mark_local(&self, name: &'a str) {
         self.local_names.borrow_mut().insert(name);
     }
@@ -609,69 +630,277 @@ pub fn check_function_body<'a>(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<SchemaView<'a>> {
     let mut inferred_return: Option<SchemaView<'a>> = None;
-    for stmt in &func.def.body {
-        match stmt {
-            Stmt::Assign(a) => {
-                let schema = analyze_expr(&a.value, ctx, source, line_index, diagnostics);
-                // Always walk every target to mark its names as locally
-                // bound — covers plain names, tuple/list unpack, and
-                // starred targets. Schema/instance binding below is the
-                // plain-name single-target case; tuple unpack falls
-                // through to mark-local-only.
-                for target in &a.targets {
-                    ctx.mark_local_target(target);
-                }
-                if let Some(schema) = schema {
-                    for target in &a.targets {
-                        if let Some(name) = target.as_name_expr() {
-                            ctx.bind_df(name.id.as_str(), schema.clone());
-                            ctx.record_local_binding(name.id.as_str(), name.range, schema.clone());
-                        }
-                    }
-                } else if let Some(class_name) = class_instance_from_call(&a.value, ctx) {
-                    // RHS didn't resolve to a DataFrame, but it's a
-                    // `ClassName(...)` call whose target class lives in
-                    // the project's registry — bind the LHS as an
-                    // instance so downstream method calls route through
-                    // the generic-inference path.
-                    for target in &a.targets {
-                        if let Some(name) = target.as_name_expr() {
-                            ctx.bind_instance(name.id.as_str(), class_name);
-                        }
-                    }
-                }
-            }
-            Stmt::AnnAssign(ann) => {
-                handle_ann_assign(ann, ctx, source, line_index, diagnostics);
-            }
-            Stmt::Return(r) => {
-                let Some(value) = r.value.as_deref() else {
-                    continue;
-                };
-                let actual = analyze_expr(value, ctx, source, line_index, diagnostics);
-                if inferred_return.is_none() {
-                    inferred_return = actual.clone();
-                }
-                if let (Some(declared), Some(actual)) = (declared_return.as_ref(), actual.as_ref())
-                {
-                    check_return_type(
-                        declared,
-                        actual,
-                        ctx.schemas(),
-                        value.range(),
-                        source,
-                        line_index,
-                        diagnostics,
-                    );
-                }
-            }
-            Stmt::Expr(e) => {
-                analyze_expr(&e.value, ctx, source, line_index, diagnostics);
-            }
-            _ => {}
-        }
-    }
+    walk_body(
+        &func.def.body,
+        declared_return.as_ref(),
+        ctx,
+        source,
+        line_index,
+        diagnostics,
+        &mut inferred_return,
+    );
     inferred_return
+}
+
+/// Walk a sequence of statements, dispatching per-stmt handling and
+/// recursing into the bodies of control-flow statements (`if`/`for`/
+/// `while`/`with`/`try`/`match`). Every column reference inside a
+/// conditional branch or loop body needs to reach the checker, so the
+/// walker descends unconditionally — pykrete doesn't reason about
+/// reachability (return-after-return, etc.). Loop and `with` targets
+/// are marked as local names; exception bindings (`except E as e`)
+/// likewise. The body checker is the only seam that pushes
+/// diagnostics for column references, so missing a branch was a
+/// silent blind spot — see v0.1.26.
+fn walk_body<'a>(
+    body: &'a [Stmt],
+    declared_return: Option<&SchemaView<'a>>,
+    ctx: &mut BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+    inferred_return: &mut Option<SchemaView<'a>>,
+) {
+    for stmt in body {
+        walk_stmt(
+            stmt,
+            declared_return,
+            ctx,
+            source,
+            line_index,
+            diagnostics,
+            inferred_return,
+        );
+    }
+}
+
+fn walk_stmt<'a>(
+    stmt: &'a Stmt,
+    declared_return: Option<&SchemaView<'a>>,
+    ctx: &mut BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+    inferred_return: &mut Option<SchemaView<'a>>,
+) {
+    match stmt {
+        Stmt::Assign(a) => {
+            let schema = analyze_expr(&a.value, ctx, source, line_index, diagnostics);
+            // Always walk every target to mark its names as locally
+            // bound — covers plain names, tuple/list unpack, and
+            // starred targets. Schema/instance binding below is the
+            // plain-name single-target case; tuple unpack falls
+            // through to mark-local-only.
+            for target in &a.targets {
+                ctx.mark_local_target(target);
+            }
+            if let Some(schema) = schema {
+                for target in &a.targets {
+                    if let Some(name) = target.as_name_expr() {
+                        ctx.bind_df(name.id.as_str(), schema.clone());
+                        ctx.record_local_binding(name.id.as_str(), name.range, schema.clone());
+                    }
+                }
+            } else if let Some(class_name) = class_instance_from_call(&a.value, ctx) {
+                // RHS didn't resolve to a DataFrame, but it's a
+                // `ClassName(...)` call whose target class lives in
+                // the project's registry — bind the LHS as an
+                // instance so downstream method calls route through
+                // the generic-inference path.
+                for target in &a.targets {
+                    if let Some(name) = target.as_name_expr() {
+                        ctx.bind_instance(name.id.as_str(), class_name);
+                    }
+                }
+            }
+        }
+        Stmt::AnnAssign(ann) => {
+            handle_ann_assign(ann, ctx, source, line_index, diagnostics);
+        }
+        Stmt::AugAssign(a) => {
+            // `x += expr` — both sides are normal expressions; analyze
+            // them so column refs inside surface, and mark the target
+            // local (it could shadow a top-level name).
+            analyze_expr(&a.value, ctx, source, line_index, diagnostics);
+            analyze_expr(&a.target, ctx, source, line_index, diagnostics);
+            ctx.mark_local_target(&a.target);
+        }
+        Stmt::Return(r) => {
+            let Some(value) = r.value.as_deref() else {
+                return;
+            };
+            let actual = analyze_expr(value, ctx, source, line_index, diagnostics);
+            if inferred_return.is_none() {
+                *inferred_return = actual.clone();
+            }
+            if let (Some(declared), Some(actual)) = (declared_return, actual.as_ref()) {
+                check_return_type(
+                    declared,
+                    actual,
+                    ctx.schemas(),
+                    value.range(),
+                    source,
+                    line_index,
+                    diagnostics,
+                );
+            }
+        }
+        Stmt::Expr(e) => {
+            analyze_expr(&e.value, ctx, source, line_index, diagnostics);
+        }
+        Stmt::If(if_stmt) => {
+            analyze_expr(&if_stmt.test, ctx, source, line_index, diagnostics);
+            walk_body(
+                &if_stmt.body,
+                declared_return,
+                ctx,
+                source,
+                line_index,
+                diagnostics,
+                inferred_return,
+            );
+            for clause in &if_stmt.elif_else_clauses {
+                if let Some(test) = clause.test.as_ref() {
+                    analyze_expr(test, ctx, source, line_index, diagnostics);
+                }
+                walk_body(
+                    &clause.body,
+                    declared_return,
+                    ctx,
+                    source,
+                    line_index,
+                    diagnostics,
+                    inferred_return,
+                );
+            }
+        }
+        Stmt::For(for_stmt) => {
+            analyze_expr(&for_stmt.iter, ctx, source, line_index, diagnostics);
+            ctx.mark_local_target(&for_stmt.target);
+            walk_body(
+                &for_stmt.body,
+                declared_return,
+                ctx,
+                source,
+                line_index,
+                diagnostics,
+                inferred_return,
+            );
+            walk_body(
+                &for_stmt.orelse,
+                declared_return,
+                ctx,
+                source,
+                line_index,
+                diagnostics,
+                inferred_return,
+            );
+        }
+        Stmt::While(while_stmt) => {
+            analyze_expr(&while_stmt.test, ctx, source, line_index, diagnostics);
+            walk_body(
+                &while_stmt.body,
+                declared_return,
+                ctx,
+                source,
+                line_index,
+                diagnostics,
+                inferred_return,
+            );
+            walk_body(
+                &while_stmt.orelse,
+                declared_return,
+                ctx,
+                source,
+                line_index,
+                diagnostics,
+                inferred_return,
+            );
+        }
+        Stmt::With(with_stmt) => {
+            for item in &with_stmt.items {
+                let schema = analyze_expr(&item.context_expr, ctx, source, line_index, diagnostics);
+                if let Some(vars) = item.optional_vars.as_deref() {
+                    ctx.mark_local_target(vars);
+                    if let (Some(name), Some(schema)) = (vars.as_name_expr(), schema) {
+                        ctx.bind_df(name.id.as_str(), schema.clone());
+                        ctx.record_local_binding(name.id.as_str(), name.range, schema);
+                    }
+                }
+            }
+            walk_body(
+                &with_stmt.body,
+                declared_return,
+                ctx,
+                source,
+                line_index,
+                diagnostics,
+                inferred_return,
+            );
+        }
+        Stmt::Try(try_stmt) => {
+            walk_body(
+                &try_stmt.body,
+                declared_return,
+                ctx,
+                source,
+                line_index,
+                diagnostics,
+                inferred_return,
+            );
+            for handler in &try_stmt.handlers {
+                let ruff_python_ast::ExceptHandler::ExceptHandler(h) = handler;
+                if let Some(name) = h.name.as_ref() {
+                    ctx.mark_local(name.id.as_str());
+                }
+                walk_body(
+                    &h.body,
+                    declared_return,
+                    ctx,
+                    source,
+                    line_index,
+                    diagnostics,
+                    inferred_return,
+                );
+            }
+            walk_body(
+                &try_stmt.orelse,
+                declared_return,
+                ctx,
+                source,
+                line_index,
+                diagnostics,
+                inferred_return,
+            );
+            walk_body(
+                &try_stmt.finalbody,
+                declared_return,
+                ctx,
+                source,
+                line_index,
+                diagnostics,
+                inferred_return,
+            );
+        }
+        Stmt::Match(match_stmt) => {
+            analyze_expr(&match_stmt.subject, ctx, source, line_index, diagnostics);
+            for case in &match_stmt.cases {
+                if let Some(guard) = case.guard.as_deref() {
+                    analyze_expr(guard, ctx, source, line_index, diagnostics);
+                }
+                walk_body(
+                    &case.body,
+                    declared_return,
+                    ctx,
+                    source,
+                    line_index,
+                    diagnostics,
+                    inferred_return,
+                );
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Handle `name: DataFrame[Schema] = …` (and the no-value form).
@@ -1180,6 +1409,17 @@ fn analyze_method_call<'a>(
         return None;
     }
 
+    // `groupBy(keys).count()` is NOT terminal — it returns a DataFrame
+    // shaped `{keys..., count: long}`, and a follow-up `.filter(col("count") > 10)`
+    // is the routine pattern. Handle it before the general terminal
+    // recognizer (which fires for `df.count()` → long, the genuinely
+    // terminal case).
+    if method == "count"
+        && let SchemaView::Grouped { keys, underlying } = &receiver
+    {
+        return Some(grouped_count_schema(keys, underlying, ctx.schemas()));
+    }
+
     // Terminal recognizers — `count`, `collect`, `show`, …. Spark
     // semantics: each returns something other than a DataFrame (a
     // scalar, a row, a list of rows, None), so the chain dies cleanly
@@ -1262,42 +1502,22 @@ fn analyze_method_call<'a>(
     // shortcuts, equivalent to `groupBy(keys).agg(F.<method>(col))`.
     // Each string-literal arg is a column name on the underlying schema;
     // dotted paths into nested structs (`"b.c"`) are walked through
-    // `resolve_path`, same as `col("b.c")`. The chain bails after — the
-    // output column name is auto-generated (`max(col)`, ...) and not
-    // statically modeled here; users re-anchor with `.cast(...)` if they
-    // need to continue.
+    // `resolve_path`, same as `col("b.c")`. The output schema is the
+    // grouping keys plus one synthetic field per input string, named
+    // following Spark's convention (`sum(col)`, `max(col)`, …); a
+    // follow-up `.filter(col("sum(amount)") > 100)` checks against it.
     if matches!(method, "max" | "min" | "sum" | "mean" | "avg")
-        && let SchemaView::Grouped { underlying, .. } = &receiver
+        && matches!(receiver, SchemaView::Grouped { .. })
     {
-        for arg in &call.arguments.args {
-            if let Some(lit) = arg.as_string_literal_expr() {
-                let name = lit.value.to_str();
-                if let FieldPathResult::Missing { field, on } =
-                    resolve_path(underlying.as_ref(), name, ctx.schemas())
-                {
-                    let suggestion = on.as_ref().and_then(|v| suggest_field_name(field, v));
-                    let on_phrase = on
-                        .as_ref()
-                        .map_or_else(|| "the nested struct".to_string(), SchemaView::display_name);
-                    let mut message = format!("Column '{field}' does not exist on {on_phrase}.");
-                    if let Some(s) = &suggestion {
-                        message.push_str(&format!(" Did you mean '{s}'?"));
-                    }
-                    diagnostics.push(
-                        Diagnostic::at_range(
-                            Severity::Error,
-                            "D0030",
-                            message,
-                            lit.range(),
-                            source,
-                            line_index,
-                        )
-                        .with_suggestion(suggestion),
-                    );
-                }
-            }
-        }
-        return None;
+        return Some(grouped_aggregate_schema(
+            method,
+            call,
+            &receiver,
+            ctx,
+            source,
+            line_index,
+            diagnostics,
+        ));
     }
     if method == "pivot" {
         // `groupBy(keys).pivot("col")` — verify the pivot column exists
@@ -2330,6 +2550,132 @@ fn handle_agg<'a>(
     }
     report_column_refs(&refs, &underlying, ctx, source, line_index, diagnostics);
     SchemaView::Derived(fields)
+}
+
+/// Result schema of `groupBy(keys).count()` — the grouping keys followed
+/// by a `count: long` column. Spark always names this column `count`
+/// regardless of how many keys there are.
+fn grouped_count_schema<'a>(
+    keys: &[&'a str],
+    underlying: &SchemaView<'a>,
+    schemas: &'a [Schema<'a>],
+) -> SchemaView<'a> {
+    let mut fields: Vec<DerivedField<'a>> = keys
+        .iter()
+        .map(|&name| DerivedField {
+            name,
+            ty: underlying.field_type(name, schemas),
+        })
+        .collect();
+    fields.push(DerivedField {
+        name: "count",
+        ty: Some(ColumnType::Long),
+    });
+    SchemaView::Derived(fields)
+}
+
+/// Result schema of `groupBy(keys).sum("c1", "c2") / .max(...) / .min(...) /
+/// .mean(...) / .avg(...)`. Each string-literal argument is verified to
+/// exist on the underlying schema (D0030 fires otherwise, matching the
+/// pre-v0.1.26 behavior), then a synthetic column named after Spark's
+/// convention — `sum(c1)`, `max(c1)`, … — is added with a type derived
+/// from the input column:
+///
+/// - `sum`: int → long, long → long, double → double; non-numeric → None.
+/// - `mean`/`avg`: any numeric → double; otherwise None.
+/// - `max`/`min`: same type as input.
+fn grouped_aggregate_schema<'a>(
+    method: &str,
+    call: &'a ExprCall,
+    receiver: &SchemaView<'a>,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> SchemaView<'a> {
+    let SchemaView::Grouped { keys, underlying } = receiver else {
+        return receiver.clone();
+    };
+    let underlying = underlying.as_ref();
+    let mut fields: Vec<DerivedField<'a>> = keys
+        .iter()
+        .map(|&name| DerivedField {
+            name,
+            ty: underlying.field_type(name, ctx.schemas()),
+        })
+        .collect();
+    for arg in &call.arguments.args {
+        let Some(lit) = arg.as_string_literal_expr() else {
+            continue;
+        };
+        let name = lit.value.to_str();
+        match resolve_path(underlying, name, ctx.schemas()) {
+            FieldPathResult::Missing { field, on } => {
+                let suggestion = on.as_ref().and_then(|v| suggest_field_name(field, v));
+                let on_phrase = on
+                    .as_ref()
+                    .map_or_else(|| "the nested struct".to_string(), SchemaView::display_name);
+                let mut message = format!("Column '{field}' does not exist on {on_phrase}.");
+                if let Some(s) = &suggestion {
+                    message.push_str(&format!(" Did you mean '{s}'?"));
+                }
+                diagnostics.push(
+                    Diagnostic::at_range(
+                        Severity::Error,
+                        "D0030",
+                        message,
+                        lit.range(),
+                        source,
+                        line_index,
+                    )
+                    .with_suggestion(suggestion),
+                );
+            }
+            FieldPathResult::Resolved => {
+                let synthetic = ctx.intern_synthetic(format!("{method}({name})"));
+                let input_ty = underlying.field_type(name, ctx.schemas());
+                let ty = aggregate_output_type(method, input_ty.as_ref());
+                if !fields.iter().any(|f| f.name == synthetic) {
+                    fields.push(DerivedField {
+                        name: synthetic,
+                        ty,
+                    });
+                }
+            }
+        }
+    }
+    SchemaView::Derived(fields)
+}
+
+/// Spark's type rule for the `groupBy.<method>(col)` shortcuts.
+///
+/// `sum` widens `int` to `long` (matching `pyspark.sql.functions.sum`),
+/// preserves `long` and `double`, and is `None` for any other input
+/// (the user shouldn't be summing strings anyway — the existing type-
+/// checker covers that on `.agg(F.sum(col("x")))`).
+///
+/// `mean` / `avg` always return `double`; pyspark casts integer inputs
+/// up. `max` / `min` return the input's type unchanged. A `Nullable`
+/// wrapper is stripped at the boundary — grouped aggregates over a
+/// nullable column don't preserve nullability in Spark's output schema.
+fn aggregate_output_type(method: &str, input: Option<&ColumnType>) -> Option<ColumnType> {
+    let unwrapped = input.map(|t| match t {
+        ColumnType::Nullable(inner) => inner.as_ref(),
+        other => other,
+    });
+    match method {
+        "sum" => match unwrapped? {
+            ColumnType::Int | ColumnType::Long => Some(ColumnType::Long),
+            ColumnType::Double => Some(ColumnType::Double),
+            _ => None,
+        },
+        "mean" | "avg" => match unwrapped? {
+            ColumnType::Int | ColumnType::Long | ColumnType::Double => Some(ColumnType::Double),
+            _ => None,
+        },
+        "max" | "min" => unwrapped.cloned(),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
