@@ -4,10 +4,9 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "dev": "npm run copy-pyright-worker && astro dev",
-    "start": "npm run copy-pyright-worker && astro dev",
-    "prebuild": "../scripts/build-wasm.sh && npm run copy-pyright-worker",
-    "copy-pyright-worker": "node ./scripts/copy-pyright-worker.mjs",
+    "dev": "astro dev",
+    "start": "astro dev",
+    "prebuild": "../scripts/build-wasm.sh",
     "build": "astro build",
     "preview": "astro preview",
     "astro": "astro"
@@ -16,7 +15,6 @@
     "@astrojs/react": "^4.2.0",
     "@astrojs/starlight": "^0.32.0",
     "@monaco-editor/react": "^4.6.0",
-    "@typefox/pyright-browser": "^1.1.299",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "astro": "^5.5.0",
@@ -24,7 +22,6 @@
     "pykrete-wasm": "file:./pykrete-wasm-pkg",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "sharp": "^0.33.5",
-    "vscode-languageserver-protocol": "^3.17.5"
+    "sharp": "^0.33.5"
   }
 }

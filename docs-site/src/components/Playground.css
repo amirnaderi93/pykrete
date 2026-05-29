@@ -82,21 +82,6 @@
   color: var(--sl-color-gray-3);
 }
 
-/* Secondary status line for pyright. Only rendered while pyright is
-   loading or after it failed (on the happy path the whole line is
-   omitted), so we lighten the styling — it's a transient/diagnostic
-   message, not a counter the user reads constantly. */
-.pk-status-pyright {
-  margin-top: -0.25rem;
-  font-size: 0.75rem;
-  color: var(--sl-color-gray-4);
-}
-.pk-status-pyright-failed {
-  /* Same warm-warning hue as `.pk-diag-warning` rows — pyright
-     failure degrades the playground but doesn't break it. */
-  color: rgba(229, 192, 123, 0.9);
-}
-
 .pk-diagnostics {
   margin: 0;
   padding: 0;
@@ -165,14 +150,18 @@
 }
 
 /* Lift Monaco's overflow widgets (hover popup, suggest menu, parameter
- * hints) above Starlight's right-hand "On this page" table-of-contents
- * sidebar. With `fixedOverflowWidgets: true` in the editor options,
- * Monaco renders these at the document body level so they can escape
- * the editor's own `overflow: hidden`. That move puts them in the same
- * stacking context as Starlight's sidebar, which sets `z-index: 9`
- * on `.right-sidebar` — without this override, the hover gets covered
- * by the TOC links. 1000 is generous; Monaco's own widgets use 4500+
- * internally but only against their own container. */
-.monaco-editor-overflow-widgets-root {
-  z-index: 1000;
+ * hints) above Starlight's right-hand "On this page" TOC sidebar.
+ *
+ * Playground.tsx passes a body-level `#playground-overflow-root` to
+ * Monaco via the `overflowWidgetsDomNode` option. Monaco mounts its
+ * `.overflowingContentWidgets` and `.overflowingOverlayWidgets`
+ * containers inside that node, so the widgets live in the body's
+ * stacking context alongside Starlight's `.right-sidebar` (z-index 9
+ * by default). We push the host node well above every on-page chrome
+ * element Starlight ships. */
+#playground-overflow-root {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 9999;
 }
