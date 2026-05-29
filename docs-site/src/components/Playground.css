@@ -158,10 +158,55 @@
  * containers inside that node, so the widgets live in the body's
  * stacking context alongside Starlight's `.right-sidebar` (z-index 9
  * by default). We push the host node well above every on-page chrome
- * element Starlight ships. */
+ * element Starlight ships.
+ *
+ * Monaco's standalone theme service writes `--vscode-*` CSS variables
+ * onto a `.monaco-editor, .monaco-diff-editor, .monaco-component`
+ * selector. Because this host node sits outside the `.monaco-editor`
+ * subtree, those variables don't reach the widgets via inheritance and
+ * Monaco's own hover.css / suggest.css rules fall back to transparent.
+ * Forward the variables that the widgets need with the `vs-dark` palette
+ * (the playground uses a fixed theme; values verified against
+ * `node_modules/monaco-editor/esm/vs/platform/theme/common/colors/` in
+ * monaco-editor 0.52.x). */
 #playground-overflow-root {
   position: absolute;
   top: 0;
   left: 0;
   z-index: 9999;
+
+  --vscode-editorHoverWidget-background: #252526;
+  --vscode-editorHoverWidget-border: #454545;
+  --vscode-editorHoverWidget-foreground: #cccccc;
+  --vscode-editorHoverWidget-statusBarBackground: #2c2c2d;
+  --vscode-editorSuggestWidget-background: #252526;
+  --vscode-editorSuggestWidget-border: #454545;
+  --vscode-editorSuggestWidget-foreground: #cccccc;
+  --vscode-editorSuggestWidget-selectedBackground: #04395e;
+  --vscode-editorSuggestWidget-selectedForeground: #ffffff;
+  --vscode-editorSuggestWidget-highlightForeground: #2aaaff;
+  --vscode-editorWidget-background: #252526;
+  --vscode-editorWidget-border: #454545;
+  --vscode-editorWidget-foreground: #cccccc;
+  --vscode-list-hoverBackground: #2a2d2e;
+  --vscode-list-focusBackground: #04395e;
+  --vscode-list-focusForeground: #ffffff;
+  --vscode-textLink-foreground: #3794ff;
+  --vscode-textCodeBlock-background: #0a0a0a66;
+
+  color: #cccccc;
+}
+
+/* Belt-and-suspenders: explicit background on the widgets themselves
+ * so they render even if Monaco's own rule fails to apply (e.g. if a
+ * future Monaco version scopes its selectors more tightly under
+ * `.monaco-editor`). */
+#playground-overflow-root .monaco-hover,
+#playground-overflow-root .monaco-editor-hover,
+#playground-overflow-root .suggest-widget,
+#playground-overflow-root .parameter-hints-widget,
+#playground-overflow-root .monaco-editor-overlaymessage {
+  background-color: var(--vscode-editorHoverWidget-background);
+  border: 1px solid var(--vscode-editorHoverWidget-border);
+  color: var(--vscode-editorHoverWidget-foreground);
 }

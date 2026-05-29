@@ -6,6 +6,135 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.22]
+
+Hotfix. v0.1.21 reparented Monaco's hover/suggest/parameter-hint
+widgets onto a body-level host node to clear Starlight's right-hand
+TOC sidebar — verified working — but the widgets came out with no
+background fill because Monaco only writes its `--vscode-*` theme
+variables onto the `.monaco-editor, .monaco-diff-editor,
+.monaco-component` selector, and the new host node sits outside that
+subtree. The widgets fell back to transparent and text showed through
+the editor source behind them. Fix forwards the `vs-dark` palette
+values for hover/suggest/parameter-hint/list/textLink/textCodeBlock
+onto `#playground-overflow-root` so Monaco's own
+`hover.css` / `suggest.css` rules resolve there too, plus a
+belt-and-suspenders explicit rule directly on the widget classes.
+Docs-only release; no checker/LSP/extension behavior changed.
+
+## [0.1.21]
+
+Playground rebuild — drops `pyright-browser`, ships a static pyspark
+symbol table. v0.1.20's `@typefox/pyright-browser` 1.1.299 turned out
+to ship without typeshed fallback files, so even `int` was reported
+"not defined" and `sales.<dot>` showed only generic Python keywords;
+the worker also dragged a few MB of stale-fork bundle. The
+playground now reads a build-time-generated symbol table
+(`docs-site/scripts/gen-pyspark-symbols.py` against pyspark 3.5.1)
+for DataFrame / Column / GroupedData / `F.*` / Window hover and
+completion, dispatched on a per-source DataFrame-name heuristic.
+Pykrete's hover/completion/definition still run first and own the
+schema-related surface; the Spark table only fires when pykrete
+returns nothing. Hover-popup z-index fix in v0.1.20 didn't actually
+land — Starlight's `.main-pane` sets `isolation: isolate`, which
+trapped Monaco's widget root. Two-part fix: hoist Monaco's overflow
+widget container to a body-level `#playground-overflow-root` (via
+`overflowWidgetsDomNode`) and z-index 9999 on that node so it clears
+every Starlight chrome layer. Bundle: Playground.js shrinks from
+~80 KB to 29 KB; pyspark-symbols.json adds 192 KB of static asset
+loaded lazily on `/playground` only. Docs-only; no checker behavior
+changed.
+
+## [0.1.20]
+
+Hotfix on v0.1.19's playground polish. Pyright was still firing
+"Expected no type arguments for class DataFrame" on `DataFrame[Sale]`
+because `@typefox/pyright-browser` 1.1.299 handles
+`class Foo(Generic[T])` less robustly than current pyright — switched
+to explicit `__class_getitem__` on DataFrame, which works in every
+pyright version. PREAMBLE_LINES auto-recomputes. Also bumps the
+hover popup's z-index above Starlight's right-hand TOC sidebar
+(superseded by the more comprehensive fix in v0.1.21). Docs-only
+release; no checker behavior changed.
+
+## [0.1.19]
+
+Playground implicit imports. A hidden 27-line preamble is prepended
+to whatever pyright sees, declaring `Schema`, `DataFrame[T]`, `col`,
+`lit`, `F` (with `__getattr__` open-class so any method resolves to
+`Any`), and lowercase pykrete type aliases (`string`, `double`,
+`long`, `short`, `byte`, `binary`, `date`, `timestamp`, `decimal`).
+All five LSP boundaries (`didOpen`, `didChange`, diagnostics, hover,
+completion, definition) handle the offset arithmetic in
+`pyrightClient.ts`. Result: playground users can write code without
+any import lines, pyright stops complaining about
+Schema/DataFrame/Sale/col/F, and real Python errors (`1 + "foo"`)
+are still caught. Pykrete's analyzer path unchanged. 825 workspace
+tests (no change since v0.1.18 — playground-only release).
+
+## [0.1.18]
+
+The playground becomes a full Python + pykrete IDE.
+`@typefox/pyright-browser` runs in a Web Worker behind a hand-rolled
+LSP client (`pyrightClient.ts` on `vscode-jsonrpc/browser`) and is
+multiplexed alongside pykrete using the same rules as the VS Code
+extension's `pykrete-lsp/multiplex.rs`: diagnostics union, hover
+stacked with `---` rule (pykrete first; schema-hover suppresses
+pyright's contribution), completion pykrete-first then pyright with
+explicit LSP→Monaco kind mapping. Editor polish:
+`quickSuggestions.strings: true` so completions appear inside string
+literals (pykrete's whole completion surface lives in strings),
+`fixedOverflowWidgets: true` so hover popups extend outside the
+playground container, a Cmd/Ctrl+S no-op so the browser's "Save
+Page As" dialog doesn't fire inside the editor, 8 px top/bottom
+padding, and the underscore removed from trigger characters
+(was firing mid-identifier). Docs-only release; no checker behavior
+changed.
+
+## [0.1.17]
+
+The playground becomes an IDE for pykrete features.
+**`pykrete-wasm`** grows three new exports — `hover_at(source, line,
+column)` for schemas / columns / function signatures,
+`complete_at(source, line, column)` for column-name completions
+inside `col("...")`, bare-string args to `groupBy` / `select` /
+`agg` / `F.sum`, and schema-name completions inside `DataFrame[...]`
+annotations, and `definition_at(source, line, column)` for jump-to-
+schema. Each is a thin wrapper around the existing pykrete-side
+analyzer functions — no duplicated logic. Same `catch_unwind` +
+`console_error_panic_hook` panic-safety pattern as `check_source`.
+Monaco wiring in `Playground.tsx` registers
+`HoverProvider`/`CompletionItemProvider`/`DefinitionProvider`. Docs-
+only; no Rust checker behavior changed.
+
+## [0.1.16]
+
+The launch-readiness release. Closes the last Spark coverage gaps,
+ships the WASM playground, and brings the project to a state ready
+for public posting. **CLI polish** — `pykrete --version`, `--help`,
+and quieter `check` output by default (`-v` restores the full dump);
+the first install-verify step no longer fails. **Perf pass** —
+`discover_schemas` fixpoint uses a name→idx table instead of a
+linear scan; 29% wall-clock reduction on a 100-file / 3000-schema
+synthetic, fenced by a perf smoke test. **`D0072
+duplicateSchemaName`** — warns when the same schema name is declared
+in multiple files within a project. **Column `.dropFields("typo")`**
+— fires `D0030` with did-you-mean, symmetric to `.getField`.
+**WASM playground** — new `pykrete-wasm` crate (wasm32 build
+pipeline, wasm-bindgen API, npm wrapper at
+`docs-site/pykrete-wasm-pkg/`), Monaco editor at `/playground` with
+live diagnostics (debounced 300 ms), three pre-loaded snippets,
+click-to-jump diagnostic list, lazy-loaded so other pages pay
+nothing, `catch_unwind` panic-safety + synthetic `D9999
+internalError` fallback. **Marketing readiness** — production-
+readiness page on the docs site, every stale `v0.1.6` version
+reference across docs fixed, quick-fixes claim accurately scoped
+against the LSP implementation, new cookbook page with 5 realistic
+recipes (adoption, `spark.read` re-anchor, cross-file schemas,
+function signature validation, `pykrete.json` configuration).
+806 workspace tests (+31 since v0.1.15). See the
+[v0.1.16 release](https://github.com/amirnaderi93/pykrete/releases/tag/v0.1.16).
+
 ## [0.1.15]
 
 Generic-inference extensions complete — all four roadmap items shipped.
@@ -286,7 +415,14 @@ full contract.
 - **Multi-file analysis** via imported typed declarations.
 - **`pykrete.json`** project configuration with non-strict / strict modes.
 
-[Unreleased]: https://github.com/amirnaderi93/pykrete/compare/v0.1.15...HEAD
+[Unreleased]: https://github.com/amirnaderi93/pykrete/compare/v0.1.22...HEAD
+[0.1.22]: https://github.com/amirnaderi93/pykrete/compare/v0.1.21...v0.1.22
+[0.1.21]: https://github.com/amirnaderi93/pykrete/compare/v0.1.20...v0.1.21
+[0.1.20]: https://github.com/amirnaderi93/pykrete/compare/v0.1.19...v0.1.20
+[0.1.19]: https://github.com/amirnaderi93/pykrete/compare/v0.1.18...v0.1.19
+[0.1.18]: https://github.com/amirnaderi93/pykrete/compare/v0.1.17...v0.1.18
+[0.1.17]: https://github.com/amirnaderi93/pykrete/compare/v0.1.16...v0.1.17
+[0.1.16]: https://github.com/amirnaderi93/pykrete/compare/v0.1.15...v0.1.16
 [0.1.15]: https://github.com/amirnaderi93/pykrete/compare/v0.1.14...v0.1.15
 [0.1.14]: https://github.com/amirnaderi93/pykrete/compare/v0.1.13...v0.1.14
 [0.1.13]: https://github.com/amirnaderi93/pykrete/compare/v0.1.12...v0.1.13
