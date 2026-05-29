@@ -257,6 +257,27 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 }
 
 #[test]
+fn groupBy_count_when_user_column_named_count_drops_original() {
+    // The schema already has a `count` column; `.count()` produces a new
+    // long-typed `count` and Spark's behavior is that the synthetic
+    // shadows the original. The chain after the .count() should see ONE
+    // `count` field — assert that by referencing `count` and no D0030.
+    // (Note: the original `count: string` is gone, so the type is now
+    // long, but we only assert "the chain stays clean and doesn't
+    // double-report `count`".)
+    let src = r#"
+class Hits(Schema):
+    page: string
+    count: string
+
+def f(raw: DataFrame[Hits]) -> DataFrame:
+    return raw.groupBy("page").count().select(col("page"), col("count"))
+"#;
+    let result = check(src);
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
 fn groupBy_sum_chained_into_withColumn_is_clean() {
     let src = format!(
         "{SCHEMA}
@@ -268,4 +289,42 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
     );
     let result = check(&src);
     assert_does_not_have_code(&result, "D0030");
+}
+
+// ---------------------------------------------------------------------------
+// Synthetic-name intern-pool boundedness (B2 regression)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn synthetic_name_pool_is_bounded_under_repeated_analysis() {
+    // Pre-fix: each fresh `BodyContext` ran its own dedup set, so
+    // re-checking the same source N times leaked N copies of every
+    // synthetic name. With the global pool, the second pass is a no-op
+    // for the leak set — `(method, column)` pairs are deduped across
+    // every analysis call in the process.
+    //
+    // The assertion is "growth between iteration 1 and iteration N is
+    // zero" rather than "pool size equals K" — this stays robust if
+    // another test in the suite already populated the pool.
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Sale]) -> DataFrame:
+    return raw.groupBy(\"region\").sum(\"amount\", \"price\").select(
+        col(\"region\"), col(\"sum(amount)\"), col(\"sum(price)\")
+    )
+"
+    );
+    // Prime the pool with one pass first so any "first-time" entries
+    // from this source land in the snapshot.
+    let _ = check(&src);
+    let before = pykrete::operations::synthetic_pool_len();
+    for _ in 0..1_000 {
+        let _ = check(&src);
+    }
+    let after = pykrete::operations::synthetic_pool_len();
+    assert_eq!(
+        before, after,
+        "synthetic name pool grew from {before} to {after} across 1000 passes — \
+         the per-call intern was supposed to be deduped globally",
+    );
 }

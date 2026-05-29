@@ -91,25 +91,27 @@ def f(raw: DataFrame[Sale]) -> None:
 }
 
 #[test]
-fn for_loop_target_shadows_outer_name() {
-    // `raw` is a parameter; inside the for-body we re-bind `raw` as the
-    // loop variable. The chain `raw.select(...)` no longer sees the
-    // DataFrame schema — checking degrades gracefully rather than
-    // firing a false-positive D0030.
+fn for_loop_target_marks_callee_local_for_d0051() {
+    // Top-level `helper` takes a `DataFrame[Sale]`. Inside `f`, the for
+    // loop binds `helper` as its iteration target (`for helper in [...]`),
+    // and then the body calls `helper(other)` — at runtime that's the
+    // loop variable, not the top-level function. D0051 should NOT fire:
+    // the for-target's name shadowed the function in the local scope.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> None:
-    for raw in [1, 2, 3]:
-        pass
-    raw.select(\"region\").show()
+class Other(Schema):
+    code: int
+
+def helper(df: DataFrame[Sale]) -> None:
+    pass
+
+def f(other: DataFrame[Other]) -> None:
+    for helper in [1, 2, 3]:
+        helper(other)
 "
     );
     let result = check(&src);
-    // The post-loop `raw.select("region")` runs against the rebound
-    // `raw` (now a number); we don't assert presence of a particular
-    // diagnostic here — just that we didn't crash and the for-target
-    // marking ran.
-    let _ = result;
+    assert_does_not_have_code(&result, "D0051");
 }
 
 #[test]
@@ -232,6 +234,176 @@ def f(raw: DataFrame[Sale], debug: bool) -> None:
     );
     let result = check(&src);
     assert_does_not_have_code(&result, "D0030");
+}
+
+// ---------------------------------------------------------------------------
+// assert / raise — expression children get walked
+//
+// The assert/raise expression IS the top of the analyzed expression
+// (analyze_expr handles the outermost call chain, not arbitrarily nested
+// sub-expressions inside builtin calls), so the column ref needs to be
+// the top of the test/msg/exc/cause expression, not buried inside a
+// `print(...)` or builtin wrapper. The walker change here is: an
+// assert / raise statement now reaches its expression children at all,
+// where before they were dropped on the floor by the `_ => {}` arm.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn typo_at_top_of_assert_test_is_caught() {
+    // `assert <call>` — the test expression is the call chain itself.
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Sale]) -> None:
+    assert raw.select(\"regoin\")
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "regoin");
+}
+
+#[test]
+fn typo_at_top_of_assert_message_is_caught() {
+    // `assert <test>, <msg>` — the message slot also gets walked.
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Sale]) -> None:
+    assert raw is not None, raw.select(\"regoin\")
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "regoin");
+}
+
+#[test]
+fn clean_chain_in_assert_does_not_fire() {
+    // Positive case: same shape, valid column name → no D0030.
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Sale]) -> None:
+    assert raw.select(\"region\")
+"
+    );
+    let result = check(&src);
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn typo_at_top_of_raise_exc_is_caught() {
+    // `raise <call>` — bare-call form (raises whatever the expression
+    // evaluates to). The exc slot's expression IS the call chain.
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Sale]) -> None:
+    raise raw.select(\"regoin\")
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "regoin");
+}
+
+#[test]
+fn typo_at_top_of_raise_cause_is_caught() {
+    // `raise X from <call>` — the `from` slot goes through `cause`.
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Sale]) -> None:
+    raise Exception(\"x\") from raw.select(\"regoin\")
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "regoin");
+}
+
+// ---------------------------------------------------------------------------
+// AugAssign (`x += …`) — expression children get walked
+// ---------------------------------------------------------------------------
+
+#[test]
+fn typo_inside_aug_assign_rhs_is_caught() {
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Sale]) -> None:
+    total = 0
+    total += raw.select(\"regoin\").count()
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "regoin");
+}
+
+// ---------------------------------------------------------------------------
+// `with df.cache() as df_cached: …` — bound name carries the schema
+// ---------------------------------------------------------------------------
+
+#[test]
+fn with_cache_alias_bind_carries_schema_into_body() {
+    // `raw.cache()` is pass-through (same schema). Binding it to
+    // `df_cached` should make `df_cached.select("regoin")` fire D0030
+    // against `Sale` — i.e. the `with` walker's bind-DataFrame branch
+    // hooks the alias up to the receiver schema.
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Sale]) -> None:
+    with raw.cache() as df_cached:
+        df_cached.select(\"regoin\").show()
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "regoin");
+}
+
+// ---------------------------------------------------------------------------
+// D0051 — nested-block shadowing of a top-level function. Pre-v0.1.26 the
+// walker only saw top-level statements, so a `helper = ...` rebind inside
+// an `if` block didn't register, and a call to `helper(...)` in the same
+// branch would still get checked against the top-level signature.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn d0051_does_not_fire_when_callee_is_shadowed_inside_nested_block() {
+    let src = format!(
+        "{SCHEMA}
+class Other(Schema):
+    code: int
+
+def helper(df: DataFrame[Sale]) -> None:
+    pass
+
+def f(raw: DataFrame[Sale], other: DataFrame[Other], debug: bool) -> None:
+    if debug:
+        helper = lambda x: None
+        helper(other)
+"
+    );
+    let result = check(&src);
+    assert_does_not_have_code(&result, "D0051");
+}
+
+#[test]
+fn d0051_fires_against_top_level_callee_without_shadow() {
+    // Sanity: same shape, drop the shadow — D0051 should fire because
+    // `helper` resolves to the top-level signature and `other` is the
+    // wrong schema.
+    let src = format!(
+        "{SCHEMA}
+class Other(Schema):
+    code: int
+
+def helper(df: DataFrame[Sale]) -> None:
+    pass
+
+def f(other: DataFrame[Other]) -> None:
+    helper(other)
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0051");
 }
 
 #[test]
