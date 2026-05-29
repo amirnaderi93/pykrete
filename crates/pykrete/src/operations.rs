@@ -29,6 +29,7 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::sync::{Mutex, OnceLock};
 
 use ruff_python_ast::{
     CmpOp, Expr, ExprAttribute, ExprCall, Number, Operator, Stmt, StmtFunctionDef,
@@ -230,6 +231,39 @@ fn role_at(shape: &ColumnMethodShape, index: usize) -> ArgRole {
 }
 
 // ---------------------------------------------------------------------------
+// Synthetic-name intern pool
+// ---------------------------------------------------------------------------
+
+/// Process-wide dedup pool for synthetic column names (`sum(amount)` &
+/// friends produced by the `groupBy.<agg>` shortcut). See
+/// [`BodyContext::intern_synthetic`] for the lifetime / leak story.
+fn synthetic_name_pool() -> &'static Mutex<HashSet<&'static str>> {
+    static POOL: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+    POOL.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn intern_synthetic_global(name: String) -> &'static str {
+    let mut pool = synthetic_name_pool().lock().expect("pool mutex poisoned");
+    if let Some(existing) = pool.get(name.as_str()) {
+        return existing;
+    }
+    let leaked: &'static str = Box::leak(name.into_boxed_str());
+    pool.insert(leaked);
+    leaked
+}
+
+/// Test-only view onto the synthetic-name pool's size. Used by the
+/// stress test that pins the leak's growth to "one entry per distinct
+/// synthetic name" regardless of how many analysis passes ran.
+#[doc(hidden)]
+pub fn synthetic_pool_len() -> usize {
+    synthetic_name_pool()
+        .lock()
+        .expect("pool mutex poisoned")
+        .len()
+}
+
+// ---------------------------------------------------------------------------
 // BodyContext — parameter and local-variable bindings
 // ---------------------------------------------------------------------------
 
@@ -289,12 +323,6 @@ pub struct BodyContext<'a> {
     /// the call site that owns the registry. Modeled as `Option<&...>`
     /// rather than `*const` so safe-Rust semantics survive.
     temp_views: Option<&'a TempViewRegistry<'a>>,
-    /// Pool of leaked synthetic column names — the strings produced by
-    /// `groupBy.sum("amount")` style shortcuts (`sum(amount)`) that
-    /// need `&'a str`-shaped identity to flow through [`DerivedField`].
-    /// Deduplicated so we never leak the same value twice. See
-    /// [`Self::intern_synthetic`].
-    synthetic_names: RefCell<HashSet<&'static str>>,
 }
 
 /// Recursion ceiling for `transform`-body inference — deep enough for any
@@ -351,7 +379,6 @@ impl<'a> BodyContext<'a> {
             call_results: RefCell::new(Vec::new()),
             infer_depth: 0,
             temp_views: None,
-            synthetic_names: RefCell::new(HashSet::new()),
         }
     }
 
@@ -497,22 +524,24 @@ impl<'a> BodyContext<'a> {
 
     /// Intern a synthetic column name (e.g. `sum(amount)` produced by
     /// `groupBy.sum("amount")`) so it can be carried in a
-    /// [`DerivedField`] that needs a `&'a str`. The string is interned
-    /// once per distinct value and leaked — the set of synthetic names
-    /// is bounded by `(method, column)` pairs across the workspace, so
-    /// the leak stays small even over an LSP session.
+    /// [`DerivedField`] that needs a `&'a str`.
     ///
-    /// The synthesizer here is the only kind of name that doesn't
-    /// originate in the user's source; all other field names borrow
-    /// directly from the source, no allocation needed.
+    /// The pool is process-wide and de-duped: the same `(method, column)`
+    /// pair from any analysis call returns the same `&'static str`
+    /// without re-leaking. This caps the leak set at "every distinct
+    /// synthetic name the workspace has ever produced" — a small
+    /// finite vocabulary (`sum(col)`, `max(col)`, …) bounded by
+    /// `aggregate_method × unique_column_name`. Per-context interning
+    /// would leak a fresh copy on every LSP keystroke, which is what
+    /// this dedup is here to prevent.
+    ///
+    /// Returns `&'a str` because that's what the trait bound at the
+    /// `DerivedField` callsite asks for; `&'static: 'a` so the
+    /// conversion is sound. The synthesizer here is the only kind of
+    /// name that doesn't originate in the user's source; all other
+    /// field names borrow directly from the source.
     pub fn intern_synthetic(&self, name: String) -> &'a str {
-        let mut pool = self.synthetic_names.borrow_mut();
-        if let Some(existing) = pool.get(name.as_str()) {
-            return existing;
-        }
-        let leaked: &'static str = Box::leak(name.into_boxed_str());
-        pool.insert(leaked);
-        leaked
+        intern_synthetic_global(name)
     }
 
     /// Mark `name` as locally bound — even when the RHS schema is unknown.
@@ -882,21 +911,26 @@ fn walk_stmt<'a>(
                 inferred_return,
             );
         }
-        Stmt::Match(match_stmt) => {
-            analyze_expr(&match_stmt.subject, ctx, source, line_index, diagnostics);
-            for case in &match_stmt.cases {
-                if let Some(guard) = case.guard.as_deref() {
-                    analyze_expr(guard, ctx, source, line_index, diagnostics);
-                }
-                walk_body(
-                    &case.body,
-                    declared_return,
-                    ctx,
-                    source,
-                    line_index,
-                    diagnostics,
-                    inferred_return,
-                );
+        Stmt::Match(_) => {
+            // Match bodies are NOT walked: `case` patterns can introduce
+            // new local names (`case MyClass(field=x):` binds `x`) that
+            // would otherwise look like undefined symbols to the D0051
+            // / column-ref machinery, since the walker has no pattern-
+            // binding extractor. Once pattern binding is modeled we can
+            // walk subject / guards / bodies through here.
+        }
+        Stmt::Assert(a) => {
+            analyze_expr(&a.test, ctx, source, line_index, diagnostics);
+            if let Some(msg) = a.msg.as_deref() {
+                analyze_expr(msg, ctx, source, line_index, diagnostics);
+            }
+        }
+        Stmt::Raise(r) => {
+            if let Some(exc) = r.exc.as_deref() {
+                analyze_expr(exc, ctx, source, line_index, diagnostics);
+            }
+            if let Some(cause) = r.cause.as_deref() {
+                analyze_expr(cause, ctx, source, line_index, diagnostics);
             }
         }
         _ => {}
@@ -2567,6 +2601,10 @@ fn grouped_count_schema<'a>(
             ty: underlying.field_type(name, schemas),
         })
         .collect();
+    // If a key was already named `count` we'd double-emit; Spark's
+    // behavior is that the synthetic shadows the original, so drop the
+    // earlier field before appending the new one.
+    fields.retain(|f| f.name != "count");
     fields.push(DerivedField {
         name: "count",
         ty: Some(ColumnType::Long),
