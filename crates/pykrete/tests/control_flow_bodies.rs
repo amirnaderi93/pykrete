@@ -424,3 +424,82 @@ def f(raw: DataFrame[Sale], debug: bool) -> None:
     assert_has_code(&result, "D0030");
     assert_message_contains(&result, "D0030", "regoin");
 }
+
+// ---------------------------------------------------------------------------
+// Nested function / class defs inside a body
+// ---------------------------------------------------------------------------
+
+#[test]
+fn typo_inside_a_nested_funcdef_body_is_caught() {
+    // Nested helper has its own typed param `raw: DataFrame[Sale]`. A
+    // typo in the inner body must reach the col-ref checker.
+    let src = format!(
+        "{SCHEMA}
+def outer(raw: DataFrame[Sale]) -> DataFrame[Sale]:
+    def inner(d: DataFrame[Sale]) -> DataFrame[Sale]:
+        return d.select(col(\"regoin\"))
+    return inner(raw)
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "regoin");
+}
+
+#[test]
+fn nested_funcdef_locals_do_not_leak_to_outer_scope() {
+    // `inner` binds `out` locally to a different schema. After `inner`,
+    // the outer `out` should still resolve to its outer binding
+    // (the receiver schema), so `out.select("region")` is fine.
+    let src = format!(
+        "{SCHEMA}
+class Other(Schema):
+    other_field: int
+
+def outer(raw: DataFrame[Sale]) -> DataFrame[Sale]:
+    out = raw
+    def inner(d: DataFrame[Other]) -> DataFrame[Other]:
+        out = d
+        return out.select(col(\"other_field\"))
+    return out.select(col(\"region\"))
+"
+    );
+    let result = check(&src);
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn nested_funcdef_can_be_called_after_definition_without_d0051() {
+    // The nested name `helper` is marked local in the outer scope after
+    // the def, so a same-named top-level function (if any) doesn't take
+    // precedence — and calling `helper` doesn't fire D0051 spuriously.
+    let src = format!(
+        "{SCHEMA}
+def outer(raw: DataFrame[Sale]) -> DataFrame[Sale]:
+    def helper(d: DataFrame[Sale]) -> DataFrame[Sale]:
+        return d.select(col(\"region\"))
+    return helper(raw)
+"
+    );
+    let result = check(&src);
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn typo_inside_a_nested_classdef_method_body_is_caught() {
+    // Nested classdef bodies are walked (best-effort) so col refs
+    // inside method bodies still reach the checker. The outer needs a
+    // typed signature so the outer function is itself analyzed; the
+    // inner method then needs typed params so col refs inside resolve.
+    let src = format!(
+        "{SCHEMA}
+def outer(raw: DataFrame[Sale]) -> DataFrame[Sale]:
+    class Inner:
+        def m(self, d: DataFrame[Sale]) -> None:
+            d.select(col(\"regoin\")).show()
+    return raw
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+}

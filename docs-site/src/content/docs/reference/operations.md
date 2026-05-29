@@ -135,8 +135,8 @@ The result schema is the grouping keys plus each aggregation, named by `.alias(.
 | Method | Status | Notes |
 | --- | --- | --- |
 | `pivot` | column-check only | Pivot column checked; output columns depend on runtime data, so the schema becomes opaque. |
-| `unpivot` | unmodeled | Not yet tracked. Re-anchor downstream with `.cast(DataFrame[X])`. |
-| `melt` | unmodeled | Same as `unpivot` (Spark 3.4+). |
+| `melt` | modeled | `ids` and `values` column refs checked against the receiver; output schema is `ids + [variableColumnName: string, valueColumnName: T]`, where `T` is the common type across the `values` columns (or all non-`id` columns when `values` is omitted/`None`). `Nullable(T)` if any branch is nullable. Defaults: `variable` / `value`. Falls back to the receiver schema when `ids`/`values` aren't list literals of strings. |
+| `unpivot` | modeled | Spark 3.4+ alias of `melt` — same shape and checks. |
 | `transpose` | unmodeled | Spark 4.0+; unmodeled. |
 
 `pivot` is the deliberate compromise here — its column names depend on the data, so pykrete checks what it can (the pivot key) and steps out of the way for the result. Use `.cast(DataFrame[PivotedSchema])` when you're ready to resume checking on the pivoted output.

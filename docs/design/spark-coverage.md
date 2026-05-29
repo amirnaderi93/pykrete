@@ -457,3 +457,42 @@ by how commonly real PySpark code uses them.
   `name: DataFrame[Schema] = spark.read.parquet(...)` and downstream
   column checks resume. Before this change, every codebase outside the
   `dal.read(SOURCE)` pattern lost its chain at line one.
+
+## Post-v1.0 follow-ups
+
+### `match` / `case` bodies (v1.1)
+
+`Stmt::Match` arms are currently NOT walked. `walk_stmt`'s `Match` arm is
+an explicit no-op with the rationale: `case` patterns can bind new local
+names (`case MyClass(field=x):` binds `x`) that would otherwise look
+like undefined symbols to the D0051 / column-ref machinery, since the
+walker has no pattern-binding extractor. Adding pattern-binding support
+is the prerequisite, after which the walker can descend into subject,
+guards, and bodies through here.
+
+Estimated cost: small — a focused pattern walker covering `MatchValue`,
+`MatchAs`, `MatchOr`, `MatchClass(positional + keyword)`, `MatchMapping`,
+`MatchSequence`, `MatchSingleton`, `MatchStar`. Each maps to a set of
+`(name, range)` bindings the walker marks local in the case-body scope
+before descending. Sequence patterns can be ignored when starred — the
+binding behavior is the same as the unstarred form for our purposes.
+
+### LSP enrichment inside nested function defs (v1.1)
+
+When the body walker descends into a `Stmt::FunctionDef` (or `ClassDef`)
+nested inside an outer function body, it processes the nested helper
+with its own `BodyContext` and discards the inner-scope `column_refs`,
+`local_bindings`, and `call_results` rather than draining them back to
+the outer collector. The diagnostic story is correct either way —
+column-ref typos, return-type mismatches, and the rest of the D-codes
+fire from the inner pass — but the LSP enrichment surfaces (hover,
+completion, go-to-definition) won't light up inside the nested helper
+because the outer file-level index never sees those inner refs.
+
+Promoting this to feature parity means deciding the merge story for
+overlapping name spans (the same identifier text can appear in both the
+outer and inner scope with different schemas) and threading a shared
+collector through `walk_function_def`. Cost: small-to-medium; the
+ordering question (which scope wins on a hover at the boundary?) is the
+real work, not the plumbing. Punted to v1.1 because v1.0 promises
+correctness, not full IDE polish in every nesting depth.

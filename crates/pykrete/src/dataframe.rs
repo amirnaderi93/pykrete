@@ -9,7 +9,7 @@
 //! `from pyspark.sql import DataFrame as DF`, pykrete won't recognize `DF[...]`
 //! until import resolution lands.
 
-use ruff_python_ast::Expr;
+use ruff_python_ast::{Expr, StmtFunctionDef};
 
 use crate::walk::DiscoveredFunction;
 
@@ -84,9 +84,17 @@ pub struct TypedSlot<'ast> {
 /// Positional-only and keyword-only parameters are included; `*args` / `**kwargs`
 /// are not.
 pub fn typed_slots<'ast>(func: &'ast DiscoveredFunction<'ast>) -> Vec<TypedSlot<'ast>> {
+    typed_slots_for_def(func.def)
+}
+
+/// Same as [`typed_slots`] but takes the underlying `StmtFunctionDef`
+/// directly — used by the nested-funcdef walker, where wrapping the
+/// AST node in a stack-local `DiscoveredFunction` would over-constrain
+/// the returned slots' lifetime.
+pub fn typed_slots_for_def<'ast>(func_def: &'ast StmtFunctionDef) -> Vec<TypedSlot<'ast>> {
     let mut slots = Vec::new();
 
-    let params = &*func.def.parameters;
+    let params = &*func_def.parameters;
     let positional = params
         .posonlyargs
         .iter()
@@ -106,7 +114,7 @@ pub fn typed_slots<'ast>(func: &'ast DiscoveredFunction<'ast>) -> Vec<TypedSlot<
         }
     }
 
-    if let Some(ret) = func.def.returns.as_deref()
+    if let Some(ret) = func_def.returns.as_deref()
         && let Some(kind) = recognize(ret)
     {
         slots.push(TypedSlot {

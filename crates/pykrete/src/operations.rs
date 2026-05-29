@@ -37,7 +37,7 @@ use ruff_python_ast::{
 use ruff_source_file::LineIndex;
 use ruff_text_size::{Ranged, TextRange};
 
-use crate::dataframe::{self, DataFrameAnnotation, SlotLabel, TypedSlot};
+use crate::dataframe::{self, DataFrameAnnotation, SlotLabel, TypedSlot, typed_slots_for_def};
 use crate::diagnostics::{CheckMode, Diagnostic, Severity};
 use crate::registry::{MethodParam, ParamKind, Registry};
 use crate::schema::{
@@ -453,7 +453,20 @@ impl<'a> BodyContext<'a> {
     /// - other typed parameters whose annotation is a known class name
     ///   (e.g. `dal: DataAccessLayer`).
     pub fn from_function(
-        func: &'a DiscoveredFunction<'a>,
+        func: &DiscoveredFunction<'a>,
+        slots: &[TypedSlot<'a>],
+        schemas: &'a [Schema<'a>],
+        registry: &'a Registry<'a>,
+    ) -> Self {
+        Self::from_function_def(func.def, slots, schemas, registry)
+    }
+
+    /// Same as [`Self::from_function`] but takes the underlying
+    /// `StmtFunctionDef` directly. Used by the nested-funcdef walker,
+    /// where wrapping the AST node in a stack-local `DiscoveredFunction`
+    /// would over-constrain the borrow lifetime.
+    pub fn from_function_def(
+        func_def: &'a StmtFunctionDef,
         slots: &[TypedSlot<'a>],
         schemas: &'a [Schema<'a>],
         registry: &'a Registry<'a>,
@@ -486,13 +499,12 @@ impl<'a> BodyContext<'a> {
         // name as an instance of that class. Every parameter (typed or
         // not) is also tracked as a local name so a param-shadowed
         // top-level function doesn't get D0051-checked.
-        for pwd in func
-            .def
+        for pwd in func_def
             .parameters
             .posonlyargs
             .iter()
-            .chain(&func.def.parameters.args)
-            .chain(&func.def.parameters.kwonlyargs)
+            .chain(&func_def.parameters.args)
+            .chain(&func_def.parameters.kwonlyargs)
         {
             let p = &pwd.parameter;
             ctx.mark_local(p.name.id.as_str());
@@ -507,10 +519,10 @@ impl<'a> BodyContext<'a> {
                 ctx.instance_bindings.insert(p.name.id.as_str(), class_name);
             }
         }
-        if let Some(vararg) = func.def.parameters.vararg.as_deref() {
+        if let Some(vararg) = func_def.parameters.vararg.as_deref() {
             ctx.mark_local(vararg.name.id.as_str());
         }
-        if let Some(kwarg) = func.def.parameters.kwarg.as_deref() {
+        if let Some(kwarg) = func_def.parameters.kwarg.as_deref() {
             ctx.mark_local(kwarg.name.id.as_str());
         }
 
@@ -701,6 +713,31 @@ fn walk_body<'a>(
             inferred_return,
         );
     }
+}
+
+/// Resolve `slots`' return slot to a `SchemaView`, mirroring
+/// `lib::declared_return_schema` for the nested-funcdef path. Used so a
+/// `return raw.select(...)` inside a nested helper can be type-checked
+/// against the helper's own annotated return.
+fn declared_return_view<'a>(
+    slots: &[TypedSlot<'a>],
+    schemas: &'a [Schema<'a>],
+) -> Option<SchemaView<'a>> {
+    for slot in slots {
+        if matches!(slot.label, SlotLabel::Return) {
+            return match slot.kind {
+                DataFrameAnnotation::Typed(name) => schemas
+                    .iter()
+                    .find(|s| s.name() == name)
+                    .map(SchemaView::Declared),
+                DataFrameAnnotation::Derived(expr) => {
+                    crate::schema::resolve_derived_schema(expr, schemas)
+                }
+                _ => None,
+            };
+        }
+    }
+    None
 }
 
 fn walk_stmt<'a>(
@@ -917,7 +954,61 @@ fn walk_stmt<'a>(
             // would otherwise look like undefined symbols to the D0051
             // / column-ref machinery, since the walker has no pattern-
             // binding extractor. Once pattern binding is modeled we can
-            // walk subject / guards / bodies through here.
+            // walk subject / guards / bodies through here. Tracked as a
+            // v1.1 follow-up — see `docs/design/spark-coverage.md`.
+        }
+        Stmt::FunctionDef(func_def) => {
+            // Nested function — `def helper(...): ...` inside the body
+            // of an outer function. Walk the inner body in a CHILD
+            // context so the inner fn's params and locals don't leak
+            // into the parent. The child inherits the parent's schemas,
+            // registry, and tempView registry. Typed `DataFrame[X]` /
+            // class-instance params are re-bound from the inner sig so
+            // column refs inside the helper resolve correctly.
+            let inner_slots = typed_slots_for_def(func_def);
+            let mut child = BodyContext::from_function_def(
+                func_def,
+                &inner_slots,
+                ctx.schemas(),
+                ctx.registry(),
+            );
+            if let Some(tv) = ctx.temp_views() {
+                child = child.with_temp_views(tv);
+            }
+            child.infer_depth = ctx.infer_depth;
+            let inner_declared_return = declared_return_view(&inner_slots, ctx.schemas());
+            let mut inner_inferred: Option<SchemaView<'a>> = None;
+            walk_body(
+                &func_def.body,
+                inner_declared_return.as_ref(),
+                &mut child,
+                source,
+                line_index,
+                diagnostics,
+                &mut inner_inferred,
+            );
+            // Mark the function's NAME as local in the OUTER scope so a
+            // subsequent reference resolves to the nested helper, not
+            // (e.g.) a top-level same-named function.
+            ctx.mark_local(func_def.name.id.as_str());
+        }
+        Stmt::ClassDef(class_def) => {
+            // Nested class — `class C: ...` inside a function body. We
+            // don't model nested classes as Schemas (Schema discovery
+            // is module-level), but we walk the body so column refs
+            // inside any method bodies still reach the checker.
+            for inner_stmt in &class_def.body {
+                walk_stmt(
+                    inner_stmt,
+                    declared_return,
+                    ctx,
+                    source,
+                    line_index,
+                    diagnostics,
+                    inferred_return,
+                );
+            }
+            ctx.mark_local(class_def.name.id.as_str());
         }
         Stmt::Assert(a) => {
             analyze_expr(&a.test, ctx, source, line_index, diagnostics);
@@ -1323,6 +1414,11 @@ fn analyze_method_call<'a>(
     {
         let recv = analyze_expr(&inner.value, ctx, source, line_index, diagnostics)?;
         check_subset_kwarg(call, &recv, ctx, source, line_index, diagnostics);
+        // `na.fill({"col": value, ...})` — same dict-key form as
+        // `df.fillna(...)`; check each literal key against the receiver.
+        if method == "fill" {
+            check_fillna_dict_keys(call, &recv, ctx, source, line_index, diagnostics);
+        }
         // `na.fill` / `na.drop` clear nulls from the affected
         // columns; `na.replace` doesn't.
         return Some(if matches!(method, "fill" | "drop") {
@@ -1474,6 +1570,15 @@ fn analyze_method_call<'a>(
         "fillna" | "dropna" | "dropDuplicates" | "drop_duplicates" | "replace"
     ) {
         check_subset_kwarg(call, &receiver, ctx, source, line_index, diagnostics);
+    }
+
+    // `fillna({"col": value, ...})` — the first positional arg can be a
+    // dict whose keys are column names. Check each literal key against
+    // the receiver. Non-dict-literal first args (a scalar, a variable
+    // holding a dict) fall through silently — we can only check the
+    // syntactically-visible form.
+    if method == "fillna" {
+        check_fillna_dict_keys(call, &receiver, ctx, source, line_index, diagnostics);
     }
 
     if method == "agg" {
@@ -3223,6 +3328,37 @@ fn melt_value_column_type(branch_types: &[Option<ColumnType>]) -> Option<ColumnT
     })
 }
 
+/// Check the dict-literal first positional arg of `fillna` / `na.fill`,
+/// whose keys are column names. Non-dict-literal first args (a bare
+/// value, a variable) fall through silently — only the syntactically
+/// visible dict can be checked here.
+fn check_fillna_dict_keys<'a>(
+    call: &'a ExprCall,
+    schema: &SchemaView<'a>,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(arg) = call.arguments.args.first() else {
+        return;
+    };
+    let Some(dict) = arg.as_dict_expr() else {
+        return;
+    };
+    let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
+    for item in &dict.items {
+        let Some(key) = item.key.as_ref() else {
+            continue;
+        };
+        let Some(s) = key.as_string_literal_expr() else {
+            continue;
+        };
+        refs.push((s.value.to_str(), s.range()));
+    }
+    report_column_refs(&refs, schema, ctx, source, line_index, diagnostics);
+}
+
 /// Check the `subset=` keyword argument against the receiver schema.
 /// `subset` — present on `fillna`, `dropna`, `dropDuplicates`,
 /// `replace`, and the `df.na.*` methods — names the columns the
@@ -4774,10 +4910,15 @@ enum JoinOn<'a> {
     /// One or more named keys, either `on="k"` or `on=["k1", "k2"]`. Each
     /// key must exist in BOTH schemas; in the result they appear once.
     Keys(Vec<(&'a str, TextRange)>),
-    /// A complex on-expression (Column expression, mixed list, etc.).
-    /// pykrete doesn't analyze the on-clause; the result schema is the
-    /// concatenation of both sides.
-    Expression,
+    /// A Column-expression on-clause — typically
+    /// `col("a") == col("b")`, `df1.a == df2.b`, or boolean conjunctions
+    /// of these. The collected column references can't be assigned to a
+    /// specific side without name-equality reasoning, so each is checked
+    /// against the union (must exist in at least ONE side). The result
+    /// schema is the concatenation of both sides with NO dedup — Spark
+    /// keeps both join-key columns when the on-clause is a Column
+    /// expression rather than a string.
+    Expression(Vec<(&'a str, TextRange)>),
 }
 
 #[allow(clippy::too_many_arguments)] // mostly source/line_index/diagnostics plumbing
@@ -4808,7 +4949,7 @@ fn handle_two_df_method<'a>(
             Some(left.clone())
         }
         TwoDfMethod::Join => {
-            let on = parse_on_arg(extract_on_arg(call));
+            let on = parse_on_arg(extract_on_arg(call), ctx);
             check_join_keys(left, &right, &on, source, line_index, diagnostics);
             // Record each `on=` key as a column reference so the LSP
             // layer offers column completion inside `join(on="…")`.
@@ -4921,7 +5062,7 @@ fn extract_how_arg(call: &ExprCall) -> JoinHow {
     }
 }
 
-fn parse_on_arg<'a>(expr: Option<&'a Expr>) -> JoinOn<'a> {
+fn parse_on_arg<'a>(expr: Option<&'a Expr>, ctx: &BodyContext<'a>) -> JoinOn<'a> {
     let Some(expr) = expr else {
         return JoinOn::None;
     };
@@ -4932,15 +5073,23 @@ fn parse_on_arg<'a>(expr: Option<&'a Expr>) -> JoinOn<'a> {
         let mut keys = Vec::new();
         for elt in &list.elts {
             let Some(s) = elt.as_string_literal_expr() else {
-                // Mixed: bail out to "complex expression" rather than
-                // half-checking.
-                return JoinOn::Expression;
+                // Mixed list (some strings, some Columns): bail out to
+                // "complex expression" rather than half-checking.
+                let mut refs = Vec::new();
+                collect_col_refs(expr, ctx, &mut refs);
+                return JoinOn::Expression(refs);
             };
             keys.push((s.value.to_str(), s.range()));
         }
         return JoinOn::Keys(keys);
     }
-    JoinOn::Expression
+    // Column-expression on-clause — `col("a") == col("b")`, an AND of
+    // them, etc. Walk the expression for every column reference so
+    // `check_join_keys` can validate each against the union of both
+    // sides.
+    let mut refs = Vec::new();
+    collect_col_refs(expr, ctx, &mut refs);
+    JoinOn::Expression(refs)
 }
 
 fn check_join_keys(
@@ -4951,33 +5100,68 @@ fn check_join_keys(
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let JoinOn::Keys(keys) = on else { return };
-    for (key, range) in keys {
-        if !left.has_field(key) {
-            diagnostics.push(Diagnostic::at_range(
-                Severity::Error,
-                "D0060",
-                format!(
-                    "Join key '{key}' does not exist on the left side ({}).",
-                    left.display_name(),
-                ),
-                *range,
-                source,
-                line_index,
-            ));
+    match on {
+        JoinOn::None => {}
+        JoinOn::Keys(keys) => {
+            for (key, range) in keys {
+                if !left.has_field(key) {
+                    diagnostics.push(Diagnostic::at_range(
+                        Severity::Error,
+                        "D0060",
+                        format!(
+                            "Join key '{key}' does not exist on the left side ({}).",
+                            left.display_name(),
+                        ),
+                        *range,
+                        source,
+                        line_index,
+                    ));
+                }
+                if !right.has_field(key) {
+                    diagnostics.push(Diagnostic::at_range(
+                        Severity::Error,
+                        "D0060",
+                        format!(
+                            "Join key '{key}' does not exist on the right side ({}).",
+                            right.display_name(),
+                        ),
+                        *range,
+                        source,
+                        line_index,
+                    ));
+                }
+            }
         }
-        if !right.has_field(key) {
-            diagnostics.push(Diagnostic::at_range(
-                Severity::Error,
-                "D0060",
-                format!(
-                    "Join key '{key}' does not exist on the right side ({}).",
+        JoinOn::Expression(refs) => {
+            // Column-expression on-clause: each ref must live on at
+            // least one side (we can't know WHICH side a bare `col("X")`
+            // belongs to). Names missing from both → D0030.
+            for (name, range) in refs {
+                if left.has_field(name) || right.has_field(name) {
+                    continue;
+                }
+                let suggestion =
+                    suggest_field_name(name, left).or_else(|| suggest_field_name(name, right));
+                let mut message = format!(
+                    "Column '{name}' does not exist on {} or {}.",
+                    left.display_name(),
                     right.display_name(),
-                ),
-                *range,
-                source,
-                line_index,
-            ));
+                );
+                if let Some(s) = &suggestion {
+                    message.push_str(&format!(" Did you mean '{s}'?"));
+                }
+                diagnostics.push(
+                    Diagnostic::at_range(
+                        Severity::Error,
+                        "D0030",
+                        message,
+                        *range,
+                        source,
+                        line_index,
+                    )
+                    .with_suggestion(suggestion),
+                );
+            }
         }
     }
 }
@@ -4991,8 +5175,10 @@ fn check_join_keys(
 ///   it matches what most pipelines do in practice.
 /// - For `on=None` (no on-clause): same as crossJoin — concatenate with
 ///   left-wins dedup.
-/// - For `on=Expression`: same as crossJoin — concatenate with left-wins
-///   dedup (we couldn't determine which keys to dedup, so we keep everything).
+/// - For `on=Expression`: Spark KEEPS both columns when the on-clause is a
+///   Column expression (only the string/list form coalesces the keys).
+///   Concatenate without dedup so subsequent `select` / `withColumn` calls
+///   see the full schema of both sides.
 fn apply_join<'a>(
     left: &SchemaView<'a>,
     right: &SchemaView<'a>,
@@ -5021,15 +5207,19 @@ fn apply_join<'a>(
             with_nullability(f, nullable)
         })
         .collect();
+    // For an expression-form on-clause, keep both sides' columns
+    // verbatim (Spark's behavior); for the string/list and absent
+    // forms, dedup shared non-key names with left winning.
+    let dedup_shared = !matches!(on, JoinOn::Expression(_));
     for f in right.typed_fields(schemas) {
-        // The join key(s) are already in result from the left side.
+        // The named join key(s) are already in result from the left side.
         if dedup_set.contains(f.name) {
             continue;
         }
-        // Non-key shared names: left wins.
-        if !result.iter().any(|r| r.name == f.name) {
-            result.push(with_nullability(f, right_nullable));
+        if dedup_shared && result.iter().any(|r| r.name == f.name) {
+            continue;
         }
+        result.push(with_nullability(f, right_nullable));
     }
     SchemaView::Derived(result)
 }
