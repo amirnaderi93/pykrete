@@ -247,7 +247,8 @@ const ASSIGN_TO_DF_RE =
 function findDataFrameNames(source: string): Set<string> {
   const names = new Set<string>();
   const lines = source.split('\n');
-  for (const line of lines) {
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
     const m1 = line.match(DATAFRAME_ANNOTATION_RE);
     if (m1) names.add(m1[1]);
     PARAM_DATAFRAME_RE.lastIndex = 0;
@@ -257,7 +258,24 @@ function findDataFrameNames(source: string): Set<string> {
     }
     const a = line.match(ASSIGN_TO_DF_RE);
     if (a) {
-      const rhs = a[2];
+      // If the RHS opens a paren that doesn't close on this line
+      // (`summary = (\n    sales\n    .groupBy(...)\n)`), join the
+      // continuation lines until the paren balances, then inspect the
+      // combined RHS for a DataFrame-returning method. Conservative on
+      // both sides — we stop at the first matching close paren on a
+      // line by itself and don't try to track nested string parens.
+      let rhs = a[2];
+      const open = (rhs.match(/\(/g) ?? []).length;
+      const close = (rhs.match(/\)/g) ?? []).length;
+      if (open > close) {
+        let depth = open - close;
+        for (let j = li + 1; j < lines.length && depth > 0; j++) {
+          const next = lines[j];
+          rhs += '\n' + next;
+          depth += (next.match(/\(/g) ?? []).length;
+          depth -= (next.match(/\)/g) ?? []).length;
+        }
+      }
       // Reject obvious literals so `x = 1` doesn't get flagged.
       if (/\.[A-Za-z_]+\s*\(/.test(rhs)) {
         for (const method of DATAFRAME_RETURNING_METHODS) {
@@ -278,6 +296,7 @@ function findDataFrameNames(source: string): Set<string> {
 function dispatchBucket(
   source: string,
   lineText: string,
+  lineNumber: number,
   cursorColumn: number,
   dfNames: Set<string>,
 ): keyof SparkSymbols | null {
@@ -300,9 +319,9 @@ function dispatchBucket(
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(partial) && partial !== '') {
       return null;
     }
-    return classifyReceiver(source, lineText, dotIdx, dfNames);
+    return classifyReceiver(source, lineText, lineNumber, dotIdx, dfNames);
   }
-  return classifyReceiver(source, lineText, leftIdx, dfNames);
+  return classifyReceiver(source, lineText, lineNumber, leftIdx, dfNames);
 }
 
 /** Given the source and the index of the `.` on a line, decide which
@@ -310,6 +329,7 @@ function dispatchBucket(
 function classifyReceiver(
   source: string,
   lineText: string,
+  lineNumber: number,
   dotIdx: number,
   dfNames: Set<string>,
 ): keyof SparkSymbols | null {
@@ -327,7 +347,7 @@ function classifyReceiver(
   // If it's a known GroupedData-returning method, suggest GroupedData;
   // if it's a known DataFrame-returning method, suggest DataFrame.
   if (before.endsWith(')')) {
-    const prevMethod = findPreviousMethodName(source, lineText, before, dotIdx);
+    const prevMethod = findPreviousMethodName(source, before, lineNumber);
     if (prevMethod === 'groupBy' || prevMethod === 'rollup' || prevMethod === 'cube') {
       return 'GroupedData';
     }
@@ -343,9 +363,8 @@ function classifyReceiver(
  * multi-line chain crossing parens we don't track). */
 function findPreviousMethodName(
   source: string,
-  lineText: string,
   before: string,
-  _dotIdx: number,
+  lineNumber: number,
 ): string | null {
   // Strip the trailing `)` and walk back balancing parens to find the
   // matching `(`.
@@ -368,7 +387,7 @@ function findPreviousMethodName(
     //       .groupBy("region")
     //       .agg(...)
     //   )
-    return findMethodInMultilineChain(source, lineText);
+    return findMethodInMultilineChain(source, lineNumber);
   }
   // The method name is the identifier directly before `(`.
   const head = before.slice(0, i);
@@ -381,14 +400,15 @@ function findPreviousMethodName(
  * lines and return the most recent method name. */
 function findMethodInMultilineChain(
   source: string,
-  lineText: string,
+  lineNumber: number,
 ): string | null {
-  // Re-scan the source from the start, find the line that equals the
-  // current line, then walk backwards.
+  // `lineNumber` is Monaco 1-indexed; subtract one for the array index
+  // of the cursor's line. We walk backwards from the line *before* the
+  // cursor, looking for the most recent `.method(...)` continuation.
   const lines = source.split('\n');
-  const idx = lines.indexOf(lineText);
-  if (idx < 0) return null;
-  for (let i = idx - 1; i >= 0; i--) {
+  const cursorIdx = lineNumber - 1;
+  if (cursorIdx <= 0 || cursorIdx >= lines.length) return null;
+  for (let i = cursorIdx - 1; i >= 0; i--) {
     const candidate = lines[i].trim();
     if (candidate.length === 0) continue;
     const m = candidate.match(/^\.([A-Za-z_][A-Za-z0-9_]*)\s*\(/);
@@ -599,6 +619,7 @@ export default function Playground() {
         const bucket = classifyReceiver(
           liveSourceRef.current,
           lineText,
+          position.lineNumber,
           before.length - 1,
           dfNames,
         );
@@ -662,6 +683,7 @@ export default function Playground() {
           const bucket = dispatchBucket(
             liveSourceRef.current,
             lineText,
+            position.lineNumber,
             position.column,
             dfNames,
           );
@@ -734,8 +756,17 @@ export default function Playground() {
     const root = editor.getDomNode()?.ownerDocument.querySelector(
       '.monaco-editor-overflow-widgets-root',
     );
-    if (root && root.parentElement !== document.body) {
+    const originalParent =
+      root && root.parentElement !== document.body ? root.parentElement : null;
+    if (root && originalParent) {
       document.body.appendChild(root);
+      // Restore on editor dispose so a remount (HMR, route change) doesn't
+      // leave the orphaned root on document.body.
+      editor.onDidDispose(() => {
+        if (root.parentElement === document.body && originalParent.isConnected) {
+          originalParent.appendChild(root);
+        }
+      });
     }
     setEditorReady(true);
   };

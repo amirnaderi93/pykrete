@@ -82,21 +82,6 @@
   color: var(--sl-color-gray-3);
 }
 
-/* Secondary status line for pyright. Only rendered while pyright is
-   loading or after it failed (on the happy path the whole line is
-   omitted), so we lighten the styling — it's a transient/diagnostic
-   message, not a counter the user reads constantly. */
-.pk-status-pyright {
-  margin-top: -0.25rem;
-  font-size: 0.75rem;
-  color: var(--sl-color-gray-4);
-}
-.pk-status-pyright-failed {
-  /* Same warm-warning hue as `.pk-diag-warning` rows — pyright
-     failure degrades the playground but doesn't break it. */
-  color: rgba(229, 192, 123, 0.9);
-}
-
 .pk-diagnostics {
   margin: 0;
   padding: 0;
