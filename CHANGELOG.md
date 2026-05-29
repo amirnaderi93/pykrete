@@ -6,6 +6,24 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.24]
+
+Hotfix. v0.1.23 mirrored Monaco's color rules onto
+`#playground-overflow-root` but missed the layout rules — Monaco's
+`suggest.css` scopes `display: flex`, padding, and white-space on
+`.monaco-editor .suggest-widget .monaco-list .monaco-list-row` under
+the same `.monaco-editor` ancestor it scopes everything else under, so
+the rebased rows existed in DOM but collapsed to zero height and the
+popup still rendered as an empty dark rectangle. Fix gives the
+body-level overflow host the `monaco-editor` class itself, so
+Monaco's own theme variables (written onto
+`.monaco-editor, .monaco-diff-editor, .monaco-component`) and every
+ancestor-scoped widget rule (suggest layout, hover styling,
+symbolIcon colors) fire naturally for the widgets that mount inside
+it. Drops the manual `--vscode-*` forwarding and the mirror rules
+v0.1.22 and v0.1.23 added — Monaco's own stylesheet now does the
+work. Docs-only release.
+
 ## [0.1.23]
 
 Hotfix. v0.1.22 fixed the suggest popup's background fill, but the list

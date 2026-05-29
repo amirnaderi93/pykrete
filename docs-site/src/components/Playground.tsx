@@ -492,10 +492,18 @@ export default function Playground() {
   // instead of the editor's parent, which is inside Starlight's
   // `.main-pane { isolation: isolate }` stacking context that otherwise
   // traps them behind the right-hand TOC sidebar.
+  //
+  // The `monaco-editor` class is load-bearing: Monaco's standalone theme
+  // service writes every `--vscode-*` variable onto `.monaco-editor`,
+  // and the suggest/hover/symbolIcon stylesheets all scope their layout
+  // and color rules under `.monaco-editor` ancestor. Putting the class
+  // on this body-level host lets those rules fire naturally for the
+  // overflow widgets that mount inside it.
   const [overflowRoot] = useState<HTMLDivElement | null>(() => {
     if (typeof document === 'undefined') return null;
     const div = document.createElement('div');
     div.id = 'playground-overflow-root';
+    div.className = 'monaco-editor';
     return div;
   });
 
