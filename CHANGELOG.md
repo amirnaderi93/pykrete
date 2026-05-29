@@ -6,6 +6,55 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.27]
+
+Spark coverage hardening, part 2. Three more pre-v1.0.0 audit
+blockers closed, plus four small follow-ups from the v0.1.26 review.
+
+Expression-form join keys are now checked. Pre-v0.1.27 a
+`df.join(other, col("a") == col("b"))` clause landed in the
+"complex expression — give up" bucket, so a typo in either side
+slipped past D0030. The analyzer now walks the on-expression for
+every column reference (recursing through boolean ops and
+comparisons, so an `AND` of two equalities is covered) and validates
+each against the union of both sides — names missing from BOTH
+fire D0030. The output schema for expression-form joins also
+matches Spark now: both join-key columns are kept (the string/list
+form still coalesces, as before).
+
+`fillna({"col": value, ...})` (and `na.fill({"col": ..., ...})`)
+now checks the dict's literal keys against the receiver's schema —
+the most common production form of `fillna`, where a typo previously
+went undetected. Non-dict-literal first args (a scalar value, a
+variable holding a dict) fall through silently rather than false-
+flag.
+
+`melt` and `unpivot` (Spark 3.4+) are documented correctly. The
+reference operations table listed both as "unmodeled" while the
+analyzer has modeled them since v0.1.21 — both column-existence
+checks on `ids`/`values` and the long-form output schema (`ids +
+[variableColumnName: string, valueColumnName: T]` with nullability
+propagation). Docs now match code.
+
+Four follow-ups from PR #56 review:
+
+- CHANGELOG correction: the v0.1.26 entry claimed `Stmt::Match`
+  bodies are walked and that synthetic-name interning is per-
+  `BodyContext`. Both were wrong — `Stmt::Match` is deferred until
+  pattern binding is modeled (and is now tracked in code as a
+  v1.1 follow-up), and synthetic-name interning is process-wide
+  via `OnceLock<Mutex<HashSet<&'static str>>>`. The original
+  v0.1.26 entry is left intact per Keep-a-Changelog convention;
+  see the corrected text below.
+- `grouped_count_schema` now exercised by a test where `count` is
+  itself a grouping key: `df.groupBy("count").count()` keeps a
+  single `count` column (the synthetic shadows the user field).
+- `Stmt::FunctionDef` and `Stmt::ClassDef` nested inside a function
+  body are now walked, so column references inside a nested helper
+  are still checked.
+- `Stmt::Match` deferral now carries a tracker comment linking to
+  the v1.1 plan note in `docs/design/spark-coverage.md`.
+
 ## [0.1.26]
 
 Spark coverage hardening, part 1 of the pre-v1.0.0 sprint. Two blocker-

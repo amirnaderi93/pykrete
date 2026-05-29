@@ -184,10 +184,11 @@ def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
 }
 
 #[test]
-fn join_with_complex_on_expression_does_not_check_keys_but_still_concatenates_schemas() {
+fn join_with_complex_on_expression_does_not_fire_when_keys_exist_on_at_least_one_side() {
     // on=col("k") == col("k") is a Compare expression, not a string/list.
     // pykrete can't tell which is left-side vs right-side, so it doesn't fire
-    // D0060. The result schema is left + right (concat with dedup), so
+    // D0060. Both `k`s exist on both sides → no D0030 either. The result
+    // schema is left + right (concat, no dedup for expression-form), so
     // subsequent column references work for fields present in either side.
     let result = check(&format!(
         r#"{TWO_SCHEMAS}
@@ -197,6 +198,120 @@ def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
 "#
     ));
     assert_does_not_have_code(&result, "D0060");
+    assert_does_not_have_code(&result, "D0030");
+}
+
+// ===========================================================================
+// Expression-form on-clause column-existence checks (D0030)
+// ===========================================================================
+
+#[test]
+fn d0030_fires_for_a_typo_in_an_expression_form_on_clause_left_ref() {
+    // `col("typo")` references a name present on NEITHER side → D0030.
+    let result = check(&format!(
+        r#"{TWO_SCHEMAS}
+
+def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+    return a.join(b, col("typo") == col("k"))
+"#
+    ));
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "typo");
+}
+
+#[test]
+fn d0030_fires_for_a_typo_in_an_expression_form_on_clause_right_ref() {
+    let result = check(&format!(
+        r#"{TWO_SCHEMAS}
+
+def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+    return a.join(b, col("k") == col("typo_right"))
+"#
+    ));
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "typo_right");
+}
+
+#[test]
+fn d0030_fires_for_each_typo_in_an_expression_form_on_clause() {
+    // Both refs are typos → two D0030s.
+    let result = check(&format!(
+        r#"{TWO_SCHEMAS}
+
+def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+    return a.join(b, col("typo_left") == col("typo_right"))
+"#
+    ));
+    assert_count(&result, "D0030", 2);
+}
+
+#[test]
+fn expression_form_on_clause_does_not_fire_when_each_name_exists_on_some_side() {
+    // `a` only on left, `b` only on right — both valid in the union.
+    let result = check(&format!(
+        r#"{TWO_SCHEMAS}
+
+def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+    return a.join(b, col("a") == col("b"))
+"#
+    ));
+    assert_does_not_have_code(&result, "D0030");
+    assert_does_not_have_code(&result, "D0060");
+}
+
+#[test]
+fn expression_form_on_clause_handles_an_and_of_two_equalities() {
+    // `(col("a") == col("b")) & (col("k") == col("k"))` — every ref
+    // exists in the union, so no diagnostics.
+    let result = check(&format!(
+        r#"{TWO_SCHEMAS}
+
+def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+    return a.join(b, (col("a") == col("b")) & (col("k") == col("k")))
+"#
+    ));
+    assert_does_not_have_code(&result, "D0030");
+    assert_does_not_have_code(&result, "D0060");
+}
+
+#[test]
+fn expression_form_on_clause_fires_for_a_typo_inside_an_and_of_equalities() {
+    let result = check(&format!(
+        r#"{TWO_SCHEMAS}
+
+def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+    return a.join(b, (col("a") == col("b")) & (col("k") == col("nope")))
+"#
+    ));
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "nope");
+}
+
+#[test]
+fn expression_form_on_clause_does_not_dedup_join_key_in_output_schema() {
+    // Spark keeps both `k`s when the on-clause is a Column expression
+    // (only the string form coalesces). Both sides have `k`, so the
+    // result schema has `k` from BOTH — selecting either is fine, and
+    // a typo is still caught.
+    let result = check(&format!(
+        r#"{TWO_SCHEMAS}
+
+def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+    return a.join(b, col("k") == col("k")).select(col("k"))
+"#
+    ));
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn expression_form_on_clause_propagates_both_sides_columns_to_downstream_select() {
+    let result = check(&format!(
+        r#"{TWO_SCHEMAS}
+
+def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+    return a.join(b, col("k") == col("k")).select(col("a"), col("b"))
+"#
+    ));
     assert_does_not_have_code(&result, "D0030");
 }
 

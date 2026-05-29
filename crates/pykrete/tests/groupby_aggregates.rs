@@ -278,6 +278,45 @@ def f(raw: DataFrame[Hits]) -> DataFrame:
 }
 
 #[test]
+fn groupBy_count_when_grouping_key_is_named_count_keeps_one_field() {
+    // `groupBy("count")` would normally add `count` to the result keys;
+    // `.count()` then synthesizes a second `count` column. Spark
+    // shadows the original — pykrete's `grouped_count_schema` drops the
+    // key before pushing the synthetic so the result has exactly one
+    // `count` field. (This exercises the retain-then-push path that
+    // the previous test couldn't reach, since `count` wasn't a key
+    // there.) Selecting `count` and nothing else is fine; selecting
+    // an extra column would D0030.
+    let src = r#"
+class Hits(Schema):
+    count: string
+    page: string
+
+def f(raw: DataFrame[Hits]) -> DataFrame:
+    return raw.groupBy("count").count().select(col("count"))
+"#;
+    let result = check(src);
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn groupBy_count_when_grouping_key_is_named_count_other_columns_are_dropped() {
+    // After `raw.groupBy("count").count()` the result is just
+    // {count: long} — the user's `page` field is gone, so selecting it
+    // must fire D0030.
+    let src = r#"
+class Hits(Schema):
+    count: string
+    page: string
+
+def f(raw: DataFrame[Hits]) -> DataFrame:
+    return raw.groupBy("count").count().select(col("page"))
+"#;
+    let result = check(src);
+    assert_has_code(&result, "D0030");
+}
+
+#[test]
 fn groupBy_sum_chained_into_withColumn_is_clean() {
     let src = format!(
         "{SCHEMA}
