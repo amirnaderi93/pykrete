@@ -152,21 +152,16 @@
 /* Lift Monaco's overflow widgets (hover popup, suggest menu, parameter
  * hints) above Starlight's right-hand "On this page" TOC sidebar.
  *
- * With `fixedOverflowWidgets: true` in the editor options, Monaco
- * appends `.monaco-editor-overflow-widgets-root` directly under the
- * document body so widgets escape the editor's own `overflow: hidden`.
- * That root lives in the body's stacking context alongside Starlight's
- * `.right-sidebar` (z-index 9 by default) and the rest of the chrome.
- *
- * A bare z-index on the root container isn't enough in practice: Monaco
- * also creates `.overflowingContentWidgets` (the hover/parameter-hint
- * container) and `.monaco-aria-container` siblings, and some Starlight
- * layouts wrap content in elements whose z-index quietly outranks a
- * mid-range value. We force the whole overflow-widget surface to a
- * z-index high enough to clear every other on-page chrome element
- * Starlight ships. */
-.monaco-editor-overflow-widgets-root,
-.monaco-editor .overflowingContentWidgets,
-.monaco-aria-container {
-  z-index: 9999 !important;
+ * Playground.tsx passes a body-level `#playground-overflow-root` to
+ * Monaco via the `overflowWidgetsDomNode` option. Monaco mounts its
+ * `.overflowingContentWidgets` and `.overflowingOverlayWidgets`
+ * containers inside that node, so the widgets live in the body's
+ * stacking context alongside Starlight's `.right-sidebar` (z-index 9
+ * by default). We push the host node well above every on-page chrome
+ * element Starlight ships. */
+#playground-overflow-root {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 9999;
 }

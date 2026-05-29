@@ -486,6 +486,27 @@ export default function Playground() {
   const liveSourceRef = useRef<string>(activeSnippet.source);
   const sparkSymbolsRef = useRef<SparkSymbols | null>(null);
 
+  // Dedicated host node for Monaco's overflow content/overlay widgets
+  // (hover popups, suggest menu, parameter hints). Passed to Monaco via
+  // `overflowWidgetsDomNode` so the widgets mount under `document.body`
+  // instead of the editor's parent, which is inside Starlight's
+  // `.main-pane { isolation: isolate }` stacking context that otherwise
+  // traps them behind the right-hand TOC sidebar.
+  const [overflowRoot] = useState<HTMLDivElement | null>(() => {
+    if (typeof document === 'undefined') return null;
+    const div = document.createElement('div');
+    div.id = 'playground-overflow-root';
+    return div;
+  });
+
+  useEffect(() => {
+    if (!overflowRoot) return;
+    document.body.appendChild(overflowRoot);
+    return () => {
+      overflowRoot.remove();
+    };
+  }, [overflowRoot]);
+
   useEffect(() => {
     let cancelled = false;
     init()
@@ -743,31 +764,6 @@ export default function Playground() {
         /* no-op */
       },
     );
-    // Reparent Monaco's overflow-widgets root onto document.body. With
-    // `fixedOverflowWidgets: true` Monaco appends the root to the
-    // editor's parent, which here is inside Starlight's `.main-pane` —
-    // and `.main-pane` carries `isolation: isolate`, creating a stacking
-    // context that traps the hover popup behind the right-hand TOC
-    // sidebar regardless of z-index. Moving the root to body sidesteps
-    // the trapped stacking context entirely; the high z-index in
-    // Playground.css then orders it above Starlight's chrome. Monaco
-    // tolerates the move because it tracks the root by element
-    // reference, not by DOM position.
-    const root = editor.getDomNode()?.ownerDocument.querySelector(
-      '.monaco-editor-overflow-widgets-root',
-    );
-    const originalParent =
-      root && root.parentElement !== document.body ? root.parentElement : null;
-    if (root && originalParent) {
-      document.body.appendChild(root);
-      // Restore on editor dispose so a remount (HMR, route change) doesn't
-      // leave the orphaned root on document.body.
-      editor.onDidDispose(() => {
-        if (root.parentElement === document.body && originalParent.isConnected) {
-          originalParent.appendChild(root);
-        }
-      });
-    }
     setEditorReady(true);
   };
 
@@ -845,18 +841,13 @@ export default function Playground() {
             insertSpaces: true,
             automaticLayout: true,
             padding: { top: 8, bottom: 8 },
-            // Render hover, suggest, and other overlay widgets at the
-            // document body level instead of inside the editor. The
-            // playground wrapper has `overflow: hidden` (for the rounded
-            // border), which would otherwise clip popups that extend
-            // beyond the editor box. Combined with the z-index override
-            // in Playground.css *and* the reparenting in `handleMount`
-            // below (Starlight's `.main-pane` sets `isolation: isolate`,
-            // creating a stacking context that traps Monaco's widget
-            // root behind the right-hand TOC sidebar — the reparenting
-            // hoists the root out to `document.body`), the hover popup
-            // rises above every Starlight chrome element.
+            // See `overflowRoot` above for the rationale; together these
+            // two options move Monaco's hover/suggest/parameter-hint
+            // widgets onto our body-level host node, escaping both the
+            // playground wrapper's `overflow: hidden` and Starlight's
+            // trapped stacking context.
             fixedOverflowWidgets: true,
+            overflowWidgetsDomNode: overflowRoot ?? undefined,
             // Pykrete's completion surface lives mostly inside string
             // literals (`col("…")`, `groupBy("…")`, …). Monaco's default
             // disables auto-trigger inside strings; override so the
