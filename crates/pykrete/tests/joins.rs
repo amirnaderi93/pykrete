@@ -404,6 +404,66 @@ def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame[Wrong]:
 }
 
 #[test]
+fn expression_form_on_clause_handles_qualified_attribute_refs() {
+    // `df1.k == df2.k` — the attribute-access form (no `col(...)`) that
+    // production code uses for self-joins and disambiguating shared keys.
+    // Both `df1.k` and `df2.k` resolve through the qualified-attribute
+    // arm of `collect_col_refs`, hit the union of both schemas, and pass.
+    let result = check(&format!(
+        r#"{TWO_SCHEMAS}
+
+def f(df1: DataFrame[A], df2: DataFrame[B]) -> DataFrame:
+    return df1.join(df2, df1.k == df2.k).select(col("a"), col("b"))
+"#
+    ));
+    assert_does_not_have_code(&result, "D0030");
+    assert_does_not_have_code(&result, "D0060");
+}
+
+#[test]
+fn expression_form_on_clause_fires_for_a_typo_in_qualified_attribute_ref() {
+    // `df1.nope` — `nope` is on neither side, should fire D0030.
+    let result = check(&format!(
+        r#"{TWO_SCHEMAS}
+
+def f(df1: DataFrame[A], df2: DataFrame[B]) -> DataFrame:
+    return df1.join(df2, df1.nope == df2.k)
+"#
+    ));
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "nope");
+}
+
+#[test]
+fn expression_form_on_clause_handles_F_col_equality() {
+    // `F.col("a") == F.col("b")` — the `F.col` attribute-call form.
+    // Both `a` and `b` are in the union → no diagnostic.
+    let result = check(&format!(
+        r#"{TWO_SCHEMAS}
+
+def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+    return a.join(b, F.col("a") == F.col("b"))
+"#
+    ));
+    assert_does_not_have_code(&result, "D0030");
+    assert_does_not_have_code(&result, "D0060");
+}
+
+#[test]
+fn expression_form_on_clause_fires_for_typo_inside_F_col() {
+    // Typo through `F.col("nope")` — still caught.
+    let result = check(&format!(
+        r#"{TWO_SCHEMAS}
+
+def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+    return a.join(b, F.col("k") == F.col("nope"))
+"#
+    ));
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "nope");
+}
+
+#[test]
 fn local_variable_bound_to_join_result_carries_the_combined_schema() {
     // joined = a.join(b, on="k") → joined has [k, a, b].
     // joined.filter(col("b") > 0) is valid.

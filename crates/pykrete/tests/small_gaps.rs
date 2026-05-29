@@ -141,6 +141,34 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 }
 
 #[test]
+fn fillna_empty_dict_does_not_fire() {
+    // `fillna({})` — no keys to check, no diagnostic.
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Raw]) -> DataFrame:
+    return raw.fillna({{}})
+"
+    );
+    assert_no_diagnostics(&check(&src));
+}
+
+#[test]
+fn fillna_with_variable_holding_bad_keys_does_not_false_flag() {
+    // `cfg = {{"some_var": 0}}; raw.fillna(cfg)` — the dict is bound to
+    // a variable, so its keys aren't visible at the call site. We MUST
+    // NOT emit a diagnostic even though `some_var` isn't a real column —
+    // silent-pass is the conservative behavior for non-literal args.
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Raw]) -> DataFrame:
+    cfg = {{\"some_var\": 0}}
+    return raw.fillna(cfg)
+"
+    );
+    assert_no_diagnostics(&check(&src));
+}
+
+#[test]
 fn na_fill_dict_with_bad_key_is_caught() {
     // Same form as `fillna`, but on the `df.na.fill` route.
     let src = format!(
