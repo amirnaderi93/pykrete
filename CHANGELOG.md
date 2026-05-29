@@ -6,6 +6,36 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.28]
+
+Spark coverage hardening, part 3 — the last v1.0.0 audit blocker:
+pykrete's type vocabulary now includes Spark's `DecimalType`,
+`ByteType`, `ShortType`, and `BinaryType`.
+
+`decimal(p, s)` is now a first-class atomic. Write `amount:
+decimal(18, 2)` in a Schema, or `col("amount").cast("decimal(18,2)")`
+in a chain, and pykrete tracks the type through downstream column
+references and return-type checks. Production money columns —
+the canonical case from the audit — finally type as decimal
+instead of degrading to Unknown.
+
+`byte`, `short`, and `binary` join the atomic set too. `byte`
+and `short` are full integers under the type-family rules
+(numeric, sum-widens-to-long matching Spark); `binary` is
+opaque (no arithmetic, no string comparison — strict-mode
+operator checks treat it like a collection).
+
+Aggregate widening is honest but simplified. `sum`/`mean` of
+a decimal stays a (bare) decimal in pykrete's model; Spark
+widens precision and scale (`decimal(p+10, s)` for sum,
+`decimal(p+4, s+4)` for mean, both capped at 38), and the
+precision-growth refinement is parked as a v1.1 polish item.
+`sum(byte)` and `sum(short)` widen to `long`, matching Spark.
+
+`schemas.md` updated to list the real v0.1.28 atomic set —
+`float` and `bytes` (which were never recognised) are out;
+`decimal(p, s)`, `byte`, `short`, and `binary` are in.
+
 ## [0.1.27]
 
 Spark coverage hardening, part 2. Three more pre-v1.0.0 audit

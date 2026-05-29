@@ -12,7 +12,21 @@ pub enum ColumnType {
     Int,
     Long,
     Double,
+    /// 8-bit signed integer — Spark `ByteType`.
+    Byte,
+    /// 16-bit signed integer — Spark `ShortType`.
+    Short,
+    /// Fixed-precision decimal — Spark `DecimalType(precision, scale)`.
+    /// `(None, None)` means the precision/scale weren't carried (`decimal`
+    /// with no args, written either as a bare annotation or as a cast
+    /// target). Precision-growth on aggregation is intentionally not
+    /// modeled in v1.0 — `sum(decimal(p, s))` reduces to a plain
+    /// `decimal`, matching the simpler-rules-than-Spark stance the
+    /// checker takes elsewhere.
+    Decimal(Option<u8>, Option<u8>),
     String,
+    /// Raw byte array — Spark `BinaryType`.
+    Binary,
     Bool,
     Date,
     Timestamp,
@@ -69,7 +83,11 @@ impl ColumnType {
             "IntegerType" => Some(Self::Int),
             "LongType" => Some(Self::Long),
             "DoubleType" | "FloatType" => Some(Self::Double),
+            "ByteType" => Some(Self::Byte),
+            "ShortType" => Some(Self::Short),
+            "DecimalType" => Some(Self::Decimal(None, None)),
             "StringType" => Some(Self::String),
+            "BinaryType" => Some(Self::Binary),
             "BooleanType" => Some(Self::Bool),
             "DateType" => Some(Self::Date),
             "TimestampType" => Some(Self::Timestamp),
@@ -111,7 +129,11 @@ impl ColumnType {
             Self::Int => "Int",
             Self::Long => "Long",
             Self::Double => "Double",
+            Self::Byte => "Byte",
+            Self::Short => "Short",
+            Self::Decimal(..) => "Decimal",
             Self::String => "String",
+            Self::Binary => "Binary",
             Self::Bool => "Bool",
             Self::Date => "Date",
             Self::Timestamp => "Timestamp",
@@ -154,6 +176,16 @@ fn parse_type<'s, F: Fn(&str) -> Option<ColumnType>>(
     let word = &s[..end];
     let after = s[end..].trim_start();
     match word.to_ascii_lowercase().as_str() {
+        "decimal" => {
+            let Some(inner) = after.strip_prefix('(') else {
+                return Some((ColumnType::Decimal(None, None), after));
+            };
+            let (precision, rest) = parse_u8(inner)?;
+            let rest = rest.trim_start().strip_prefix(',')?;
+            let (scale, rest) = parse_u8(rest)?;
+            let rest = rest.trim_start().strip_prefix(')')?;
+            Some((ColumnType::Decimal(Some(precision), Some(scale)), rest))
+        }
         "array" => {
             let Some(inner) = after.strip_prefix('<') else {
                 return Some((ColumnType::Array(None), after));
@@ -181,6 +213,19 @@ fn parse_type<'s, F: Fn(&str) -> Option<ColumnType>>(
         }
         _ => Some((leaf(word)?, after)),
     }
+}
+
+/// Parse a `u8` integer off the front of `s` (after leading whitespace),
+/// returning the value and the remainder. Used for `decimal(p, s)` —
+/// Spark caps both at 38, so `u8` is plenty.
+fn parse_u8(s: &str) -> Option<(u8, &str)> {
+    let s = s.trim_start();
+    let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+    if end == 0 {
+        return None;
+    }
+    let value = s[..end].parse().ok()?;
+    Some((value, &s[end..]))
 }
 
 /// Parse a `struct<…>` field list — `name: type`, comma-separated — off
@@ -220,7 +265,10 @@ fn atomic_strict(name: &str) -> Option<ColumnType> {
         "int" => Some(ColumnType::Int),
         "long" => Some(ColumnType::Long),
         "double" => Some(ColumnType::Double),
+        "byte" => Some(ColumnType::Byte),
+        "short" => Some(ColumnType::Short),
         "string" => Some(ColumnType::String),
+        "binary" => Some(ColumnType::Binary),
         "bool" => Some(ColumnType::Bool),
         "date" => Some(ColumnType::Date),
         "timestamp" => Some(ColumnType::Timestamp),
@@ -234,7 +282,10 @@ fn atomic_lenient(name: &str) -> Option<ColumnType> {
         "int" | "integer" => Some(ColumnType::Int),
         "long" | "bigint" => Some(ColumnType::Long),
         "double" | "float" | "real" => Some(ColumnType::Double),
+        "byte" | "tinyint" => Some(ColumnType::Byte),
+        "short" | "smallint" => Some(ColumnType::Short),
         "string" => Some(ColumnType::String),
+        "binary" => Some(ColumnType::Binary),
         "boolean" | "bool" => Some(ColumnType::Bool),
         "date" => Some(ColumnType::Date),
         "timestamp" => Some(ColumnType::Timestamp),
@@ -245,6 +296,8 @@ fn atomic_lenient(name: &str) -> Option<ColumnType> {
 impl fmt::Display for ColumnType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Decimal(Some(p), Some(s)) => write!(f, "Decimal({p}, {s})"),
+            Self::Decimal(..) => f.write_str("Decimal"),
             Self::Array(Some(elem)) => write!(f, "array<{elem}>"),
             Self::Array(None) => f.write_str("array"),
             Self::Map(Some(key), Some(value)) => write!(f, "map<{key}, {value}>"),
@@ -271,7 +324,8 @@ impl fmt::Display for ColumnType {
 
 /// Comma-separated list of the source-form names users can write in a
 /// `.pyk` file. Used inside error messages.
-pub const COLUMN_TYPE_NAMES: &str = "int, long, double, string, bool, date, timestamp, Array, Map";
+pub const COLUMN_TYPE_NAMES: &str =
+    "int, long, double, byte, short, decimal, string, binary, bool, date, timestamp, Array, Map";
 
 /// Same vocabulary as [`COLUMN_TYPE_NAMES`] but as a slice — fed to the
 /// completion engine when the cursor sits inside a `name: "<cursor>"`
@@ -280,7 +334,11 @@ pub const COLUMN_TYPE_NAMES_LIST: &[&str] = &[
     "int",
     "long",
     "double",
+    "byte",
+    "short",
+    "decimal",
     "string",
+    "binary",
     "bool",
     "date",
     "timestamp",
@@ -385,7 +443,11 @@ mod tests {
             "int",
             "long",
             "double",
+            "byte",
+            "short",
+            "decimal",
             "string",
+            "binary",
             "bool",
             "date",
             "timestamp",
@@ -397,5 +459,97 @@ mod tests {
                 "COLUMN_TYPE_NAMES should list '{name}'",
             );
         }
+    }
+
+    #[test]
+    fn from_name_recognizes_byte_short_decimal_binary() {
+        assert_eq!(ColumnType::from_name("byte"), Some(ColumnType::Byte));
+        assert_eq!(ColumnType::from_name("short"), Some(ColumnType::Short));
+        assert_eq!(ColumnType::from_name("binary"), Some(ColumnType::Binary));
+        assert_eq!(
+            ColumnType::from_name("decimal"),
+            Some(ColumnType::Decimal(None, None))
+        );
+        assert_eq!(
+            ColumnType::from_name("decimal(18, 2)"),
+            Some(ColumnType::Decimal(Some(18), Some(2)))
+        );
+        // Whitespace inside the parens is tolerated.
+        assert_eq!(
+            ColumnType::from_name("decimal( 38 , 18 )"),
+            Some(ColumnType::Decimal(Some(38), Some(18)))
+        );
+    }
+
+    #[test]
+    fn from_name_rejects_malformed_decimal() {
+        // Missing scale, garbage args, typo in keyword.
+        assert_eq!(ColumnType::from_name("decimal(18)"), None);
+        assert_eq!(ColumnType::from_name("decimal(18,)"), None);
+        assert_eq!(ColumnType::from_name("decimal(a, b)"), None);
+        assert_eq!(ColumnType::from_name("decimal(18, 2"), None);
+        assert_eq!(ColumnType::from_name("decimial(18, 2)"), None);
+    }
+
+    #[test]
+    fn from_spark_name_accepts_byte_short_decimal_binary() {
+        assert_eq!(ColumnType::from_spark_name("byte"), Some(ColumnType::Byte));
+        assert_eq!(
+            ColumnType::from_spark_name("tinyint"),
+            Some(ColumnType::Byte)
+        );
+        assert_eq!(
+            ColumnType::from_spark_name("short"),
+            Some(ColumnType::Short)
+        );
+        assert_eq!(
+            ColumnType::from_spark_name("smallint"),
+            Some(ColumnType::Short)
+        );
+        assert_eq!(
+            ColumnType::from_spark_name("binary"),
+            Some(ColumnType::Binary)
+        );
+        assert_eq!(
+            ColumnType::from_spark_name("decimal(18, 2)"),
+            Some(ColumnType::Decimal(Some(18), Some(2)))
+        );
+        // Case-insensitive on the keyword.
+        assert_eq!(
+            ColumnType::from_spark_name("DECIMAL(10, 0)"),
+            Some(ColumnType::Decimal(Some(10), Some(0)))
+        );
+    }
+
+    #[test]
+    fn from_type_constructor_accepts_byte_short_decimal_binary() {
+        assert_eq!(
+            ColumnType::from_type_constructor("ByteType"),
+            Some(ColumnType::Byte)
+        );
+        assert_eq!(
+            ColumnType::from_type_constructor("ShortType"),
+            Some(ColumnType::Short)
+        );
+        assert_eq!(
+            ColumnType::from_type_constructor("DecimalType"),
+            Some(ColumnType::Decimal(None, None))
+        );
+        assert_eq!(
+            ColumnType::from_type_constructor("BinaryType"),
+            Some(ColumnType::Binary)
+        );
+    }
+
+    #[test]
+    fn display_decimal_carries_precision_and_scale() {
+        assert_eq!(
+            format!("{}", ColumnType::Decimal(Some(18), Some(2))),
+            "Decimal(18, 2)"
+        );
+        assert_eq!(format!("{}", ColumnType::Decimal(None, None)), "Decimal");
+        assert_eq!(format!("{}", ColumnType::Byte), "Byte");
+        assert_eq!(format!("{}", ColumnType::Short), "Short");
+        assert_eq!(format!("{}", ColumnType::Binary), "Binary");
     }
 }

@@ -5,7 +5,7 @@
 //! (`name: type_expression`). Methods, docstrings, plain assignments without
 //! annotations, and nested classes are ignored.
 
-use ruff_python_ast::Expr;
+use ruff_python_ast::{Expr, Number};
 use ruff_text_size::{Ranged, TextRange};
 
 use crate::types::{COLUMN_TYPE_NAMES, ColumnType, StructField};
@@ -92,6 +92,11 @@ impl<'ast> SchemaField<'ast> {
                 Some(ct) => FieldResolution::Resolved(ct),
                 None => FieldResolution::NotABareName,
             },
+            // `decimal(p, s)` — the one parameterized atomic.
+            Expr::Call(_) => match resolve_annotation_type(self.annotation, schemas, 0) {
+                Some(ct) => FieldResolution::Resolved(ct),
+                None => FieldResolution::NotABareName,
+            },
             _ => FieldResolution::NotABareName,
         }
     }
@@ -172,6 +177,21 @@ fn resolve_annotation_type(
                 .find(|sc| sc.name() == id)
                 .map(|sc| schema_as_struct(sc, schemas, depth))
         }
+        // `decimal(18, 2)` — the parameterized atomic. The callee must
+        // be the bare name `decimal`; both arguments must be integer
+        // literals fitting in u8 (Spark caps at 38).
+        Expr::Call(call) => {
+            let callee = call.func.as_name_expr()?.id.as_str();
+            if callee != "decimal" {
+                return None;
+            }
+            let [precision, scale] = call.arguments.args.as_ref() else {
+                return None;
+            };
+            let p = int_literal_u8(precision)?;
+            let s = int_literal_u8(scale)?;
+            Some(ColumnType::Decimal(Some(p), Some(s)))
+        }
         // `Array[T]` / `Map[K, V]`.
         Expr::Subscript(sub) => {
             let base = sub.value.as_name_expr()?.id.as_str();
@@ -198,6 +218,18 @@ fn resolve_annotation_type(
         }
         _ => None,
     }
+}
+
+/// A bare integer literal as a `u8` — for `decimal(p, s)` precision /
+/// scale args. Rejects negative, non-integer, or out-of-range values.
+fn int_literal_u8(expr: &Expr) -> Option<u8> {
+    let Expr::NumberLiteral(n) = expr else {
+        return None;
+    };
+    let Number::Int(i) = &n.value else {
+        return None;
+    };
+    i.as_u8()
 }
 
 /// Resolve a declared `Schema` class to a [`ColumnType::Struct`] — each

@@ -1152,7 +1152,15 @@ fn class_instance_from_call<'a>(expr: &'a Expr, ctx: &BodyContext<'a>) -> Option
 /// or long), so a numeric-to-numeric difference is not flagged.
 fn types_compatible(a: &ColumnType, b: &ColumnType) -> bool {
     fn is_numeric(t: &ColumnType) -> bool {
-        matches!(t, ColumnType::Int | ColumnType::Long | ColumnType::Double)
+        matches!(
+            t,
+            ColumnType::Int
+                | ColumnType::Long
+                | ColumnType::Double
+                | ColumnType::Byte
+                | ColumnType::Short
+                | ColumnType::Decimal(..)
+        )
     }
     // An unknown element/key/value type is permissive — like an unknown
     // column type, it is never itself a mismatch.
@@ -2808,12 +2816,25 @@ fn aggregate_output_type(method: &str, input: Option<&ColumnType>) -> Option<Col
     });
     match method {
         "sum" => match unwrapped? {
-            ColumnType::Int | ColumnType::Long => Some(ColumnType::Long),
+            ColumnType::Byte | ColumnType::Short | ColumnType::Int | ColumnType::Long => {
+                Some(ColumnType::Long)
+            }
             ColumnType::Double => Some(ColumnType::Double),
+            // Spark widens to `decimal(p + 10, s)` (capped at 38); pykrete
+            // collapses that to a bare `Decimal` for v1.0 — the audit
+            // flagged precision-growth modeling as v1.1 polish.
+            ColumnType::Decimal(..) => Some(ColumnType::Decimal(None, None)),
             _ => None,
         },
         "mean" | "avg" => match unwrapped? {
-            ColumnType::Int | ColumnType::Long | ColumnType::Double => Some(ColumnType::Double),
+            ColumnType::Byte
+            | ColumnType::Short
+            | ColumnType::Int
+            | ColumnType::Long
+            | ColumnType::Double => Some(ColumnType::Double),
+            // Same simplification as `sum`: Spark widens to
+            // `decimal(p + 4, s + 4)` (cap 38); pykrete collapses.
+            ColumnType::Decimal(..) => Some(ColumnType::Decimal(None, None)),
             _ => None,
         },
         "max" | "min" => unwrapped.cloned(),
@@ -3732,10 +3753,13 @@ fn function_result_type(name: &str, first_arg: Option<ColumnType>) -> Option<Col
         "min" | "max" | "first" | "last" | "first_value" | "last_value" | "greatest" | "least"
         | "nanvl" | "abs" | "round" | "bround" | "negative" | "positive" => first_arg,
         "ceil" | "ceiling" | "floor" => Some(Long),
-        // `sum` widens an integral input to long; a double stays double.
+        // `sum` widens any integral input (byte/short/int/long) to long;
+        // a double stays double; a decimal stays decimal (precision-growth
+        // intentionally collapsed — see `aggregate_output_type`).
         "sum" | "sumDistinct" | "sum_distinct" => match first_arg {
-            Some(Int | Long) => Some(Long),
+            Some(ColumnType::Byte | ColumnType::Short | Int | Long) => Some(Long),
             Some(Double) => Some(Double),
+            Some(ColumnType::Decimal(..)) => Some(ColumnType::Decimal(None, None)),
             _ => None,
         },
         // Collection constructors — wrap the input as the element type.
@@ -4199,8 +4223,18 @@ enum TypeFamily {
 
 fn type_family(t: &ColumnType) -> TypeFamily {
     match t {
-        ColumnType::Int | ColumnType::Long | ColumnType::Double => TypeFamily::Numeric,
+        ColumnType::Int
+        | ColumnType::Long
+        | ColumnType::Double
+        | ColumnType::Byte
+        | ColumnType::Short
+        | ColumnType::Decimal(..) => TypeFamily::Numeric,
+        // `binary` doesn't fit cleanly into any family — Spark won't
+        // arithmetic on it, compare it with strings, etc. Group it with
+        // collections (the catch-all for non-combining atomics) so the
+        // strict checks treat it as opaque.
         ColumnType::String => TypeFamily::Textual,
+        ColumnType::Binary => TypeFamily::Collection,
         ColumnType::Bool => TypeFamily::Boolean,
         ColumnType::Date | ColumnType::Timestamp => TypeFamily::Temporal,
         ColumnType::Array(_) | ColumnType::Map(..) | ColumnType::Struct(_) => {
