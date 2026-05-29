@@ -44,8 +44,7 @@ Four follow-ups from PR #56 review:
   pattern binding is modeled (and is now tracked in code as a
   v1.1 follow-up), and synthetic-name interning is process-wide
   via `OnceLock<Mutex<HashSet<&'static str>>>`. The original
-  v0.1.26 entry is left intact per Keep-a-Changelog convention;
-  see the corrected text below.
+  v0.1.26 entry is left intact per Keep-a-Changelog convention.
 - `grouped_count_schema` now exercised by a test where `count` is
   itself a grouping key: `df.groupBy("count").count()` keeps a
   single `count` column (the synthetic shadows the user field).
