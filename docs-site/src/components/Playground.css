@@ -162,18 +162,27 @@
  *
  * Monaco's standalone theme service writes `--vscode-*` CSS variables
  * onto a `.monaco-editor, .monaco-diff-editor, .monaco-component`
- * selector. Because this host node sits outside the `.monaco-editor`
- * subtree, those variables don't reach the widgets via inheritance and
- * Monaco's own hover.css / suggest.css rules fall back to transparent.
- * Forward the variables that the widgets need with the `vs-dark` palette
- * (the playground uses a fixed theme; values verified against
- * `node_modules/monaco-editor/esm/vs/platform/theme/common/colors/` in
- * monaco-editor 0.52.x). */
+ * selector AND scopes its own widget stylesheets under `.monaco-editor`
+ * (see `monaco-editor/esm/vs/editor/contrib/suggest/browser/media/suggest.css`
+ * and `.../symbolIcons/browser/symbolIcons.css`). Because this host node
+ * sits outside the `.monaco-editor` subtree, neither the variables nor
+ * the rules reach the widgets. We forward both: the `vs-dark` palette as
+ * CSS variables (values verified against
+ * `node_modules/monaco-editor/esm/vs/platform/theme/common/colors/baseColors.js`,
+ * `.../listColors.js`, and `.../symbolIcons/browser/symbolIcons.js` in
+ * monaco-editor 0.52.x), and explicit mirror rules below for the list-row
+ * label and codicon selectors that Monaco scopes under `.monaco-editor`. */
 #playground-overflow-root {
   position: absolute;
   top: 0;
   left: 0;
   z-index: 9999;
+
+  --vscode-foreground: #cccccc;
+  --vscode-disabledForeground: #cccccc80;
+  --vscode-descriptionForeground: #ccccccb3;
+  --vscode-icon-foreground: #c5c5c5;
+  --vscode-focusBorder: #007fd4;
 
   --vscode-editorHoverWidget-background: #252526;
   --vscode-editorHoverWidget-border: #454545;
@@ -184,14 +193,58 @@
   --vscode-editorSuggestWidget-foreground: #cccccc;
   --vscode-editorSuggestWidget-selectedBackground: #04395e;
   --vscode-editorSuggestWidget-selectedForeground: #ffffff;
+  --vscode-editorSuggestWidget-selectedIconForeground: #ffffff;
   --vscode-editorSuggestWidget-highlightForeground: #2aaaff;
+  --vscode-editorSuggestWidget-focusHighlightForeground: #2aaaff;
+  --vscode-editorSuggestWidgetStatus-foreground: #ccccccb3;
   --vscode-editorWidget-background: #252526;
   --vscode-editorWidget-border: #454545;
   --vscode-editorWidget-foreground: #cccccc;
+
   --vscode-list-hoverBackground: #2a2d2e;
   --vscode-list-focusBackground: #04395e;
   --vscode-list-focusForeground: #ffffff;
+  --vscode-list-activeSelectionBackground: #04395e;
+  --vscode-list-activeSelectionForeground: #ffffff;
+  --vscode-list-inactiveSelectionBackground: #37373d;
+  --vscode-list-highlightForeground: #2aaaff;
+
+  --vscode-symbolIcon-classForeground: #ee9d28;
+  --vscode-symbolIcon-constructorForeground: #b180d7;
+  --vscode-symbolIcon-enumeratorForeground: #ee9d28;
+  --vscode-symbolIcon-enumeratorMemberForeground: #75beff;
+  --vscode-symbolIcon-eventForeground: #ee9d28;
+  --vscode-symbolIcon-fieldForeground: #75beff;
+  --vscode-symbolIcon-functionForeground: #b180d7;
+  --vscode-symbolIcon-interfaceForeground: #75beff;
+  --vscode-symbolIcon-methodForeground: #b180d7;
+  --vscode-symbolIcon-variableForeground: #75beff;
+  --vscode-symbolIcon-arrayForeground: #cccccc;
+  --vscode-symbolIcon-booleanForeground: #cccccc;
+  --vscode-symbolIcon-colorForeground: #cccccc;
+  --vscode-symbolIcon-constantForeground: #cccccc;
+  --vscode-symbolIcon-fileForeground: #cccccc;
+  --vscode-symbolIcon-folderForeground: #cccccc;
+  --vscode-symbolIcon-keyForeground: #cccccc;
+  --vscode-symbolIcon-keywordForeground: #cccccc;
+  --vscode-symbolIcon-moduleForeground: #cccccc;
+  --vscode-symbolIcon-namespaceForeground: #cccccc;
+  --vscode-symbolIcon-nullForeground: #cccccc;
+  --vscode-symbolIcon-numberForeground: #cccccc;
+  --vscode-symbolIcon-objectForeground: #cccccc;
+  --vscode-symbolIcon-operatorForeground: #cccccc;
+  --vscode-symbolIcon-packageForeground: #cccccc;
+  --vscode-symbolIcon-propertyForeground: #cccccc;
+  --vscode-symbolIcon-referenceForeground: #cccccc;
+  --vscode-symbolIcon-snippetForeground: #cccccc;
+  --vscode-symbolIcon-stringForeground: #cccccc;
+  --vscode-symbolIcon-structForeground: #cccccc;
+  --vscode-symbolIcon-textForeground: #cccccc;
+  --vscode-symbolIcon-typeParameterForeground: #cccccc;
+  --vscode-symbolIcon-unitForeground: #cccccc;
+
   --vscode-textLink-foreground: #3794ff;
+  --vscode-textLink-activeForeground: #3794ff;
   --vscode-textCodeBlock-background: #0a0a0a66;
 
   color: #cccccc;
@@ -209,4 +262,73 @@
   background-color: var(--vscode-editorHoverWidget-background);
   border: 1px solid var(--vscode-editorHoverWidget-border);
   color: var(--vscode-editorHoverWidget-foreground);
+}
+
+/* Monaco's `suggest.css` and `symbolIcons.css` scope every label/icon rule
+ * under `.monaco-editor`, which is absent in this overflow-root subtree.
+ * Mirror the rules we need so completion item names and symbol-icon
+ * codicons render with the right colors. */
+#playground-overflow-root .suggest-widget .monaco-list-row .monaco-icon-label,
+#playground-overflow-root .suggest-widget .monaco-list-row:not(.focused) .monaco-icon-label,
+#playground-overflow-root .suggest-widget .monaco-list-row .label-name,
+#playground-overflow-root .suggest-widget .monaco-list-row .label-description,
+#playground-overflow-root .suggest-widget .details-label {
+  color: var(--vscode-editorSuggestWidget-foreground);
+}
+
+#playground-overflow-root .suggest-widget .monaco-list-row.focused .monaco-icon-label,
+#playground-overflow-root .suggest-widget .monaco-list-row.focused .label-name,
+#playground-overflow-root .suggest-widget .monaco-list-row.focused .label-description {
+  color: var(--vscode-editorSuggestWidget-selectedForeground);
+}
+
+#playground-overflow-root .suggest-widget .monaco-list-row .monaco-highlighted-label .highlight {
+  color: var(--vscode-editorSuggestWidget-highlightForeground);
+}
+
+#playground-overflow-root .suggest-widget .monaco-list-row.focused .monaco-highlighted-label .highlight {
+  color: var(--vscode-editorSuggestWidget-focusHighlightForeground);
+}
+
+#playground-overflow-root .suggest-details {
+  color: var(--vscode-editorSuggestWidget-foreground);
+}
+
+#playground-overflow-root .codicon.codicon-symbol-class { color: var(--vscode-symbolIcon-classForeground); }
+#playground-overflow-root .codicon.codicon-symbol-constructor { color: var(--vscode-symbolIcon-constructorForeground); }
+#playground-overflow-root .codicon.codicon-symbol-enum,
+#playground-overflow-root .codicon.codicon-symbol-value { color: var(--vscode-symbolIcon-enumeratorForeground); }
+#playground-overflow-root .codicon.codicon-symbol-enum-member { color: var(--vscode-symbolIcon-enumeratorMemberForeground); }
+#playground-overflow-root .codicon.codicon-symbol-event { color: var(--vscode-symbolIcon-eventForeground); }
+#playground-overflow-root .codicon.codicon-symbol-field { color: var(--vscode-symbolIcon-fieldForeground); }
+#playground-overflow-root .codicon.codicon-symbol-function { color: var(--vscode-symbolIcon-functionForeground); }
+#playground-overflow-root .codicon.codicon-symbol-interface { color: var(--vscode-symbolIcon-interfaceForeground); }
+#playground-overflow-root .codicon.codicon-symbol-method { color: var(--vscode-symbolIcon-methodForeground); }
+#playground-overflow-root .codicon.codicon-symbol-property { color: var(--vscode-symbolIcon-propertyForeground); }
+#playground-overflow-root .codicon.codicon-symbol-variable { color: var(--vscode-symbolIcon-variableForeground); }
+#playground-overflow-root .codicon.codicon-symbol-keyword { color: var(--vscode-symbolIcon-keywordForeground); }
+#playground-overflow-root .codicon.codicon-symbol-snippet { color: var(--vscode-symbolIcon-snippetForeground); }
+#playground-overflow-root .codicon.codicon-symbol-text { color: var(--vscode-symbolIcon-textForeground); }
+#playground-overflow-root .codicon.codicon-symbol-module { color: var(--vscode-symbolIcon-moduleForeground); }
+#playground-overflow-root .codicon.codicon-symbol-namespace { color: var(--vscode-symbolIcon-namespaceForeground); }
+#playground-overflow-root .codicon.codicon-symbol-package { color: var(--vscode-symbolIcon-packageForeground); }
+#playground-overflow-root .codicon.codicon-symbol-constant { color: var(--vscode-symbolIcon-constantForeground); }
+#playground-overflow-root .codicon.codicon-symbol-reference { color: var(--vscode-symbolIcon-referenceForeground); }
+#playground-overflow-root .codicon.codicon-symbol-type-parameter { color: var(--vscode-symbolIcon-typeParameterForeground); }
+#playground-overflow-root .codicon.codicon-symbol-object { color: var(--vscode-symbolIcon-objectForeground); }
+#playground-overflow-root .codicon.codicon-symbol-array { color: var(--vscode-symbolIcon-arrayForeground); }
+#playground-overflow-root .codicon.codicon-symbol-boolean { color: var(--vscode-symbolIcon-booleanForeground); }
+#playground-overflow-root .codicon.codicon-symbol-string { color: var(--vscode-symbolIcon-stringForeground); }
+#playground-overflow-root .codicon.codicon-symbol-number { color: var(--vscode-symbolIcon-numberForeground); }
+#playground-overflow-root .codicon.codicon-symbol-null { color: var(--vscode-symbolIcon-nullForeground); }
+#playground-overflow-root .codicon.codicon-symbol-key { color: var(--vscode-symbolIcon-keyForeground); }
+#playground-overflow-root .codicon.codicon-symbol-operator { color: var(--vscode-symbolIcon-operatorForeground); }
+#playground-overflow-root .codicon.codicon-symbol-struct { color: var(--vscode-symbolIcon-structForeground); }
+#playground-overflow-root .codicon.codicon-symbol-color { color: var(--vscode-symbolIcon-colorForeground); }
+#playground-overflow-root .codicon.codicon-symbol-file { color: var(--vscode-symbolIcon-fileForeground); }
+#playground-overflow-root .codicon.codicon-symbol-folder { color: var(--vscode-symbolIcon-folderForeground); }
+#playground-overflow-root .codicon.codicon-symbol-unit { color: var(--vscode-symbolIcon-unitForeground); }
+
+#playground-overflow-root .suggest-widget .monaco-list-row.focused .codicon {
+  color: var(--vscode-editorSuggestWidget-selectedIconForeground);
 }
