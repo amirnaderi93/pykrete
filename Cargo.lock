@@ -633,7 +633,7 @@ dependencies = [
 
 [[package]]
 name = "pykrete"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "ruff_python_ast",
  "ruff_python_parser",
@@ -646,7 +646,7 @@ dependencies = [
 
 [[package]]
 name = "pykrete-lsp"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "crossbeam-channel",
  "lsp-server",
@@ -657,7 +657,7 @@ dependencies = [
 
 [[package]]
 name = "pykrete-wasm"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "console_error_panic_hook",
  "pykrete",

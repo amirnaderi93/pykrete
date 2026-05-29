@@ -6,6 +6,23 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.23]
+
+Hotfix. v0.1.22 fixed the suggest popup's background fill, but the list
+items inside the popup still rendered invisible — the dark frame and
+footer painted correctly, the focused row's blue highlight bar was
+there, but no method names, no codicons, no docs preview. Same root
+cause as v0.1.22, one layer deeper: Monaco scopes its
+`suggest.css` row/label/icon-label rules and its
+`symbolIcons.css` codicon rules under `.monaco-editor`, and the
+overflow-widgets host node sits outside that subtree, so the rules
+never fire on the rebased widget. Forwards the rest of the `vs-dark`
+palette onto `#playground-overflow-root` (foreground, list selection,
+the `symbolIcon.*Foreground` family) and mirrors the row label
+and `.codicon.codicon-symbol-*` rules under
+`#playground-overflow-root` so the widget paints with the right
+colors. Docs-only release.
+
 ## [0.1.22]
 
 Hotfix. v0.1.21 reparented Monaco's hover/suggest/parameter-hint
