@@ -1,0 +1,2986 @@
+{
+  "_meta": {
+    "pyspark_version": "3.5.1",
+    "python_version": "3.13.2"
+  },
+  "DataFrame": [
+    {
+      "name": "agg",
+      "signature": "(self, *exprs: Union[pyspark.sql.column.Column, Dict[str, str]]) -> 'DataFrame'",
+      "doc": "Aggregate on the entire :class:`DataFrame` without groups (shorthand for ``df.groupBy().agg()``)."
+    },
+    {
+      "name": "alias",
+      "signature": "(self, alias: str) -> 'DataFrame'",
+      "doc": "Returns a new :class:`DataFrame` with an alias set."
+    },
+    {
+      "name": "approxQuantile",
+      "signature": "(self, col: Union[str, List[str], Tuple[str]], probabilities: Union[List[float], Tuple[float]], relativeError: float) -> Union[List[float], List[List[float]]]",
+      "doc": "Calculates the approximate quantiles of numerical columns of a :class:`DataFrame`."
+    },
+    {
+      "name": "cache",
+      "signature": "(self) -> 'DataFrame'",
+      "doc": "Persists the :class:`DataFrame` with the default storage level (`MEMORY_AND_DISK_DESER`)."
+    },
+    {
+      "name": "checkpoint",
+      "signature": "(self, eager: bool = True) -> 'DataFrame'",
+      "doc": "Returns a checkpointed version of this :class:`DataFrame`. Checkpointing can be used to truncate the logical plan of this :class:`DataFrame`, which is especially useful in iterative algorithms where the plan may grow exponentially. It will be saved to files inside the checkpoint directory set with :meth:`SparkContext.setCheckpointDir`."
+    },
+    {
+      "name": "coalesce",
+      "signature": "(self, numPartitions: int) -> 'DataFrame'",
+      "doc": "Returns a new :class:`DataFrame` that has exactly `numPartitions` partitions."
+    },
+    {
+      "name": "colRegex",
+      "signature": "(self, colName: str) -> pyspark.sql.column.Column",
+      "doc": "Selects column based on the column name specified as a regex and returns it as :class:`Column`."
+    },
+    {
+      "name": "collect",
+      "signature": "(self) -> List[pyspark.sql.types.Row]",
+      "doc": "Returns all the records as a list of :class:`Row`."
+    },
+    {
+      "name": "columns",
+      "signature": "",
+      "doc": "Retrieves the names of all columns in the :class:`DataFrame` as a list."
+    },
+    {
+      "name": "corr",
+      "signature": "(self, col1: str, col2: str, method: Optional[str] = None) -> float",
+      "doc": "Calculates the correlation of two columns of a :class:`DataFrame` as a double value. Currently only supports the Pearson Correlation Coefficient. :func:`DataFrame.corr` and :func:`DataFrameStatFunctions.corr` are aliases of each other."
+    },
+    {
+      "name": "count",
+      "signature": "(self) -> int",
+      "doc": "Returns the number of rows in this :class:`DataFrame`."
+    },
+    {
+      "name": "cov",
+      "signature": "(self, col1: str, col2: str) -> float",
+      "doc": "Calculate the sample covariance for the given columns, specified by their names, as a double value. :func:`DataFrame.cov` and :func:`DataFrameStatFunctions.cov` are aliases."
+    },
+    {
+      "name": "createGlobalTempView",
+      "signature": "(self, name: str) -> None",
+      "doc": "Creates a global temporary view with this :class:`DataFrame`."
+    },
+    {
+      "name": "createOrReplaceGlobalTempView",
+      "signature": "(self, name: str) -> None",
+      "doc": "Creates or replaces a global temporary view using the given name."
+    },
+    {
+      "name": "createOrReplaceTempView",
+      "signature": "(self, name: str) -> None",
+      "doc": "Creates or replaces a local temporary view with this :class:`DataFrame`."
+    },
+    {
+      "name": "createTempView",
+      "signature": "(self, name: str) -> None",
+      "doc": "Creates a local temporary view with this :class:`DataFrame`."
+    },
+    {
+      "name": "crossJoin",
+      "signature": "(self, other: 'DataFrame') -> 'DataFrame'",
+      "doc": "Returns the cartesian product with another :class:`DataFrame`."
+    },
+    {
+      "name": "crosstab",
+      "signature": "(self, col1: str, col2: str) -> 'DataFrame'",
+      "doc": "Computes a pair-wise frequency table of the given columns. Also known as a contingency table. The first column of each row will be the distinct values of `col1` and the column names will be the distinct values of `col2`. The name of the first column will be `$col1_$col2`. Pairs that have no occurrences will have zero as their counts. :func:`DataFrame.crosstab` and :func:`DataFrameStatFunctions...."
+    },
+    {
+      "name": "cube",
+      "signature": "(self, *cols: 'ColumnOrName') -> 'GroupedData'",
+      "doc": "Create a multi-dimensional cube for the current :class:`DataFrame` using the specified columns, so we can run aggregations on them."
+    },
+    {
+      "name": "describe",
+      "signature": "(self, *cols: Union[str, List[str]]) -> 'DataFrame'",
+      "doc": "Computes basic statistics for numeric and string columns."
+    },
+    {
+      "name": "distinct",
+      "signature": "(self) -> 'DataFrame'",
+      "doc": "Returns a new :class:`DataFrame` containing the distinct rows in this :class:`DataFrame`."
+    },
+    {
+      "name": "drop",
+      "signature": "(self, *cols: 'ColumnOrName') -> 'DataFrame'",
+      "doc": "Returns a new :class:`DataFrame` without specified columns. This is a no-op if the schema doesn't contain the given column name(s)."
+    },
+    {
+      "name": "dropDuplicates",
+      "signature": "(self, subset: Optional[List[str]] = None) -> 'DataFrame'",
+      "doc": "Return a new :class:`DataFrame` with duplicate rows removed, optionally only considering certain columns."
+    },
+    {
+      "name": "dropDuplicatesWithinWatermark",
+      "signature": "(self, subset: Optional[List[str]] = None) -> 'DataFrame'",
+      "doc": "Return a new :class:`DataFrame` with duplicate rows removed, optionally only considering certain columns, within watermark."
+    },
+    {
+      "name": "drop_duplicates",
+      "signature": "(self, subset=None)",
+      "doc": ":func:`drop_duplicates` is an alias for :func:`dropDuplicates`."
+    },
+    {
+      "name": "dropna",
+      "signature": "(self, how: str = 'any', thresh: Optional[int] = None, subset: Union[str, Tuple[str, ...], List[str], NoneType] = None) -> 'DataFrame'",
+      "doc": "Returns a new :class:`DataFrame` omitting rows with null values. :func:`DataFrame.dropna` and :func:`DataFrameNaFunctions.drop` are aliases of each other."
+    },
+    {
+      "name": "dtypes",
+      "signature": "",
+      "doc": "Returns all column names and their data types as a list."
+    },
+    {
+      "name": "exceptAll",
+      "signature": "(self, other: 'DataFrame') -> 'DataFrame'",
+      "doc": "Return a new :class:`DataFrame` containing rows in this :class:`DataFrame` but not in another :class:`DataFrame` while preserving duplicates."
+    },
+    {
+      "name": "explain",
+      "signature": "(self, extended: Union[bool, str, NoneType] = None, mode: Optional[str] = None) -> None",
+      "doc": "Prints the (logical and physical) plans to the console for debugging purposes."
+    },
+    {
+      "name": "fillna",
+      "signature": "(self, value: Union[ForwardRef('LiteralType'), Dict[str, ForwardRef('LiteralType')]], subset: Union[str, Tuple[str, ...], List[str], NoneType] = None) -> 'DataFrame'",
+      "doc": "Replace null values, alias for ``na.fill()``. :func:`DataFrame.fillna` and :func:`DataFrameNaFunctions.fill` are aliases of each other."
+    },
+    {
+      "name": "filter",
+      "signature": "(self, condition: 'ColumnOrName') -> 'DataFrame'",
+      "doc": "Filters rows using the given condition."
+    },
+    {
+      "name": "first",
+      "signature": "(self) -> Optional[pyspark.sql.types.Row]",
+      "doc": "Returns the first row as a :class:`Row`."
+    },
+    {
+      "name": "foreach",
+      "signature": "(self, f: Callable[[pyspark.sql.types.Row], NoneType]) -> None",
+      "doc": "Applies the ``f`` function to all :class:`Row` of this :class:`DataFrame`."
+    },
+    {
+      "name": "foreachPartition",
+      "signature": "(self, f: Callable[[Iterator[pyspark.sql.types.Row]], NoneType]) -> None",
+      "doc": "Applies the ``f`` function to each partition of this :class:`DataFrame`."
+    },
+    {
+      "name": "freqItems",
+      "signature": "(self, cols: Union[List[str], Tuple[str]], support: Optional[float] = None) -> 'DataFrame'",
+      "doc": "Finding frequent items for columns, possibly with false positives. Using the frequent element count algorithm described in \"https://doi.org/10.1145/762471.762473, proposed by Karp, Schenker, and Papadimitriou\". :func:`DataFrame.freqItems` and :func:`DataFrameStatFunctions.freqItems` are aliases."
+    },
+    {
+      "name": "groupBy",
+      "signature": "(self, *cols: 'ColumnOrName') -> 'GroupedData'",
+      "doc": "Groups the :class:`DataFrame` using the specified columns, so we can run aggregation on them. See :class:`GroupedData` for all the available aggregate functions."
+    },
+    {
+      "name": "groupby",
+      "signature": "(self, *cols)",
+      "doc": ":func:`groupby` is an alias for :func:`groupBy`."
+    },
+    {
+      "name": "head",
+      "signature": "(self, n: Optional[int] = None) -> Union[pyspark.sql.types.Row, NoneType, List[pyspark.sql.types.Row]]",
+      "doc": "Returns the first ``n`` rows."
+    },
+    {
+      "name": "hint",
+      "signature": "(self, name: str, *parameters: Union[ForwardRef('PrimitiveType'), List[ForwardRef('PrimitiveType')]]) -> 'DataFrame'",
+      "doc": "Specifies some hint on the current :class:`DataFrame`."
+    },
+    {
+      "name": "inputFiles",
+      "signature": "(self) -> List[str]",
+      "doc": "Returns a best-effort snapshot of the files that compose this :class:`DataFrame`. This method simply asks each constituent BaseRelation for its respective files and takes the union of all results. Depending on the source relations, this may not find all input files. Duplicates are removed."
+    },
+    {
+      "name": "intersect",
+      "signature": "(self, other: 'DataFrame') -> 'DataFrame'",
+      "doc": "Return a new :class:`DataFrame` containing rows only in both this :class:`DataFrame` and another :class:`DataFrame`. Note that any duplicates are removed. To preserve duplicates use :func:`intersectAll`."
+    },
+    {
+      "name": "intersectAll",
+      "signature": "(self, other: 'DataFrame') -> 'DataFrame'",
+      "doc": "Return a new :class:`DataFrame` containing rows in both this :class:`DataFrame` and another :class:`DataFrame` while preserving duplicates."
+    },
+    {
+      "name": "isEmpty",
+      "signature": "(self) -> bool",
+      "doc": "Checks if the :class:`DataFrame` is empty and returns a boolean value."
+    },
+    {
+      "name": "isLocal",
+      "signature": "(self) -> bool",
+      "doc": "Returns ``True`` if the :func:`collect` and :func:`take` methods can be run locally (without any Spark executors)."
+    },
+    {
+      "name": "isStreaming",
+      "signature": "",
+      "doc": "Returns ``True`` if this :class:`DataFrame` contains one or more sources that continuously return data as it arrives. A :class:`DataFrame` that reads data from a streaming source must be executed as a :class:`StreamingQuery` using the :func:`start` method in :class:`DataStreamWriter`.  Methods that return a single answer, (e.g., :func:`count` or :func:`collect`) will throw an :class:`AnalysisEx..."
+    },
+    {
+      "name": "join",
+      "signature": "(self, other: 'DataFrame', on: Union[str, List[str], pyspark.sql.column.Column, List[pyspark.sql.column.Column], NoneType] = None, how: Optional[str] = None) -> 'DataFrame'",
+      "doc": "Joins with another :class:`DataFrame`, using the given join expression."
+    },
+    {
+      "name": "limit",
+      "signature": "(self, num: int) -> 'DataFrame'",
+      "doc": "Limits the result count to the number specified."
+    },
+    {
+      "name": "localCheckpoint",
+      "signature": "(self, eager: bool = True) -> 'DataFrame'",
+      "doc": "Returns a locally checkpointed version of this :class:`DataFrame`. Checkpointing can be used to truncate the logical plan of this :class:`DataFrame`, which is especially useful in iterative algorithms where the plan may grow exponentially. Local checkpoints are stored in the executors using the caching subsystem and therefore they are not reliable."
+    },
+    {
+      "name": "mapInArrow",
+      "signature": "(self, func: 'ArrowMapIterFunction', schema: Union[pyspark.sql.types.StructType, str], barrier: bool = False) -> 'DataFrame'",
+      "doc": "Maps an iterator of batches in the current :class:`DataFrame` using a Python native function that takes and outputs a PyArrow's `RecordBatch`, and returns the result as a :class:`DataFrame`."
+    },
+    {
+      "name": "mapInPandas",
+      "signature": "(self, func: 'PandasMapIterFunction', schema: Union[pyspark.sql.types.StructType, str], barrier: bool = False) -> 'DataFrame'",
+      "doc": "Maps an iterator of batches in the current :class:`DataFrame` using a Python native function that takes and outputs a pandas DataFrame, and returns the result as a :class:`DataFrame`."
+    },
+    {
+      "name": "melt",
+      "signature": "(self, ids: Union[ForwardRef('ColumnOrName'), List[ForwardRef('ColumnOrName')], Tuple[ForwardRef('ColumnOrName'), ...]], values: Union[ForwardRef('ColumnOrName'), List[ForwardRef('ColumnOrName')], ...)",
+      "doc": "Unpivot a DataFrame from wide format to long format, optionally leaving identifier columns set. This is the reverse to `groupBy(...).pivot(...).agg(...)`, except for the aggregation, which cannot be reversed."
+    },
+    {
+      "name": "na",
+      "signature": "",
+      "doc": "Returns a :class:`DataFrameNaFunctions` for handling missing values."
+    },
+    {
+      "name": "observe",
+      "signature": "(self, observation: Union[ForwardRef('Observation'), str], *exprs: pyspark.sql.column.Column) -> 'DataFrame'",
+      "doc": "Define (named) metrics to observe on the DataFrame. This method returns an 'observed' DataFrame that returns the same result as the input, with the following guarantees:"
+    },
+    {
+      "name": "offset",
+      "signature": "(self, num: int) -> 'DataFrame'",
+      "doc": "Returns a new :class: `DataFrame` by skipping the first `n` rows."
+    },
+    {
+      "name": "orderBy",
+      "signature": "(self, *cols: Union[str, pyspark.sql.column.Column, List[Union[str, pyspark.sql.column.Column]]], **kwargs: Any) -> 'DataFrame'",
+      "doc": "Returns a new :class:`DataFrame` sorted by the specified column(s)."
+    },
+    {
+      "name": "pandas_api",
+      "signature": "(self, index_col: Union[str, List[str], NoneType] = None) -> 'PandasOnSparkDataFrame'",
+      "doc": "Converts the existing DataFrame into a pandas-on-Spark DataFrame."
+    },
+    {
+      "name": "persist",
+      "signature": "(self, storageLevel: pyspark.storagelevel.StorageLevel = StorageLevel(True, True, False, True, 1)) -> 'DataFrame'",
+      "doc": "Sets the storage level to persist the contents of the :class:`DataFrame` across operations after the first time it is computed. This can only be used to assign a new storage level if the :class:`DataFrame` does not have a storage level set yet. If no storage level is specified defaults to (`MEMORY_AND_DISK_DESER`)"
+    },
+    {
+      "name": "printSchema",
+      "signature": "(self, level: Optional[int] = None) -> None",
+      "doc": "Prints out the schema in the tree format. Optionally allows to specify how many levels to print if schema is nested."
+    },
+    {
+      "name": "randomSplit",
+      "signature": "(self, weights: List[float], seed: Optional[int] = None) -> List[ForwardRef('DataFrame')]",
+      "doc": "Randomly splits this :class:`DataFrame` with the provided weights."
+    },
+    {
+      "name": "rdd",
+      "signature": "",
+      "doc": "Returns the content as an :class:`pyspark.RDD` of :class:`Row`."
+    },
+    {
+      "name": "registerTempTable",
+      "signature": "(self, name: str) -> None",
+      "doc": "Registers this :class:`DataFrame` as a temporary table using the given name."
+    },
+    {
+      "name": "repartition",
+      "signature": "(self, numPartitions: Union[int, ForwardRef('ColumnOrName')], *cols: 'ColumnOrName') -> 'DataFrame'",
+      "doc": "Returns a new :class:`DataFrame` partitioned by the given partitioning expressions. The resulting :class:`DataFrame` is hash partitioned."
+    },
+    {
+      "name": "repartitionByRange",
+      "signature": "(self, numPartitions: Union[int, ForwardRef('ColumnOrName')], *cols: 'ColumnOrName') -> 'DataFrame'",
+      "doc": "Returns a new :class:`DataFrame` partitioned by the given partitioning expressions. The resulting :class:`DataFrame` is range partitioned."
+    },
+    {
+      "name": "replace",
+      "signature": "(self, to_replace: Union[ForwardRef('LiteralType'), List[ForwardRef('LiteralType')], Dict[ForwardRef('LiteralType'), ForwardRef('OptionalPrimitiveType')]], value: Union[ForwardRef('OptionalPrimitiv...)",
+      "doc": "Returns a new :class:`DataFrame` replacing a value with another value. :func:`DataFrame.replace` and :func:`DataFrameNaFunctions.replace` are aliases of each other. Values to_replace and value must have the same type and can only be numerics, booleans, or strings. Value can have None. When replacing, the new value will be cast to the type of the existing column. For numeric replacements all val..."
+    },
+    {
+      "name": "rollup",
+      "signature": "(self, *cols: 'ColumnOrName') -> 'GroupedData'",
+      "doc": "Create a multi-dimensional rollup for the current :class:`DataFrame` using the specified columns, so we can run aggregation on them."
+    },
+    {
+      "name": "sameSemantics",
+      "signature": "(self, other: 'DataFrame') -> bool",
+      "doc": "Returns `True` when the logical query plans inside both :class:`DataFrame`\\s are equal and therefore return the same results."
+    },
+    {
+      "name": "sample",
+      "signature": "(self, withReplacement: Union[float, bool, NoneType] = None, fraction: Union[int, float, NoneType] = None, seed: Optional[int] = None) -> 'DataFrame'",
+      "doc": "Returns a sampled subset of this :class:`DataFrame`."
+    },
+    {
+      "name": "sampleBy",
+      "signature": "(self, col: 'ColumnOrName', fractions: Dict[Any, float], seed: Optional[int] = None) -> 'DataFrame'",
+      "doc": "Returns a stratified sample without replacement based on the fraction given on each stratum."
+    },
+    {
+      "name": "schema",
+      "signature": "",
+      "doc": "Returns the schema of this :class:`DataFrame` as a :class:`pyspark.sql.types.StructType`."
+    },
+    {
+      "name": "select",
+      "signature": "(self, *cols: 'ColumnOrName') -> 'DataFrame'",
+      "doc": "Projects a set of expressions and returns a new :class:`DataFrame`."
+    },
+    {
+      "name": "selectExpr",
+      "signature": "(self, *expr: Union[str, List[str]]) -> 'DataFrame'",
+      "doc": "Projects a set of SQL expressions and returns a new :class:`DataFrame`."
+    },
+    {
+      "name": "semanticHash",
+      "signature": "(self) -> int",
+      "doc": "Returns a hash code of the logical query plan against this :class:`DataFrame`."
+    },
+    {
+      "name": "show",
+      "signature": "(self, n: int = 20, truncate: Union[bool, int] = True, vertical: bool = False) -> None",
+      "doc": "Prints the first ``n`` rows to the console."
+    },
+    {
+      "name": "sort",
+      "signature": "(self, *cols: Union[str, pyspark.sql.column.Column, List[Union[str, pyspark.sql.column.Column]]], **kwargs: Any) -> 'DataFrame'",
+      "doc": "Returns a new :class:`DataFrame` sorted by the specified column(s)."
+    },
+    {
+      "name": "sortWithinPartitions",
+      "signature": "(self, *cols: Union[str, pyspark.sql.column.Column, List[Union[str, pyspark.sql.column.Column]]], **kwargs: Any) -> 'DataFrame'",
+      "doc": "Returns a new :class:`DataFrame` with each partition sorted by the specified column(s)."
+    },
+    {
+      "name": "sparkSession",
+      "signature": "",
+      "doc": "Returns Spark session that created this :class:`DataFrame`."
+    },
+    {
+      "name": "sql_ctx",
+      "signature": "",
+      "doc": ""
+    },
+    {
+      "name": "stat",
+      "signature": "",
+      "doc": "Returns a :class:`DataFrameStatFunctions` for statistic functions."
+    },
+    {
+      "name": "storageLevel",
+      "signature": "",
+      "doc": "Get the :class:`DataFrame`'s current storage level."
+    },
+    {
+      "name": "subtract",
+      "signature": "(self, other: 'DataFrame') -> 'DataFrame'",
+      "doc": "Return a new :class:`DataFrame` containing rows in this :class:`DataFrame` but not in another :class:`DataFrame`."
+    },
+    {
+      "name": "summary",
+      "signature": "(self, *statistics: str) -> 'DataFrame'",
+      "doc": "Computes specified statistics for numeric and string columns. Available statistics are: - count - mean - stddev - min - max - arbitrary approximate percentiles specified as a percentage (e.g., 75%)"
+    },
+    {
+      "name": "tail",
+      "signature": "(self, num: int) -> List[pyspark.sql.types.Row]",
+      "doc": "Returns the last ``num`` rows as a :class:`list` of :class:`Row`."
+    },
+    {
+      "name": "take",
+      "signature": "(self, num: int) -> List[pyspark.sql.types.Row]",
+      "doc": "Returns the first ``num`` rows as a :class:`list` of :class:`Row`."
+    },
+    {
+      "name": "to",
+      "signature": "(self, schema: pyspark.sql.types.StructType) -> 'DataFrame'",
+      "doc": "Returns a new :class:`DataFrame` where each row is reconciled to match the specified schema."
+    },
+    {
+      "name": "toDF",
+      "signature": "(self, *cols: str) -> 'DataFrame'",
+      "doc": "Returns a new :class:`DataFrame` that with new specified column names"
+    },
+    {
+      "name": "toJSON",
+      "signature": "(self, use_unicode: bool = True) -> pyspark.rdd.RDD[str]",
+      "doc": "Converts a :class:`DataFrame` into a :class:`RDD` of string."
+    },
+    {
+      "name": "toLocalIterator",
+      "signature": "(self, prefetchPartitions: bool = False) -> Iterator[pyspark.sql.types.Row]",
+      "doc": "Returns an iterator that contains all of the rows in this :class:`DataFrame`. The iterator will consume as much memory as the largest partition in this :class:`DataFrame`. With prefetch it may consume up to the memory of the 2 largest partitions."
+    },
+    {
+      "name": "toPandas",
+      "signature": "(self) -> 'PandasDataFrameLike'",
+      "doc": "Returns the contents of this :class:`DataFrame` as Pandas ``pandas.DataFrame``."
+    },
+    {
+      "name": "to_koalas",
+      "signature": "(self, index_col: Union[str, List[str], NoneType] = None) -> 'PandasOnSparkDataFrame'",
+      "doc": ""
+    },
+    {
+      "name": "to_pandas_on_spark",
+      "signature": "(self, index_col: Union[str, List[str], NoneType] = None) -> 'PandasOnSparkDataFrame'",
+      "doc": ""
+    },
+    {
+      "name": "transform",
+      "signature": "(self, func: Callable[..., ForwardRef('DataFrame')], *args: Any, **kwargs: Any) -> 'DataFrame'",
+      "doc": "Returns a new :class:`DataFrame`. Concise syntax for chaining custom transformations."
+    },
+    {
+      "name": "union",
+      "signature": "(self, other: 'DataFrame') -> 'DataFrame'",
+      "doc": "Return a new :class:`DataFrame` containing the union of rows in this and another :class:`DataFrame`."
+    },
+    {
+      "name": "unionAll",
+      "signature": "(self, other: 'DataFrame') -> 'DataFrame'",
+      "doc": "Return a new :class:`DataFrame` containing the union of rows in this and another :class:`DataFrame`."
+    },
+    {
+      "name": "unionByName",
+      "signature": "(self, other: 'DataFrame', allowMissingColumns: bool = False) -> 'DataFrame'",
+      "doc": "Returns a new :class:`DataFrame` containing union of rows in this and another :class:`DataFrame`."
+    },
+    {
+      "name": "unpersist",
+      "signature": "(self, blocking: bool = False) -> 'DataFrame'",
+      "doc": "Marks the :class:`DataFrame` as non-persistent, and remove all blocks for it from memory and disk."
+    },
+    {
+      "name": "unpivot",
+      "signature": "(self, ids: Union[ForwardRef('ColumnOrName'), List[ForwardRef('ColumnOrName')], Tuple[ForwardRef('ColumnOrName'), ...]], values: Union[ForwardRef('ColumnOrName'), List[ForwardRef('ColumnOrName')], ...)",
+      "doc": "Unpivot a DataFrame from wide format to long format, optionally leaving identifier columns set. This is the reverse to `groupBy(...).pivot(...).agg(...)`, except for the aggregation, which cannot be reversed."
+    },
+    {
+      "name": "where",
+      "signature": "(self, condition)",
+      "doc": ":func:`where` is an alias for :func:`filter`."
+    },
+    {
+      "name": "withColumn",
+      "signature": "(self, colName: str, col: pyspark.sql.column.Column) -> 'DataFrame'",
+      "doc": "Returns a new :class:`DataFrame` by adding a column or replacing the existing column that has the same name."
+    },
+    {
+      "name": "withColumnRenamed",
+      "signature": "(self, existing: str, new: str) -> 'DataFrame'",
+      "doc": "Returns a new :class:`DataFrame` by renaming an existing column. This is a no-op if the schema doesn't contain the given column name."
+    },
+    {
+      "name": "withColumns",
+      "signature": "(self, *colsMap: Dict[str, pyspark.sql.column.Column]) -> 'DataFrame'",
+      "doc": "Returns a new :class:`DataFrame` by adding multiple columns or replacing the existing columns that have the same names."
+    },
+    {
+      "name": "withColumnsRenamed",
+      "signature": "(self, colsMap: Dict[str, str]) -> 'DataFrame'",
+      "doc": "Returns a new :class:`DataFrame` by renaming multiple columns. This is a no-op if the schema doesn't contain the given column names."
+    },
+    {
+      "name": "withMetadata",
+      "signature": "(self, columnName: str, metadata: Dict[str, Any]) -> 'DataFrame'",
+      "doc": "Returns a new :class:`DataFrame` by updating an existing column with metadata."
+    },
+    {
+      "name": "withWatermark",
+      "signature": "(self, eventTime: str, delayThreshold: str) -> 'DataFrame'",
+      "doc": "Defines an event time watermark for this :class:`DataFrame`. A watermark tracks a point in time before which we assume no more late data is going to arrive."
+    },
+    {
+      "name": "write",
+      "signature": "",
+      "doc": "Interface for saving the content of the non-streaming :class:`DataFrame` out into external storage."
+    },
+    {
+      "name": "writeStream",
+      "signature": "",
+      "doc": "Interface for saving the content of the streaming :class:`DataFrame` out into external storage."
+    },
+    {
+      "name": "writeTo",
+      "signature": "(self, table: str) -> pyspark.sql.readwriter.DataFrameWriterV2",
+      "doc": "Create a write configuration builder for v2 sources."
+    }
+  ],
+  "Column": [
+    {
+      "name": "alias",
+      "signature": "(self, *alias: str, **kwargs: Any) -> 'Column'",
+      "doc": "Returns this column aliased with a new name or names (in the case of expressions that return more than one column, such as explode)."
+    },
+    {
+      "name": "asc",
+      "signature": "(self: 'Column') -> 'Column'",
+      "doc": "Returns a sort expression based on the ascending order of the column."
+    },
+    {
+      "name": "asc_nulls_first",
+      "signature": "(self: 'Column') -> 'Column'",
+      "doc": "Returns a sort expression based on ascending order of the column, and null values return before non-null values."
+    },
+    {
+      "name": "asc_nulls_last",
+      "signature": "(self: 'Column') -> 'Column'",
+      "doc": "Returns a sort expression based on ascending order of the column, and null values appear after non-null values."
+    },
+    {
+      "name": "astype",
+      "signature": "(self, dataType)",
+      "doc": ":func:`astype` is an alias for :func:`cast`."
+    },
+    {
+      "name": "between",
+      "signature": "(self, lowerBound: Union[ForwardRef('Column'), ForwardRef('LiteralType'), ForwardRef('DateTimeLiteral'), ForwardRef('DecimalLiteral')], upperBound: Union[ForwardRef('Column'), ForwardRef('LiteralTy...)",
+      "doc": "True if the current column is between the lower bound and upper bound, inclusive."
+    },
+    {
+      "name": "bitwiseAND",
+      "signature": "(self: 'Column', other: Union[ForwardRef('Column'), ForwardRef('LiteralType'), ForwardRef('DecimalLiteral'), ForwardRef('DateTimeLiteral')]) -> 'Column'",
+      "doc": "Compute bitwise AND of this expression with another expression."
+    },
+    {
+      "name": "bitwiseOR",
+      "signature": "(self: 'Column', other: Union[ForwardRef('Column'), ForwardRef('LiteralType'), ForwardRef('DecimalLiteral'), ForwardRef('DateTimeLiteral')]) -> 'Column'",
+      "doc": "Compute bitwise OR of this expression with another expression."
+    },
+    {
+      "name": "bitwiseXOR",
+      "signature": "(self: 'Column', other: Union[ForwardRef('Column'), ForwardRef('LiteralType'), ForwardRef('DecimalLiteral'), ForwardRef('DateTimeLiteral')]) -> 'Column'",
+      "doc": "Compute bitwise XOR of this expression with another expression."
+    },
+    {
+      "name": "cast",
+      "signature": "(self, dataType: Union[pyspark.sql.types.DataType, str]) -> 'Column'",
+      "doc": "Casts the column into type ``dataType``."
+    },
+    {
+      "name": "contains",
+      "signature": "(self: 'Column', other: Union[ForwardRef('Column'), ForwardRef('LiteralType'), ForwardRef('DecimalLiteral'), ForwardRef('DateTimeLiteral')]) -> 'Column'",
+      "doc": "Contains the other element. Returns a boolean :class:`Column` based on a string match."
+    },
+    {
+      "name": "desc",
+      "signature": "(self: 'Column') -> 'Column'",
+      "doc": "Returns a sort expression based on the descending order of the column."
+    },
+    {
+      "name": "desc_nulls_first",
+      "signature": "(self: 'Column') -> 'Column'",
+      "doc": "Returns a sort expression based on the descending order of the column, and null values appear before non-null values."
+    },
+    {
+      "name": "desc_nulls_last",
+      "signature": "(self: 'Column') -> 'Column'",
+      "doc": "Returns a sort expression based on the descending order of the column, and null values appear after non-null values."
+    },
+    {
+      "name": "dropFields",
+      "signature": "(self, *fieldNames: str) -> 'Column'",
+      "doc": "An expression that drops fields in :class:`StructType` by name. This is a no-op if the schema doesn't contain field name(s)."
+    },
+    {
+      "name": "endswith",
+      "signature": "(self: 'Column', other: Union[ForwardRef('Column'), ForwardRef('LiteralType'), ForwardRef('DecimalLiteral'), ForwardRef('DateTimeLiteral')]) -> 'Column'",
+      "doc": "String ends with. Returns a boolean :class:`Column` based on a string match."
+    },
+    {
+      "name": "eqNullSafe",
+      "signature": "(self: 'Column', other: Union[ForwardRef('Column'), ForwardRef('LiteralType'), ForwardRef('DecimalLiteral'), ForwardRef('DateTimeLiteral')]) -> 'Column'",
+      "doc": "Equality test that is safe for null values."
+    },
+    {
+      "name": "getField",
+      "signature": "(self, name: Any) -> 'Column'",
+      "doc": "An expression that gets a field by name in a :class:`StructType`."
+    },
+    {
+      "name": "getItem",
+      "signature": "(self, key: Any) -> 'Column'",
+      "doc": "An expression that gets an item at position ``ordinal`` out of a list, or gets an item by key out of a dict."
+    },
+    {
+      "name": "ilike",
+      "signature": "(self: 'Column', other: str) -> 'Column'",
+      "doc": "SQL ILIKE expression (case insensitive LIKE). Returns a boolean :class:`Column` based on a case insensitive match."
+    },
+    {
+      "name": "isNotNull",
+      "signature": "(self: 'Column') -> 'Column'",
+      "doc": "True if the current expression is NOT null."
+    },
+    {
+      "name": "isNull",
+      "signature": "(self: 'Column') -> 'Column'",
+      "doc": "True if the current expression is null."
+    },
+    {
+      "name": "isin",
+      "signature": "(self, *cols: Any) -> 'Column'",
+      "doc": "A boolean expression that is evaluated to true if the value of this expression is contained by the evaluated values of the arguments."
+    },
+    {
+      "name": "like",
+      "signature": "(self: 'Column', other: str) -> 'Column'",
+      "doc": "SQL like expression. Returns a boolean :class:`Column` based on a SQL LIKE match."
+    },
+    {
+      "name": "name",
+      "signature": "(self, *alias, **kwargs)",
+      "doc": ":func:`name` is an alias for :func:`alias`."
+    },
+    {
+      "name": "otherwise",
+      "signature": "(self, value: Any) -> 'Column'",
+      "doc": "Evaluates a list of conditions and returns one of multiple possible result expressions. If :func:`Column.otherwise` is not invoked, None is returned for unmatched conditions."
+    },
+    {
+      "name": "over",
+      "signature": "(self, window: 'WindowSpec') -> 'Column'",
+      "doc": "Define a windowing column."
+    },
+    {
+      "name": "rlike",
+      "signature": "(self: 'Column', other: str) -> 'Column'",
+      "doc": "SQL RLIKE expression (LIKE with Regex). Returns a boolean :class:`Column` based on a regex match."
+    },
+    {
+      "name": "startswith",
+      "signature": "(self: 'Column', other: Union[ForwardRef('Column'), ForwardRef('LiteralType'), ForwardRef('DecimalLiteral'), ForwardRef('DateTimeLiteral')]) -> 'Column'",
+      "doc": "String starts with. Returns a boolean :class:`Column` based on a string match."
+    },
+    {
+      "name": "substr",
+      "signature": "(self, startPos: Union[int, ForwardRef('Column')], length: Union[int, ForwardRef('Column')]) -> 'Column'",
+      "doc": "Return a :class:`Column` which is a substring of the column."
+    },
+    {
+      "name": "when",
+      "signature": "(self, condition: 'Column', value: Any) -> 'Column'",
+      "doc": "Evaluates a list of conditions and returns one of multiple possible result expressions. If :func:`Column.otherwise` is not invoked, None is returned for unmatched conditions."
+    },
+    {
+      "name": "withField",
+      "signature": "(self, fieldName: str, col: 'Column') -> 'Column'",
+      "doc": "An expression that adds/replaces a field in :class:`StructType` by name."
+    }
+  ],
+  "GroupedData": [
+    {
+      "name": "agg",
+      "signature": "(self, *exprs: Union[pyspark.sql.column.Column, Dict[str, str]]) -> pyspark.sql.dataframe.DataFrame",
+      "doc": "Compute aggregates and returns the result as a :class:`DataFrame`."
+    },
+    {
+      "name": "apply",
+      "signature": "(self, udf: 'GroupedMapPandasUserDefinedFunction') -> pyspark.sql.dataframe.DataFrame",
+      "doc": "It is an alias of :meth:`pyspark.sql.GroupedData.applyInPandas`; however, it takes a :meth:`pyspark.sql.functions.pandas_udf` whereas :meth:`pyspark.sql.GroupedData.applyInPandas` takes a Python native function."
+    },
+    {
+      "name": "applyInPandas",
+      "signature": "(self, func: 'PandasGroupedMapFunction', schema: Union[pyspark.sql.types.StructType, str]) -> pyspark.sql.dataframe.DataFrame",
+      "doc": "Maps each group of the current :class:`DataFrame` using a pandas udf and returns the result as a `DataFrame`."
+    },
+    {
+      "name": "applyInPandasWithState",
+      "signature": "(self, func: 'PandasGroupedMapFunctionWithState', outputStructType: Union[pyspark.sql.types.StructType, str], stateStructType: Union[pyspark.sql.types.StructType, str], outputMode: str, timeoutConf...)",
+      "doc": "Applies the given function to each group of data, while maintaining a user-defined per-group state. The result Dataset will represent the flattened record returned by the function."
+    },
+    {
+      "name": "avg",
+      "signature": "(self: 'GroupedData', *cols: str) -> pyspark.sql.dataframe.DataFrame",
+      "doc": "Computes average values for each numeric columns for each group."
+    },
+    {
+      "name": "cogroup",
+      "signature": "(self, other: 'GroupedData') -> 'PandasCogroupedOps'",
+      "doc": "Cogroups this group with another group so that we can run cogrouped operations."
+    },
+    {
+      "name": "count",
+      "signature": "(self: 'GroupedData') -> pyspark.sql.dataframe.DataFrame",
+      "doc": "Counts the number of records for each group."
+    },
+    {
+      "name": "max",
+      "signature": "(self: 'GroupedData', *cols: str) -> pyspark.sql.dataframe.DataFrame",
+      "doc": "Computes the max value for each numeric columns for each group."
+    },
+    {
+      "name": "mean",
+      "signature": "(self: 'GroupedData', *cols: str) -> pyspark.sql.dataframe.DataFrame",
+      "doc": "Computes average values for each numeric columns for each group."
+    },
+    {
+      "name": "min",
+      "signature": "(self: 'GroupedData', *cols: str) -> pyspark.sql.dataframe.DataFrame",
+      "doc": "Computes the min value for each numeric column for each group."
+    },
+    {
+      "name": "pivot",
+      "signature": "(self, pivot_col: str, values: Optional[List[ForwardRef('LiteralType')]] = None) -> 'GroupedData'",
+      "doc": "Pivots a column of the current :class:`DataFrame` and perform the specified aggregation. There are two versions of the pivot function: one that requires the caller to specify the list of distinct values to pivot on, and one that does not. The latter is more concise but less efficient, because Spark needs to first compute the list of distinct values internally."
+    },
+    {
+      "name": "sum",
+      "signature": "(self: 'GroupedData', *cols: str) -> pyspark.sql.dataframe.DataFrame",
+      "doc": "Computes the sum for each numeric columns for each group."
+    }
+  ],
+  "Window": [
+    {
+      "name": "currentRow",
+      "signature": "",
+      "doc": "int([x]) -> integer int(x, base=10) -> integer"
+    },
+    {
+      "name": "orderBy",
+      "signature": "(*cols: Union[ForwardRef('ColumnOrName'), List[ForwardRef('ColumnOrName_')]]) -> 'WindowSpec'",
+      "doc": "Creates a :class:`WindowSpec` with the ordering defined."
+    },
+    {
+      "name": "partitionBy",
+      "signature": "(*cols: Union[ForwardRef('ColumnOrName'), List[ForwardRef('ColumnOrName_')]]) -> 'WindowSpec'",
+      "doc": "Creates a :class:`WindowSpec` with the partitioning defined."
+    },
+    {
+      "name": "rangeBetween",
+      "signature": "(start: int, end: int) -> 'WindowSpec'",
+      "doc": "Creates a :class:`WindowSpec` with the frame boundaries defined, from `start` (inclusive) to `end` (inclusive)."
+    },
+    {
+      "name": "rowsBetween",
+      "signature": "(start: int, end: int) -> 'WindowSpec'",
+      "doc": "Creates a :class:`WindowSpec` with the frame boundaries defined, from `start` (inclusive) to `end` (inclusive)."
+    },
+    {
+      "name": "unboundedFollowing",
+      "signature": "",
+      "doc": "int([x]) -> integer int(x, base=10) -> integer"
+    },
+    {
+      "name": "unboundedPreceding",
+      "signature": "",
+      "doc": "int([x]) -> integer int(x, base=10) -> integer"
+    }
+  ],
+  "functions": [
+    {
+      "name": "Callable",
+      "signature": "(*args, **kwargs)",
+      "doc": "Deprecated alias to collections.abc.Callable."
+    },
+    {
+      "name": "Dict",
+      "signature": "(*args, **kwargs)",
+      "doc": "A generic version of dict."
+    },
+    {
+      "name": "Iterable",
+      "signature": "(*args, **kwargs)",
+      "doc": "A generic version of collections.abc.Iterable."
+    },
+    {
+      "name": "List",
+      "signature": "(*args, **kwargs)",
+      "doc": "A generic version of list."
+    },
+    {
+      "name": "Optional",
+      "signature": "(*args, **kwds)",
+      "doc": "Optional[X] is equivalent to Union[X, None]."
+    },
+    {
+      "name": "Tuple",
+      "signature": "(*args, **kwargs)",
+      "doc": "Deprecated alias to builtins.tuple."
+    },
+    {
+      "name": "Type",
+      "signature": "(*args, **kwargs)",
+      "doc": "Deprecated alias to builtins.type."
+    },
+    {
+      "name": "Union",
+      "signature": "(*args, **kwds)",
+      "doc": "Union type; Union[X, Y] means either X or Y."
+    },
+    {
+      "name": "ValuesView",
+      "signature": "(*args, **kwargs)",
+      "doc": "A generic version of collections.abc.ValuesView."
+    },
+    {
+      "name": "abs",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes the absolute value."
+    },
+    {
+      "name": "acos",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes inverse cosine of the input column."
+    },
+    {
+      "name": "acosh",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes inverse hyperbolic cosine of the input column."
+    },
+    {
+      "name": "add_months",
+      "signature": "(start: 'ColumnOrName', months: Union[ForwardRef('ColumnOrName'), int]) -> pyspark.sql.column.Column",
+      "doc": "Returns the date that is `months` months after `start`. If `months` is a negative value then these amount of months will be deducted from the `start`."
+    },
+    {
+      "name": "aes_decrypt",
+      "signature": "(input: 'ColumnOrName', key: 'ColumnOrName', mode: Optional[ForwardRef('ColumnOrName')] = None, padding: Optional[ForwardRef('ColumnOrName')] = None, aad: Optional[ForwardRef('ColumnOrName')] = Non...)",
+      "doc": "Returns a decrypted value of `input` using AES in `mode` with `padding`. Key lengths of 16, 24 and 32 bits are supported. Supported combinations of (`mode`, `padding`) are ('ECB', 'PKCS'), ('GCM', 'NONE') and ('CBC', 'PKCS'). Optional additional authenticated data (AAD) is only supported for GCM. If provided for encryption, the identical AAD value must be provided for decryption. The default mo..."
+    },
+    {
+      "name": "aes_encrypt",
+      "signature": "(input: 'ColumnOrName', key: 'ColumnOrName', mode: Optional[ForwardRef('ColumnOrName')] = None, padding: Optional[ForwardRef('ColumnOrName')] = None, iv: Optional[ForwardRef('ColumnOrName')] = None...)",
+      "doc": "Returns an encrypted value of `input` using AES in given `mode` with the specified `padding`. Key lengths of 16, 24 and 32 bits are supported. Supported combinations of (`mode`, `padding`) are ('ECB', 'PKCS'), ('GCM', 'NONE') and ('CBC', 'PKCS'). Optional initialization vectors (IVs) are only supported for CBC and GCM modes. These must be 16 bytes for CBC and 12 bytes for GCM. If not provided, ..."
+    },
+    {
+      "name": "aggregate",
+      "signature": "(col: 'ColumnOrName', initialValue: 'ColumnOrName', merge: Callable[[pyspark.sql.column.Column, pyspark.sql.column.Column], pyspark.sql.column.Column], finish: Optional[Callable[[pyspark.sql.column...)",
+      "doc": "Applies a binary operator to an initial state and all elements in the array, and reduces this to a single state. The final state is converted into the final result by applying a finish function."
+    },
+    {
+      "name": "any_value",
+      "signature": "(col: 'ColumnOrName', ignoreNulls: Union[bool, pyspark.sql.column.Column, NoneType] = None) -> pyspark.sql.column.Column",
+      "doc": "Returns some value of `col` for a group of rows."
+    },
+    {
+      "name": "approxCountDistinct",
+      "signature": "(col: 'ColumnOrName', rsd: Optional[float] = None) -> pyspark.sql.column.Column",
+      "doc": ".. versionadded:: 1.3.0"
+    },
+    {
+      "name": "approx_count_distinct",
+      "signature": "(col: 'ColumnOrName', rsd: Optional[float] = None) -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns a new :class:`~pyspark.sql.Column` for approximate distinct count of column `col`."
+    },
+    {
+      "name": "approx_percentile",
+      "signature": "(col: 'ColumnOrName', percentage: Union[pyspark.sql.column.Column, float, List[float], Tuple[float]], accuracy: Union[pyspark.sql.column.Column, float] = 10000) -> pyspark.sql.column.Column",
+      "doc": "Returns the approximate `percentile` of the numeric column `col` which is the smallest value in the ordered `col` values (sorted from least to greatest) such that no more than `percentage` of `col` values is less than the value or equal to that value."
+    },
+    {
+      "name": "array",
+      "signature": "(*cols: Union[ForwardRef('ColumnOrName'), List[ForwardRef('ColumnOrName_')], Tuple[ForwardRef('ColumnOrName_'), ...]]) -> pyspark.sql.column.Column",
+      "doc": "Creates a new array column."
+    },
+    {
+      "name": "array_agg",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns a list of objects with duplicates."
+    },
+    {
+      "name": "array_append",
+      "signature": "(col: 'ColumnOrName', value: Any) -> pyspark.sql.column.Column",
+      "doc": "Collection function: returns an array of the elements in col1 along with the added element in col2 at the last of the array."
+    },
+    {
+      "name": "array_compact",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Collection function: removes null values from the array."
+    },
+    {
+      "name": "array_contains",
+      "signature": "(col: 'ColumnOrName', value: Any) -> pyspark.sql.column.Column",
+      "doc": "Collection function: returns null if the array is null, true if the array contains the given value, and false otherwise."
+    },
+    {
+      "name": "array_distinct",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Collection function: removes duplicate values from the array."
+    },
+    {
+      "name": "array_except",
+      "signature": "(col1: 'ColumnOrName', col2: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Collection function: returns an array of the elements in col1 but not in col2, without duplicates."
+    },
+    {
+      "name": "array_insert",
+      "signature": "(arr: 'ColumnOrName', pos: Union[ForwardRef('ColumnOrName'), int], value: Any) -> pyspark.sql.column.Column",
+      "doc": "Collection function: adds an item into a given array at a specified array index. Array indices start at 1, or start from the end if index is negative. Index above array size appends the array, or prepends the array if index is negative, with 'null' elements."
+    },
+    {
+      "name": "array_intersect",
+      "signature": "(col1: 'ColumnOrName', col2: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Collection function: returns an array of the elements in the intersection of col1 and col2, without duplicates."
+    },
+    {
+      "name": "array_join",
+      "signature": "(col: 'ColumnOrName', delimiter: str, null_replacement: Optional[str] = None) -> pyspark.sql.column.Column",
+      "doc": "Concatenates the elements of `column` using the `delimiter`. Null values are replaced with `null_replacement` if set, otherwise they are ignored."
+    },
+    {
+      "name": "array_max",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Collection function: returns the maximum value of the array."
+    },
+    {
+      "name": "array_min",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Collection function: returns the minimum value of the array."
+    },
+    {
+      "name": "array_position",
+      "signature": "(col: 'ColumnOrName', value: Any) -> pyspark.sql.column.Column",
+      "doc": "Collection function: Locates the position of the first occurrence of the given value in the given array. Returns null if either of the arguments are null."
+    },
+    {
+      "name": "array_prepend",
+      "signature": "(col: 'ColumnOrName', value: Any) -> pyspark.sql.column.Column",
+      "doc": "Collection function: Returns an array containing element as well as all elements from array. The new element is positioned at the beginning of the array."
+    },
+    {
+      "name": "array_remove",
+      "signature": "(col: 'ColumnOrName', element: Any) -> pyspark.sql.column.Column",
+      "doc": "Collection function: Remove all elements that equal to element from the given array."
+    },
+    {
+      "name": "array_repeat",
+      "signature": "(col: 'ColumnOrName', count: Union[ForwardRef('ColumnOrName'), int]) -> pyspark.sql.column.Column",
+      "doc": "Collection function: creates an array containing a column repeated count times."
+    },
+    {
+      "name": "array_size",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the total number of elements in the array. The function returns null for null input."
+    },
+    {
+      "name": "array_sort",
+      "signature": "(col: 'ColumnOrName', comparator: Optional[Callable[[pyspark.sql.column.Column, pyspark.sql.column.Column], pyspark.sql.column.Column]] = None) -> pyspark.sql.column.Column",
+      "doc": "Collection function: sorts the input array in ascending order. The elements of the input array must be orderable. Null elements will be placed at the end of the returned array."
+    },
+    {
+      "name": "array_union",
+      "signature": "(col1: 'ColumnOrName', col2: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Collection function: returns an array of the elements in the union of col1 and col2, without duplicates."
+    },
+    {
+      "name": "arrays_overlap",
+      "signature": "(a1: 'ColumnOrName', a2: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Collection function: returns true if the arrays contain any common non-null element; if not, returns null if both the arrays are non-empty and any of them contains a null element; returns false otherwise."
+    },
+    {
+      "name": "arrays_zip",
+      "signature": "(*cols: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Collection function: Returns a merged array of structs in which the N-th struct contains all N-th values of input arrays. If one of the arrays is shorter than others then resulting struct type value will be a `null` for missing elements."
+    },
+    {
+      "name": "asc",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a sort expression based on the ascending order of the given column name."
+    },
+    {
+      "name": "asc_nulls_first",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a sort expression based on the ascending order of the given column name, and null values return before non-null values."
+    },
+    {
+      "name": "asc_nulls_last",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a sort expression based on the ascending order of the given column name, and null values appear after non-null values."
+    },
+    {
+      "name": "ascii",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes the numeric value of the first character of the string column."
+    },
+    {
+      "name": "asin",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes inverse sine of the input column."
+    },
+    {
+      "name": "asinh",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes inverse hyperbolic sine of the input column."
+    },
+    {
+      "name": "assert_true",
+      "signature": "(col: 'ColumnOrName', errMsg: Union[pyspark.sql.column.Column, str, NoneType] = None) -> pyspark.sql.column.Column",
+      "doc": "Returns `null` if the input column is `true`; throws an exception with the provided error message otherwise."
+    },
+    {
+      "name": "atan",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Compute inverse tangent of the input column."
+    },
+    {
+      "name": "atan2",
+      "signature": "(col1: Union[ForwardRef('ColumnOrName'), float], col2: Union[ForwardRef('ColumnOrName'), float]) -> pyspark.sql.column.Column",
+      "doc": ".. versionadded:: 1.4.0"
+    },
+    {
+      "name": "atanh",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes inverse hyperbolic tangent of the input column."
+    },
+    {
+      "name": "avg",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the average of the values in a group."
+    },
+    {
+      "name": "base64",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes the BASE64 encoding of a binary column and returns it as a string column."
+    },
+    {
+      "name": "bin",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the string representation of the binary value of the given column."
+    },
+    {
+      "name": "bit_and",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the bitwise AND of all non-null input values, or null if none."
+    },
+    {
+      "name": "bit_count",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the number of bits that are set in the argument expr as an unsigned 64-bit integer, or NULL if the argument is NULL."
+    },
+    {
+      "name": "bit_get",
+      "signature": "(col: 'ColumnOrName', pos: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the value of the bit (0 or 1) at the specified position. The positions are numbered from right to left, starting at zero. The position argument cannot be negative."
+    },
+    {
+      "name": "bit_length",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Calculates the bit length for the specified string column."
+    },
+    {
+      "name": "bit_or",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the bitwise OR of all non-null input values, or null if none."
+    },
+    {
+      "name": "bit_xor",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the bitwise XOR of all non-null input values, or null if none."
+    },
+    {
+      "name": "bitmap_bit_position",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the bit position for the given input column."
+    },
+    {
+      "name": "bitmap_bucket_number",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the bucket number for the given input column."
+    },
+    {
+      "name": "bitmap_construct_agg",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a bitmap with the positions of the bits set from all the values from the input column. The input column will most likely be bitmap_bit_position()."
+    },
+    {
+      "name": "bitmap_count",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the number of set bits in the input bitmap."
+    },
+    {
+      "name": "bitmap_or_agg",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a bitmap that is the bitwise OR of all of the bitmaps from the input column. The input column should be bitmaps created from bitmap_construct_agg()."
+    },
+    {
+      "name": "bitwiseNOT",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes bitwise not."
+    },
+    {
+      "name": "bitwise_not",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes bitwise not."
+    },
+    {
+      "name": "bool_and",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns true if all values of `col` are true."
+    },
+    {
+      "name": "bool_or",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns true if at least one value of `col` is true."
+    },
+    {
+      "name": "broadcast",
+      "signature": "(df: pyspark.sql.dataframe.DataFrame) -> pyspark.sql.dataframe.DataFrame",
+      "doc": "Marks a DataFrame as small enough for use in broadcast joins."
+    },
+    {
+      "name": "bround",
+      "signature": "(col: 'ColumnOrName', scale: int = 0) -> pyspark.sql.column.Column",
+      "doc": "Round the given value to `scale` decimal places using HALF_EVEN rounding mode if `scale` >= 0 or at integral part when `scale` < 0."
+    },
+    {
+      "name": "btrim",
+      "signature": "(str: 'ColumnOrName', trim: Optional[ForwardRef('ColumnOrName')] = None) -> pyspark.sql.column.Column",
+      "doc": "Remove the leading and trailing `trim` characters from `str`."
+    },
+    {
+      "name": "bucket",
+      "signature": "(numBuckets: Union[pyspark.sql.column.Column, int], col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Partition transform function: A transform for any type that partitions by a hash of the input column."
+    },
+    {
+      "name": "call_function",
+      "signature": "(funcName: str, *cols: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Call a SQL function."
+    },
+    {
+      "name": "call_udf",
+      "signature": "(udfName: str, *cols: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Call an user-defined function."
+    },
+    {
+      "name": "cardinality",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Collection function: returns the length of the array or map stored in the column."
+    },
+    {
+      "name": "cast",
+      "signature": "(typ, val)",
+      "doc": "Cast a value to a type."
+    },
+    {
+      "name": "cbrt",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes the cube-root of the given value."
+    },
+    {
+      "name": "ceil",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes the ceiling of the given value."
+    },
+    {
+      "name": "ceiling",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes the ceiling of the given value."
+    },
+    {
+      "name": "char",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the ASCII character having the binary equivalent to `col`. If col is larger than 256 the result is equivalent to char(col % 256)"
+    },
+    {
+      "name": "char_length",
+      "signature": "(str: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the character length of string data or number of bytes of binary data. The length of string data includes the trailing spaces. The length of binary data includes binary zeros."
+    },
+    {
+      "name": "character_length",
+      "signature": "(str: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the character length of string data or number of bytes of binary data. The length of string data includes the trailing spaces. The length of binary data includes binary zeros."
+    },
+    {
+      "name": "coalesce",
+      "signature": "(*cols: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the first column that is not null."
+    },
+    {
+      "name": "col",
+      "signature": "(col: str) -> pyspark.sql.column.Column",
+      "doc": "Returns a :class:`~pyspark.sql.Column` based on the given column name."
+    },
+    {
+      "name": "collect_list",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns a list of objects with duplicates."
+    },
+    {
+      "name": "collect_set",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns a set of objects with duplicate elements eliminated."
+    },
+    {
+      "name": "column",
+      "signature": "(col: str) -> pyspark.sql.column.Column",
+      "doc": "Returns a :class:`~pyspark.sql.Column` based on the given column name."
+    },
+    {
+      "name": "concat",
+      "signature": "(*cols: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Concatenates multiple input columns together into a single column. The function works with strings, numeric, binary and compatible array columns."
+    },
+    {
+      "name": "concat_ws",
+      "signature": "(sep: str, *cols: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Concatenates multiple input string columns together into a single string column, using the given separator."
+    },
+    {
+      "name": "contains",
+      "signature": "(left: 'ColumnOrName', right: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a boolean. The value is True if right is found inside left. Returns NULL if either input expression is NULL. Otherwise, returns False. Both left or right must be of STRING or BINARY type."
+    },
+    {
+      "name": "conv",
+      "signature": "(col: 'ColumnOrName', fromBase: int, toBase: int) -> pyspark.sql.column.Column",
+      "doc": "Convert a number in a string column from one base to another."
+    },
+    {
+      "name": "convert_timezone",
+      "signature": "(sourceTz: Optional[pyspark.sql.column.Column], targetTz: pyspark.sql.column.Column, sourceTs: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Converts the timestamp without time zone `sourceTs` from the `sourceTz` time zone to `targetTz`."
+    },
+    {
+      "name": "corr",
+      "signature": "(col1: 'ColumnOrName', col2: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a new :class:`~pyspark.sql.Column` for the Pearson Correlation Coefficient for ``col1`` and ``col2``."
+    },
+    {
+      "name": "cos",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes cosine of the input column."
+    },
+    {
+      "name": "cosh",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes hyperbolic cosine of the input column."
+    },
+    {
+      "name": "cot",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes cotangent of the input column."
+    },
+    {
+      "name": "count",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the number of items in a group."
+    },
+    {
+      "name": "countDistinct",
+      "signature": "(col: 'ColumnOrName', *cols: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a new :class:`~pyspark.sql.Column` for distinct count of ``col`` or ``cols``."
+    },
+    {
+      "name": "count_distinct",
+      "signature": "(col: 'ColumnOrName', *cols: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a new :class:`Column` for distinct count of ``col`` or ``cols``."
+    },
+    {
+      "name": "count_if",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the number of `TRUE` values for the `col`."
+    },
+    {
+      "name": "count_min_sketch",
+      "signature": "(col: 'ColumnOrName', eps: 'ColumnOrName', confidence: 'ColumnOrName', seed: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a count-min sketch of a column with the given esp, confidence and seed. The result is an array of bytes, which can be deserialized to a `CountMinSketch` before usage. Count-min sketch is a probabilistic data structure used for cardinality estimation using sub-linear space."
+    },
+    {
+      "name": "covar_pop",
+      "signature": "(col1: 'ColumnOrName', col2: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a new :class:`~pyspark.sql.Column` for the population covariance of ``col1`` and ``col2``."
+    },
+    {
+      "name": "covar_samp",
+      "signature": "(col1: 'ColumnOrName', col2: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a new :class:`~pyspark.sql.Column` for the sample covariance of ``col1`` and ``col2``."
+    },
+    {
+      "name": "crc32",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Calculates the cyclic redundancy check value  (CRC32) of a binary column and returns the value as a bigint."
+    },
+    {
+      "name": "create_map",
+      "signature": "(*cols: Union[ForwardRef('ColumnOrName'), List[ForwardRef('ColumnOrName_')], Tuple[ForwardRef('ColumnOrName_'), ...]]) -> pyspark.sql.column.Column",
+      "doc": "Creates a new map column."
+    },
+    {
+      "name": "csc",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes cosecant of the input column."
+    },
+    {
+      "name": "cume_dist",
+      "signature": "() -> pyspark.sql.column.Column",
+      "doc": "Window function: returns the cumulative distribution of values within a window partition, i.e. the fraction of rows that are below the current row."
+    },
+    {
+      "name": "curdate",
+      "signature": "() -> pyspark.sql.column.Column",
+      "doc": "Returns the current date at the start of query evaluation as a :class:`DateType` column. All calls of current_date within the same query return the same value."
+    },
+    {
+      "name": "current_catalog",
+      "signature": "() -> pyspark.sql.column.Column",
+      "doc": "Returns the current catalog."
+    },
+    {
+      "name": "current_database",
+      "signature": "() -> pyspark.sql.column.Column",
+      "doc": "Returns the current database."
+    },
+    {
+      "name": "current_date",
+      "signature": "() -> pyspark.sql.column.Column",
+      "doc": "Returns the current date at the start of query evaluation as a :class:`DateType` column. All calls of current_date within the same query return the same value."
+    },
+    {
+      "name": "current_schema",
+      "signature": "() -> pyspark.sql.column.Column",
+      "doc": "Returns the current database."
+    },
+    {
+      "name": "current_timestamp",
+      "signature": "() -> pyspark.sql.column.Column",
+      "doc": "Returns the current timestamp at the start of query evaluation as a :class:`TimestampType` column. All calls of current_timestamp within the same query return the same value."
+    },
+    {
+      "name": "current_timezone",
+      "signature": "() -> pyspark.sql.column.Column",
+      "doc": "Returns the current session local timezone."
+    },
+    {
+      "name": "current_user",
+      "signature": "() -> pyspark.sql.column.Column",
+      "doc": "Returns the current database."
+    },
+    {
+      "name": "date_add",
+      "signature": "(start: 'ColumnOrName', days: Union[ForwardRef('ColumnOrName'), int]) -> pyspark.sql.column.Column",
+      "doc": "Returns the date that is `days` days after `start`. If `days` is a negative value then these amount of days will be deducted from `start`."
+    },
+    {
+      "name": "date_diff",
+      "signature": "(end: 'ColumnOrName', start: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the number of days from `start` to `end`."
+    },
+    {
+      "name": "date_format",
+      "signature": "(date: 'ColumnOrName', format: str) -> pyspark.sql.column.Column",
+      "doc": "Converts a date/timestamp/string to a value of string in the format specified by the date format given by the second argument."
+    },
+    {
+      "name": "date_from_unix_date",
+      "signature": "(days: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Create date from the number of `days` since 1970-01-01."
+    },
+    {
+      "name": "date_part",
+      "signature": "(field: 'ColumnOrName', source: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Extracts a part of the date/timestamp or interval source."
+    },
+    {
+      "name": "date_sub",
+      "signature": "(start: 'ColumnOrName', days: Union[ForwardRef('ColumnOrName'), int]) -> pyspark.sql.column.Column",
+      "doc": "Returns the date that is `days` days before `start`. If `days` is a negative value then these amount of days will be added to `start`."
+    },
+    {
+      "name": "date_trunc",
+      "signature": "(format: str, timestamp: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns timestamp truncated to the unit specified by the format."
+    },
+    {
+      "name": "dateadd",
+      "signature": "(start: 'ColumnOrName', days: Union[ForwardRef('ColumnOrName'), int]) -> pyspark.sql.column.Column",
+      "doc": "Returns the date that is `days` days after `start`. If `days` is a negative value then these amount of days will be deducted from `start`."
+    },
+    {
+      "name": "datediff",
+      "signature": "(end: 'ColumnOrName', start: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the number of days from `start` to `end`."
+    },
+    {
+      "name": "datepart",
+      "signature": "(field: 'ColumnOrName', source: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Extracts a part of the date/timestamp or interval source."
+    },
+    {
+      "name": "day",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Extract the day of the month of a given date/timestamp as integer."
+    },
+    {
+      "name": "dayofmonth",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Extract the day of the month of a given date/timestamp as integer."
+    },
+    {
+      "name": "dayofweek",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Extract the day of the week of a given date/timestamp as integer. Ranges from 1 for a Sunday through to 7 for a Saturday"
+    },
+    {
+      "name": "dayofyear",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Extract the day of the year of a given date/timestamp as integer."
+    },
+    {
+      "name": "days",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Partition transform function: A transform for timestamps and dates to partition data into days."
+    },
+    {
+      "name": "decode",
+      "signature": "(col: 'ColumnOrName', charset: str) -> pyspark.sql.column.Column",
+      "doc": "Computes the first argument into a string from a binary using the provided character set (one of 'US-ASCII', 'ISO-8859-1', 'UTF-8', 'UTF-16BE', 'UTF-16LE', 'UTF-16')."
+    },
+    {
+      "name": "degrees",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Converts an angle measured in radians to an approximately equivalent angle measured in degrees."
+    },
+    {
+      "name": "dense_rank",
+      "signature": "() -> pyspark.sql.column.Column",
+      "doc": "Window function: returns the rank of rows within a window partition, without any gaps."
+    },
+    {
+      "name": "desc",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a sort expression based on the descending order of the given column name."
+    },
+    {
+      "name": "desc_nulls_first",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a sort expression based on the descending order of the given column name, and null values appear before non-null values."
+    },
+    {
+      "name": "desc_nulls_last",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a sort expression based on the descending order of the given column name, and null values appear after non-null values."
+    },
+    {
+      "name": "e",
+      "signature": "() -> pyspark.sql.column.Column",
+      "doc": "Returns Euler's number."
+    },
+    {
+      "name": "element_at",
+      "signature": "(col: 'ColumnOrName', extraction: Any) -> pyspark.sql.column.Column",
+      "doc": "Collection function: Returns element of array at given index in `extraction` if col is array. Returns value for the given key in `extraction` if col is map. If position is negative then location of the element will start from end, if number is outside the array boundaries then None will be returned."
+    },
+    {
+      "name": "elt",
+      "signature": "(*inputs: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the `n`-th input, e.g., returns `input2` when `n` is 2. The function returns NULL if the index exceeds the length of the array and `spark.sql.ansi.enabled` is set to false. If `spark.sql.ansi.enabled` is set to true, it throws ArrayIndexOutOfBoundsException for invalid indices."
+    },
+    {
+      "name": "encode",
+      "signature": "(col: 'ColumnOrName', charset: str) -> pyspark.sql.column.Column",
+      "doc": "Computes the first argument into a binary from a string using the provided character set (one of 'US-ASCII', 'ISO-8859-1', 'UTF-8', 'UTF-16BE', 'UTF-16LE', 'UTF-16')."
+    },
+    {
+      "name": "endswith",
+      "signature": "(str: 'ColumnOrName', suffix: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a boolean. The value is True if str ends with suffix. Returns NULL if either input expression is NULL. Otherwise, returns False. Both str or suffix must be of STRING or BINARY type."
+    },
+    {
+      "name": "equal_null",
+      "signature": "(col1: 'ColumnOrName', col2: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns same result as the EQUAL(=) operator for non-null operands, but returns true if both are null, false if one of the them is null."
+    },
+    {
+      "name": "every",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns true if all values of `col` are true."
+    },
+    {
+      "name": "exists",
+      "signature": "(col: 'ColumnOrName', f: Callable[[pyspark.sql.column.Column], pyspark.sql.column.Column]) -> pyspark.sql.column.Column",
+      "doc": "Returns whether a predicate holds for one or more elements in the array."
+    },
+    {
+      "name": "exp",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes the exponential of the given value."
+    },
+    {
+      "name": "explode",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a new row for each element in the given array or map. Uses the default column name `col` for elements in the array and `key` and `value` for elements in the map unless specified otherwise."
+    },
+    {
+      "name": "explode_outer",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a new row for each element in the given array or map. Unlike explode, if the array/map is null or empty then null is produced. Uses the default column name `col` for elements in the array and `key` and `value` for elements in the map unless specified otherwise."
+    },
+    {
+      "name": "expm1",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes the exponential of the given value minus one."
+    },
+    {
+      "name": "expr",
+      "signature": "(str: str) -> pyspark.sql.column.Column",
+      "doc": "Parses the expression string into the column that it represents"
+    },
+    {
+      "name": "extract",
+      "signature": "(field: 'ColumnOrName', source: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Extracts a part of the date/timestamp or interval source."
+    },
+    {
+      "name": "factorial",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes the factorial of the given value."
+    },
+    {
+      "name": "filter",
+      "signature": "(col: 'ColumnOrName', f: Union[Callable[[pyspark.sql.column.Column], pyspark.sql.column.Column], Callable[[pyspark.sql.column.Column, pyspark.sql.column.Column], pyspark.sql.column.Column]]) -> pys...)",
+      "doc": "Returns an array of elements for which a predicate holds in a given array."
+    },
+    {
+      "name": "find_in_set",
+      "signature": "(str: 'ColumnOrName', str_array: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the index (1-based) of the given string (`str`) in the comma-delimited list (`strArray`). Returns 0, if the string was not found or if the given string (`str`) contains a comma."
+    },
+    {
+      "name": "first",
+      "signature": "(col: 'ColumnOrName', ignorenulls: bool = False) -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the first value in a group."
+    },
+    {
+      "name": "first_value",
+      "signature": "(col: 'ColumnOrName', ignoreNulls: Union[bool, pyspark.sql.column.Column, NoneType] = None) -> pyspark.sql.column.Column",
+      "doc": "Returns the first value of `col` for a group of rows. It will return the first non-null value it sees when `ignoreNulls` is set to true. If all values are null, then null is returned."
+    },
+    {
+      "name": "flatten",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Collection function: creates a single array from an array of arrays. If a structure of nested arrays is deeper than two levels, only one level of nesting is removed."
+    },
+    {
+      "name": "floor",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes the floor of the given value."
+    },
+    {
+      "name": "forall",
+      "signature": "(col: 'ColumnOrName', f: Callable[[pyspark.sql.column.Column], pyspark.sql.column.Column]) -> pyspark.sql.column.Column",
+      "doc": "Returns whether a predicate holds for every element in the array."
+    },
+    {
+      "name": "format_number",
+      "signature": "(col: 'ColumnOrName', d: int) -> pyspark.sql.column.Column",
+      "doc": "Formats the number X to a format like '#,--#,--#.--', rounded to d decimal places with HALF_EVEN round mode, and returns the result as a string."
+    },
+    {
+      "name": "format_string",
+      "signature": "(format: str, *cols: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Formats the arguments in printf-style and returns the result as a string column."
+    },
+    {
+      "name": "from_csv",
+      "signature": "(col: 'ColumnOrName', schema: Union[pyspark.sql.column.Column, str], options: Optional[Dict[str, str]] = None) -> pyspark.sql.column.Column",
+      "doc": "Parses a column containing a CSV string to a row with the specified schema. Returns `null`, in the case of an unparseable string."
+    },
+    {
+      "name": "from_json",
+      "signature": "(col: 'ColumnOrName', schema: Union[pyspark.sql.types.ArrayType, pyspark.sql.types.StructType, pyspark.sql.column.Column, str], options: Optional[Dict[str, str]] = None) -> pyspark.sql.column.Column",
+      "doc": "Parses a column containing a JSON string into a :class:`MapType` with :class:`StringType` as keys type, :class:`StructType` or :class:`ArrayType` with the specified schema. Returns `null`, in the case of an unparseable string."
+    },
+    {
+      "name": "from_unixtime",
+      "signature": "(timestamp: 'ColumnOrName', format: str = 'yyyy-MM-dd HH:mm:ss') -> pyspark.sql.column.Column",
+      "doc": "Converts the number of seconds from unix epoch (1970-01-01 00:00:00 UTC) to a string representing the timestamp of that moment in the current system time zone in the given format."
+    },
+    {
+      "name": "from_utc_timestamp",
+      "signature": "(timestamp: 'ColumnOrName', tz: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "This is a common function for databases supporting TIMESTAMP WITHOUT TIMEZONE. This function takes a timestamp which is timezone-agnostic, and interprets it as a timestamp in UTC, and renders that timestamp as a timestamp in the given time zone."
+    },
+    {
+      "name": "get",
+      "signature": "(col: 'ColumnOrName', index: Union[ForwardRef('ColumnOrName'), int]) -> pyspark.sql.column.Column",
+      "doc": "Collection function: Returns element of array at given (0-based) index. If the index points outside of the array boundaries, then this function returns NULL."
+    },
+    {
+      "name": "get_active_spark_context",
+      "signature": "() -> pyspark.context.SparkContext",
+      "doc": "Raise RuntimeError if SparkContext is not initialized, otherwise, returns the active SparkContext."
+    },
+    {
+      "name": "get_json_object",
+      "signature": "(col: 'ColumnOrName', path: str) -> pyspark.sql.column.Column",
+      "doc": "Extracts json object from a json string based on json `path` specified, and returns json string of the extracted json object. It will return null if the input json string is invalid."
+    },
+    {
+      "name": "getbit",
+      "signature": "(col: 'ColumnOrName', pos: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the value of the bit (0 or 1) at the specified position. The positions are numbered from right to left, starting at zero. The position argument cannot be negative."
+    },
+    {
+      "name": "greatest",
+      "signature": "(*cols: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the greatest value of the list of column names, skipping null values. This function takes at least 2 parameters. It will return null if all parameters are null."
+    },
+    {
+      "name": "grouping",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: indicates whether a specified column in a GROUP BY list is aggregated or not, returns 1 for aggregated or 0 for not aggregated in the result set."
+    },
+    {
+      "name": "grouping_id",
+      "signature": "(*cols: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the level of grouping, equals to"
+    },
+    {
+      "name": "hash",
+      "signature": "(*cols: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Calculates the hash code of given columns, and returns the result as an int column."
+    },
+    {
+      "name": "hex",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes hex value of the given column, which could be :class:`pyspark.sql.types.StringType`, :class:`pyspark.sql.types.BinaryType`, :class:`pyspark.sql.types.IntegerType` or :class:`pyspark.sql.types.LongType`."
+    },
+    {
+      "name": "histogram_numeric",
+      "signature": "(col: 'ColumnOrName', nBins: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes a histogram on numeric 'col' using nb bins. The return value is an array of (x,y) pairs representing the centers of the histogram's bins. As the value of 'nb' is increased, the histogram approximation gets finer-grained, but may yield artifacts around outliers. In practice, 20-40 histogram bins appear to work well, with more bins being required for skewed or smaller datasets. Note that..."
+    },
+    {
+      "name": "hll_sketch_agg",
+      "signature": "(col: 'ColumnOrName', lgConfigK: Union[int, pyspark.sql.column.Column, NoneType] = None) -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the updatable binary representation of the Datasketches HllSketch configured with lgConfigK arg."
+    },
+    {
+      "name": "hll_sketch_estimate",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the estimated number of unique values given the binary representation of a Datasketches HllSketch."
+    },
+    {
+      "name": "hll_union",
+      "signature": "(col1: 'ColumnOrName', col2: 'ColumnOrName', allowDifferentLgConfigK: Optional[bool] = None) -> pyspark.sql.column.Column",
+      "doc": "Merges two binary representations of Datasketches HllSketch objects, using a Datasketches Union object.  Throws an exception if sketches have different lgConfigK values and allowDifferentLgConfigK is unset or set to false."
+    },
+    {
+      "name": "hll_union_agg",
+      "signature": "(col: 'ColumnOrName', allowDifferentLgConfigK: Union[bool, pyspark.sql.column.Column, NoneType] = None) -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the updatable binary representation of the Datasketches HllSketch, generated by merging previously created Datasketches HllSketch instances via a Datasketches Union instance. Throws an exception if sketches have different lgConfigK values and allowDifferentLgConfigK is unset or set to false."
+    },
+    {
+      "name": "hour",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Extract the hours of a given timestamp as integer."
+    },
+    {
+      "name": "hours",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Partition transform function: A transform for timestamps to partition data into hours."
+    },
+    {
+      "name": "hypot",
+      "signature": "(col1: Union[ForwardRef('ColumnOrName'), float], col2: Union[ForwardRef('ColumnOrName'), float]) -> pyspark.sql.column.Column",
+      "doc": "Computes ``sqrt(a^2 + b^2)`` without intermediate overflow or underflow."
+    },
+    {
+      "name": "ifnull",
+      "signature": "(col1: 'ColumnOrName', col2: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns `col2` if `col1` is null, or `col1` otherwise."
+    },
+    {
+      "name": "ilike",
+      "signature": "(str: 'ColumnOrName', pattern: 'ColumnOrName', escapeChar: Optional[ForwardRef('Column')] = None) -> pyspark.sql.column.Column",
+      "doc": "Returns true if str matches `pattern` with `escape` case-insensitively, null if any arguments are null, false otherwise. The default escape character is the ''."
+    },
+    {
+      "name": "initcap",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Translate the first letter of each word to upper case in the sentence."
+    },
+    {
+      "name": "inline",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Explodes an array of structs into a table."
+    },
+    {
+      "name": "inline_outer",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Explodes an array of structs into a table. Unlike inline, if the array is null or empty then null is produced for each nested column."
+    },
+    {
+      "name": "input_file_block_length",
+      "signature": "() -> pyspark.sql.column.Column",
+      "doc": "Returns the length of the block being read, or -1 if not available."
+    },
+    {
+      "name": "input_file_block_start",
+      "signature": "() -> pyspark.sql.column.Column",
+      "doc": "Returns the start offset of the block being read, or -1 if not available."
+    },
+    {
+      "name": "input_file_name",
+      "signature": "() -> pyspark.sql.column.Column",
+      "doc": "Creates a string column for the file name of the current Spark task."
+    },
+    {
+      "name": "instr",
+      "signature": "(str: 'ColumnOrName', substr: str) -> pyspark.sql.column.Column",
+      "doc": "Locate the position of the first occurrence of substr column in the given string. Returns null if either of the arguments are null."
+    },
+    {
+      "name": "isnan",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "An expression that returns true if the column is NaN."
+    },
+    {
+      "name": "isnotnull",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns true if `col` is not null, or false otherwise."
+    },
+    {
+      "name": "isnull",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "An expression that returns true if the column is null."
+    },
+    {
+      "name": "java_method",
+      "signature": "(*cols: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Calls a method with reflection."
+    },
+    {
+      "name": "json_array_length",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the number of elements in the outermost JSON array. `NULL` is returned in case of any other valid JSON string, `NULL` or an invalid JSON."
+    },
+    {
+      "name": "json_object_keys",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns all the keys of the outermost JSON object as an array. If a valid JSON object is given, all the keys of the outermost object will be returned as an array. If it is any other valid JSON string, an invalid JSON string or an empty string, the function returns null."
+    },
+    {
+      "name": "json_tuple",
+      "signature": "(col: 'ColumnOrName', *fields: str) -> pyspark.sql.column.Column",
+      "doc": "Creates a new row for a json column according to the given field names."
+    },
+    {
+      "name": "kurtosis",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the kurtosis of the values in a group."
+    },
+    {
+      "name": "lag",
+      "signature": "(col: 'ColumnOrName', offset: int = 1, default: Optional[Any] = None) -> pyspark.sql.column.Column",
+      "doc": "Window function: returns the value that is `offset` rows before the current row, and `default` if there is less than `offset` rows before the current row. For example, an `offset` of one will return the previous row at any given point in the window partition."
+    },
+    {
+      "name": "last",
+      "signature": "(col: 'ColumnOrName', ignorenulls: bool = False) -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the last value in a group."
+    },
+    {
+      "name": "last_day",
+      "signature": "(date: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the last day of the month which the given date belongs to."
+    },
+    {
+      "name": "last_value",
+      "signature": "(col: 'ColumnOrName', ignoreNulls: Union[bool, pyspark.sql.column.Column, NoneType] = None) -> pyspark.sql.column.Column",
+      "doc": "Returns the last value of `col` for a group of rows. It will return the last non-null value it sees when `ignoreNulls` is set to true. If all values are null, then null is returned."
+    },
+    {
+      "name": "lcase",
+      "signature": "(str: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns `str` with all characters changed to lowercase."
+    },
+    {
+      "name": "lead",
+      "signature": "(col: 'ColumnOrName', offset: int = 1, default: Optional[Any] = None) -> pyspark.sql.column.Column",
+      "doc": "Window function: returns the value that is `offset` rows after the current row, and `default` if there is less than `offset` rows after the current row. For example, an `offset` of one will return the next row at any given point in the window partition."
+    },
+    {
+      "name": "least",
+      "signature": "(*cols: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the least value of the list of column names, skipping null values. This function takes at least 2 parameters. It will return null if all parameters are null."
+    },
+    {
+      "name": "left",
+      "signature": "(str: 'ColumnOrName', len: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the leftmost `len`(`len` can be string type) characters from the string `str`, if `len` is less or equal than 0 the result is an empty string."
+    },
+    {
+      "name": "length",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes the character length of string data or number of bytes of binary data. The length of character data includes the trailing spaces. The length of binary data includes binary zeros."
+    },
+    {
+      "name": "levenshtein",
+      "signature": "(left: 'ColumnOrName', right: 'ColumnOrName', threshold: Optional[int] = None) -> pyspark.sql.column.Column",
+      "doc": "Computes the Levenshtein distance of the two given strings."
+    },
+    {
+      "name": "like",
+      "signature": "(str: 'ColumnOrName', pattern: 'ColumnOrName', escapeChar: Optional[ForwardRef('Column')] = None) -> pyspark.sql.column.Column",
+      "doc": "Returns true if str matches `pattern` with `escape`, null if any arguments are null, false otherwise. The default escape character is the ''."
+    },
+    {
+      "name": "lit",
+      "signature": "(col: Any) -> pyspark.sql.column.Column",
+      "doc": "Creates a :class:`~pyspark.sql.Column` of literal value."
+    },
+    {
+      "name": "ln",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the natural logarithm of the argument."
+    },
+    {
+      "name": "localtimestamp",
+      "signature": "() -> pyspark.sql.column.Column",
+      "doc": "Returns the current timestamp without time zone at the start of query evaluation as a timestamp without time zone column. All calls of localtimestamp within the same query return the same value."
+    },
+    {
+      "name": "locate",
+      "signature": "(substr: str, str: 'ColumnOrName', pos: int = 1) -> pyspark.sql.column.Column",
+      "doc": "Locate the position of the first occurrence of substr in a string column, after position pos."
+    },
+    {
+      "name": "log",
+      "signature": "(arg1: Union[ForwardRef('ColumnOrName'), float], arg2: Optional[ForwardRef('ColumnOrName')] = None) -> pyspark.sql.column.Column",
+      "doc": "Returns the first argument-based logarithm of the second argument."
+    },
+    {
+      "name": "log10",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes the logarithm of the given value in Base 10."
+    },
+    {
+      "name": "log1p",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes the natural logarithm of the \"given value plus one\"."
+    },
+    {
+      "name": "log2",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the base-2 logarithm of the argument."
+    },
+    {
+      "name": "lower",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Converts a string expression to lower case."
+    },
+    {
+      "name": "lpad",
+      "signature": "(col: 'ColumnOrName', len: int, pad: str) -> pyspark.sql.column.Column",
+      "doc": "Left-pad the string column to width `len` with `pad`."
+    },
+    {
+      "name": "ltrim",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Trim the spaces from left end for the specified string value."
+    },
+    {
+      "name": "make_date",
+      "signature": "(year: 'ColumnOrName', month: 'ColumnOrName', day: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a column with a date built from the year, month and day columns."
+    },
+    {
+      "name": "make_dt_interval",
+      "signature": "(days: Optional[ForwardRef('ColumnOrName')] = None, hours: Optional[ForwardRef('ColumnOrName')] = None, mins: Optional[ForwardRef('ColumnOrName')] = None, secs: Optional[ForwardRef('ColumnOrName')]...)",
+      "doc": "Make DayTimeIntervalType duration from days, hours, mins and secs."
+    },
+    {
+      "name": "make_interval",
+      "signature": "(years: Optional[ForwardRef('ColumnOrName')] = None, months: Optional[ForwardRef('ColumnOrName')] = None, weeks: Optional[ForwardRef('ColumnOrName')] = None, days: Optional[ForwardRef('ColumnOrName...)",
+      "doc": "Make interval from years, months, weeks, days, hours, mins and secs."
+    },
+    {
+      "name": "make_timestamp",
+      "signature": "(years: 'ColumnOrName', months: 'ColumnOrName', days: 'ColumnOrName', hours: 'ColumnOrName', mins: 'ColumnOrName', secs: 'ColumnOrName', timezone: Optional[ForwardRef('ColumnOrName')] = None) -> py...)",
+      "doc": "Create timestamp from years, months, days, hours, mins, secs and timezone fields. The result data type is consistent with the value of configuration `spark.sql.timestampType`. If the configuration `spark.sql.ansi.enabled` is false, the function returns NULL on invalid inputs. Otherwise, it will throw an error instead."
+    },
+    {
+      "name": "make_timestamp_ltz",
+      "signature": "(years: 'ColumnOrName', months: 'ColumnOrName', days: 'ColumnOrName', hours: 'ColumnOrName', mins: 'ColumnOrName', secs: 'ColumnOrName', timezone: Optional[ForwardRef('ColumnOrName')] = None) -> py...)",
+      "doc": "Create the current timestamp with local time zone from years, months, days, hours, mins, secs and timezone fields. If the configuration `spark.sql.ansi.enabled` is false, the function returns NULL on invalid inputs. Otherwise, it will throw an error instead."
+    },
+    {
+      "name": "make_timestamp_ntz",
+      "signature": "(years: 'ColumnOrName', months: 'ColumnOrName', days: 'ColumnOrName', hours: 'ColumnOrName', mins: 'ColumnOrName', secs: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Create local date-time from years, months, days, hours, mins, secs fields. If the configuration `spark.sql.ansi.enabled` is false, the function returns NULL on invalid inputs. Otherwise, it will throw an error instead."
+    },
+    {
+      "name": "make_ym_interval",
+      "signature": "(years: Optional[ForwardRef('ColumnOrName')] = None, months: Optional[ForwardRef('ColumnOrName')] = None) -> pyspark.sql.column.Column",
+      "doc": "Make year-month interval from years, months."
+    },
+    {
+      "name": "map_concat",
+      "signature": "(*cols: Union[ForwardRef('ColumnOrName'), List[ForwardRef('ColumnOrName_')], Tuple[ForwardRef('ColumnOrName_'), ...]]) -> pyspark.sql.column.Column",
+      "doc": "Returns the union of all the given maps."
+    },
+    {
+      "name": "map_contains_key",
+      "signature": "(col: 'ColumnOrName', value: Any) -> pyspark.sql.column.Column",
+      "doc": "Returns true if the map contains the key."
+    },
+    {
+      "name": "map_entries",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Collection function: Returns an unordered array of all entries in the given map."
+    },
+    {
+      "name": "map_filter",
+      "signature": "(col: 'ColumnOrName', f: Callable[[pyspark.sql.column.Column, pyspark.sql.column.Column], pyspark.sql.column.Column]) -> pyspark.sql.column.Column",
+      "doc": "Returns a map whose key-value pairs satisfy a predicate."
+    },
+    {
+      "name": "map_from_arrays",
+      "signature": "(col1: 'ColumnOrName', col2: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Creates a new map from two arrays."
+    },
+    {
+      "name": "map_from_entries",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Collection function: Converts an array of entries (key value struct types) to a map of values."
+    },
+    {
+      "name": "map_keys",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Collection function: Returns an unordered array containing the keys of the map."
+    },
+    {
+      "name": "map_values",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Collection function: Returns an unordered array containing the values of the map."
+    },
+    {
+      "name": "map_zip_with",
+      "signature": "(col1: 'ColumnOrName', col2: 'ColumnOrName', f: Callable[[pyspark.sql.column.Column, pyspark.sql.column.Column, pyspark.sql.column.Column], pyspark.sql.column.Column]) -> pyspark.sql.column.Column",
+      "doc": "Merge two given maps, key-wise into a single map using a function."
+    },
+    {
+      "name": "mask",
+      "signature": "(col: 'ColumnOrName', upperChar: Optional[ForwardRef('ColumnOrName')] = None, lowerChar: Optional[ForwardRef('ColumnOrName')] = None, digitChar: Optional[ForwardRef('ColumnOrName')] = None, otherCh...)",
+      "doc": "Masks the given string value. This can be useful for creating copies of tables with sensitive information removed."
+    },
+    {
+      "name": "max",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the maximum value of the expression in a group."
+    },
+    {
+      "name": "max_by",
+      "signature": "(col: 'ColumnOrName', ord: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the value associated with the maximum value of ord."
+    },
+    {
+      "name": "md5",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Calculates the MD5 digest and returns the value as a 32 character hex string."
+    },
+    {
+      "name": "mean",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the average of the values in a group. An alias of :func:`avg`."
+    },
+    {
+      "name": "median",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the median of the values in a group."
+    },
+    {
+      "name": "min",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the minimum value of the expression in a group."
+    },
+    {
+      "name": "min_by",
+      "signature": "(col: 'ColumnOrName', ord: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the value associated with the minimum value of ord."
+    },
+    {
+      "name": "minute",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Extract the minutes of a given timestamp as integer."
+    },
+    {
+      "name": "mode",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the most frequent value in a group."
+    },
+    {
+      "name": "monotonically_increasing_id",
+      "signature": "() -> pyspark.sql.column.Column",
+      "doc": "A column that generates monotonically increasing 64-bit integers."
+    },
+    {
+      "name": "month",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Extract the month of a given date/timestamp as integer."
+    },
+    {
+      "name": "months",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Partition transform function: A transform for timestamps and dates to partition data into months."
+    },
+    {
+      "name": "months_between",
+      "signature": "(date1: 'ColumnOrName', date2: 'ColumnOrName', roundOff: bool = True) -> pyspark.sql.column.Column",
+      "doc": "Returns number of months between dates date1 and date2. If date1 is later than date2, then the result is positive. A whole number is returned if both inputs have the same day of month or both are the last day of their respective months. Otherwise, the difference is calculated assuming 31 days per month. The result is rounded off to 8 digits unless `roundOff` is set to `False`."
+    },
+    {
+      "name": "named_struct",
+      "signature": "(*cols: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Creates a struct with the given field names and values."
+    },
+    {
+      "name": "nanvl",
+      "signature": "(col1: 'ColumnOrName', col2: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns col1 if it is not NaN, or col2 if col1 is NaN."
+    },
+    {
+      "name": "negate",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the negative value."
+    },
+    {
+      "name": "negative",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the negative value."
+    },
+    {
+      "name": "next_day",
+      "signature": "(date: 'ColumnOrName', dayOfWeek: str) -> pyspark.sql.column.Column",
+      "doc": "Returns the first date which is later than the value of the date column based on second `week day` argument."
+    },
+    {
+      "name": "now",
+      "signature": "() -> pyspark.sql.column.Column",
+      "doc": "Returns the current timestamp at the start of query evaluation."
+    },
+    {
+      "name": "nth_value",
+      "signature": "(col: 'ColumnOrName', offset: int, ignoreNulls: Optional[bool] = False) -> pyspark.sql.column.Column",
+      "doc": "Window function: returns the value that is the `offset`\\th row of the window frame (counting from 1), and `null` if the size of window frame is less than `offset` rows."
+    },
+    {
+      "name": "ntile",
+      "signature": "(n: int) -> pyspark.sql.column.Column",
+      "doc": "Window function: returns the ntile group id (from 1 to `n` inclusive) in an ordered window partition. For example, if `n` is 4, the first quarter of the rows will get value 1, the second quarter will get 2, the third quarter will get 3, and the last quarter will get 4."
+    },
+    {
+      "name": "nullif",
+      "signature": "(col1: 'ColumnOrName', col2: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns null if `col1` equals to `col2`, or `col1` otherwise."
+    },
+    {
+      "name": "nvl",
+      "signature": "(col1: 'ColumnOrName', col2: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns `col2` if `col1` is null, or `col1` otherwise."
+    },
+    {
+      "name": "nvl2",
+      "signature": "(col1: 'ColumnOrName', col2: 'ColumnOrName', col3: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns `col2` if `col1` is not null, or `col3` otherwise."
+    },
+    {
+      "name": "octet_length",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Calculates the byte length for the specified string column."
+    },
+    {
+      "name": "overlay",
+      "signature": "(src: 'ColumnOrName', replace: 'ColumnOrName', pos: Union[ForwardRef('ColumnOrName'), int], len: Union[ForwardRef('ColumnOrName'), int] = -1) -> pyspark.sql.column.Column",
+      "doc": "Overlay the specified portion of `src` with `replace`, starting from byte position `pos` of `src` and proceeding for `len` bytes."
+    },
+    {
+      "name": "overload",
+      "signature": "(func)",
+      "doc": "Decorator for overloaded functions/methods."
+    },
+    {
+      "name": "pandas_udf",
+      "signature": "(f=None, returnType=None, functionType=None)",
+      "doc": "Creates a pandas user defined function (a.k.a. vectorized user defined function)."
+    },
+    {
+      "name": "parse_url",
+      "signature": "(url: 'ColumnOrName', partToExtract: 'ColumnOrName', key: Optional[ForwardRef('ColumnOrName')] = None) -> pyspark.sql.column.Column",
+      "doc": "Extracts a part from a URL."
+    },
+    {
+      "name": "percent_rank",
+      "signature": "() -> pyspark.sql.column.Column",
+      "doc": "Window function: returns the relative rank (i.e. percentile) of rows within a window partition."
+    },
+    {
+      "name": "percentile",
+      "signature": "(col: 'ColumnOrName', percentage: Union[pyspark.sql.column.Column, float, List[float], Tuple[float]], frequency: Union[pyspark.sql.column.Column, int] = 1) -> pyspark.sql.column.Column",
+      "doc": "Returns the exact percentile(s) of numeric column `expr` at the given percentage(s) with value range in [0.0, 1.0]."
+    },
+    {
+      "name": "percentile_approx",
+      "signature": "(col: 'ColumnOrName', percentage: Union[pyspark.sql.column.Column, float, List[float], Tuple[float]], accuracy: Union[pyspark.sql.column.Column, float] = 10000) -> pyspark.sql.column.Column",
+      "doc": "Returns the approximate `percentile` of the numeric column `col` which is the smallest value in the ordered `col` values (sorted from least to greatest) such that no more than `percentage` of `col` values is less than the value or equal to that value."
+    },
+    {
+      "name": "pi",
+      "signature": "() -> pyspark.sql.column.Column",
+      "doc": "Returns Pi."
+    },
+    {
+      "name": "pmod",
+      "signature": "(dividend: Union[ForwardRef('ColumnOrName'), float], divisor: Union[ForwardRef('ColumnOrName'), float]) -> pyspark.sql.column.Column",
+      "doc": "Returns the positive value of dividend mod divisor."
+    },
+    {
+      "name": "posexplode",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a new row for each element with position in the given array or map. Uses the default column name `pos` for position, and `col` for elements in the array and `key` and `value` for elements in the map unless specified otherwise."
+    },
+    {
+      "name": "posexplode_outer",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a new row for each element with position in the given array or map. Unlike posexplode, if the array/map is null or empty then the row (null, null) is produced. Uses the default column name `pos` for position, and `col` for elements in the array and `key` and `value` for elements in the map unless specified otherwise."
+    },
+    {
+      "name": "position",
+      "signature": "(substr: 'ColumnOrName', str: 'ColumnOrName', start: Optional[ForwardRef('ColumnOrName')] = None) -> pyspark.sql.column.Column",
+      "doc": "Returns the position of the first occurrence of `substr` in `str` after position `start`. The given `start` and return value are 1-based."
+    },
+    {
+      "name": "positive",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the value."
+    },
+    {
+      "name": "pow",
+      "signature": "(col1: Union[ForwardRef('ColumnOrName'), float], col2: Union[ForwardRef('ColumnOrName'), float]) -> pyspark.sql.column.Column",
+      "doc": "Returns the value of the first argument raised to the power of the second argument."
+    },
+    {
+      "name": "power",
+      "signature": "(col1: Union[ForwardRef('ColumnOrName'), float], col2: Union[ForwardRef('ColumnOrName'), float]) -> pyspark.sql.column.Column",
+      "doc": "Returns the value of the first argument raised to the power of the second argument."
+    },
+    {
+      "name": "printf",
+      "signature": "(format: 'ColumnOrName', *cols: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Formats the arguments in printf-style and returns the result as a string column."
+    },
+    {
+      "name": "product",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the product of the values in a group."
+    },
+    {
+      "name": "quarter",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Extract the quarter of a given date/timestamp as integer."
+    },
+    {
+      "name": "radians",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Converts an angle measured in degrees to an approximately equivalent angle measured in radians."
+    },
+    {
+      "name": "raise_error",
+      "signature": "(errMsg: Union[pyspark.sql.column.Column, str]) -> pyspark.sql.column.Column",
+      "doc": "Throws an exception with the provided error message."
+    },
+    {
+      "name": "rand",
+      "signature": "(seed: Optional[int] = None) -> pyspark.sql.column.Column",
+      "doc": "Generates a random column with independent and identically distributed (i.i.d.) samples uniformly distributed in [0.0, 1.0)."
+    },
+    {
+      "name": "randn",
+      "signature": "(seed: Optional[int] = None) -> pyspark.sql.column.Column",
+      "doc": "Generates a column with independent and identically distributed (i.i.d.) samples from the standard normal distribution."
+    },
+    {
+      "name": "rank",
+      "signature": "() -> pyspark.sql.column.Column",
+      "doc": "Window function: returns the rank of rows within a window partition."
+    },
+    {
+      "name": "reduce",
+      "signature": "(col: 'ColumnOrName', initialValue: 'ColumnOrName', merge: Callable[[pyspark.sql.column.Column, pyspark.sql.column.Column], pyspark.sql.column.Column], finish: Optional[Callable[[pyspark.sql.column...)",
+      "doc": "Applies a binary operator to an initial state and all elements in the array, and reduces this to a single state. The final state is converted into the final result by applying a finish function."
+    },
+    {
+      "name": "reflect",
+      "signature": "(*cols: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Calls a method with reflection."
+    },
+    {
+      "name": "regexp",
+      "signature": "(str: 'ColumnOrName', regexp: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns true if `str` matches the Java regex `regexp`, or false otherwise."
+    },
+    {
+      "name": "regexp_count",
+      "signature": "(str: 'ColumnOrName', regexp: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a count of the number of times that the Java regex pattern `regexp` is matched in the string `str`."
+    },
+    {
+      "name": "regexp_extract",
+      "signature": "(str: 'ColumnOrName', pattern: str, idx: int) -> pyspark.sql.column.Column",
+      "doc": "Extract a specific group matched by the Java regex `regexp`, from the specified string column. If the regex did not match, or the specified group did not match, an empty string is returned."
+    },
+    {
+      "name": "regexp_extract_all",
+      "signature": "(str: 'ColumnOrName', regexp: 'ColumnOrName', idx: Union[int, pyspark.sql.column.Column, NoneType] = None) -> pyspark.sql.column.Column",
+      "doc": "Extract all strings in the `str` that match the Java regex `regexp` and corresponding to the regex group index."
+    },
+    {
+      "name": "regexp_instr",
+      "signature": "(str: 'ColumnOrName', regexp: 'ColumnOrName', idx: Union[int, pyspark.sql.column.Column, NoneType] = None) -> pyspark.sql.column.Column",
+      "doc": "Extract all strings in the `str` that match the Java regex `regexp` and corresponding to the regex group index."
+    },
+    {
+      "name": "regexp_like",
+      "signature": "(str: 'ColumnOrName', regexp: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns true if `str` matches the Java regex `regexp`, or false otherwise."
+    },
+    {
+      "name": "regexp_replace",
+      "signature": "(string: 'ColumnOrName', pattern: Union[str, pyspark.sql.column.Column], replacement: Union[str, pyspark.sql.column.Column]) -> pyspark.sql.column.Column",
+      "doc": "Replace all substrings of the specified string value that match regexp with replacement."
+    },
+    {
+      "name": "regexp_substr",
+      "signature": "(str: 'ColumnOrName', regexp: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the substring that matches the Java regex `regexp` within the string `str`. If the regular expression is not found, the result is null."
+    },
+    {
+      "name": "regr_avgx",
+      "signature": "(y: 'ColumnOrName', x: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the average of the independent variable for non-null pairs in a group, where `y` is the dependent variable and `x` is the independent variable."
+    },
+    {
+      "name": "regr_avgy",
+      "signature": "(y: 'ColumnOrName', x: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the average of the dependent variable for non-null pairs in a group, where `y` is the dependent variable and `x` is the independent variable."
+    },
+    {
+      "name": "regr_count",
+      "signature": "(y: 'ColumnOrName', x: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the number of non-null number pairs in a group, where `y` is the dependent variable and `x` is the independent variable."
+    },
+    {
+      "name": "regr_intercept",
+      "signature": "(y: 'ColumnOrName', x: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the intercept of the univariate linear regression line for non-null pairs in a group, where `y` is the dependent variable and `x` is the independent variable."
+    },
+    {
+      "name": "regr_r2",
+      "signature": "(y: 'ColumnOrName', x: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the coefficient of determination for non-null pairs in a group, where `y` is the dependent variable and `x` is the independent variable."
+    },
+    {
+      "name": "regr_slope",
+      "signature": "(y: 'ColumnOrName', x: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the slope of the linear regression line for non-null pairs in a group, where `y` is the dependent variable and `x` is the independent variable."
+    },
+    {
+      "name": "regr_sxx",
+      "signature": "(y: 'ColumnOrName', x: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns REGR_COUNT(y, x) * VAR_POP(x) for non-null pairs in a group, where `y` is the dependent variable and `x` is the independent variable."
+    },
+    {
+      "name": "regr_sxy",
+      "signature": "(y: 'ColumnOrName', x: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns REGR_COUNT(y, x) * COVAR_POP(y, x) for non-null pairs in a group, where `y` is the dependent variable and `x` is the independent variable."
+    },
+    {
+      "name": "regr_syy",
+      "signature": "(y: 'ColumnOrName', x: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns REGR_COUNT(y, x) * VAR_POP(y) for non-null pairs in a group, where `y` is the dependent variable and `x` is the independent variable."
+    },
+    {
+      "name": "repeat",
+      "signature": "(col: 'ColumnOrName', n: int) -> pyspark.sql.column.Column",
+      "doc": "Repeats a string column n times, and returns it as a new string column."
+    },
+    {
+      "name": "replace",
+      "signature": "(src: 'ColumnOrName', search: 'ColumnOrName', replace: Optional[ForwardRef('ColumnOrName')] = None) -> pyspark.sql.column.Column",
+      "doc": "Replaces all occurrences of `search` with `replace`."
+    },
+    {
+      "name": "reverse",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Collection function: returns a reversed string or an array with reverse order of elements."
+    },
+    {
+      "name": "right",
+      "signature": "(str: 'ColumnOrName', len: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the rightmost `len`(`len` can be string type) characters from the string `str`, if `len` is less or equal than 0 the result is an empty string."
+    },
+    {
+      "name": "rint",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the double value that is closest in value to the argument and is equal to a mathematical integer."
+    },
+    {
+      "name": "rlike",
+      "signature": "(str: 'ColumnOrName', regexp: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns true if `str` matches the Java regex `regexp`, or false otherwise."
+    },
+    {
+      "name": "round",
+      "signature": "(col: 'ColumnOrName', scale: int = 0) -> pyspark.sql.column.Column",
+      "doc": "Round the given value to `scale` decimal places using HALF_UP rounding mode if `scale` >= 0 or at integral part when `scale` < 0."
+    },
+    {
+      "name": "row_number",
+      "signature": "() -> pyspark.sql.column.Column",
+      "doc": "Window function: returns a sequential number starting at 1 within a window partition."
+    },
+    {
+      "name": "rpad",
+      "signature": "(col: 'ColumnOrName', len: int, pad: str) -> pyspark.sql.column.Column",
+      "doc": "Right-pad the string column to width `len` with `pad`."
+    },
+    {
+      "name": "rtrim",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Trim the spaces from right end for the specified string value."
+    },
+    {
+      "name": "schema_of_csv",
+      "signature": "(csv: 'ColumnOrName', options: Optional[Dict[str, str]] = None) -> pyspark.sql.column.Column",
+      "doc": "Parses a CSV string and infers its schema in DDL format."
+    },
+    {
+      "name": "schema_of_json",
+      "signature": "(json: 'ColumnOrName', options: Optional[Dict[str, str]] = None) -> pyspark.sql.column.Column",
+      "doc": "Parses a JSON string and infers its schema in DDL format."
+    },
+    {
+      "name": "sec",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes secant of the input column."
+    },
+    {
+      "name": "second",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Extract the seconds of a given date as integer."
+    },
+    {
+      "name": "sentences",
+      "signature": "(string: 'ColumnOrName', language: Optional[ForwardRef('ColumnOrName')] = None, country: Optional[ForwardRef('ColumnOrName')] = None) -> pyspark.sql.column.Column",
+      "doc": "Splits a string into arrays of sentences, where each sentence is an array of words. The 'language' and 'country' arguments are optional, and if omitted, the default locale is used."
+    },
+    {
+      "name": "sequence",
+      "signature": "(start: 'ColumnOrName', stop: 'ColumnOrName', step: Optional[ForwardRef('ColumnOrName')] = None) -> pyspark.sql.column.Column",
+      "doc": "Generate a sequence of integers from `start` to `stop`, incrementing by `step`. If `step` is not set, incrementing by 1 if `start` is less than or equal to `stop`, otherwise -1."
+    },
+    {
+      "name": "session_window",
+      "signature": "(timeColumn: 'ColumnOrName', gapDuration: Union[pyspark.sql.column.Column, str]) -> pyspark.sql.column.Column",
+      "doc": "Generates session window given a timestamp specifying column. Session window is one of dynamic windows, which means the length of window is varying according to the given inputs. The length of session window is defined as \"the timestamp of latest input of the session + gap duration\", so when the new inputs are bound to the current session window, the end time of session window can be expanded a..."
+    },
+    {
+      "name": "sha",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a sha1 hash value as a hex string of the `col`."
+    },
+    {
+      "name": "sha1",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the hex string result of SHA-1."
+    },
+    {
+      "name": "sha2",
+      "signature": "(col: 'ColumnOrName', numBits: int) -> pyspark.sql.column.Column",
+      "doc": "Returns the hex string result of SHA-2 family of hash functions (SHA-224, SHA-256, SHA-384, and SHA-512). The numBits indicates the desired bit length of the result, which must have a value of 224, 256, 384, 512, or 0 (which is equivalent to 256)."
+    },
+    {
+      "name": "shiftLeft",
+      "signature": "(col: 'ColumnOrName', numBits: int) -> pyspark.sql.column.Column",
+      "doc": "Shift the given value numBits left."
+    },
+    {
+      "name": "shiftRight",
+      "signature": "(col: 'ColumnOrName', numBits: int) -> pyspark.sql.column.Column",
+      "doc": "(Signed) shift the given value numBits right."
+    },
+    {
+      "name": "shiftRightUnsigned",
+      "signature": "(col: 'ColumnOrName', numBits: int) -> pyspark.sql.column.Column",
+      "doc": "Unsigned shift the given value numBits right."
+    },
+    {
+      "name": "shiftleft",
+      "signature": "(col: 'ColumnOrName', numBits: int) -> pyspark.sql.column.Column",
+      "doc": "Shift the given value numBits left."
+    },
+    {
+      "name": "shiftright",
+      "signature": "(col: 'ColumnOrName', numBits: int) -> pyspark.sql.column.Column",
+      "doc": "(Signed) shift the given value numBits right."
+    },
+    {
+      "name": "shiftrightunsigned",
+      "signature": "(col: 'ColumnOrName', numBits: int) -> pyspark.sql.column.Column",
+      "doc": "Unsigned shift the given value numBits right."
+    },
+    {
+      "name": "shuffle",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Collection function: Generates a random permutation of the given array."
+    },
+    {
+      "name": "sign",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes the signum of the given value."
+    },
+    {
+      "name": "signum",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes the signum of the given value."
+    },
+    {
+      "name": "sin",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes sine of the input column."
+    },
+    {
+      "name": "sinh",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes hyperbolic sine of the input column."
+    },
+    {
+      "name": "size",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Collection function: returns the length of the array or map stored in the column."
+    },
+    {
+      "name": "skewness",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the skewness of the values in a group."
+    },
+    {
+      "name": "slice",
+      "signature": "(x: 'ColumnOrName', start: Union[ForwardRef('ColumnOrName'), int], length: Union[ForwardRef('ColumnOrName'), int]) -> pyspark.sql.column.Column",
+      "doc": "Collection function: returns an array containing all the elements in `x` from index `start` (array indices start at 1, or from the end if `start` is negative) with the specified `length`."
+    },
+    {
+      "name": "some",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns true if at least one value of `col` is true."
+    },
+    {
+      "name": "sort_array",
+      "signature": "(col: 'ColumnOrName', asc: bool = True) -> pyspark.sql.column.Column",
+      "doc": "Collection function: sorts the input array in ascending or descending order according to the natural ordering of the array elements. Null elements will be placed at the beginning of the returned array in ascending order or at the end of the returned array in descending order."
+    },
+    {
+      "name": "soundex",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the SoundEx encoding for a string"
+    },
+    {
+      "name": "spark_partition_id",
+      "signature": "() -> pyspark.sql.column.Column",
+      "doc": "A column for partition ID."
+    },
+    {
+      "name": "split",
+      "signature": "(str: 'ColumnOrName', pattern: str, limit: int = -1) -> pyspark.sql.column.Column",
+      "doc": "Splits str around matches of the given pattern."
+    },
+    {
+      "name": "split_part",
+      "signature": "(src: 'ColumnOrName', delimiter: 'ColumnOrName', partNum: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Splits `str` by delimiter and return requested part of the split (1-based). If any input is null, returns null. if `partNum` is out of range of split parts, returns empty string. If `partNum` is 0, throws an error. If `partNum` is negative, the parts are counted backward from the end of the string. If the `delimiter` is an empty string, the `str` is not split."
+    },
+    {
+      "name": "sqrt",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes the square root of the specified float value."
+    },
+    {
+      "name": "stack",
+      "signature": "(*cols: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Separates `col1`, ..., `colk` into `n` rows. Uses column names col0, col1, etc. by default unless specified otherwise."
+    },
+    {
+      "name": "startswith",
+      "signature": "(str: 'ColumnOrName', prefix: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a boolean. The value is True if str starts with prefix. Returns NULL if either input expression is NULL. Otherwise, returns False. Both str or prefix must be of STRING or BINARY type."
+    },
+    {
+      "name": "std",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: alias for stddev_samp."
+    },
+    {
+      "name": "stddev",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: alias for stddev_samp."
+    },
+    {
+      "name": "stddev_pop",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns population standard deviation of the expression in a group."
+    },
+    {
+      "name": "stddev_samp",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the unbiased sample standard deviation of the expression in a group."
+    },
+    {
+      "name": "str_to_map",
+      "signature": "(text: 'ColumnOrName', pairDelim: Optional[ForwardRef('ColumnOrName')] = None, keyValueDelim: Optional[ForwardRef('ColumnOrName')] = None) -> pyspark.sql.column.Column",
+      "doc": "Creates a map after splitting the text into key/value pairs using delimiters. Both `pairDelim` and `keyValueDelim` are treated as regular expressions."
+    },
+    {
+      "name": "struct",
+      "signature": "(*cols: Union[ForwardRef('ColumnOrName'), List[ForwardRef('ColumnOrName_')], Tuple[ForwardRef('ColumnOrName_'), ...]]) -> pyspark.sql.column.Column",
+      "doc": "Creates a new struct column."
+    },
+    {
+      "name": "substr",
+      "signature": "(str: 'ColumnOrName', pos: 'ColumnOrName', len: Optional[ForwardRef('ColumnOrName')] = None) -> pyspark.sql.column.Column",
+      "doc": "Returns the substring of `str` that starts at `pos` and is of length `len`, or the slice of byte array that starts at `pos` and is of length `len`."
+    },
+    {
+      "name": "substring",
+      "signature": "(str: 'ColumnOrName', pos: int, len: int) -> pyspark.sql.column.Column",
+      "doc": "Substring starts at `pos` and is of length `len` when str is String type or returns the slice of byte array that starts at `pos` in byte and is of length `len` when str is Binary type."
+    },
+    {
+      "name": "substring_index",
+      "signature": "(str: 'ColumnOrName', delim: str, count: int) -> pyspark.sql.column.Column",
+      "doc": "Returns the substring from string str before count occurrences of the delimiter delim. If count is positive, everything the left of the final delimiter (counting from left) is returned. If count is negative, every to the right of the final delimiter (counting from the right) is returned. substring_index performs a case-sensitive match when searching for delim."
+    },
+    {
+      "name": "sum",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the sum of all values in the expression."
+    },
+    {
+      "name": "sumDistinct",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the sum of distinct values in the expression."
+    },
+    {
+      "name": "sum_distinct",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the sum of distinct values in the expression."
+    },
+    {
+      "name": "tan",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes tangent of the input column."
+    },
+    {
+      "name": "tanh",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes hyperbolic tangent of the input column."
+    },
+    {
+      "name": "timestamp_micros",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Creates timestamp from the number of microseconds since UTC epoch."
+    },
+    {
+      "name": "timestamp_millis",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Creates timestamp from the number of milliseconds since UTC epoch."
+    },
+    {
+      "name": "timestamp_seconds",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Converts the number of seconds from the Unix epoch (1970-01-01T00:00:00Z) to a timestamp."
+    },
+    {
+      "name": "toDegrees",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": ".. versionadded:: 1.4.0"
+    },
+    {
+      "name": "toRadians",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": ".. versionadded:: 1.4.0"
+    },
+    {
+      "name": "to_binary",
+      "signature": "(col: 'ColumnOrName', format: Optional[ForwardRef('ColumnOrName')] = None) -> pyspark.sql.column.Column",
+      "doc": "Converts the input `col` to a binary value based on the supplied `format`. The `format` can be a case-insensitive string literal of \"hex\", \"utf-8\", \"utf8\", or \"base64\". By default, the binary format for conversion is \"hex\" if `format` is omitted. The function returns NULL if at least one of the input parameters is NULL."
+    },
+    {
+      "name": "to_char",
+      "signature": "(col: 'ColumnOrName', format: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Convert `col` to a string based on the `format`. Throws an exception if the conversion fails. The format can consist of the following characters, case insensitive: '0' or '9': Specifies an expected digit between 0 and 9. A sequence of 0 or 9 in the format string matches a sequence of digits in the input value, generating a result string of the same length as the corresponding sequence in the fo..."
+    },
+    {
+      "name": "to_csv",
+      "signature": "(col: 'ColumnOrName', options: Optional[Dict[str, str]] = None) -> pyspark.sql.column.Column",
+      "doc": "Converts a column containing a :class:`StructType` into a CSV string. Throws an exception, in the case of an unsupported type."
+    },
+    {
+      "name": "to_date",
+      "signature": "(col: 'ColumnOrName', format: Optional[str] = None) -> pyspark.sql.column.Column",
+      "doc": "Converts a :class:`~pyspark.sql.Column` into :class:`pyspark.sql.types.DateType` using the optionally specified format. Specify formats according to `datetime pattern`_. By default, it follows casting rules to :class:`pyspark.sql.types.DateType` if the format is omitted. Equivalent to ``col.cast(\"date\")``."
+    },
+    {
+      "name": "to_json",
+      "signature": "(col: 'ColumnOrName', options: Optional[Dict[str, str]] = None) -> pyspark.sql.column.Column",
+      "doc": "Converts a column containing a :class:`StructType`, :class:`ArrayType` or a :class:`MapType` into a JSON string. Throws an exception, in the case of an unsupported type."
+    },
+    {
+      "name": "to_number",
+      "signature": "(col: 'ColumnOrName', format: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Convert string 'col' to a number based on the string format 'format'. Throws an exception if the conversion fails. The format can consist of the following characters, case insensitive: '0' or '9': Specifies an expected digit between 0 and 9. A sequence of 0 or 9 in the format string matches a sequence of digits in the input string. If the 0/9 sequence starts with 0 and is before the decimal poi..."
+    },
+    {
+      "name": "to_str",
+      "signature": "(value: Any) -> Optional[str]",
+      "doc": "A wrapper over str(), but converts bool values to lower case strings. If None is given, just returns None, instead of converting it to string \"None\"."
+    },
+    {
+      "name": "to_timestamp",
+      "signature": "(col: 'ColumnOrName', format: Optional[str] = None) -> pyspark.sql.column.Column",
+      "doc": "Converts a :class:`~pyspark.sql.Column` into :class:`pyspark.sql.types.TimestampType` using the optionally specified format. Specify formats according to `datetime pattern`_. By default, it follows casting rules to :class:`pyspark.sql.types.TimestampType` if the format is omitted. Equivalent to ``col.cast(\"timestamp\")``."
+    },
+    {
+      "name": "to_timestamp_ltz",
+      "signature": "(timestamp: 'ColumnOrName', format: Optional[ForwardRef('ColumnOrName')] = None) -> pyspark.sql.column.Column",
+      "doc": "Parses the `timestamp` with the `format` to a timestamp without time zone. Returns null with invalid input."
+    },
+    {
+      "name": "to_timestamp_ntz",
+      "signature": "(timestamp: 'ColumnOrName', format: Optional[ForwardRef('ColumnOrName')] = None) -> pyspark.sql.column.Column",
+      "doc": "Parses the `timestamp` with the `format` to a timestamp without time zone. Returns null with invalid input."
+    },
+    {
+      "name": "to_unix_timestamp",
+      "signature": "(timestamp: 'ColumnOrName', format: Optional[ForwardRef('ColumnOrName')] = None) -> pyspark.sql.column.Column",
+      "doc": "Returns the UNIX timestamp of the given time."
+    },
+    {
+      "name": "to_utc_timestamp",
+      "signature": "(timestamp: 'ColumnOrName', tz: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "This is a common function for databases supporting TIMESTAMP WITHOUT TIMEZONE. This function takes a timestamp which is timezone-agnostic, and interprets it as a timestamp in the given timezone, and renders that timestamp as a timestamp in UTC."
+    },
+    {
+      "name": "to_varchar",
+      "signature": "(col: 'ColumnOrName', format: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Convert `col` to a string based on the `format`. Throws an exception if the conversion fails. The format can consist of the following characters, case insensitive: '0' or '9': Specifies an expected digit between 0 and 9. A sequence of 0 or 9 in the format string matches a sequence of digits in the input value, generating a result string of the same length as the corresponding sequence in the fo..."
+    },
+    {
+      "name": "transform",
+      "signature": "(col: 'ColumnOrName', f: Union[Callable[[pyspark.sql.column.Column], pyspark.sql.column.Column], Callable[[pyspark.sql.column.Column, pyspark.sql.column.Column], pyspark.sql.column.Column]]) -> pys...)",
+      "doc": "Returns an array of elements after applying a transformation to each element in the input array."
+    },
+    {
+      "name": "transform_keys",
+      "signature": "(col: 'ColumnOrName', f: Callable[[pyspark.sql.column.Column, pyspark.sql.column.Column], pyspark.sql.column.Column]) -> pyspark.sql.column.Column",
+      "doc": "Applies a function to every key-value pair in a map and returns a map with the results of those applications as the new keys for the pairs."
+    },
+    {
+      "name": "transform_values",
+      "signature": "(col: 'ColumnOrName', f: Callable[[pyspark.sql.column.Column, pyspark.sql.column.Column], pyspark.sql.column.Column]) -> pyspark.sql.column.Column",
+      "doc": "Applies a function to every key-value pair in a map and returns a map with the results of those applications as the new values for the pairs."
+    },
+    {
+      "name": "translate",
+      "signature": "(srcCol: 'ColumnOrName', matching: str, replace: str) -> pyspark.sql.column.Column",
+      "doc": "A function translate any character in the `srcCol` by a character in `matching`. The characters in `replace` is corresponding to the characters in `matching`. Translation will happen whenever any character in the string is matching with the character in the `matching`."
+    },
+    {
+      "name": "trim",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Trim the spaces from both ends for the specified string column."
+    },
+    {
+      "name": "trunc",
+      "signature": "(date: 'ColumnOrName', format: str) -> pyspark.sql.column.Column",
+      "doc": "Returns date truncated to the unit specified by the format."
+    },
+    {
+      "name": "try_add",
+      "signature": "(left: 'ColumnOrName', right: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the sum of `left`and `right` and the result is null on overflow. The acceptable input types are the same with the `+` operator."
+    },
+    {
+      "name": "try_aes_decrypt",
+      "signature": "(input: 'ColumnOrName', key: 'ColumnOrName', mode: Optional[ForwardRef('ColumnOrName')] = None, padding: Optional[ForwardRef('ColumnOrName')] = None, aad: Optional[ForwardRef('ColumnOrName')] = Non...)",
+      "doc": "This is a special version of `aes_decrypt` that performs the same operation, but returns a NULL value instead of raising an error if the decryption cannot be performed. Returns a decrypted value of `input` using AES in `mode` with `padding`. Key lengths of 16, 24 and 32 bits are supported. Supported combinations of (`mode`, `padding`) are ('ECB', 'PKCS'), ('GCM', 'NONE') and ('CBC', 'PKCS'). Op..."
+    },
+    {
+      "name": "try_avg",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the mean calculated from values of a group and the result is null on overflow."
+    },
+    {
+      "name": "try_divide",
+      "signature": "(left: 'ColumnOrName', right: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns `dividend`/`divisor`. It always performs floating point division. Its result is always null if `divisor` is 0."
+    },
+    {
+      "name": "try_element_at",
+      "signature": "(col: 'ColumnOrName', extraction: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "(array, index) - Returns element of array at given (1-based) index. If Index is 0, Spark will throw an error. If index < 0, accesses elements from the last to the first. The function always returns NULL if the index exceeds the length of the array."
+    },
+    {
+      "name": "try_multiply",
+      "signature": "(left: 'ColumnOrName', right: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns `left`*`right` and the result is null on overflow. The acceptable input types are the same with the `*` operator."
+    },
+    {
+      "name": "try_remote_functions",
+      "signature": "(f: ~FuncT) -> ~FuncT",
+      "doc": "Mark API supported from Spark Connect."
+    },
+    {
+      "name": "try_subtract",
+      "signature": "(left: 'ColumnOrName', right: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns `left`-`right` and the result is null on overflow. The acceptable input types are the same with the `-` operator."
+    },
+    {
+      "name": "try_sum",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the sum calculated from values of a group and the result is null on overflow."
+    },
+    {
+      "name": "try_to_binary",
+      "signature": "(col: 'ColumnOrName', format: Optional[ForwardRef('ColumnOrName')] = None) -> pyspark.sql.column.Column",
+      "doc": "This is a special version of `to_binary` that performs the same operation, but returns a NULL value instead of raising an error if the conversion cannot be performed."
+    },
+    {
+      "name": "try_to_number",
+      "signature": "(col: 'ColumnOrName', format: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Convert string 'col' to a number based on the string format `format`. Returns NULL if the string 'col' does not match the expected format. The format follows the same semantics as the to_number function."
+    },
+    {
+      "name": "try_to_timestamp",
+      "signature": "(col: 'ColumnOrName', format: Optional[ForwardRef('ColumnOrName')] = None) -> pyspark.sql.column.Column",
+      "doc": "Parses the `col` with the `format` to a timestamp. The function always returns null on an invalid input with/without ANSI SQL mode enabled. The result data type is consistent with the value of configuration `spark.sql.timestampType`."
+    },
+    {
+      "name": "typeof",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Return DDL-formatted type string for the data type of the input."
+    },
+    {
+      "name": "ucase",
+      "signature": "(str: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns `str` with all characters changed to uppercase."
+    },
+    {
+      "name": "udf",
+      "signature": "(f: Union[Callable[..., Any], ForwardRef('DataTypeOrString'), NoneType] = None, returnType: 'DataTypeOrString' = StringType(), *, useArrow: Optional[bool] = None) -> Union[ForwardRef('UserDefinedFu...)",
+      "doc": "Creates a user defined function (UDF)."
+    },
+    {
+      "name": "udtf",
+      "signature": "(cls: Optional[Type] = None, *, returnType: Union[pyspark.sql.types.StructType, str], useArrow: Optional[bool] = None) -> Union[ForwardRef('UserDefinedTableFunction'), Callable[[Type], ForwardRef('...)",
+      "doc": "Creates a user defined table function (UDTF)."
+    },
+    {
+      "name": "unbase64",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Decodes a BASE64 encoded string column and returns it as a binary column."
+    },
+    {
+      "name": "unhex",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Inverse of hex. Interprets each pair of characters as a hexadecimal number and converts to the byte representation of number."
+    },
+    {
+      "name": "unix_date",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the number of days since 1970-01-01."
+    },
+    {
+      "name": "unix_micros",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the number of microseconds since 1970-01-01 00:00:00 UTC."
+    },
+    {
+      "name": "unix_millis",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the number of milliseconds since 1970-01-01 00:00:00 UTC. Truncates higher levels of precision."
+    },
+    {
+      "name": "unix_seconds",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the number of seconds since 1970-01-01 00:00:00 UTC. Truncates higher levels of precision."
+    },
+    {
+      "name": "unix_timestamp",
+      "signature": "(timestamp: Optional[ForwardRef('ColumnOrName')] = None, format: str = 'yyyy-MM-dd HH:mm:ss') -> pyspark.sql.column.Column",
+      "doc": "Convert time string with given pattern ('yyyy-MM-dd HH:mm:ss', by default) to Unix time stamp (in seconds), using the default timezone and the default locale, returns null if failed."
+    },
+    {
+      "name": "unwrap_udt",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Unwrap UDT data type column into its underlying type."
+    },
+    {
+      "name": "upper",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Converts a string expression to upper case."
+    },
+    {
+      "name": "url_decode",
+      "signature": "(str: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Decodes a `str` in 'application/x-www-form-urlencoded' format using a specific encoding scheme."
+    },
+    {
+      "name": "url_encode",
+      "signature": "(str: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Translates a string into 'application/x-www-form-urlencoded' format using a specific encoding scheme."
+    },
+    {
+      "name": "user",
+      "signature": "() -> pyspark.sql.column.Column",
+      "doc": "Returns the current database."
+    },
+    {
+      "name": "var_pop",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the population variance of the values in a group."
+    },
+    {
+      "name": "var_samp",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: returns the unbiased sample variance of the values in a group."
+    },
+    {
+      "name": "variance",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Aggregate function: alias for var_samp"
+    },
+    {
+      "name": "version",
+      "signature": "() -> pyspark.sql.column.Column",
+      "doc": "Returns the Spark version. The string contains 2 fields, the first being a release version and the second being a git revision."
+    },
+    {
+      "name": "weekday",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the day of the week for date/timestamp (0 = Monday, 1 = Tuesday, ..., 6 = Sunday)."
+    },
+    {
+      "name": "weekofyear",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Extract the week number of a given date as integer. A week is considered to start on a Monday and week 1 is the first week with more than 3 days, as defined by ISO 8601"
+    },
+    {
+      "name": "when",
+      "signature": "(condition: pyspark.sql.column.Column, value: Any) -> pyspark.sql.column.Column",
+      "doc": "Evaluates a list of conditions and returns one of multiple possible result expressions. If :func:`pyspark.sql.Column.otherwise` is not invoked, None is returned for unmatched conditions."
+    },
+    {
+      "name": "width_bucket",
+      "signature": "(v: 'ColumnOrName', min: 'ColumnOrName', max: 'ColumnOrName', numBucket: Union[ForwardRef('ColumnOrName'), int]) -> pyspark.sql.column.Column",
+      "doc": "Returns the bucket number into which the value of this expression would fall after being evaluated. Note that input arguments must follow conditions listed below; otherwise, the method will return null."
+    },
+    {
+      "name": "window",
+      "signature": "(timeColumn: 'ColumnOrName', windowDuration: str, slideDuration: Optional[str] = None, startTime: Optional[str] = None) -> pyspark.sql.column.Column",
+      "doc": "Bucketize rows into one or more time windows given a timestamp specifying column. Window starts are inclusive but the window ends are exclusive, e.g. 12:05 will be in the window [12:05,12:10) but not in [12:00,12:05). Windows can support microsecond precision. Windows in the order of months are not supported."
+    },
+    {
+      "name": "window_time",
+      "signature": "(windowColumn: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Computes the event time from a window column. The column window values are produced by window aggregating operators and are of type `STRUCT<start: TIMESTAMP, end: TIMESTAMP>` where start is inclusive and end is exclusive. The event time of records produced by window aggregating operators can be computed as ``window_time(window)`` and are ``window.end - lit(1).alias(\"microsecond\")`` (as microsec..."
+    },
+    {
+      "name": "xpath",
+      "signature": "(xml: 'ColumnOrName', path: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a string array of values within the nodes of xml that match the XPath expression."
+    },
+    {
+      "name": "xpath_boolean",
+      "signature": "(xml: 'ColumnOrName', path: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns true if the XPath expression evaluates to true, or if a matching node is found."
+    },
+    {
+      "name": "xpath_double",
+      "signature": "(xml: 'ColumnOrName', path: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a double value, the value zero if no match is found, or NaN if a match is found but the value is non-numeric."
+    },
+    {
+      "name": "xpath_float",
+      "signature": "(xml: 'ColumnOrName', path: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a float value, the value zero if no match is found, or NaN if a match is found but the value is non-numeric."
+    },
+    {
+      "name": "xpath_int",
+      "signature": "(xml: 'ColumnOrName', path: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns an integer value, or the value zero if no match is found, or a match is found but the value is non-numeric."
+    },
+    {
+      "name": "xpath_long",
+      "signature": "(xml: 'ColumnOrName', path: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a long integer value, or the value zero if no match is found, or a match is found but the value is non-numeric."
+    },
+    {
+      "name": "xpath_number",
+      "signature": "(xml: 'ColumnOrName', path: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a double value, the value zero if no match is found, or NaN if a match is found but the value is non-numeric."
+    },
+    {
+      "name": "xpath_short",
+      "signature": "(xml: 'ColumnOrName', path: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns a short integer value, or the value zero if no match is found, or a match is found but the value is non-numeric."
+    },
+    {
+      "name": "xpath_string",
+      "signature": "(xml: 'ColumnOrName', path: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Returns the text contents of the first xml node that matches the XPath expression."
+    },
+    {
+      "name": "xxhash64",
+      "signature": "(*cols: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Calculates the hash code of given columns using the 64-bit variant of the xxHash algorithm, and returns the result as a long column. The hash computation uses an initial seed of 42."
+    },
+    {
+      "name": "year",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Extract the year of a given date/timestamp as integer."
+    },
+    {
+      "name": "years",
+      "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
+      "doc": "Partition transform function: A transform for timestamps and dates to partition data into years."
+    },
+    {
+      "name": "zip_with",
+      "signature": "(left: 'ColumnOrName', right: 'ColumnOrName', f: Callable[[pyspark.sql.column.Column, pyspark.sql.column.Column], pyspark.sql.column.Column]) -> pyspark.sql.column.Column",
+      "doc": "Merge two given arrays, element-wise, into a single array using a function. If one array is shorter, nulls are appended at the end to match the length of the longer array, before applying the function."
+    }
+  ]
+}

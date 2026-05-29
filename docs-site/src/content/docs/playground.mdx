@@ -1,58 +1,60 @@
 ---
 title: Playground
-description: Try pykrete in your browser. Edit Python code with full pyright type checking and pykrete schema diagnostics — same engines the VS Code extension uses, running locally via WebAssembly and a web worker.
+description: Try pykrete in your browser. Edit `.pyk` code and watch pykrete's schema-aware diagnostics, hover, completion, and go-to-definition update as you type — running locally via WebAssembly.
 ---
 
 import Playground from '../../components/Playground.tsx';
 
-Edit the source below. pykrete runs in your browser via WebAssembly,
-and Microsoft's pyright runs alongside it in a Web Worker — the same
-engines the VS Code extension uses. No code leaves your machine.
+Edit the source below. pykrete runs in your browser via WebAssembly —
+the same checker the CLI and the VS Code extension use. No code leaves
+your machine.
 
 <Playground client:only="react" />
 
 ## What you're seeing
 
 Every keystroke (debounced ~300 ms) runs the source through pykrete's
-single-file analyzer **and** pyright in `typeCheckingMode: 'standard'`
-— the same mode the VS Code extension configures. Diagnostics from
-both engines show up as squiggles in the editor and as one-liners in
-the panel below — pykrete's keep their `D\d\d\d\d` codes; pyright's
-are prefixed `py:`.
+single-file analyzer. Diagnostics show up as squiggles in the editor
+and as one-liners in the panel below — each carrying pykrete's
+`D\d\d\d\d` code and rule name.
 
-The playground multiplexes both engines into Monaco for every IDE
-feature, the same way the LSP server does for the VS Code extension:
+The playground wires pykrete into Monaco for the IDE features that
+matter on a `.pyk` file:
 
-- **Hover.** Hover a Schema class name to see its fields; hover any
-  Python identifier to see pyright's type information. When both
-  engines have something to say, the popup stacks pykrete's content
-  on top, then a horizontal rule, then pyright's. Schema hovers
-  suppress pyright's "(class) Foo" echo (same rule as the VS Code
-  extension — the schema heading already covers it).
+- **Schema-aware diagnostics.** Column typos, unknown schemas, type
+  mismatches, and the rest of the `D00xx` rule surface — same engine
+  the VS Code extension runs.
+- **Hover.** Hover a Schema class name to see its fields; hover a
+  DataFrame-typed identifier to see the bound schema; hover a Spark
+  method (`sales.select`, `F.sum`) to see its real pyspark signature
+  and docstring summary.
 - **Completion.** Type a column name inside `col("…")` to get
-  pykrete's column suggestions; type `pri` at the top level to get
-  pyright's `print` (with its standard-library signature); inside a
-  `DataFrame[…]` slot you get every Schema declared in the source;
-  inside any function call, pyright supplies argument-name and
-  keyword completions for the Python standard library and any
-  imports you reference. Pykrete suggestions come first.
+  pykrete's column suggestions from the bound schema. Type `sales.`
+  on a `DataFrame[Schema]`-typed local to get the DataFrame method
+  surface; `F.` to get `pyspark.sql.functions`; `.groupBy("…").` to
+  get GroupedData methods. The Spark suggestions are generated at
+  build time from a real pyspark install — see
+  `docs-site/scripts/gen-pyspark-symbols.py` in the repo.
 - **Go-to-definition.** Cmd/Ctrl+click (or F12) on a `DataFrame[X]`
-  reference to jump to `class X(Schema):`; jump to any in-file `def`
-  or `class` via pyright when pykrete doesn't know the symbol.
-- **Python type checking.** pyright runs in standard mode and
-  publishes type errors as you type. Same diagnostic list, prefixed
-  with `py:` so you can tell them apart from pykrete's.
+  reference to jump to `class X(Schema):`.
 
-The wasm playground is single-file only: no cross-file resolution, no
-project config, no `.pyk-import` declarations.
+## What's NOT here
 
-**No explicit imports needed.** `Schema`, `DataFrame`, `col`, `F`,
-and the lowercase PySpark-style type aliases (`string`, `double`,
-`long`, …) are pre-declared for you — just write the code. Pure
-Python and the Python standard library work as you'd expect. Other
-third-party packages (`numpy`, `pandas`, …) aren't bundled and will
-resolve as `Any`; pykrete and PySpark are the supported sandbox
-surface.
+This is a single-file pykrete sandbox. It is **not** a general Python
+type checker:
+
+- No general Python type checking. `int`/`str`/`bool` and the rest of
+  Python's standard library are not validated here — pykrete focuses
+  on schema and DataFrame semantics. For full Python typing, install
+  the [VS Code extension](/pykrete/getting-started/install/) — it
+  runs pykrete alongside basedpyright (or pyright), so you get both.
+- No cross-file resolution. Multi-file imports, project
+  configuration, and the `.pyk-import` mechanism need real file
+  system access — use the CLI for those.
+- `Schema`, `DataFrame`, `col`, `F`, and the lowercase PySpark-style
+  type aliases (`string`, `double`, `long`, …) are pre-declared for
+  you here so you can start typing without import boilerplate. Real
+  projects use explicit imports — see the Install page.
 
 ## Limits
 
@@ -61,13 +63,9 @@ surface.
 - **Desktop-first.** Monaco editor is hard to use on a phone; the
   diagnostics list is still useful on small screens, but typing is
   not.
-- **Single-file analysis only.** Multi-file imports, project
-  configuration, and the `.pyk-import` mechanism need real file
-  system access — use the CLI for those.
-- **Cold-start bundle is large.** Monaco loads from a CDN (~2 MB);
-  pykrete-wasm and pyright-browser are each a few MB and load on
-  demand when this page mounts. Other pages on the docs site are
-  unaffected.
+- **Cold-start bundle.** Monaco loads from a CDN (~2 MB); pykrete-wasm
+  is a few hundred KB and loads on demand when this page mounts.
+  Other pages on the docs site are unaffected.
 
 ## Want it locally?
 
