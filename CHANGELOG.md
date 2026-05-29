@@ -6,6 +6,30 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.25]
+
+Playground polish. Monaco's bundled Python tokenizer is context-free
+and matches identifiers against a single flat list that mixes
+real keywords (`def`, `class`, `return`) with Python builtins
+(`filter`, `map`, `sum`, `len`, `type`, `print`, `range`, `zip`,
+`iter`, `next`, etc.) — so a method call like
+`sales.filter(col("amount") < 1000)` rendered `filter` in the
+keyword color while sibling chains like `sales.select(...)` or
+`sales.groupBy(...)` rendered their methods in the regular identifier
+color. The asymmetry was distracting and the user asked for it fixed.
+
+This release ships a Monarch tokenizer override that copies Monaco's
+v0.52.2 Python grammar verbatim, then adds one rule: a `.` followed by
+an identifier pushes into a dedicated `property` state where the
+identifier always tokenizes as a plain `identifier`, never matched
+against `@keywords`. Top-level uses (e.g. `len(my_list)`) keep their
+existing color — only post-dot identifiers change. The override is
+installed in `beforeMount`, before any editor model is created, so
+existing buffers pick it up immediately. Everything else about
+Monaco's Python tokenizing — strings, f-strings, triple-quoted
+strings, numbers, hex, decorators, comments — is byte-identical to
+upstream. Docs-only release.
+
 ## [0.1.24]
 
 Hotfix. v0.1.23 mirrored Monaco's color rules onto
