@@ -1,1 +1,2 @@
+# Python 3.10–3.12 (pyspark 3.5.x's supported interpreter range).
 pyspark==3.5.1

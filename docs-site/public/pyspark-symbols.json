@@ -1,7 +1,6 @@
 {
   "_meta": {
-    "pyspark_version": "3.5.1",
-    "python_version": "3.13.2"
+    "pyspark_version": "3.5.1"
   },
   "DataFrame": [
     {
@@ -256,7 +255,7 @@
     },
     {
       "name": "melt",
-      "signature": "(self, ids: Union[ForwardRef('ColumnOrName'), List[ForwardRef('ColumnOrName')], Tuple[ForwardRef('ColumnOrName'), ...]], values: Union[ForwardRef('ColumnOrName'), List[ForwardRef('ColumnOrName')], ...)",
+      "signature": "(self, ids: Union[ForwardRef('ColumnOrName'), List[ForwardRef('ColumnOrName')], Tuple[ForwardRef('ColumnOrName'), ...]], values: Union[ForwardRef('ColumnOrName'), List[ForwardRef('ColumnOrName')], Tuple[ForwardRef('ColumnOrName'), ...], NoneType], variableColumnName: str, valueColumnName: str) -> 'DataFrame'",
       "doc": "Unpivot a DataFrame from wide format to long format, optionally leaving identifier columns set. This is the reverse to `groupBy(...).pivot(...).agg(...)`, except for the aggregation, which cannot be reversed."
     },
     {
@@ -321,7 +320,7 @@
     },
     {
       "name": "replace",
-      "signature": "(self, to_replace: Union[ForwardRef('LiteralType'), List[ForwardRef('LiteralType')], Dict[ForwardRef('LiteralType'), ForwardRef('OptionalPrimitiveType')]], value: Union[ForwardRef('OptionalPrimitiv...)",
+      "signature": "(self, to_replace: Union[ForwardRef('LiteralType'), List[ForwardRef('LiteralType')], Dict[ForwardRef('LiteralType'), ForwardRef('OptionalPrimitiveType')]], value: Union[ForwardRef('OptionalPrimitiveType'), List[ForwardRef('OptionalPrimitiveType')], pyspark._globals._NoValueType, NoneType] = <no value>, subset: Optional[List[str]] = None) -> 'DataFrame'",
       "doc": "Returns a new :class:`DataFrame` replacing a value with another value. :func:`DataFrame.replace` and :func:`DataFrameNaFunctions.replace` are aliases of each other. Values to_replace and value must have the same type and can only be numerics, booleans, or strings. Value can have None. When replacing, the new value will be cast to the type of the existing column. For numeric replacements all val..."
     },
     {
@@ -481,7 +480,7 @@
     },
     {
       "name": "unpivot",
-      "signature": "(self, ids: Union[ForwardRef('ColumnOrName'), List[ForwardRef('ColumnOrName')], Tuple[ForwardRef('ColumnOrName'), ...]], values: Union[ForwardRef('ColumnOrName'), List[ForwardRef('ColumnOrName')], ...)",
+      "signature": "(self, ids: Union[ForwardRef('ColumnOrName'), List[ForwardRef('ColumnOrName')], Tuple[ForwardRef('ColumnOrName'), ...]], values: Union[ForwardRef('ColumnOrName'), List[ForwardRef('ColumnOrName')], Tuple[ForwardRef('ColumnOrName'), ...], NoneType], variableColumnName: str, valueColumnName: str) -> 'DataFrame'",
       "doc": "Unpivot a DataFrame from wide format to long format, optionally leaving identifier columns set. This is the reverse to `groupBy(...).pivot(...).agg(...)`, except for the aggregation, which cannot be reversed."
     },
     {
@@ -563,7 +562,7 @@
     },
     {
       "name": "between",
-      "signature": "(self, lowerBound: Union[ForwardRef('Column'), ForwardRef('LiteralType'), ForwardRef('DateTimeLiteral'), ForwardRef('DecimalLiteral')], upperBound: Union[ForwardRef('Column'), ForwardRef('LiteralTy...)",
+      "signature": "(self, lowerBound: Union[ForwardRef('Column'), ForwardRef('LiteralType'), ForwardRef('DateTimeLiteral'), ForwardRef('DecimalLiteral')], upperBound: Union[ForwardRef('Column'), ForwardRef('LiteralType'), ForwardRef('DateTimeLiteral'), ForwardRef('DecimalLiteral')]) -> 'Column'",
       "doc": "True if the current column is between the lower bound and upper bound, inclusive."
     },
     {
@@ -715,7 +714,7 @@
     },
     {
       "name": "applyInPandasWithState",
-      "signature": "(self, func: 'PandasGroupedMapFunctionWithState', outputStructType: Union[pyspark.sql.types.StructType, str], stateStructType: Union[pyspark.sql.types.StructType, str], outputMode: str, timeoutConf...)",
+      "signature": "(self, func: 'PandasGroupedMapFunctionWithState', outputStructType: Union[pyspark.sql.types.StructType, str], stateStructType: Union[pyspark.sql.types.StructType, str], outputMode: str, timeoutConf: str) -> pyspark.sql.dataframe.DataFrame",
       "doc": "Applies the given function to each group of data, while maintaining a user-defined per-group state. The result Dataset will represent the flattened record returned by the function."
     },
     {
@@ -763,7 +762,7 @@
     {
       "name": "currentRow",
       "signature": "",
-      "doc": "int([x]) -> integer int(x, base=10) -> integer"
+      "doc": ""
     },
     {
       "name": "orderBy",
@@ -788,12 +787,12 @@
     {
       "name": "unboundedFollowing",
       "signature": "",
-      "doc": "int([x]) -> integer int(x, base=10) -> integer"
+      "doc": ""
     },
     {
       "name": "unboundedPreceding",
       "signature": "",
-      "doc": "int([x]) -> integer int(x, base=10) -> integer"
+      "doc": ""
     }
   ],
   "functions": [
@@ -819,17 +818,17 @@
     },
     {
       "name": "aes_decrypt",
-      "signature": "(input: 'ColumnOrName', key: 'ColumnOrName', mode: Optional[ForwardRef('ColumnOrName')] = None, padding: Optional[ForwardRef('ColumnOrName')] = None, aad: Optional[ForwardRef('ColumnOrName')] = Non...)",
+      "signature": "(input: 'ColumnOrName', key: 'ColumnOrName', mode: Optional[ForwardRef('ColumnOrName')] = None, padding: Optional[ForwardRef('ColumnOrName')] = None, aad: Optional[ForwardRef('ColumnOrName')] = None) -> pyspark.sql.column.Column",
       "doc": "Returns a decrypted value of `input` using AES in `mode` with `padding`. Key lengths of 16, 24 and 32 bits are supported. Supported combinations of (`mode`, `padding`) are ('ECB', 'PKCS'), ('GCM', 'NONE') and ('CBC', 'PKCS'). Optional additional authenticated data (AAD) is only supported for GCM. If provided for encryption, the identical AAD value must be provided for decryption. The default mo..."
     },
     {
       "name": "aes_encrypt",
-      "signature": "(input: 'ColumnOrName', key: 'ColumnOrName', mode: Optional[ForwardRef('ColumnOrName')] = None, padding: Optional[ForwardRef('ColumnOrName')] = None, iv: Optional[ForwardRef('ColumnOrName')] = None...)",
+      "signature": "(input: 'ColumnOrName', key: 'ColumnOrName', mode: Optional[ForwardRef('ColumnOrName')] = None, padding: Optional[ForwardRef('ColumnOrName')] = None, iv: Optional[ForwardRef('ColumnOrName')] = None, aad: Optional[ForwardRef('ColumnOrName')] = None) -> pyspark.sql.column.Column",
       "doc": "Returns an encrypted value of `input` using AES in given `mode` with the specified `padding`. Key lengths of 16, 24 and 32 bits are supported. Supported combinations of (`mode`, `padding`) are ('ECB', 'PKCS'), ('GCM', 'NONE') and ('CBC', 'PKCS'). Optional initialization vectors (IVs) are only supported for CBC and GCM modes. These must be 16 bytes for CBC and 12 bytes for GCM. If not provided, ..."
     },
     {
       "name": "aggregate",
-      "signature": "(col: 'ColumnOrName', initialValue: 'ColumnOrName', merge: Callable[[pyspark.sql.column.Column, pyspark.sql.column.Column], pyspark.sql.column.Column], finish: Optional[Callable[[pyspark.sql.column...)",
+      "signature": "(col: 'ColumnOrName', initialValue: 'ColumnOrName', merge: Callable[[pyspark.sql.column.Column, pyspark.sql.column.Column], pyspark.sql.column.Column], finish: Optional[Callable[[pyspark.sql.column.Column], pyspark.sql.column.Column]] = None) -> pyspark.sql.column.Column",
       "doc": "Applies a binary operator to an initial state and all elements in the array, and reduces this to a single state. The final state is converted into the final result by applying a finish function."
     },
     {
@@ -1509,7 +1508,7 @@
     },
     {
       "name": "filter",
-      "signature": "(col: 'ColumnOrName', f: Union[Callable[[pyspark.sql.column.Column], pyspark.sql.column.Column], Callable[[pyspark.sql.column.Column, pyspark.sql.column.Column], pyspark.sql.column.Column]]) -> pys...)",
+      "signature": "(col: 'ColumnOrName', f: Union[Callable[[pyspark.sql.column.Column], pyspark.sql.column.Column], Callable[[pyspark.sql.column.Column, pyspark.sql.column.Column], pyspark.sql.column.Column]]) -> pyspark.sql.column.Column",
       "doc": "Returns an array of elements for which a predicate holds in a given array."
     },
     {
@@ -1854,22 +1853,22 @@
     },
     {
       "name": "make_dt_interval",
-      "signature": "(days: Optional[ForwardRef('ColumnOrName')] = None, hours: Optional[ForwardRef('ColumnOrName')] = None, mins: Optional[ForwardRef('ColumnOrName')] = None, secs: Optional[ForwardRef('ColumnOrName')]...)",
+      "signature": "(days: Optional[ForwardRef('ColumnOrName')] = None, hours: Optional[ForwardRef('ColumnOrName')] = None, mins: Optional[ForwardRef('ColumnOrName')] = None, secs: Optional[ForwardRef('ColumnOrName')] = None) -> pyspark.sql.column.Column",
       "doc": "Make DayTimeIntervalType duration from days, hours, mins and secs."
     },
     {
       "name": "make_interval",
-      "signature": "(years: Optional[ForwardRef('ColumnOrName')] = None, months: Optional[ForwardRef('ColumnOrName')] = None, weeks: Optional[ForwardRef('ColumnOrName')] = None, days: Optional[ForwardRef('ColumnOrName...)",
+      "signature": "(years: Optional[ForwardRef('ColumnOrName')] = None, months: Optional[ForwardRef('ColumnOrName')] = None, weeks: Optional[ForwardRef('ColumnOrName')] = None, days: Optional[ForwardRef('ColumnOrName')] = None, hours: Optional[ForwardRef('ColumnOrName')] = None, mins: Optional[ForwardRef('ColumnOrName')] = None, secs: Optional[ForwardRef('ColumnOrName')] = None) -> pyspark.sql.column.Column",
       "doc": "Make interval from years, months, weeks, days, hours, mins and secs."
     },
     {
       "name": "make_timestamp",
-      "signature": "(years: 'ColumnOrName', months: 'ColumnOrName', days: 'ColumnOrName', hours: 'ColumnOrName', mins: 'ColumnOrName', secs: 'ColumnOrName', timezone: Optional[ForwardRef('ColumnOrName')] = None) -> py...)",
+      "signature": "(years: 'ColumnOrName', months: 'ColumnOrName', days: 'ColumnOrName', hours: 'ColumnOrName', mins: 'ColumnOrName', secs: 'ColumnOrName', timezone: Optional[ForwardRef('ColumnOrName')] = None) -> pyspark.sql.column.Column",
       "doc": "Create timestamp from years, months, days, hours, mins, secs and timezone fields. The result data type is consistent with the value of configuration `spark.sql.timestampType`. If the configuration `spark.sql.ansi.enabled` is false, the function returns NULL on invalid inputs. Otherwise, it will throw an error instead."
     },
     {
       "name": "make_timestamp_ltz",
-      "signature": "(years: 'ColumnOrName', months: 'ColumnOrName', days: 'ColumnOrName', hours: 'ColumnOrName', mins: 'ColumnOrName', secs: 'ColumnOrName', timezone: Optional[ForwardRef('ColumnOrName')] = None) -> py...)",
+      "signature": "(years: 'ColumnOrName', months: 'ColumnOrName', days: 'ColumnOrName', hours: 'ColumnOrName', mins: 'ColumnOrName', secs: 'ColumnOrName', timezone: Optional[ForwardRef('ColumnOrName')] = None) -> pyspark.sql.column.Column",
       "doc": "Create the current timestamp with local time zone from years, months, days, hours, mins, secs and timezone fields. If the configuration `spark.sql.ansi.enabled` is false, the function returns NULL on invalid inputs. Otherwise, it will throw an error instead."
     },
     {
@@ -1929,7 +1928,7 @@
     },
     {
       "name": "mask",
-      "signature": "(col: 'ColumnOrName', upperChar: Optional[ForwardRef('ColumnOrName')] = None, lowerChar: Optional[ForwardRef('ColumnOrName')] = None, digitChar: Optional[ForwardRef('ColumnOrName')] = None, otherCh...)",
+      "signature": "(col: 'ColumnOrName', upperChar: Optional[ForwardRef('ColumnOrName')] = None, lowerChar: Optional[ForwardRef('ColumnOrName')] = None, digitChar: Optional[ForwardRef('ColumnOrName')] = None, otherChar: Optional[ForwardRef('ColumnOrName')] = None) -> pyspark.sql.column.Column",
       "doc": "Masks the given string value. This can be useful for creating copies of tables with sensitive information removed."
     },
     {
@@ -2164,7 +2163,7 @@
     },
     {
       "name": "reduce",
-      "signature": "(col: 'ColumnOrName', initialValue: 'ColumnOrName', merge: Callable[[pyspark.sql.column.Column, pyspark.sql.column.Column], pyspark.sql.column.Column], finish: Optional[Callable[[pyspark.sql.column...)",
+      "signature": "(col: 'ColumnOrName', initialValue: 'ColumnOrName', merge: Callable[[pyspark.sql.column.Column, pyspark.sql.column.Column], pyspark.sql.column.Column], finish: Optional[Callable[[pyspark.sql.column.Column], pyspark.sql.column.Column]] = None) -> pyspark.sql.column.Column",
       "doc": "Applies a binary operator to an initial state and all elements in the array, and reduces this to a single state. The final state is converted into the final result by applying a finish function."
     },
     {
@@ -2629,7 +2628,7 @@
     },
     {
       "name": "transform",
-      "signature": "(col: 'ColumnOrName', f: Union[Callable[[pyspark.sql.column.Column], pyspark.sql.column.Column], Callable[[pyspark.sql.column.Column, pyspark.sql.column.Column], pyspark.sql.column.Column]]) -> pys...)",
+      "signature": "(col: 'ColumnOrName', f: Union[Callable[[pyspark.sql.column.Column], pyspark.sql.column.Column], Callable[[pyspark.sql.column.Column, pyspark.sql.column.Column], pyspark.sql.column.Column]]) -> pyspark.sql.column.Column",
       "doc": "Returns an array of elements after applying a transformation to each element in the input array."
     },
     {
@@ -2664,7 +2663,7 @@
     },
     {
       "name": "try_aes_decrypt",
-      "signature": "(input: 'ColumnOrName', key: 'ColumnOrName', mode: Optional[ForwardRef('ColumnOrName')] = None, padding: Optional[ForwardRef('ColumnOrName')] = None, aad: Optional[ForwardRef('ColumnOrName')] = Non...)",
+      "signature": "(input: 'ColumnOrName', key: 'ColumnOrName', mode: Optional[ForwardRef('ColumnOrName')] = None, padding: Optional[ForwardRef('ColumnOrName')] = None, aad: Optional[ForwardRef('ColumnOrName')] = None) -> pyspark.sql.column.Column",
       "doc": "This is a special version of `aes_decrypt` that performs the same operation, but returns a NULL value instead of raising an error if the decryption cannot be performed. Returns a decrypted value of `input` using AES in `mode` with `padding`. Key lengths of 16, 24 and 32 bits are supported. Supported combinations of (`mode`, `padding`) are ('ECB', 'PKCS'), ('GCM', 'NONE') and ('CBC', 'PKCS'). Op..."
     },
     {
@@ -2724,12 +2723,12 @@
     },
     {
       "name": "udf",
-      "signature": "(f: Union[Callable[..., Any], ForwardRef('DataTypeOrString'), NoneType] = None, returnType: 'DataTypeOrString' = StringType(), *, useArrow: Optional[bool] = None) -> Union[ForwardRef('UserDefinedFu...)",
+      "signature": "(f: Union[Callable[..., Any], ForwardRef('DataTypeOrString'), NoneType] = None, returnType: 'DataTypeOrString' = StringType(), *, useArrow: Optional[bool] = None) -> Union[ForwardRef('UserDefinedFunctionLike'), Callable[[Callable[..., Any]], ForwardRef('UserDefinedFunctionLike')]]",
       "doc": "Creates a user defined function (UDF)."
     },
     {
       "name": "udtf",
-      "signature": "(cls: Optional[Type] = None, *, returnType: Union[pyspark.sql.types.StructType, str], useArrow: Optional[bool] = None) -> Union[ForwardRef('UserDefinedTableFunction'), Callable[[Type], ForwardRef('...)",
+      "signature": "(cls: Optional[Type] = None, *, returnType: Union[pyspark.sql.types.StructType, str], useArrow: Optional[bool] = None) -> Union[ForwardRef('UserDefinedTableFunction'), Callable[[Type], ForwardRef('UserDefinedTableFunction')]]",
       "doc": "Creates a user defined table function (UDTF)."
     },
     {

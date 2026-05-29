@@ -36,10 +36,7 @@ def _signature(obj: Any) -> str:
         sig = inspect.signature(obj)
     except (TypeError, ValueError):
         return "(...)"
-    text = str(sig)
-    if len(text) > 200:
-        text = text[:197] + "...)"
-    return text
+    return str(sig)
 
 
 def _collect_class(cls: type) -> list[dict[str, str]]:
@@ -78,6 +75,12 @@ def _collect_class(cls: type) -> list[dict[str, str]]:
                         "doc": _doc_summary(resolved),
                     }
                 )
+            elif isinstance(resolved, (int, float, str, bytes, bool)):
+                # Primitive class-level constants (e.g. `Window.currentRow`,
+                # `Window.unboundedPreceding`) — `_doc_summary` would walk
+                # to `int.__doc__` and emit `int([x]) -> integer …`. Emit
+                # an empty doc instead; the symbol name is the signal.
+                out.append({"name": name, "signature": "", "doc": ""})
             else:
                 out.append({"name": name, "signature": "", "doc": _doc_summary(resolved)})
         except Exception as err:  # noqa: BLE001
@@ -147,7 +150,6 @@ def main() -> int:
     payload = {
         "_meta": {
             "pyspark_version": pyspark.__version__,
-            "python_version": sys.version.split()[0],
         },
         "DataFrame": _collect_class(DataFrame),
         "Column": _collect_class(Column),
