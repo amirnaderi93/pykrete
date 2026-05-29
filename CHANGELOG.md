@@ -6,6 +6,37 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.26]
+
+Spark coverage hardening, part 1 of the pre-v1.0.0 sprint. Two blocker-
+grade gaps in the analyzer closed: a body-walker blind spot inside
+control-flow statements, and a `GroupedData` schema regression on the
+aggregate shortcuts.
+
+The body walker now descends into every `if`/`elif`/`else`, `for`,
+`while`, `with`, `try`/`except`/`finally`, and `match` block — pre-
+v0.1.26 it only checked top-level `Assign`/`AnnAssign`/`Return`/`Expr`
+statements, so a typo like `if debug: return raw.select("regoin")`
+never reached the col-ref checker. Loop targets, `with ... as x:`
+bindings, and `except E as e:` exception bindings are now marked as
+local names (so D0051's local-rebind detection works inside nested
+blocks), and the `with`-as binding additionally records its schema
+when the context expression resolves to a DataFrame. `AugAssign`
+(`x += expr`) is also walked.
+
+On the GroupedData front, `groupBy(keys).count()` is no longer treated
+as a chain-killing terminal — it now produces a `{keys..., count: long}`
+schema so the routine `.filter(col("count") > 10)` follow-up gets
+checked. `df.count()` (the actual terminal) is unchanged. The
+`groupBy.sum()` / `.max()` / `.min()` / `.mean()` / `.avg()` shortcuts
+now return `{keys..., method(col)...}` instead of `None`, mirroring
+Spark's auto-generated output column names. Type derivation follows
+pyspark's rules: `sum` widens `int` → `long`, preserves `long` and
+`double`; `mean`/`avg` always return `double`; `max`/`min` preserve
+the input type. Synthetic names are interned per-`BodyContext` so
+they can flow through the `DerivedField` chain at the source
+lifetime.
+
 ## [0.1.25]
 
 Playground polish. Monaco's bundled Python tokenizer is context-free
