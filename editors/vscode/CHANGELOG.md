@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.22
+
+Marketplace metadata refresh tracking the v0.1.25 docs-only release
+(playground tokenizer polish). The bundled `pykrete-lsp` is unchanged
+from 0.2.21.
+
 ## 0.2.13
 
 Marketplace listing refresh — README quick-fixes section tightened to

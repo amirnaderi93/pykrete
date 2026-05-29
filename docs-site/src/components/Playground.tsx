@@ -15,7 +15,12 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import Editor, { type Monaco, type OnChange, type OnMount } from '@monaco-editor/react';
+import Editor, {
+  type BeforeMount,
+  type Monaco,
+  type OnChange,
+  type OnMount,
+} from '@monaco-editor/react';
 import type { editor, languages } from 'monaco-editor';
 import init, {
   check_source,
@@ -23,6 +28,7 @@ import init, {
   complete_at,
   definition_at,
 } from 'pykrete-wasm';
+import { pykretePythonLanguage } from './pykretePythonGrammar';
 import './Playground.css';
 
 interface Diagnostic {
@@ -760,6 +766,15 @@ export default function Playground() {
     };
   }, [wasmReady, editorReady]);
 
+  // Override Monaco's bundled Python tokenizer before the editor mounts
+  // so method-call identifiers like `df.filter(...)` don't get the
+  // keyword/builtin color that the stock grammar applies to bare
+  // `filter` / `map` / `sum` / `len` / `type` / `print`. See
+  // `pykretePythonGrammar.ts` for what changes.
+  const handleBeforeMount: BeforeMount = (monaco) => {
+    monaco.languages.setMonarchTokensProvider('python', pykretePythonLanguage);
+  };
+
   const handleMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
     monacoRef.current = monaco;
@@ -839,6 +854,7 @@ export default function Playground() {
           theme="vs-dark"
           value={source}
           onChange={handleChange}
+          beforeMount={handleBeforeMount}
           onMount={handleMount}
           options={{
             minimap: { enabled: false },
