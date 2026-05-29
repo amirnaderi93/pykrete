@@ -89,6 +89,7 @@ def _collect_class(cls: type) -> list[dict[str, str]]:
 
 def _collect_module(mod: Any) -> list[dict[str, str]]:
     out: list[dict[str, str]] = []
+    mod_name = mod.__name__
     for name in dir(mod):
         if name.startswith("_"):
             continue
@@ -102,6 +103,12 @@ def _collect_module(mod: Any) -> list[dict[str, str]]:
         # Skip classes re-exported into the functions module (Column,
         # WindowSpec, etc.) — we want function-style entries here.
         if inspect.isclass(obj):
+            continue
+        # Skip names re-exported from other modules (typing helpers like
+        # `Callable`, `Dict`, `Iterable`; `datetime`, etc.) — we want
+        # only the real `pyspark.sql.functions` surface.
+        obj_mod = getattr(obj, "__module__", None)
+        if obj_mod is not None and obj_mod != mod_name:
             continue
         try:
             out.append(

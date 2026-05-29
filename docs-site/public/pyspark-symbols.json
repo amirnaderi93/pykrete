@@ -798,51 +798,6 @@
   ],
   "functions": [
     {
-      "name": "Callable",
-      "signature": "(*args, **kwargs)",
-      "doc": "Deprecated alias to collections.abc.Callable."
-    },
-    {
-      "name": "Dict",
-      "signature": "(*args, **kwargs)",
-      "doc": "A generic version of dict."
-    },
-    {
-      "name": "Iterable",
-      "signature": "(*args, **kwargs)",
-      "doc": "A generic version of collections.abc.Iterable."
-    },
-    {
-      "name": "List",
-      "signature": "(*args, **kwargs)",
-      "doc": "A generic version of list."
-    },
-    {
-      "name": "Optional",
-      "signature": "(*args, **kwds)",
-      "doc": "Optional[X] is equivalent to Union[X, None]."
-    },
-    {
-      "name": "Tuple",
-      "signature": "(*args, **kwargs)",
-      "doc": "Deprecated alias to builtins.tuple."
-    },
-    {
-      "name": "Type",
-      "signature": "(*args, **kwargs)",
-      "doc": "Deprecated alias to builtins.type."
-    },
-    {
-      "name": "Union",
-      "signature": "(*args, **kwds)",
-      "doc": "Union type; Union[X, Y] means either X or Y."
-    },
-    {
-      "name": "ValuesView",
-      "signature": "(*args, **kwargs)",
-      "doc": "A generic version of collections.abc.ValuesView."
-    },
-    {
       "name": "abs",
       "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
       "doc": "Computes the absolute value."
@@ -1176,11 +1131,6 @@
       "name": "cardinality",
       "signature": "(col: 'ColumnOrName') -> pyspark.sql.column.Column",
       "doc": "Collection function: returns the length of the array or map stored in the column."
-    },
-    {
-      "name": "cast",
-      "signature": "(typ, val)",
-      "doc": "Cast a value to a type."
     },
     {
       "name": "cbrt",
@@ -1626,11 +1576,6 @@
       "name": "get",
       "signature": "(col: 'ColumnOrName', index: Union[ForwardRef('ColumnOrName'), int]) -> pyspark.sql.column.Column",
       "doc": "Collection function: Returns element of array at given (0-based) index. If the index points outside of the array boundaries, then this function returns NULL."
-    },
-    {
-      "name": "get_active_spark_context",
-      "signature": "() -> pyspark.context.SparkContext",
-      "doc": "Raise RuntimeError if SparkContext is not initialized, otherwise, returns the active SparkContext."
     },
     {
       "name": "get_json_object",
@@ -2116,16 +2061,6 @@
       "name": "overlay",
       "signature": "(src: 'ColumnOrName', replace: 'ColumnOrName', pos: Union[ForwardRef('ColumnOrName'), int], len: Union[ForwardRef('ColumnOrName'), int] = -1) -> pyspark.sql.column.Column",
       "doc": "Overlay the specified portion of `src` with `replace`, starting from byte position `pos` of `src` and proceeding for `len` bytes."
-    },
-    {
-      "name": "overload",
-      "signature": "(func)",
-      "doc": "Decorator for overloaded functions/methods."
-    },
-    {
-      "name": "pandas_udf",
-      "signature": "(f=None, returnType=None, functionType=None)",
-      "doc": "Creates a pandas user defined function (a.k.a. vectorized user defined function)."
     },
     {
       "name": "parse_url",
@@ -2663,11 +2598,6 @@
       "doc": "Convert string 'col' to a number based on the string format 'format'. Throws an exception if the conversion fails. The format can consist of the following characters, case insensitive: '0' or '9': Specifies an expected digit between 0 and 9. A sequence of 0 or 9 in the format string matches a sequence of digits in the input string. If the 0/9 sequence starts with 0 and is before the decimal poi..."
     },
     {
-      "name": "to_str",
-      "signature": "(value: Any) -> Optional[str]",
-      "doc": "A wrapper over str(), but converts bool values to lower case strings. If None is given, just returns None, instead of converting it to string \"None\"."
-    },
-    {
       "name": "to_timestamp",
       "signature": "(col: 'ColumnOrName', format: Optional[str] = None) -> pyspark.sql.column.Column",
       "doc": "Converts a :class:`~pyspark.sql.Column` into :class:`pyspark.sql.types.TimestampType` using the optionally specified format. Specify formats according to `datetime pattern`_. By default, it follows casting rules to :class:`pyspark.sql.types.TimestampType` if the format is omitted. Equivalent to ``col.cast(\"timestamp\")``."
@@ -2756,11 +2686,6 @@
       "name": "try_multiply",
       "signature": "(left: 'ColumnOrName', right: 'ColumnOrName') -> pyspark.sql.column.Column",
       "doc": "Returns `left`*`right` and the result is null on overflow. The acceptable input types are the same with the `*` operator."
-    },
-    {
-      "name": "try_remote_functions",
-      "signature": "(f: ~FuncT) -> ~FuncT",
-      "doc": "Mark API supported from Spark Connect."
     },
     {
       "name": "try_subtract",
