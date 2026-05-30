@@ -42,7 +42,13 @@ references against the pre-pivot schema. Previously the pivot killed
 the chain, so a typo like `agg(F.sum("amunt"))` went silent. The
 post-`.agg` result schema is Unknown — pivot's output columns depend
 on the runtime pivot values pykrete can't see — but the input check
-covers the common bug.
+covers the common bug. The same termination contract now applies to
+the shorthand aggregate paths: `groupBy(...).pivot(...).count()` and
+`.{sum,max,min,mean,avg}(col)` check the input column against the
+pre-pivot schema, then return Unknown so the chain dies cleanly
+instead of synthesizing a wrong concrete schema (which would have
+fired false-positive `D0030` on legitimate pivot-value column
+references downstream).
 
 **`dropDuplicates` / `drop_duplicates` parity.** Both names are Spark
 aliases for the same method; pykrete previously modeled the camelCase
@@ -50,11 +56,28 @@ form as schema-preserving and the snake_case form as column-check-only
 (silently losing the schema downstream). Both names now route to the
 same handler: arguments are checked AND the schema flows through.
 
-**`sampleBy`** joins `sample` as a pass-through. It's stratified
-sampling — same schema-shape contract: rows change, columns don't.
-`randomSplit` remains unmodeled — it returns `list[DataFrame]`, a
-shape pykrete can't yet thread through tuple unpacking; documented
-as a v1.1 gap.
+**`sampleBy`** is schema-preserving like `sample`, and its first
+positional arg — the stratification column — is now column-ref
+checked against the receiver. A typo (`sampleBy("regoin", ...)`)
+fires `D0030`; the `col(...)` expression form is recognized too. The
+fractions dict's keys are stratum *values*, not column names, and are
+correctly left alone. `randomSplit` remains unmodeled — it returns
+`list[DataFrame]`, a shape pykrete can't yet thread through tuple
+unpacking; documented as a v1.1 gap.
+
+**`describe(*cols)`** now column-ref-checks its positional string
+arguments against the receiver before bailing Unknown. A typo like
+`describe("amunt")` fires `D0030`. The result schema stays Unknown
+(it's a data-dependent statistics table). `summary` is unchanged —
+its arguments are statistic-name strings (`"mean"`, `"50%"`), not
+column names.
+
+**`observe(name, *exprs)`** now walks the expression args for
+embedded column references. The first arg is a metric label (a
+string literal, not a column ref) and is correctly skipped; embedded
+column refs in the remaining args (`F.sum("typo").alias("total")`)
+fire `D0030`. The receiver's schema continues to flow through
+unchanged.
 
 ## [0.1.28]
 

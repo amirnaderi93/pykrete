@@ -373,6 +373,105 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
     assert_does_not_have_code(&check(&src), "D0030");
 }
 
+// The shorthand dispatch sites for `.count()` and `.max/.min/.sum/.mean/.avg`
+// must honor the same `after_pivot` contract as `.agg(...)`: column args
+// against the pre-pivot schema still get checked, but the output schema
+// is Unknown — pivot columns are runtime data.
+
+#[test]
+fn groupBy_pivot_count_post_chain_is_unknown() {
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Sale]) -> DataFrame:
+    return raw.groupBy(\"region\").pivot(\"product\").count().select(col(\"anything\"))
+"
+    );
+    assert_does_not_have_code(&check(&src), "D0030");
+}
+
+#[test]
+fn groupBy_pivot_max_post_chain_is_unknown() {
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Sale]) -> DataFrame:
+    return raw.groupBy(\"region\").pivot(\"product\").max(\"amount\").filter(col(\"amount\") > 100)
+"
+    );
+    assert_does_not_have_code(&check(&src), "D0030");
+}
+
+#[test]
+fn groupBy_pivot_sum_post_chain_is_unknown() {
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Sale]) -> DataFrame:
+    return raw.groupBy(\"region\").pivot(\"product\").sum(\"amount\").select(col(\"nope\"))
+"
+    );
+    assert_does_not_have_code(&check(&src), "D0030");
+}
+
+#[test]
+fn groupBy_pivot_min_post_chain_is_unknown() {
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Sale]) -> DataFrame:
+    return raw.groupBy(\"region\").pivot(\"product\").min(\"amount\").select(col(\"nope\"))
+"
+    );
+    assert_does_not_have_code(&check(&src), "D0030");
+}
+
+#[test]
+fn groupBy_pivot_mean_post_chain_is_unknown() {
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Sale]) -> DataFrame:
+    return raw.groupBy(\"region\").pivot(\"product\").mean(\"amount\").select(col(\"nope\"))
+"
+    );
+    assert_does_not_have_code(&check(&src), "D0030");
+}
+
+#[test]
+fn groupBy_pivot_avg_post_chain_is_unknown() {
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Sale]) -> DataFrame:
+    return raw.groupBy(\"region\").pivot(\"product\").avg(\"amount\").select(col(\"nope\"))
+"
+    );
+    assert_does_not_have_code(&check(&src), "D0030");
+}
+
+#[test]
+fn groupBy_pivot_max_typo_in_agg_arg_fires_D0030() {
+    // The pre-pivot column check must still fire — `typo` doesn't exist
+    // on Sale, so the user's typo on the aggregate column is caught.
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Sale]) -> DataFrame:
+    return raw.groupBy(\"region\").pivot(\"product\").max(\"typo\")
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "typo");
+}
+
+#[test]
+fn groupBy_pivot_sum_typo_in_agg_arg_fires_D0030() {
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Sale]) -> DataFrame:
+    return raw.groupBy(\"region\").pivot(\"product\").sum(\"typo\")
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "typo");
+}
+
 // ---------------------------------------------------------------------------
 // 5. dropDuplicates / drop_duplicates parity
 // ---------------------------------------------------------------------------
@@ -459,4 +558,103 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
     let result = check(&src);
     assert_has_code(&result, "D0030");
     assert_message_contains(&result, "D0030", "regoin");
+}
+
+// The first positional arg to `sampleBy` IS a column reference and
+// must be checked against the receiver — pre-fix it slipped through
+// the pass-through bucket unchecked.
+
+#[test]
+fn sampleBy_typo_in_col_arg_fires_D0030() {
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Sale]) -> DataFrame:
+    return raw.sampleBy(\"typo\", {{\"us\": 0.5}})
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "typo");
+}
+
+#[test]
+fn sampleBy_col_form_first_arg_resolved() {
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Sale]) -> DataFrame:
+    return raw.sampleBy(col(\"region\"), {{\"us\": 0.5}})
+"
+    );
+    assert_does_not_have_code(&check(&src), "D0030");
+}
+
+#[test]
+fn sampleBy_dict_string_keys_are_values_not_column_refs() {
+    // The dict keys are stratum values (literal cells of the column),
+    // NOT column names — they must not be column-ref-checked.
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Sale]) -> DataFrame:
+    return raw.sampleBy(\"region\", {{\"us\": 0.5, \"eu\": 0.3}})
+"
+    );
+    assert_does_not_have_code(&check(&src), "D0030");
+}
+
+// `describe(*cols)` — explicit-column form should column-ref-check
+// each positional arg against the receiver; the output schema is left
+// Unknown (data-dependent statistics table).
+
+#[test]
+fn describe_explicit_cols_no_typo_clean() {
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Sale]) -> DataFrame:
+    return raw.describe(\"amount\", \"region\")
+"
+    );
+    assert_does_not_have_code(&check(&src), "D0030");
+}
+
+#[test]
+fn describe_explicit_cols_typo_fires_D0030() {
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Sale]) -> DataFrame:
+    return raw.describe(\"typo\")
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "typo");
+}
+
+// `observe(name, *exprs)` — first arg is a metric name (NOT a column
+// ref); subsequent args are expressions whose embedded column refs
+// must be checked.
+
+#[test]
+fn observe_metric_name_not_treated_as_column_ref() {
+    // `"metric_name"` is a literal label, not a column ref — it must
+    // NOT fire D0030 even though no column by that name exists.
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Sale]) -> DataFrame:
+    return raw.observe(\"metric_name\", F.sum(\"amount\").alias(\"total\"))
+"
+    );
+    assert_does_not_have_code(&check(&src), "D0030");
+}
+
+#[test]
+fn observe_expr_arg_typo_fires_D0030() {
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Sale]) -> DataFrame:
+    return raw.observe(\"metric_name\", F.sum(\"typo\").alias(\"total\"))
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "typo");
 }
