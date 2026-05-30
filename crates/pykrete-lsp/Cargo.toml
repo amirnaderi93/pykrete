@@ -35,3 +35,10 @@ serde_json = "1"
 # LSP's channel in the multiplexer. Same crate `lsp-server` uses
 # internally for its own connection channels.
 crossbeam-channel = "0.5"
+
+# PATH resolution for the embedded Python LSP discovery, in place of
+# spawning each candidate with `--version` to test for existence. Avoids
+# blocking LSP startup on a candidate whose `--version` doesn't exit
+# promptly, and avoids running arbitrary binaries that happen to share
+# a name.
+which = "6"

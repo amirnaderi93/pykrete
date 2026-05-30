@@ -58,6 +58,21 @@ pub fn synthetic_pool_len() -> usize {
 // BodyContext — parameter and local-variable bindings
 // ---------------------------------------------------------------------------
 
+/// Per-function-body analysis context.
+///
+/// The four `RefCell` fields below (`local_names`, `column_refs`,
+/// `local_bindings`, `call_results`) are write-only sinks for traces the
+/// analysis pass appends as it walks the body. They're held behind
+/// interior mutability so the recursion can keep `&self` everywhere
+/// (cascading `&mut self` through every `analyze_expr` /
+/// `analyze_method_call` helper costs more than it saves).
+///
+/// To keep that interior mutability from spreading: every borrow of
+/// these `RefCell`s is confined to the helper methods on this `impl`
+/// (`mark_local`, `is_locally_bound`, `record_*`, `take_*`). Call sites
+/// elsewhere in `operations/` go through those helpers and never see
+/// `borrow_mut`. As long as that holds, a borrow-conflict panic is
+/// impossible: each helper's borrow lifetime ends before it returns.
 pub(crate) struct BodyContext<'a> {
     df_bindings: HashMap<&'a str, SchemaView<'a>>,
     /// Function-parameter / local names that are class **instances** (not
@@ -68,9 +83,6 @@ pub(crate) struct BodyContext<'a> {
     /// this to skip the top-level-function check when the callee name has
     /// been shadowed locally, even if we can't say what schema it now
     /// refers to.
-    ///
-    /// Held in a `RefCell` so the analysis pass can record a walrus-bound
-    /// name (`(x := expr)`) through an otherwise-immutable `&BodyContext`.
     local_names: RefCell<HashSet<&'a str>>,
     schemas: &'a [Schema<'a>],
     registry: &'a Registry<'a>,
@@ -78,10 +90,6 @@ pub(crate) struct BodyContext<'a> {
     /// resolved against a known schema. Always populated during analysis;
     /// the LSP layer drains this to power hover and go-to-definition for
     /// column references. The diagnostic path simply ignores it.
-    ///
-    /// Held in a `RefCell` so the analysis pass can push to it through an
-    /// otherwise-immutable `&BodyContext` — keeps the inner functions
-    /// from needing `&mut` signatures everywhere.
     column_refs: RefCell<Vec<ColumnRefTrace<'a>>>,
     /// Local-variable DataFrame bindings discovered during body analysis.
     /// Each entry records the assignment-target name range and the schema
@@ -158,7 +166,7 @@ pub(crate) struct LocalBindingTrace<'a> {
 }
 
 impl<'a> BodyContext<'a> {
-    pub fn new(schemas: &'a [Schema<'a>], registry: &'a Registry<'a>) -> Self {
+    pub(crate) fn new(schemas: &'a [Schema<'a>], registry: &'a Registry<'a>) -> Self {
         Self {
             df_bindings: HashMap::new(),
             instance_bindings: HashMap::new(),
@@ -177,33 +185,38 @@ impl<'a> BodyContext<'a> {
     /// shared per-file map that `createOrReplaceTempView` writes into
     /// and `spark.sql("… FROM view")` reads from. Returns `self` for
     /// fluent construction in [`Self::from_function`].
-    pub fn with_temp_views(mut self, temp_views: &'a TempViewRegistry<'a>) -> Self {
+    pub(crate) fn with_temp_views(mut self, temp_views: &'a TempViewRegistry<'a>) -> Self {
         self.temp_views = Some(temp_views);
         self
     }
 
     /// The file-scoped tempView registry, if one is wired in.
-    pub fn temp_views(&self) -> Option<&'a TempViewRegistry<'a>> {
+    pub(crate) fn temp_views(&self) -> Option<&'a TempViewRegistry<'a>> {
         self.temp_views
     }
 
     /// Record a method-call site and the schema it produced. Drained by
     /// the LSP layer to power chain-result completion.
-    pub fn record_call_result(&self, range: TextRange, schema: SchemaView<'a>) {
+    pub(crate) fn record_call_result(&self, range: TextRange, schema: SchemaView<'a>) {
         self.call_results
             .borrow_mut()
             .push(CallResultTrace { range, schema });
     }
 
     /// Drain all call-result traces captured during analysis.
-    pub fn take_call_results(&self) -> Vec<CallResultTrace<'a>> {
+    pub(crate) fn take_call_results(&self) -> Vec<CallResultTrace<'a>> {
         std::mem::take(&mut self.call_results.borrow_mut())
     }
 
     /// Record a `col(...)`-style column reference and the schema it was
     /// resolved against. Called from inside the analysis pass; the LSP
     /// layer drains the collected refs with [`take_column_refs`].
-    pub fn record_column_ref(&self, range: TextRange, name: &'a str, schema: SchemaView<'a>) {
+    pub(crate) fn record_column_ref(
+        &self,
+        range: TextRange,
+        name: &'a str,
+        schema: SchemaView<'a>,
+    ) {
         self.column_refs.borrow_mut().push(ColumnRefTrace {
             range,
             name,
@@ -214,7 +227,7 @@ impl<'a> BodyContext<'a> {
     /// Record a local DataFrame binding (`x = raw.select(...)`). Called
     /// from `check_function_body` when an assignment's RHS resolves to
     /// a known schema view.
-    pub fn record_local_binding(
+    pub(crate) fn record_local_binding(
         &self,
         name: &'a str,
         name_range: TextRange,
@@ -230,12 +243,12 @@ impl<'a> BodyContext<'a> {
     /// Drain all column references captured during analysis. Intended for
     /// the LSP entry points (hover, go-to-definition) that re-run analysis
     /// against a fresh context.
-    pub fn take_column_refs(&self) -> Vec<ColumnRefTrace<'a>> {
+    pub(crate) fn take_column_refs(&self) -> Vec<ColumnRefTrace<'a>> {
         std::mem::take(&mut self.column_refs.borrow_mut())
     }
 
     /// Drain all local-binding traces captured during analysis.
-    pub fn take_local_bindings(&self) -> Vec<LocalBindingTrace<'a>> {
+    pub(crate) fn take_local_bindings(&self) -> Vec<LocalBindingTrace<'a>> {
         std::mem::take(&mut self.local_bindings.borrow_mut())
     }
 
@@ -243,7 +256,7 @@ impl<'a> BodyContext<'a> {
     /// - typed DataFrame slots (parameters annotated `DataFrame[X]`),
     /// - other typed parameters whose annotation is a known class name
     ///   (e.g. `dal: DataAccessLayer`).
-    pub fn from_function(
+    pub(crate) fn from_function(
         func: &DiscoveredFunction<'a>,
         slots: &[TypedSlot<'a>],
         schemas: &'a [Schema<'a>],
@@ -256,7 +269,7 @@ impl<'a> BodyContext<'a> {
     /// `StmtFunctionDef` directly. Used by the nested-funcdef walker,
     /// where wrapping the AST node in a stack-local `DiscoveredFunction`
     /// would over-constrain the borrow lifetime.
-    pub fn from_function_def(
+    pub(crate) fn from_function_def(
         func_def: &'a StmtFunctionDef,
         slots: &[TypedSlot<'a>],
         schemas: &'a [Schema<'a>],
@@ -320,7 +333,7 @@ impl<'a> BodyContext<'a> {
         ctx
     }
 
-    pub fn bind_df(&mut self, name: &'a str, view: SchemaView<'a>) {
+    pub(crate) fn bind_df(&mut self, name: &'a str, view: SchemaView<'a>) {
         self.df_bindings.insert(name, view);
         self.mark_local(name);
     }
@@ -343,7 +356,7 @@ impl<'a> BodyContext<'a> {
     /// conversion is sound. The synthesizer here is the only kind of
     /// name that doesn't originate in the user's source; all other
     /// field names borrow directly from the source.
-    pub fn intern_synthetic(&self, name: String) -> &'a str {
+    pub(crate) fn intern_synthetic(&self, name: String) -> &'a str {
         intern_synthetic_global(name)
     }
 
@@ -355,7 +368,7 @@ impl<'a> BodyContext<'a> {
     /// `&self` rather than `&mut self` so the analysis pass can mark a
     /// walrus-bound name through an otherwise-immutable context — the
     /// underlying set lives in a `RefCell`.
-    pub fn mark_local(&self, name: &'a str) {
+    pub(crate) fn mark_local(&self, name: &'a str) {
         self.local_names.borrow_mut().insert(name);
     }
 
@@ -364,7 +377,7 @@ impl<'a> BodyContext<'a> {
     /// starred targets, and parenthesized targets; ignores subscript and
     /// attribute targets (those mutate an existing object — they don't
     /// introduce a new local name).
-    pub fn mark_local_target(&self, expr: &'a Expr) {
+    pub(crate) fn mark_local_target(&self, expr: &'a Expr) {
         match expr {
             Expr::Name(n) => self.mark_local(n.id.as_str()),
             Expr::Tuple(t) => {
@@ -383,7 +396,7 @@ impl<'a> BodyContext<'a> {
     }
 
     /// Whether `name` has been bound locally in this body.
-    pub fn is_locally_bound(&self, name: &str) -> bool {
+    pub(crate) fn is_locally_bound(&self, name: &str) -> bool {
         self.local_names.borrow().contains(name)
     }
 
@@ -391,7 +404,7 @@ impl<'a> BodyContext<'a> {
     /// class-method calls (`data_access.read(...)`) through the
     /// generic-inference path when the receiver was assigned locally
     /// rather than passed in as a typed parameter.
-    pub fn bind_instance(&mut self, name: &'a str, class_name: &'a str) {
+    pub(crate) fn bind_instance(&mut self, name: &'a str, class_name: &'a str) {
         self.instance_bindings.insert(name, class_name);
         self.mark_local(name);
     }
@@ -403,7 +416,7 @@ impl<'a> BodyContext<'a> {
     /// 2. top-level annotated constants (`X: GenericClass[Schema]`), where
     ///    the constant carries the named schema regardless of the outer
     ///    generic class.
-    pub fn lookup(&self, name: &str) -> Option<SchemaView<'a>> {
+    pub(crate) fn lookup(&self, name: &str) -> Option<SchemaView<'a>> {
         if let Some(view) = self.df_bindings.get(name).cloned() {
             return Some(view);
         }
@@ -417,19 +430,19 @@ impl<'a> BodyContext<'a> {
 
     /// Resolve a name as a *class instance* (not a DataFrame). Used to
     /// route method calls through the class registry.
-    pub fn lookup_instance(&self, name: &str) -> Option<&'a str> {
+    pub(crate) fn lookup_instance(&self, name: &str) -> Option<&'a str> {
         self.instance_bindings.get(name).copied()
     }
 
-    pub fn find_schema(&self, name: &str) -> Option<&'a Schema<'a>> {
+    pub(crate) fn find_schema(&self, name: &str) -> Option<&'a Schema<'a>> {
         self.schemas.iter().find(|s| s.name() == name)
     }
 
-    pub fn schemas(&self) -> &'a [Schema<'a>] {
+    pub(crate) fn schemas(&self) -> &'a [Schema<'a>] {
         self.schemas
     }
 
-    pub fn registry(&self) -> &'a Registry<'a> {
+    pub(crate) fn registry(&self) -> &'a Registry<'a> {
         self.registry
     }
 

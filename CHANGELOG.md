@@ -6,6 +6,106 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.32] - 2026-05-31
+
+Architecture-cleanups pass — leg 7 of the v1.0.0 hardening sprint.
+Bundles the eight Important items the architecture audit surfaced
+against v0.1.30 with the cosmetic minors from the three-lens review of
+v0.1.31's `operations.rs` split. No user-visible behaviour change in
+the checker; one new editor-visible signal (malformed `pykrete.json`
+warnings, below).
+
+**LSP discovery via the `which` crate.** `pykrete-lsp`'s Python-engine
+discovery used to test each candidate (`basedpyright-langserver`,
+`pyright-langserver`) for PATH presence by spawning it with `--version`
+and waiting on exit. That blocked LSP startup on any candidate whose
+`--version` didn't terminate promptly, and ran whatever binary
+happened to share the name. v0.1.32 routes the check through
+`which::which(...)` — a single PATH scan, zero spawns. Added a test
+that pins the negative result for a definitely-nonexistent program
+name (a guarantee the old probe path couldn't pin: it would still
+spawn and fall through).
+
+**Path → URL plumbing.** The LSP layer's path/URL coordinate
+translation went through `Path::to_string_lossy()` at three sites and
+fell back to the focus URI when `Url::from_file_path` failed at the
+goto-definition site. Both were quietly wrong: `to_string_lossy`
+corrupts non-UTF-8 paths (silently producing a non-roundtrippable
+string), and the focus-URI fallback teleported cross-file
+goto-definition to the wrong file. v0.1.32 swaps `to_string_lossy()` →
+`to_str()` (the snapshot cache already keys paths as `String`, so
+non-UTF-8 paths could never have been in the snapshot anyway — bailing
+to `None` matches the real lookup result), and drops the wrong
+fallback in favour of an LSP-spec `null` response — returning `null`
+from goto-definition when the path isn't valid UTF-8 is the spec-correct
+behaviour, whereas the prior fallback teleported the user to the focus
+file's location. Two tests pin the change: one valid-UTF-8 non-ASCII
+URI round-trips through goto-definition cleanly, and (on Unix only)
+a path containing a raw `0xFF` byte short-circuits to `None` at the
+strict `to_str()?` site instead of taking the lossy fallback.
+
+**Malformed `pykrete.json` is no longer silent.** A `pykrete.json` that
+couldn't be parsed used to fall back to `Config::default()` with no
+log, notification, or signal — the user sat with stale rules in effect
+and never learned why. v0.1.32 makes the snapshot cache capture the
+parse-error detail at cold-walk time and surface it on the next
+diagnostic publish: one `window/showMessage` warning ("malformed
+pykrete.json at <path> — using defaults") plus one `window/logMessage`
+with the parse error for the LSP output channel. The cache drains the
+warning once per build (so a still-malformed file on every typing
+keystroke produces exactly one notification per build), but every cold
+walk — one per 30 s today — re-populates the warning unconditionally
+when the file is still malformed, so in practice the notification
+re-fires roughly every 30 s. Suppressing re-emission until the
+`pykrete.json` mtime drifts is tracked as item 15 in
+`docs/design/spark-coverage.md` for v1.1. (Honesty correction: the
+initial v0.1.32 wording on this entry said "re-fires when mtime drifts
+and the next cold walk re-reads" — that overclaimed; the actual gate
+is the cold-walk interval, not mtime.)
+
+**Hover renderer cleanup.** `hover.rs` had ~29
+`writeln!(md, ...).unwrap()` calls on String writes that are
+infallible in practice. Replaced with the explicit
+`let _ = writeln!(...)` shape — same semantics, less stamping, makes
+the "infallible to a String" intent read at a glance.
+
+**`BodyContext` docstring tightened.** The four `RefCell` fields on
+`BodyContext` (`local_names`, `column_refs`, `local_bindings`,
+`call_results`) carry interior-mutability state that the analysis pass
+appends to through `&self`. The audit flagged the panic-on-aliased-
+borrow risk. v0.1.32 documents the actual invariant: every
+`borrow_mut` is confined to the eight `record_*` / `take_*` /
+`mark_local` / `is_locally_bound` helpers on the same `impl`, each of
+which holds its borrow only for the duration of the call. A
+borrow-conflict panic is impossible as long as that locality holds.
+(`grep` on the rest of `operations/` confirms zero direct borrows.)
+
+**Reader-receiver heuristic documented.** `is_dataframe_reader_expr`
+recognises `<X>.read.<format>(…)` structurally without verifying that
+`<X>` is a `SparkSession` — codebases bind the session as `spark`,
+`ss`, `sess`, etc. The trade-off: a non-Spark API exposing a similar
+`.read.<format>(...)` shape (an in-house loader, say) also matches and
+yields opaque instead of the loader's real return type. Workaround is
+identical to a genuine `spark.read`: re-anchor with
+`.cast(DataFrame[X])`. Documented in `reference/operations.md`'s IO
+section. Tightening the receiver check requires plumbing binding
+context through `shapes.rs` (currently `&Expr`-only) — deferred as a
+v1.1 follow-up since the workaround is the same.
+
+**Visibility tightening (cosmetic).** Two `pub(super) fn` helpers in
+`operations/shapes.rs` (`is_dataframe_reader_expr`,
+`is_dataframe_reader_format`) had no cross-module callers post-split;
+demoted to private `fn`. 22 `pub fn` impl methods on the
+`pub(crate) struct BodyContext` switched to `pub(crate) fn` to make
+the actual visibility ceiling read at the call site. Added a comment
+explaining the `unreachable!()` arm in `column_methods.rs`'s
+chained-field-access walker (outer match arm already pinned the
+variant set; inner re-match cannot see any other).
+
+**Audit items previously delivered.** `Schema::fields()` memoization
+(v0.1.30 PR #61) and wasm `word_range_at` two-pass scan (v0.1.30 PR
+\#61) are confirmed still in place. No code change here.
+
 ## [0.1.31] - 2026-05-30
 
 Architecture-performance hardening, leg 6 of the v1.0.0 sprint. Pure

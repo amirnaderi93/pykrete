@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.29
+
+Tracks the v0.1.32 pykrete release — architecture cleanups pass.
+Editor-visible signal: pykrete now emits a `window/showMessage` warning
+plus a `window/logMessage` detail whenever a `pykrete.json` config
+file fails to parse, instead of silently falling back to defaults.
+LSP startup is also faster on hosts where the bundled Python engine
+search hits an unresponsive PATH candidate. See the
+[main CHANGELOG](../../CHANGELOG.md#0132---2026-05-31) for details.
+
 ## 0.2.28
 
 Tracks the v0.1.31 pykrete release — internal refactor of the PySpark

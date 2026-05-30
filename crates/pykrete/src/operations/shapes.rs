@@ -103,7 +103,7 @@ pub(super) fn is_terminal_method(method: &str) -> bool {
 /// chain, or `.load(...)` from the builder form). The result schema is
 /// genuinely runtime data — pykrete returns Unknown and expects the user
 /// to re-anchor via `.cast(DataFrame[X])` or a typed variable annotation.
-pub(super) fn is_dataframe_reader_format(method: &str) -> bool {
+fn is_dataframe_reader_format(method: &str) -> bool {
     matches!(
         method,
         "parquet" | "csv" | "json" | "orc" | "text" | "table" | "load" | "jdbc" | "xml"
@@ -119,7 +119,7 @@ pub(super) fn is_dataframe_reader_format(method: &str) -> bool {
 /// an unrelated `myloader.read.parquet(...)` API would also be
 /// intercepted, but that just yields Unknown — same as falling through —
 /// so no incorrect behavior surfaces.
-pub(super) fn is_dataframe_reader_expr(expr: &Expr) -> bool {
+fn is_dataframe_reader_expr(expr: &Expr) -> bool {
     match expr {
         // `<X>.read` — the base reader attribute.
         Expr::Attribute(a) => a.attr.id.as_str() == "read",

@@ -257,6 +257,10 @@ spark.sql("SELECT regoin FROM sales_view")
 
 `spark.sql` is single-table-SELECT only — joins, subqueries, and cross-file views fall back to best-effort behavior. If you need richer SQL checking, lean on the dataframe API instead.
 
+### Reader-receiver heuristic
+
+The `.read.<format>(…)` recognition is structural: pykrete matches any chain of the form `<X>.read.<format>(…)` (and the equivalent `<X>.read.format(...).load(...)` / `<X>.read.schema(...).<format>(...)` builder shapes) without verifying that `<X>` is a `SparkSession`. In practice `<X>` is `spark`, `ss`, `sess`, …; we deliberately don't pin the receiver name. The trade-off: a non-Spark API that happens to expose a `.read.<format>(...)` shape (e.g. an in-house loader) is also matched and yields **opaque** instead of the loader's real return type. If your own type-checker tooling agrees the loader returns `DataFrame[X]`, re-anchor with `.cast(DataFrame[X])` — same workaround as a genuine `spark.read`. Tracked for a follow-up if the false-positive rate ever bites.
+
 ## Streaming
 
 Structured streaming is a runtime concern — pykrete is a static schema checker, so this surface is out of scope by design.
