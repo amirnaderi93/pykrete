@@ -1,0 +1,12 @@
+class A(Schema):
+    x: int
+    y: int
+
+
+class B(Schema):
+    x: int
+    z: int
+
+
+def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+    return a.unionByName(b)

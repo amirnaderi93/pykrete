@@ -6,6 +6,89 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.33] - 2026-05-31
+
+Leg 8 of 10 in the v1.0.0 hardening sprint. Two items, both surfaced by
+the pre-launch audit: deliver the long-promised JSON CLI output, and
+add a per-D-code snapshot test that doubles as the canonical "what
+pykrete says when D00xx fires" reference.
+
+**`pykrete check --format json`.** Production-readiness has been
+promising machine-readable output since v0.1.15; this release delivers
+it. New `--format <text|json>` flag on `pykrete check` — default
+`text` is byte-identical to today's CLI behaviour, `json` emits one
+object on stdout with the shape:
+
+```json
+{
+  "schemaVersion": "1",
+  "version": "0.1.33",
+  "diagnostics": [
+    {
+      "file": "path/to/file.pyk",
+      "line": 12, "column": 8,
+      "endLine": 12, "endColumn": 14,
+      "code": "D0030",
+      "ruleName": "unknownColumn",
+      "severity": "error",
+      "source": "pykrete",
+      "message": "Column 'regoin' does not exist on schema 'Sale'. Did you mean 'region'?",
+      "suggestion": "region",
+      "relatedInformation": []
+    }
+  ],
+  "summary": {
+    "filesChecked": 12,
+    "errorCount": 1,
+    "warningCount": 0
+  }
+}
+```
+
+`schemaVersion` versions the wire format itself (consumers pin to
+that, not the pykrete `version`); `source` always equals `"pykrete"`
+so CI aggregators like reviewdog can disambiguate from other linters;
+`suggestion` carries the structured "did you mean…" replacement that
+LSP already round-trips for quick-fixes, or `null` when the
+diagnostic doesn't have one. Positions are 1-indexed (matching the
+existing `text` output); pykrete-lsp re-indexes to 0-indexed on the
+wire per the LSP spec, so tools consuming the CLI's JSON directly
+should not.
+
+Exit codes are unchanged: `0` when no diagnostics, `1` when any
+diagnostic fires (error _or_ warning). This is deliberate — it
+matches today's text-format behaviour and lets CI scripts react
+uniformly to warnings like `D0072 duplicateSchemaName` without
+having to parse the summary block. Consumers that want "errors only"
+semantics will be able to opt in via a future `--max-severity` flag
+(tracked in `docs/design/spark-coverage.md` as a v1.1 follow-up).
+The JSON schema and exit codes become a **stability contract at
+v1.0.0** — any breaking change post-v1.0 requires a SemVer-major
+bump (and a `schemaVersion` bump to `"2"`); see `Production
+readiness → JSON output stability contract` for the full scope of
+what's covered. Until v1.0 it's a `0.x` API and may still shift if a
+real adopter surfaces a fork in the design.
+
+**Diagnostic catalog snapshot test.** New
+`crates/pykrete/tests/diagnostic_catalog.rs` builds a minimal `.pyk`
+fixture per D-code (17 codes total), runs the checker, and snapshots
+the rendered diagnostic with `insta`. A coverage assertion at the top
+iterates `pykrete::diagnostics::DIAGNOSTIC_CATALOG` and fails if any
+code lacks a fixture — adding a new D-code now forces an accompanying
+snapshot. Wording changes fail the snapshot test until explicitly
+accepted with `cargo insta accept`, locking in the message text as a
+reviewable artifact rather than something that drifts silently. The
+`rule_name` lookup itself moved from an inline `match` to iterating
+`DIAGNOSTIC_CATALOG`, so the catalog list is the single source of
+truth for both the runtime mapping and the test.
+
+**`DIAGNOSTIC_CATALOG` is now a public const.** Exposed from
+`pykrete::diagnostics` so the catalog test (and future tooling) can
+iterate every known code without going through the private `match`.
+Public API surface: a `&[(&str, &str)]` of `(code, rule_name)` pairs.
+Adding a code to this list is what makes the snapshot test require a
+fixture.
+
 ## [0.1.32] - 2026-05-31
 
 Architecture-cleanups pass — leg 7 of the v1.0.0 hardening sprint.

@@ -1,0 +1,5 @@
+---
+source: crates/pykrete/tests/diagnostic_catalog.rs
+expression: captured
+---
+d0080_return_type_mismatch.pyk:12:12-12:74 error D0080 returnTypeMismatch: Return type mismatch: column 'scores' is declared String in schema 'Out', but the body produces array<Int>.

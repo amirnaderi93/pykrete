@@ -1,0 +1,5 @@
+---
+source: crates/pykrete/tests/diagnostic_catalog.rs
+expression: captured
+---
+d0060_missing_join_key.pyk:11:25-11:28 error D0060 missingJoinKey: Join key 'k' does not exist on the right side (schema 'B').

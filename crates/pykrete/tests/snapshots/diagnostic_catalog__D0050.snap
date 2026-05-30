@@ -1,0 +1,5 @@
+---
+source: crates/pykrete/tests/diagnostic_catalog.rs
+expression: captured
+---
+d0050_return_columns_mismatch.pyk:7:12-7:35 error D0050 returnColumnsMismatch: Return type mismatch with declared schema 'Sale'. Missing in body: [amount]; extra in body: [].

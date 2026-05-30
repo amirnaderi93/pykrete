@@ -1,0 +1,12 @@
+class In(Schema):
+    name: string
+    score: int
+
+
+class Out(Schema):
+    name: string
+    scores: string
+
+
+def f(d: DataFrame[In]) -> DataFrame[Out]:
+    return d.groupBy("name").agg(F.collect_list("score").alias("scores"))

@@ -1,0 +1,15 @@
+class Sale(Schema):
+    region: string
+    amount: int
+
+
+class Other(Schema):
+    foo: string
+
+
+def consume(d: DataFrame[Sale]) -> DataFrame[Sale]:
+    return d
+
+
+def caller(o: DataFrame[Other]) -> DataFrame[Sale]:
+    return consume(o)

@@ -197,6 +197,200 @@ fn check_help_flag_prints_check_usage() {
 }
 
 #[test]
+fn check_format_json_clean_file_emits_valid_json() {
+    let out = Command::new(bin())
+        .args(["check", "--format", "json"])
+        .arg(fixture("clean.pyk"))
+        .output()
+        .expect("run pykrete check --format json clean.pyk");
+    assert!(out.status.success(), "non-zero exit: {:?}", out.status);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("invalid JSON: {e}\n{stdout}"));
+    // schemaVersion is the wire-format version; pinned to "1" until a
+    // SemVer-major breaking change forces a bump.
+    assert_eq!(v["schemaVersion"], "1");
+    assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
+    // Empty array, NOT null — important for downstream tools.
+    let diags = v["diagnostics"]
+        .as_array()
+        .expect("diagnostics is an array");
+    assert!(diags.is_empty(), "expected zero diagnostics: {stdout}");
+    assert_eq!(v["summary"]["filesChecked"], 1);
+    assert_eq!(v["summary"]["errorCount"], 0);
+    assert_eq!(v["summary"]["warningCount"], 0);
+}
+
+#[test]
+fn check_format_json_dirty_file_carries_full_diagnostic_shape() {
+    let out = Command::new(bin())
+        .args(["check", "--format", "json"])
+        .arg(fixture("typo.pyk"))
+        .output()
+        .expect("run pykrete check --format json typo.pyk");
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("invalid JSON: {e}\n{stdout}"));
+    let diags = v["diagnostics"]
+        .as_array()
+        .expect("diagnostics is an array");
+    // The `regoin` typo triggers both D0030 (unknown column) and D0050
+    // (return columns mismatch). The shape assertion targets the D0030
+    // entry.
+    let d = diags
+        .iter()
+        .find(|d| d["code"] == "D0030")
+        .unwrap_or_else(|| panic!("D0030 missing in JSON: {stdout}"));
+    assert_eq!(d["ruleName"], "unknownColumn");
+    assert_eq!(d["severity"], "error");
+    // Source pins to the literal string "pykrete" so CI aggregators
+    // (reviewdog etc.) can disambiguate from other linters in the same
+    // workflow.
+    assert_eq!(d["source"], "pykrete");
+    // 1-indexed positions; the typo is in `col("regoin")` on line 7.
+    assert_eq!(d["line"], 7);
+    assert!(d["column"].as_u64().unwrap() >= 1);
+    assert_eq!(d["endLine"], 7);
+    assert!(d["message"].as_str().unwrap().contains("regoin"));
+    assert!(d["file"].as_str().unwrap().ends_with("typo.pyk"));
+    assert!(d["relatedInformation"].is_array());
+    // D0030 carries the "did you mean" suggestion as its own structured
+    // field so quick-fix tooling doesn't have to grep the message.
+    assert_eq!(d["suggestion"], "region");
+    assert_eq!(v["summary"]["errorCount"], diags.len());
+    assert_eq!(v["summary"]["warningCount"], 0);
+}
+
+#[test]
+fn check_format_json_emits_null_suggestion_when_absent() {
+    // The companion D0050 diagnostic on the same fixture doesn't carry
+    // a suggestion — it should serialize as JSON null, never omitted.
+    let out = Command::new(bin())
+        .args(["check", "--format", "json"])
+        .arg(fixture("typo.pyk"))
+        .output()
+        .expect("run pykrete check --format json typo.pyk");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("invalid JSON: {e}\n{stdout}"));
+    let diags = v["diagnostics"]
+        .as_array()
+        .expect("diagnostics is an array");
+    let d = diags
+        .iter()
+        .find(|d| d["code"] == "D0050")
+        .unwrap_or_else(|| panic!("D0050 missing in JSON: {stdout}"));
+    assert!(
+        d.get("suggestion").is_some(),
+        "suggestion field should always be present: {d}"
+    );
+    assert!(
+        d["suggestion"].is_null(),
+        "expected null suggestion on D0050, got {}: {stdout}",
+        d["suggestion"]
+    );
+}
+
+#[test]
+fn check_format_json_source_always_present() {
+    // Even with zero diagnostics the empty diagnostics array is still
+    // structured correctly — this test pins source for non-empty cases
+    // and schemaVersion across the board.
+    let out = Command::new(bin())
+        .args(["check", "--format", "json"])
+        .arg(fixture("typo.pyk"))
+        .output()
+        .expect("run pykrete check --format json typo.pyk");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("invalid JSON: {e}\n{stdout}"));
+    assert_eq!(v["schemaVersion"], "1");
+    let diags = v["diagnostics"]
+        .as_array()
+        .expect("diagnostics is an array");
+    assert!(!diags.is_empty(), "expected diagnostics: {stdout}");
+    for d in diags {
+        assert_eq!(d["source"], "pykrete", "source missing on: {d}");
+    }
+}
+
+#[test]
+fn check_format_text_matches_default() {
+    // `--format text` must be byte-identical to the bare default form,
+    // both on stdout and stderr.
+    let default = Command::new(bin())
+        .arg("check")
+        .arg(fixture("typo.pyk"))
+        .output()
+        .expect("run pykrete check typo.pyk");
+    let explicit_text = Command::new(bin())
+        .args(["check", "--format", "text"])
+        .arg(fixture("typo.pyk"))
+        .output()
+        .expect("run pykrete check --format text typo.pyk");
+    assert_eq!(default.status, explicit_text.status);
+    assert_eq!(default.stdout, explicit_text.stdout);
+    assert_eq!(default.stderr, explicit_text.stderr);
+}
+
+#[test]
+fn check_format_json_eq_syntax_works() {
+    let out = Command::new(bin())
+        .args(["check", "--format=json"])
+        .arg(fixture("clean.pyk"))
+        .output()
+        .expect("run pykrete check --format=json clean.pyk");
+    assert!(out.status.success(), "non-zero exit: {:?}", out.status);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let _: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("invalid JSON for --format=json: {e}\n{stdout}"));
+}
+
+#[test]
+fn check_format_unknown_value_errors() {
+    let out = Command::new(bin())
+        .args(["check", "--format", "yaml"])
+        .arg(fixture("clean.pyk"))
+        .output()
+        .expect("run pykrete check --format yaml");
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("unknown --format"),
+        "stderr missing 'unknown --format': {stderr}"
+    );
+}
+
+#[test]
+fn check_format_missing_value_errors() {
+    let out = Command::new(bin())
+        .args(["check", "--format"])
+        .output()
+        .expect("run pykrete check --format (no value)");
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("requires a value"),
+        "stderr missing 'requires a value': {stderr}"
+    );
+}
+
+#[test]
+fn check_help_lists_format_flag() {
+    let out = Command::new(bin())
+        .args(["check", "--help"])
+        .output()
+        .expect("run pykrete check --help");
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("--format"),
+        "check --help missing '--format': {stdout}"
+    );
+}
+
+#[test]
 fn transpile_help_flag_prints_transpile_usage() {
     let out = Command::new(bin())
         .arg("transpile")

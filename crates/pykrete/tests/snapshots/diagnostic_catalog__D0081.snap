@@ -1,0 +1,5 @@
+---
+source: crates/pykrete/tests/diagnostic_catalog.rs
+expression: captured
+---
+d0081_non_numeric_arithmetic.pyk:7:30-7:59 warning D0081 nonNumericArithmetic: Arithmetic operator applied to a non-numeric (String) column. Spark coerces or errors here; cast it explicitly if intended.

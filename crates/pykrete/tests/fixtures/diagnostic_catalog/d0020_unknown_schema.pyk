@@ -1,0 +1,2 @@
+def f(d: DataFrame[Mystery]) -> DataFrame:
+    return d

@@ -87,6 +87,8 @@ pykrete check .
 
 It walks every `.pyk` file and prints the same `parsed OK — N schema(s), M typed function(s), K issue(s)` summary per file. That line is what you put in CI.
 
+For CI scripts that need to parse the results, `pykrete check --format json .` emits a single JSON object on stdout (`{"version": ..., "diagnostics": [...], "summary": {...}}`) with the same `0` / `1` exit code. The schema becomes a stability contract at v1.0.0.
+
 ## Next
 
 - [Schemas](/pykrete/reference/schemas/) — nested arrays / maps / structs, and the `Pick` / `Omit` / `Join` operators.

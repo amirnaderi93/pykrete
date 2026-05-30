@@ -1,0 +1,11 @@
+class A(Schema):
+    k: int
+    x: int
+
+
+class B(Schema):
+    other: int
+
+
+def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+    return a.join(b, on="k")

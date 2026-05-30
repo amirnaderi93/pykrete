@@ -1,0 +1,5 @@
+---
+source: crates/pykrete/tests/diagnostic_catalog.rs
+expression: captured
+---
+d0072_duplicate_schema_name/b.pyk:1:1-3:16 warning D0072 duplicateSchemaName: Schema 'Sale' is declared in multiple files: d0072_duplicate_schema_name/a.pyk, d0072_duplicate_schema_name/b.pyk.

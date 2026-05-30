@@ -1,0 +1,5 @@
+---
+source: crates/pykrete/tests/diagnostic_catalog.rs
+expression: captured
+---
+d0083_nullability_mismatch.pyk:11:12-11:60 warning D0083 nullabilityMismatch: Column 'note' is nullable in the body, but schema 'Out' declares it non-nullable.

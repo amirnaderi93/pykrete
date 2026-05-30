@@ -1,0 +1,2 @@
+def f(d: DataFrame["Sale"]) -> DataFrame:
+    return d

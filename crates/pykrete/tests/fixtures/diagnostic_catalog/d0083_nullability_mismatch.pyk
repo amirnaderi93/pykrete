@@ -1,0 +1,11 @@
+class In(Schema):
+    id: int
+
+
+class Out(Schema):
+    id: int
+    note: string
+
+
+def f(d: DataFrame[In]) -> DataFrame[Out]:
+    return d.withColumn("note", F.lit(None).cast("string"))

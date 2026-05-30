@@ -34,12 +34,15 @@ Usage:
     pykrete check [OPTIONS] <FILE_OR_DIR> [<FILE_OR_DIR> ...]
 
 Options:
-    -v, --verbose    Also print every schema declaration and typed
-                     function signature (default: summary line only).
-    -h, --help       Show this help and exit.
+    -v, --verbose          Also print every schema declaration and typed
+                           function signature (default: summary line only).
+        --format <FORMAT>  Output format: 'text' (default, human-readable)
+                           or 'json' (machine-readable on stdout).
+    -h, --help             Show this help and exit.
 
 Example:
     pykrete check examples/orders.pyk
+    pykrete check --format json examples/orders.pyk
 ";
 
 const TRANSPILE_HELP: &str = "\
@@ -86,22 +89,55 @@ fn main() -> ExitCode {
     }
 }
 
-/// Parse `check`'s flags and arguments. Returns the verbose flag and the
-/// list of path arguments, or an error message if a flag is unrecognized.
-/// Caller is expected to have already short-circuited on `-h` / `--help`.
-fn parse_check_args(args: &[String]) -> Result<(bool, Vec<String>), String> {
+/// Output format selected via `--format`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutputFormat {
+    Text,
+    Json,
+}
+
+/// Parse `check`'s flags and arguments. Returns the verbose flag, the
+/// output format, and the list of path arguments, or an error message if
+/// a flag is unrecognized. Caller is expected to have already short-
+/// circuited on `-h` / `--help`.
+fn parse_check_args(args: &[String]) -> Result<(bool, OutputFormat, Vec<String>), String> {
     let mut verbose = false;
+    let mut format = OutputFormat::Text;
     let mut paths: Vec<String> = Vec::new();
-    for a in args {
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
         match a.as_str() {
             "-v" | "--verbose" => verbose = true,
+            "--format" => {
+                i += 1;
+                let value = args
+                    .get(i)
+                    .ok_or_else(|| "--format requires a value (text|json)".to_string())?;
+                format = parse_format(value)?;
+            }
+            s if s.starts_with("--format=") => {
+                let value = &s["--format=".len()..];
+                format = parse_format(value)?;
+            }
             s if s.starts_with('-') => {
                 return Err(format!("unknown option '{s}'; see `pykrete check --help`"));
             }
             _ => paths.push(a.clone()),
         }
+        i += 1;
     }
-    Ok((verbose, paths))
+    Ok((verbose, format, paths))
+}
+
+fn parse_format(value: &str) -> Result<OutputFormat, String> {
+    match value {
+        "text" => Ok(OutputFormat::Text),
+        "json" => Ok(OutputFormat::Json),
+        other => Err(format!(
+            "unknown --format value '{other}'; expected 'text' or 'json'"
+        )),
+    }
 }
 
 fn run_check(args: &[String]) -> ExitCode {
@@ -112,7 +148,7 @@ fn run_check(args: &[String]) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let (verbose, paths) = match parse_check_args(args) {
+    let (verbose, format, paths) = match parse_check_args(args) {
         Ok(v) => v,
         Err(msg) => {
             eprintln!("{msg}");
@@ -159,12 +195,19 @@ fn run_check(args: &[String]) -> ExitCode {
         config.apply_rules(&mut file.result.diagnostics);
     }
 
-    // Print per-file summary + body to stdout, in input order. Then dump
-    // all diagnostics across all files to stderr at the end (TS-style).
-    //
-    // Default output is just the summary line — the verbose schema/function
-    // dump is gated behind `--verbose` so first-run output matches the
-    // promise in the quickstart docs.
+    match format {
+        OutputFormat::Text => render_text(&project, verbose),
+        OutputFormat::Json => render_json(&project),
+    }
+}
+
+/// Default text renderer. Per-file summary + body to stdout in input order,
+/// all diagnostics dumped to stderr at the end (TS-style).
+///
+/// Default output is just the summary line — the verbose schema/function
+/// dump is gated behind `--verbose` so first-run output matches the
+/// promise in the quickstart docs.
+fn render_text(project: &pykrete::ProjectCheckResult, verbose: bool) -> ExitCode {
     let mut had_diagnostics = false;
     for (i, file) in project.files.iter().enumerate() {
         let r = &file.result;
@@ -204,6 +247,91 @@ fn run_check(args: &[String]) -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+/// Machine-readable renderer. Emits one JSON object on stdout with the
+/// shape documented in the v1.0 stability contract:
+///
+/// ```json
+/// {
+///   "schemaVersion": "1",
+///   "version": "X.Y.Z",
+///   "diagnostics": [
+///     { "file", "line", "column", "endLine", "endColumn",
+///       "code", "ruleName", "severity", "source", "message",
+///       "suggestion", "relatedInformation" }
+///   ],
+///   "summary": { "filesChecked", "errorCount", "warningCount" }
+/// }
+/// ```
+///
+/// `schemaVersion` is the version of this JSON shape, distinct from
+/// `version` (the pykrete release that produced the output). Consumers
+/// pin to `schemaVersion`. Bump policy:
+/// - Adding a new top-level or per-diagnostic field: non-breaking, keep
+///   `schemaVersion` at `"1"`. Consumers must accept unknown fields.
+/// - Adding a new severity or D-code: non-breaking, keep at `"1"`.
+///   Consumers must handle unknown severities/codes gracefully.
+/// - Renaming a field, changing its type, or changing its meaning:
+///   breaking — bump `schemaVersion` to `"2"` alongside the pykrete
+///   SemVer-major bump.
+///
+/// Positions are 1-indexed (matching the `text` format and most editor
+/// gutter labels). pykrete-lsp re-indexes to 0-indexed on the wire per
+/// the LSP spec; tools consuming this JSON directly should not.
+fn render_json(project: &pykrete::ProjectCheckResult) -> ExitCode {
+    let mut diagnostics_json: Vec<serde_json::Value> = Vec::new();
+    let mut error_count: usize = 0;
+    let mut warning_count: usize = 0;
+    for file in &project.files {
+        for d in &file.result.diagnostics {
+            let severity = match d.severity {
+                pykrete::diagnostics::Severity::Error => "error",
+                pykrete::diagnostics::Severity::Warning => "warning",
+            };
+            match d.severity {
+                pykrete::diagnostics::Severity::Error => error_count += 1,
+                pykrete::diagnostics::Severity::Warning => warning_count += 1,
+            }
+            diagnostics_json.push(serde_json::json!({
+                "file": file.path,
+                "line": d.line,
+                "column": d.column,
+                "endLine": d.end_line,
+                "endColumn": d.end_column,
+                "code": d.code,
+                "ruleName": pykrete::diagnostics::rule_name(d.code),
+                "severity": severity,
+                "source": "pykrete",
+                "message": d.message,
+                "suggestion": d.suggestion,
+                "relatedInformation": [],
+            }));
+        }
+    }
+
+    let payload = serde_json::json!({
+        "schemaVersion": "1",
+        "version": VERSION,
+        "diagnostics": diagnostics_json,
+        "summary": {
+            "filesChecked": project.files.len(),
+            "errorCount": error_count,
+            "warningCount": warning_count,
+        },
+    });
+
+    // Pretty-print so the output is greppable by humans too; tools that
+    // care about size pipe through `jq -c`.
+    let rendered = serde_json::to_string_pretty(&payload)
+        .expect("project JSON is composed of types that always serialize");
+    println!("{rendered}");
+
+    if error_count + warning_count > 0 {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 /// Expand a list of CLI paths to `.pyk` files. File paths pass through

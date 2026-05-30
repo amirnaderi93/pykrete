@@ -1,0 +1,3 @@
+class Sale(Schema):
+    region: string
+    amount: int
