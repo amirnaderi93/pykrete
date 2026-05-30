@@ -66,14 +66,14 @@ Pykrete is a development-time checker, not a runtime dependency. Your `.pyk` fil
 What this means in practice:
 
 - **Static analysis runs in your editor, pre-commit hook, or CI.** The `pykrete` binary never ships to production hosts.
-- **The transpile step is a rename plus a `from __future__ import annotations` injection** — no code transformation, no rewrites. Inspect the output if you want; it's byte-identical to your `.pyk` modulo the import.
-- **Adopting pykrete is reversible.** Delete the `.pyk` extension, uninstall the binary, remove the VS Code extension. Your jobs run unchanged.
+- **The transpile step is small and well-defined.** It prepends `from __future__ import annotations` and strips the pykrete-only `.cast(DataFrame[Schema])` re-anchor calls — these exist purely to help the checker; PySpark's `DataFrame` has no `.cast` method, so the call would `AttributeError` at runtime regardless. Everything else is copied verbatim, line numbers preserved. Run `pykrete transpile path/to/file.pyk` and diff against the source to see exactly what changed.
+- **Adopting pykrete is reversible.** Run `pykrete transpile` once to bake the `.pyk` → `.py` rewrite into your repo, commit the result, and you've vendored your way off pykrete. No runtime dependency to remove (there isn't one), no binary on production hosts (there never was one).
 
 ### How we earn confidence
 
 We hold pykrete to PySpark's standard because that's the standard that matters:
 
-- **Cross-tested against real PySpark codebases on every release.** The [pykrete-tests](https://github.com/amirnaderi93/pykrete-tests) repo vendors snapshots of Apache Spark and MLflow, annotates them the way a real adopter would, and runs `pykrete check` on every push and nightly. The same loop also runs against an internal production data-engineering codebase during the v1.0 hardening sprint. A false positive on real Spark code is a release blocker.
+- **Cross-tested against real PySpark code on every release.** The [pykrete-tests](https://github.com/amirnaderi93/pykrete-tests) repo vendors annotated snapshots from Apache Spark's and MLflow's own Spark integrations, and CI runs `pykrete check` against them on every push and nightly. During the v1.0 hardening sprint pykrete is also run as a check-only pass against a production PySpark codebase the maintainer has direct access to (a data-engineering team's daily-shipped Spark jobs); the explicit adopter donor list and continuous-loop wire-up lands in v0.1.36. A false positive on real Spark code is a release blocker.
 - **1,018 tests in CI across the analyzer, LSP, and wasm crates.** Every release has to pass the full suite, plus per-D-code snapshot tests that pin every error message — wording drifts fail the build until explicitly accepted.
 - **JSON output is a stability contract from v1.0.0.** Field names, types, semantics, and D-code identity will not change without a SemVer-major bump and a corresponding `schemaVersion` bump. See [Production readiness → JSON output stability contract](https://amirnaderi93.github.io/pykrete/about/production-readiness/#json-output-stability-contract).
 - **No-false-positives policy.** When pykrete cannot determine a schema or a type with confidence, it stops checking that subtree rather than guessing. A static checker that cries wolf gets switched off.

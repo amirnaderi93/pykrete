@@ -73,6 +73,6 @@ The full unmodeled list, with the rationale for each, is in [Operations → What
 
 ## Production deployments
 
-Pykrete is currently running against an internal production PySpark codebase (a working data-engineering team's daily-shipped Spark jobs) as part of the pre-v1.0 hardening loop. Named external references will be added here as adopters give the go-ahead.
+Pykrete is being run as a check-only pass against a production PySpark codebase the maintainer has direct access to (a data-engineering team's daily-shipped Spark jobs at a former employer) as part of the pre-v1.0 hardening loop. This is hands-on access, not arm's-length adopter validation — it surfaces real-world false positives early but doesn't substitute for independent adopter signal. The public, reproducible coverage lives in [pykrete-tests](/pykrete/about/pykrete-tests/), which vendors annotated snapshots from Apache Spark's and MLflow's own codebases; the explicit donor list and per-donor coverage matrix land there in v0.1.36. Named external adopter references will be added here as teams give the go-ahead.
 
 Pykrete itself is a development-time checker — it does not ship to production hosts and cannot affect a running pipeline. See the [Reliability and trust](https://github.com/amirnaderi93/pykrete#reliability-and-trust) section of the README for the full story.

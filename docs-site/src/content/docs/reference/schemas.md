@@ -39,7 +39,7 @@ class Sale(Schema):
 
 Atomic names are **case-sensitive lowercase** in `.pyk` source: `int`, `string`, `decimal`. `Int`, `STRING`, `Decimal` are rejected (`D0010`). This matches Spark interop — column names already are case-sensitive (see [Why case-sensitive?](#why-case-sensitive)), and pykrete keeps the rule uniform across the type vocabulary.
 
-The composite keywords `Array`, `Map`, `Struct` are matched case-insensitively (a legacy compatibility carve-out — the Python annotation form is conventionally `Array[…]` / `Map[…, …]`). The element types inside still follow the strict rule: `Array[Int]` is rejected because `Int` is not the atomic name; write `Array[int]`.
+Two complex-type keywords have legacy spelling carve-outs: both `Array[…]` and `array[…]` are accepted, and both `Map[…, …]` and `map[…, …]` are accepted — exactly those two casings each, not arbitrary case. `ARRAY` / `aRrAy` are rejected. There is no `Struct[…]` subscript form: struct columns are declared by typing the nested `Schema` class name as the field type (see [Struct columns](#struct-columns) below). The element types inside `Array[…]` / `Map[…, …]` still follow the strict rule: `Array[Int]` is rejected because `Int` is not the atomic name; write `Array[int]`.
 
 The wider Spark SQL vocabulary (`integer`, `bigint`, `smallint`, `tinyint`, `float`, `real`, `boolean`) is accepted only inside `.cast("…")` strings and string-form UDF return types, where Spark SQL itself is case-insensitive. Inside a Schema class body, stick to the lowercase pykrete names listed above.
 
@@ -158,7 +158,7 @@ class SaleWithManager(Merge[Sale, Region]):
 # SaleWithManager has every column of Sale plus every column of Region
 ```
 
-Use `Merge` to describe the shape of a join result, a `withColumns` extension, or any concatenation of schemas. Pykrete flags overlapping non-key columns at the operator site; use `Pick` / `Omit` on one of the operands to disambiguate.
+Use `Merge` to describe the shape of a join result, a `withColumns` extension, or any concatenation of schemas. When two operands declare the same column name, pykrete keeps the **first occurrence** in argument order and silently drops the later ones. (Note: this is the opposite of Python's `{**a, **b}` dict merge, where the later operand wins — pykrete's `Merge` is first-wins, not last-wins.) If you need a later operand's column to survive instead, reorder the arguments, or wrap the earlier operand in `Omit` to drop the column there.
 
 These three operators are the full surface. Operators that appeared in earlier specs (`Join[A, B]`, `GroupBy[S, k]`) were dropped before v0.1 shipped — the join / groupBy result schemas are inferred from the call site instead, so a separate operator wasn't needed.
 
