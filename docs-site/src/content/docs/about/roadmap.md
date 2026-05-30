@@ -7,7 +7,7 @@ The canonical source is [docs/roadmap.md](https://github.com/amirnaderi93/pykret
 
 ## Where pykrete is now
 
-The PySpark static checker is **feature-complete** as of [v0.1.15](https://github.com/amirnaderi93/pykrete/releases/tag/v0.1.15):
+The PySpark static checker is **feature-complete** as of the v0.1 release line (see the [GitHub Releases page](https://github.com/amirnaderi93/pykrete/releases) for the per-release history):
 
 - The full DataFrame operation surface (`select` / `filter` / `join` / `groupBy`+`agg` / `withColumn(s)` / `drop` / `union` / `cube` / `rollup` / `pivot` / `transform` / `cast` / `toDF` / `df.na.*` / set ops / `melt` / `unpivot` / …) with result-schema inference through whole transformation chains.
 - Inline SQL (`F.expr`, `selectExpr`, string-`filter`) and raw `spark.sql("SELECT …")` — including `createOrReplaceTempView` + `spark.sql("SELECT … FROM v")` resolution within a file.

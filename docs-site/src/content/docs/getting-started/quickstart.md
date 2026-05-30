@@ -91,6 +91,6 @@ For CI scripts that need to parse the results, `pykrete check --format json .` e
 
 ## Next
 
-- [Schemas](/pykrete/reference/schemas/) — nested arrays / maps / structs, and the `Pick` / `Omit` / `Join` operators.
+- [Schemas](/pykrete/reference/schemas/) — nested arrays / maps / structs, and the `Pick` / `Omit` / `Merge` operators.
 - [Diagnostics](/pykrete/reference/diagnostics/) — every rule, with examples.
 - [How it works](/pykrete/about/how-it-works/) — what's happening under the hood.

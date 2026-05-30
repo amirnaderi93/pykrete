@@ -6,6 +6,83 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.34] - 2026-05-31
+
+Leg 9 of 10 in the v1.0.0 hardening sprint — a docs-only release that
+closes the remaining doc-vs-code drifts surfaced by the pre-launch
+audit and adds a new **Reliability and trust** section to the README.
+
+### Added
+
+- **README "Reliability and trust" section.** New section explaining
+  that pykrete is a development-time checker (never ships to
+  production hosts; cannot affect a running pipeline), and how each
+  release earns confidence: cross-testing against Apache Spark /
+  MLflow / an internal production codebase, 1,018-test CI suite,
+  per-D-code snapshot tests, JSON output stability contract from
+  v1.0.0, no-false-positives policy, pre-major-release audit cycle.
+- **Per-crate READMEs** for `pykrete`, `pykrete-lsp`, `pykrete-wasm`.
+  Two- to three-sentence stubs pointing at the main repo for install,
+  usage, and docs.
+- **Schema reference — case sensitivity section.** Documents that
+  atomic names (`int`, `string`, `decimal`, …) are case-sensitive
+  lowercase in `.pyk` source, the `Array` / `Map` / `Struct` keywords
+  are case-insensitive (legacy compatibility carve-out), and the
+  wider Spark SQL vocabulary (`integer`, `bigint`, `tinyint`,
+  `float`, `real`, `boolean`) is accepted only inside `.cast("…")`
+  strings — folds the v0.1.28 round-4 review's `from_name`
+  case-sensitivity nuance into the user-facing docs.
+- **`numeric` / `dec` aliases documented** in the atomic types
+  section — Spark SQL aliases for `decimal`, parameterised and bare
+  forms resolve identically.
+- **Three new CHANGELOG link-refs** (v0.1.31, v0.1.32, v0.1.33,
+  v0.1.34) plus the `Unreleased` compare base bumped to v0.1.34.
+
+### Changed
+
+- **Schema reference — full rewrite.** Dropped `List[T]` / `Dict[K, V]`
+  examples in favour of the Spark-aligned `Array[T]` / `Map[K, V]`
+  forms pykrete actually uses. Dropped the `Join[A, B]` and
+  `GroupBy[S, k]` operator sections — these appeared in early v0.1
+  specs but never shipped; the actual operator surface is `Pick`,
+  `Omit`, `Merge`. Aligned the cross-file example on `.pyk` (a `.py`
+  schema module isn't walked at check time). Tightened the `Pick` /
+  `Omit` / `Merge` descriptions against `schema.rs`.
+- **Production-readiness sweep.** Dropped non-existent `Join` /
+  `GroupBy` operators from the stability commitments list. Promoted
+  the wasm API surface from "not yet shipped" to "shipped in v0.1.16;
+  current shape stable until v1.0, frozen per SemVer from v1.0
+  onward" — single-file analyzer wrapper, scope explicitly noted.
+  Replaced the now-stale v0.1.7 → v0.1.15 release-cadence story with
+  a release-line-neutral phrasing. Linked to the new README
+  Reliability and trust section from both the TL;DR and the
+  Production deployments section.
+- **Playground install copy.** Replaced the misleading
+  `pip install pykrete` (pykrete is a Rust binary, not on PyPI) with
+  the real install paths (Homebrew, cargo, Windows MSI, VS Code
+  marketplace links). Tightened the "no general Python type
+  checking" copy to reflect the static PySpark-symbol hover /
+  completion / go-to-definition layer that's been part of the
+  playground since v0.1.21.
+- **VS Code marketplace CHANGELOG backfill.** Collapsed the
+  v0.2.14 – v0.2.21 and v0.2.23 – v0.2.27 gaps into two summary
+  stubs pointing at the main CHANGELOG, plus fresh entries for
+  v0.2.30 (tracks v0.1.33) and v0.2.31 (tracks v0.1.34). Marketplace
+  shoppers no longer see a broken-looking version history.
+- **Stale version-number sweep.** Replaced `v0.1.15` references in
+  the install guide, roadmap, pykrete-tests, and production-readiness
+  pages with current versions or release-line-neutral phrasing.
+- **README operator list.** Added an explicit "TypeScript-style
+  schema composition — `Pick`, `Omit`, and `Merge`" bullet to the
+  "What you get" list.
+
+### Verification
+
+`cargo test --workspace` (1,018 passing), `cargo fmt --check`,
+`cargo clippy --workspace --all-targets -- -D warnings`,
+`cd docs-site && npm run build`,
+`cd editors/vscode && npm run compile` all green.
+
 ## [0.1.33] - 2026-05-31
 
 Leg 8 of 10 in the v1.0.0 hardening sprint. Two items, both surfaced by
@@ -977,7 +1054,19 @@ full contract.
 - **Multi-file analysis** via imported typed declarations.
 - **`pykrete.json`** project configuration with non-strict / strict modes.
 
-[Unreleased]: https://github.com/amirnaderi93/pykrete/compare/v0.1.22...HEAD
+[Unreleased]: https://github.com/amirnaderi93/pykrete/compare/v0.1.34...HEAD
+[0.1.34]: https://github.com/amirnaderi93/pykrete/compare/v0.1.33...v0.1.34
+[0.1.33]: https://github.com/amirnaderi93/pykrete/compare/v0.1.32...v0.1.33
+[0.1.32]: https://github.com/amirnaderi93/pykrete/compare/v0.1.31...v0.1.32
+[0.1.31]: https://github.com/amirnaderi93/pykrete/compare/v0.1.30...v0.1.31
+[0.1.30]: https://github.com/amirnaderi93/pykrete/compare/v0.1.29...v0.1.30
+[0.1.29]: https://github.com/amirnaderi93/pykrete/compare/v0.1.28...v0.1.29
+[0.1.28]: https://github.com/amirnaderi93/pykrete/compare/v0.1.27...v0.1.28
+[0.1.27]: https://github.com/amirnaderi93/pykrete/compare/v0.1.26...v0.1.27
+[0.1.26]: https://github.com/amirnaderi93/pykrete/compare/v0.1.25...v0.1.26
+[0.1.25]: https://github.com/amirnaderi93/pykrete/compare/v0.1.24...v0.1.25
+[0.1.24]: https://github.com/amirnaderi93/pykrete/compare/v0.1.23...v0.1.24
+[0.1.23]: https://github.com/amirnaderi93/pykrete/compare/v0.1.22...v0.1.23
 [0.1.22]: https://github.com/amirnaderi93/pykrete/compare/v0.1.21...v0.1.22
 [0.1.21]: https://github.com/amirnaderi93/pykrete/compare/v0.1.20...v0.1.21
 [0.1.20]: https://github.com/amirnaderi93/pykrete/compare/v0.1.19...v0.1.20

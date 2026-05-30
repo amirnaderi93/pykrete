@@ -189,5 +189,5 @@ def report(refunds: DataFrame[Refund]) -> DataFrame:
 
 - [Operations](/pykrete/reference/operations/) — every PySpark op pykrete recognizes, and where chains end.
 - [Diagnostics](/pykrete/reference/diagnostics/) — every rule, with examples.
-- [Schemas](/pykrete/reference/schemas/) — `Pick`, `Omit`, `Join`, `GroupBy`, nested types.
+- [Schemas](/pykrete/reference/schemas/) — `Pick`, `Omit`, `Merge`, nested types.
 - [Configuration](/pykrete/reference/configuration/) — every key in `pykrete.json`.
