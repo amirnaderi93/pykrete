@@ -8,7 +8,7 @@
 use ruff_python_ast::{Expr, Number};
 use ruff_text_size::{Ranged, TextRange};
 
-use crate::types::{COLUMN_TYPE_NAMES, ColumnType, StructField};
+use crate::types::{COLUMN_TYPE_NAMES, ColumnType, StructField, validate_decimal_args};
 use crate::walk::DiscoveredClass;
 
 /// Recursion ceiling for resolving a (possibly self-referential) schema
@@ -194,11 +194,7 @@ fn resolve_annotation_type(
                 _ => return None,
             };
             let precision = int_literal_u8(precision_expr)?;
-            if precision == 0 || precision > ColumnType::MAX_DECIMAL_PRECISION || scale > precision
-            {
-                return None;
-            }
-            Some(ColumnType::Decimal { precision, scale })
+            validate_decimal_args(precision, scale)
         }
         // `Array[T]` / `Map[K, V]`.
         Expr::Subscript(sub) => {

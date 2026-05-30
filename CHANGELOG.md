@@ -63,7 +63,31 @@ false-rejected.
 `numeric` and `dec` are accepted as aliases for `decimal` end-
 to-end — Spark SQL treats them as synonyms, so `amount:
 numeric(18, 2)` in a Schema and `.cast("dec(10)")` in a chain
-both resolve identically to the corresponding `decimal`.
+both resolve identically to the corresponding `decimal`. The
+strict schema-annotation surface keeps its long-standing case-
+sensitivity contract (`Int` is rejected, and the alias forms
+follow the same rule — `Numeric(18, 2)` in a class body fires
+`D0011`); the Spark cast path stays case-insensitive
+(`NUMERIC`, `Dec`, `DECIMAL` all resolve), matching Spark SQL's
+own behaviour on type names.
+
+Decimal bounds validation (`1..=38` precision, `scale <=
+precision`) is now driven by a single shared helper
+(`validate_decimal_args`), so the same rules fire from both the
+cast-string parser and the schema-annotation parser. Previously
+the two paths each carried their own bounds check; the
+extraction protects against drift on future tweaks.
+
+The cast-typo allowlist for unmodeled Spark types now handles
+parenthesised forms more tightly: `varchar(n)` and `char(n)`
+require a positive integer `n`, and bare-only types
+(`interval`, `void`, `null`, `timestamp_ntz`) reject paren
+forms outright — `.cast("interval(5)")` and `.cast("void(0)")`
+now fire `D0011` instead of being silently allowed. The
+compound `INTERVAL <unit> TO <unit>` form is normalised case-
+insensitively and accepts per-unit precision args (`INTERVAL
+DAY(3) TO SECOND(6)`), so real Spark compound-interval casts
+aren't false-rejected.
 
 `schemas.md` updated to list the real v0.1.28 atomic set —
 `float` and `bytes` (which were never recognised) are out;

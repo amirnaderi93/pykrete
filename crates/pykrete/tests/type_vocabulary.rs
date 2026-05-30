@@ -385,3 +385,137 @@ def f(raw: DataFrame[Raw]) -> DataFrame[Out]:
     assert_does_not_have_code(&check(shortcut), "D0080");
     assert_does_not_have_code(&check(agg), "D0080");
 }
+
+// ---------------------------------------------------------------------------
+// Round-4 multi-lens review fixes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn round4_schema_field_decimal_aliases_stay_case_sensitive() {
+    // Round-4 fix: `from_name` (the strict-vocabulary surface that
+    // backs schema annotations) is case-sensitive — `Int` is rejected,
+    // and the alias forms `numeric` / `dec` follow the same rule. A
+    // mixed-case `Numeric(18, 2)` in a schema annotation must surface
+    // as D0010/D0011, not silently resolve.
+    for typo in ["Numeric(18, 2)", "DECIMAL(18, 2)", "Dec(10)", "DEC"] {
+        let src = format!(
+            "class Sale(Schema):
+    amount: {typo}
+"
+        );
+        let result = check(&src);
+        let any_unknown_code = result
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "D0010" || d.code == "D0011");
+        assert!(
+            any_unknown_code,
+            "{typo} on the schema-annotation surface should fire D0010 or D0011, got {:?}",
+            result
+                .diagnostics
+                .iter()
+                .map(|d| d.code)
+                .collect::<Vec<_>>(),
+        );
+    }
+}
+
+#[test]
+fn round4_cast_path_decimal_aliases_stay_case_insensitive() {
+    // Round-4 companion: the Spark cast path stays lenient — Spark SQL
+    // itself accepts `DECIMAL`, `NUMERIC`, `Dec` interchangeably, so
+    // pykrete's typo-checker must too.
+    let src = "\
+class Sale(Schema):
+    amount: int
+
+def f(s: DataFrame[Sale]) -> DataFrame:
+    return s.select(
+        col(\"amount\").cast(\"NUMERIC(18, 2)\").alias(\"n\"),
+        col(\"amount\").cast(\"Dec(10, 0)\").alias(\"d\"),
+        col(\"amount\").cast(\"DECIMAL\").alias(\"db\"),
+    )
+";
+    assert_does_not_have_code(&check(src), "D0011");
+}
+
+#[test]
+fn round4_schema_decimal_above_cap_fires_d0011_from_unified_validator() {
+    // Round-4 fix: `validate_decimal_args` is the single source of
+    // truth for `(p, s)` bounds — `precision > 38`, `scale > precision`,
+    // and `precision == 0` are rejected from both the cast path and
+    // the schema-annotation path. These cases land in the schema
+    // surface specifically, exercising the unified validator.
+    for ann in ["decimal(40, 2)", "decimal(18, 25)", "decimal(0, 0)"] {
+        let src = format!(
+            "class Bad(Schema):
+    amount: {ann}
+"
+        );
+        assert_has_code(&check(&src), "D0011");
+    }
+}
+
+#[test]
+fn round4_schema_decimal_at_max_precision_passes() {
+    // Boundary check: the unified validator must allow `decimal(38, 18)`
+    // — the max-valid case on both surfaces.
+    let src = "\
+class Sale(Schema):
+    amount: decimal(38, 18)
+
+def f(s: DataFrame[Sale]) -> DataFrame:
+    return s.select(col(\"amount\").cast(\"decimal(38, 18)\").alias(\"a\"))
+";
+    assert_no_diagnostics(&check(src));
+}
+
+#[test]
+fn round4_cast_to_paren_garbage_on_bare_unmodeled_types_fires_d0011() {
+    // Round-4 fix: `is_unmodeled_spark_type` used to false-allow
+    // `interval(5)`, `void(0)`, `null(0)` etc. because the matcher
+    // split on `(` and only checked the bare keyword. These types
+    // don't take parenthesised args in Spark SQL; the cast-typo
+    // emission must fire.
+    for typo in [
+        "interval(5)",
+        "void(0)",
+        "null(0)",
+        "timestamp_ntz(3)",
+        "varchar(0)",
+        "varchar(-1)",
+        "char(0)",
+    ] {
+        let src = format!(
+            "class Sale(Schema):
+    amount: int
+
+def f(s: DataFrame[Sale]) -> DataFrame:
+    return s.select(col(\"amount\").cast(\"{typo}\").alias(\"a\"))
+"
+        );
+        assert_has_code(&check(&src), "D0011");
+    }
+}
+
+#[test]
+fn round4_cast_to_compound_interval_with_precision_does_not_fire_d0011() {
+    // Round-4 fix: `INTERVAL DAY(3) TO SECOND(6)` is real Spark SQL —
+    // a compound interval with per-unit precision args. The matcher
+    // used to false-reject it (the case-sensitive base lookup and the
+    // exact-string interval table both missed). With case-normalisation
+    // and precision-arg stripping it now matches.
+    let src = "\
+class Sale(Schema):
+    amount: int
+
+def f(s: DataFrame[Sale]) -> DataFrame:
+    return s.select(
+        col(\"amount\").cast(\"INTERVAL DAY(3) TO SECOND(6)\").alias(\"a\"),
+        col(\"amount\").cast(\"interval day(3) to second(6)\").alias(\"b\"),
+        col(\"amount\").cast(\"INTERVAL YEAR TO MONTH\").alias(\"c\"),
+        col(\"amount\").cast(\"VARCHAR(100)\").alias(\"d\"),
+    )
+";
+    assert_does_not_have_code(&check(src), "D0011");
+}
