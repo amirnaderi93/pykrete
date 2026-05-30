@@ -992,7 +992,12 @@ fn publish_project_diagnostics(
     let config = snapshot_cache.config(docs);
     // A malformed `pykrete.json` quietly fell back to defaults inside
     // the snapshot cache — surface that to the user so they don't sit
-    // with stale rules and never know why. Drained once per cache key.
+    // with stale rules and never know why. The cache drains the warning
+    // exactly once per cache build, but every cold walk (30 s today)
+    // re-populates it as long as the file stays malformed, so the
+    // notification re-fires roughly every 30 s. Tightening this to
+    // suppress until the mtime drifts is tracked as item 15 in
+    // `docs/design/spark-coverage.md`.
     if let Some(warning) = snapshot_cache.take_pending_warning() {
         publish_malformed_config_warning(connection, &warning)?;
     }
@@ -1088,6 +1093,10 @@ fn publish_malformed_config_warning(
     connection: &Connection,
     warning: &project::MalformedConfig,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
+    // `display()` (not `to_str()?`) is deliberate here: this string is
+    // only ever shown to the user in a toast and the LSP output channel,
+    // never used as a lookup key. A readable U+FFFD-substituted path is
+    // strictly better than no warning at all for the non-UTF-8 case.
     let path_str = warning.path.display().to_string();
     let show_params = lsp_types::ShowMessageParams {
         typ: lsp_types::MessageType::WARNING,
@@ -1503,18 +1512,15 @@ mod tests {
     }
 
     #[test]
-    fn handle_definition_resolves_through_a_non_ascii_path() {
-        // A path containing non-ASCII (but valid UTF-8) chars must
-        // survive the path → str → URL → path round-trip without going
-        // through `to_string_lossy`, which would silently corrupt
-        // non-UTF-8 byte paths on Linux.
+    fn handle_definition_non_ascii_uri_roundtrip_valid_utf8() {
+        // Non-ASCII but valid UTF-8 paths survive the path → str → URL →
+        // path round-trip cleanly; both `to_str()` and the old
+        // `to_string_lossy()` return identical output here, so this
+        // pins the happy path only. The truly non-UTF-8 case (where
+        // the two diverge) is exercised separately on Unix below; on
+        // Windows it's unreachable because `to_file_path()` itself
+        // rejects non-UTF-16 URIs upstream.
         let mut docs: HashMap<Url, String> = HashMap::new();
-        // The single open doc is enough to drive single-file analysis;
-        // we don't need an on-disk snapshot. The lossy-conversion bug
-        // would also surface here when the LSP layer fell back through
-        // single-file mode after a snapshot miss — but the goal of the
-        // assertion is to pin that the non-ASCII URI doesn't break the
-        // request path.
         let uri = Url::parse("file:///t%C3%A9st.pyk").unwrap(); // /tést.pyk
         let src = "class Orders(Schema):\n    x: int\n\ndef f(raw: DataFrame[Orders]) -> DataFrame[Orders]:\n    return raw\n";
         docs.insert(uri.clone(), src.to_string());
@@ -1533,6 +1539,50 @@ mod tests {
             }
             other => panic!("expected Scalar location, got {other:?}"),
         }
+    }
+
+    /// Truly non-UTF-8 byte paths must short-circuit to `None` instead
+    /// of falling back through `to_string_lossy` — the prior bug would
+    /// have produced a non-roundtrippable string that either missed
+    /// the snapshot lookup silently or, worse, key-collided onto the
+    /// wrong entry. Unix-only: Windows paths are UTF-16, so the
+    /// `Url::to_file_path()` step rejects the URI long before reaching
+    /// the strict `to_str()?` we're trying to pin.
+    #[cfg(unix)]
+    #[test]
+    fn handle_definition_returns_none_for_non_utf8_path() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        use std::path::Path;
+
+        // `0xFF` on its own is invalid UTF-8 in any encoding — this
+        // PathBuf is well-formed as bytes but `to_str()` returns None.
+        let raw = OsStr::from_bytes(b"/inv\xffalid.pyk");
+        let bad_path = Path::new(raw);
+        assert!(
+            bad_path.to_str().is_none(),
+            "test setup: path must be non-UTF-8"
+        );
+
+        let uri = Url::from_file_path(bad_path)
+            .expect("from_file_path encodes raw bytes as percent-escapes on Unix");
+        let mut docs: HashMap<Url, String> = HashMap::new();
+        docs.insert(
+            uri.clone(),
+            "class Orders(Schema):\n    x: int\n".to_string(),
+        );
+
+        // No assertion on the snapshot side — what we pin is that the
+        // LSP layer chooses `None` over a lossy fallback string. The
+        // old code path here would have produced `to_string_lossy()`'s
+        // U+FFFD replacement and either silently missed the lookup or
+        // returned the wrong target.
+        let result = handle_definition(
+            &docs,
+            &mut project::SnapshotCache::new(),
+            def_params_at(&uri, 0, 6),
+        );
+        assert!(result.is_none(), "non-UTF-8 path must return None");
     }
 
     // -----------------------------------------------------------------------
@@ -1675,6 +1725,64 @@ mod tests {
         let params = code_action_params(&uri, vec![diag]);
         let result = handle_code_action(params);
         assert!(result.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // malformed pykrete.json fan-out (showMessage + logMessage)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn publish_malformed_config_warning_fans_out_show_and_log_messages() {
+        // In-memory paired connection: writes to `server` show up on
+        // `client.receiver`. We assert the wire shape — both the
+        // user-visible `window/showMessage` and the LSP-output-channel
+        // `window/logMessage` — rather than just the cache-side drain
+        // semantics (which the project-mod tests already pin).
+        let (server, client) = Connection::memory();
+        let warning = project::MalformedConfig {
+            path: PathBuf::from("/proj/pykrete.json"),
+            error: "expected `:` at line 1 column 7".to_string(),
+        };
+        publish_malformed_config_warning(&server, &warning).expect("publish");
+
+        let mut methods: Vec<String> = Vec::new();
+        let mut messages: Vec<String> = Vec::new();
+        // Drain exactly two notifications; anything else (request,
+        // response, extra notification) is a bug.
+        for _ in 0..2 {
+            match client.receiver.recv().expect("notification") {
+                Message::Notification(n) => {
+                    let msg = n.params["message"].as_str().unwrap_or("").to_string();
+                    methods.push(n.method);
+                    messages.push(msg);
+                }
+                other => panic!("expected Notification, got {other:?}"),
+            }
+        }
+        assert!(
+            client.receiver.try_recv().is_err(),
+            "exactly two notifications expected; got a third"
+        );
+
+        assert_eq!(
+            methods,
+            vec![
+                "window/showMessage".to_string(),
+                "window/logMessage".to_string(),
+            ],
+            "showMessage must precede logMessage so the toast surfaces before the channel write"
+        );
+        assert!(
+            messages[0].contains("/proj/pykrete.json") && messages[0].contains("using defaults"),
+            "showMessage body: {}",
+            messages[0]
+        );
+        assert!(
+            messages[1].contains("/proj/pykrete.json")
+                && messages[1].contains("expected `:` at line 1 column 7"),
+            "logMessage body must carry the parse-error detail; got: {}",
+            messages[1]
+        );
     }
 
     #[test]

@@ -143,9 +143,13 @@ struct CachedState {
     /// Set when this cache build saw a malformed `pykrete.json`. The LSP
     /// layer drains it via [`SnapshotCache::take_pending_warning`] and
     /// pushes one `window/showMessage` + one `window/logMessage` so the
-    /// user knows defaults are being used. Cleared after the first drain;
-    /// re-populates only when the key (path + mtime) drifts and the next
-    /// cold walk re-reads a still-malformed file.
+    /// user knows defaults are being used. Cleared after the first drain
+    /// within a given cache build — but every cold walk (one per
+    /// `COLD_WALK_INTERVAL`, 30 s today) re-populates it unconditionally
+    /// when the file is still malformed, so the warning re-fires roughly
+    /// every 30 s rather than once-per-mtime. A v1.1 follow-up (item 15
+    /// in `docs/design/spark-coverage.md`) will gate re-emission on
+    /// mtime drift.
     malformed_warning: Option<MalformedConfig>,
 }
 

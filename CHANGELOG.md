@@ -36,8 +36,13 @@ goto-definition to the wrong file. v0.1.32 swaps `to_string_lossy()` →
 `to_str()` (the snapshot cache already keys paths as `String`, so
 non-UTF-8 paths could never have been in the snapshot anyway — bailing
 to `None` matches the real lookup result), and drops the wrong
-fallback in favour of an LSP-spec `null` response. New test pins that
-a non-ASCII URI roundtrips correctly through goto-definition.
+fallback in favour of an LSP-spec `null` response — returning `null`
+from goto-definition when the path isn't valid UTF-8 is the spec-correct
+behaviour, whereas the prior fallback teleported the user to the focus
+file's location. Two tests pin the change: one valid-UTF-8 non-ASCII
+URI round-trips through goto-definition cleanly, and (on Unix only)
+a path containing a raw `0xFF` byte short-circuits to `None` at the
+strict `to_str()?` site instead of taking the lossy fallback.
 
 **Malformed `pykrete.json` is no longer silent.** A `pykrete.json` that
 couldn't be parsed used to fall back to `Config::default()` with no
@@ -46,10 +51,17 @@ and never learned why. v0.1.32 makes the snapshot cache capture the
 parse-error detail at cold-walk time and surface it on the next
 diagnostic publish: one `window/showMessage` warning ("malformed
 pykrete.json at <path> — using defaults") plus one `window/logMessage`
-with the parse error for the LSP output channel. Drained once per
-cache key, so a still-malformed file on every typing keystroke
-produces exactly one notification (re-fires when mtime drifts and the
-next cold walk re-reads).
+with the parse error for the LSP output channel. The cache drains the
+warning once per build (so a still-malformed file on every typing
+keystroke produces exactly one notification per build), but every cold
+walk — one per 30 s today — re-populates the warning unconditionally
+when the file is still malformed, so in practice the notification
+re-fires roughly every 30 s. Suppressing re-emission until the
+`pykrete.json` mtime drifts is tracked as item 15 in
+`docs/design/spark-coverage.md` for v1.1. (Honesty correction: the
+initial v0.1.32 wording on this entry said "re-fires when mtime drifts
+and the next cold walk re-reads" — that overclaimed; the actual gate
+is the cold-walk interval, not mtime.)
 
 **Hover renderer cleanup.** `hover.rs` had ~29
 `writeln!(md, ...).unwrap()` calls on String writes that are

@@ -675,3 +675,45 @@ dynamic registration); these are tracking items for the v1.0.0 ship.
     document the gap and require LSP restart / refresh command on
     `pykrete.json` edits. Cost: trivial — one extra glob entry in the
     `DidChangeWatchedFilesRegistrationOptions`.
+
+### v0.1.32 architecture-cleanups deferrals (v1.1)
+
+Surfaced by the v0.1.32 multi-lens review (PR #63). Round-1 closed
+seven of the eight architecture-audit Importants; the eighth (I5)
+landed as a documented limitation rather than a code change. The
+ninth item below is a follow-up to the I8 fix shipped in this PR.
+
+14. **Reader-receiver tightening for `spark.read.<format>(…)`.**
+    `is_dataframe_reader_expr` in `operations/shapes.rs` recognises
+    `<X>.read.<format>(...)` purely structurally and does not verify
+    that `<X>` resolves to a `SparkSession`. In practice users bind
+    the session as `spark` / `ss` / `sess` / etc., so pinning the
+    receiver name would have broken real codebases; the trade-off is
+    that an in-house loader exposing the same `.read.<format>(…)`
+    shape also matches and yields opaque. The workaround is identical
+    to a genuine `spark.read` (re-anchor with `.cast(DataFrame[X])`),
+    documented in `docs-site/.../reference/operations.md` §
+    "Reader-receiver heuristic". Tightening the receiver check
+    requires plumbing binding context into `shapes.rs` (currently
+    `&Expr`-only), which is a non-trivial refactor — deferred to v1.1
+    behind real false-positive evidence from the field. Cost: medium —
+    threading a `BodyContext` reference through every `shapes.rs`
+    recogniser, plus a heuristic for "this binding came from
+    `SparkSession.builder.…getOrCreate()`" or import-based detection.
+
+15. **Suppress malformed `pykrete.json` re-warns until mtime drifts.**
+    v0.1.32 I8 introduced a `window/showMessage` + `window/logMessage`
+    fan-out for malformed `pykrete.json`, drained once per cache
+    build. The cold-walk interval (`COLD_WALK_INTERVAL`, 30 s) then
+    re-populates the warning unconditionally as long as the file
+    stays malformed, so in practice the user sees the toast roughly
+    every 30 s — annoying but not load-bearing for correctness. Fix:
+    add `last_warned_mtime: Option<SystemTime>` on `CachedState` (or
+    `SnapshotCache`); in `run_cold_walk`, when `load_pykrete_json`
+    returns a `MalformedConfig`, suppress queuing the warning when
+    the `pykrete.json` mtime matches the previously-warned mtime;
+    reset (or update) the field on every mtime drift, on a successful
+    parse, and on `invalidate()`. Cost: small — one field, one
+    compare in `run_cold_walk`, plus a test that pins a malformed
+    file produces exactly one warning across many cold walks until
+    its mtime changes.
