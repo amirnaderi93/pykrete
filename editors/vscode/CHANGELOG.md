@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.28
+
+Tracks the v0.1.31 pykrete release — internal refactor of the PySpark
+operations checker (single 6,000-line file split into nine sibling
+modules along its existing section banners). No behaviour change. See
+the [main CHANGELOG](../../CHANGELOG.md#0131---2026-05-30) for details.
+
 ## 0.2.22
 
 Marketplace metadata refresh tracking the v0.1.25 docs-only release

@@ -6,6 +6,50 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.31] - 2026-05-30
+
+Architecture-performance hardening, leg 6 of the v1.0.0 sprint. Pure
+module reorganization, no user-visible behaviour change.
+
+**`operations.rs` split.** The PySpark operations checker — analyzer,
+`BodyContext`, statement walker, `analyze_expr` dispatch, column-method
+checking + result inference, type-inference engine, strict-mode
+operator checks, two-DataFrame methods, and `col(...)` reference
+discovery — has lived in a single 6,000-line file. The architecture
+audit flagged it as a blocker for parallel-PR development: every
+analyzer touch recompiles the whole `pykrete` crate, every analyzer PR
+diffs against the same file, and visibility-by-default leaked internal
+types just so `hover.rs` / `completion.rs` could see them. v0.1.31
+splits the file along its existing nine section banners into sibling
+files under `crates/pykrete/src/operations/`:
+
+- `shapes.rs` — `column_method_shape`, `two_df_method`, terminal
+  recognizers, `spark.read.*` opaque-source recognizer.
+- `context.rs` — `BodyContext`, `ColumnRefTrace`,
+  `LocalBindingTrace`, `CallResultTrace`, `TypeCtx`, the synthetic-name
+  intern pool.
+- `driver.rs` — `check_function_body`, `walk_body`, `walk_stmt`,
+  `handle_ann_assign`, `check_return_type`.
+- `expr.rs` — `analyze_expr`, `analyze_method_call`, the
+  `transform`/`agg`/`groupBy` shortcuts, generic-method routing.
+- `column_methods.rs` — `check_column_method_args`,
+  `apply_with_columns`, `apply_melt`, fillna-dict / subset-kwarg
+  checks.
+- `column_exprs.rs` — `infer_expr_type`, `function_result_type`, the
+  `when`/`struct`/`getField` shape-inference engine.
+- `strict_operators.rs` — `report_expr_type_errors` (D0081 / D0082),
+  `apply_column_method`, `apply_select_expr`, SQL-fragment-reference
+  reporting.
+- `two_df.rs` — `union`, `unionByName`, `join`, `crossJoin`,
+  `apply_concat`, nullability strip.
+- `col_refs.rs` — `col(...)` / `df.X` / `df["X"]` / `F.<fn>("x")`
+  reference discovery.
+
+All 985 tests pass unchanged; visibility tightened on the public
+surface (`BodyContext` and its trace types are now `pub(crate)` rather
+than `pub`); cross-section helpers default to `pub(super)` so each
+sibling exposes only what the others need.
+
 ## [0.1.30] - 2026-05-30
 
 Architecture-performance hardening, leg 5 of the v1.0.0 sprint. Three
