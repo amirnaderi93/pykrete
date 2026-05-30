@@ -536,3 +536,40 @@ deferred as v1.1 to keep this PR focused.
    test surfaced during v0.1.26 work; the round-4 review picked it
    up but it's an older issue and out of scope for v0.1.28. Track as
    a standalone hygiene item, separate from the type-vocab work.
+
+### v0.1.29 Spark-coverage minors (v1.1)
+
+Surfaced by the v0.1.29 multi-lens review (PR #59). The blocker and
+three important items shipped in v0.1.29; these four minors were
+deferred to keep the patch focused.
+
+1. **Explicit-values `pivot(col, ["a", "b"])` overload.** When the
+   caller supplies the pivot values inline, the output columns become
+   statically knowable — pykrete could materialize a concrete Derived
+   schema (`{keys..., "a", "b"}`) instead of bailing Unknown. The
+   no-values form (`pivot("col")`) stays Unknown by necessity. Cost:
+   small — extend the pivot handler in `operations.rs` to read the
+   second positional arg when it's a list literal of string literals.
+
+2. **`posexplode` in agg context lacks a test.** `handle_agg` calls
+   `posexplode_fields` for each arg, which produces both `pos: int`
+   and `col: <element>` fields, but no test covers
+   `.groupBy("k").agg(F.posexplode("tags"))`. The code path is
+   exercised only via `.select(F.posexplode(...))`. Cost: trivial —
+   add one positive test (both fields resolve) and one negative
+   (typo on the input array fires D0030).
+
+3. **`.alias(...)` on `posexplode` lacks a test.** The fall-through
+   behavior is documented in the helper's doc-comment ("alias on a
+   posexplode is rare; default walker handles it") but is unverified
+   by any test. Silent drift on a future Spark rename would go
+   unnoticed. Cost: trivial — one test asserting
+   `.select(F.posexplode("tags").alias("p"))` doesn't crash or fire
+   spurious D-codes.
+
+4. **`F.get(arr, idx)` shares `element_at`'s Map-unwrap arm.** Per
+   Spark docs, `get` is array-only — it doesn't accept Map inputs.
+   The shared arm in `function_result_type` unwraps `Map(_, V) → V`
+   for `get`, which is dead code in practice (the input would have
+   been rejected upstream) but cosmetically wrong. Cost: trivial —
+   split the arm or guard the Map branch behind a method-name check.

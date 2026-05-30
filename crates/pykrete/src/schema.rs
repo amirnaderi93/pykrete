@@ -402,6 +402,11 @@ pub enum SchemaView<'a> {
     Grouped {
         keys: Vec<&'a str>,
         underlying: Box<SchemaView<'a>>,
+        /// `true` after `groupBy(...).pivot(...)`: subsequent `.agg(...)`
+        /// still column-checks against `underlying`, but the result
+        /// schema degrades to Unknown — pivot's output columns depend
+        /// on runtime pivot-value data that pykrete can't see.
+        after_pivot: bool,
     },
 }
 
@@ -1027,6 +1032,7 @@ mod tests {
         let grouped = SchemaView::Grouped {
             keys: vec!["k"],
             underlying: Box::new(underlying),
+            after_pivot: false,
         };
         assert!(!grouped.has_field("k"));
         assert!(!grouped.has_field("a"));
@@ -1039,6 +1045,7 @@ mod tests {
         let grouped = SchemaView::Grouped {
             keys: vec!["k1", "k2"],
             underlying: Box::new(underlying),
+            after_pivot: false,
         };
         assert_eq!(grouped.field_names(), vec!["k1", "k2"]);
     }
@@ -1049,6 +1056,7 @@ mod tests {
         let grouped = SchemaView::Grouped {
             keys: vec!["k"],
             underlying: Box::new(underlying),
+            after_pivot: false,
         };
         assert_eq!(grouped.display_name(), "grouped data with keys [k]");
     }
