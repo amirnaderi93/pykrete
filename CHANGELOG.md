@@ -6,6 +6,38 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.30] - 2026-05-30
+
+Architecture-performance hardening, leg 5 of the v1.0.0 sprint. Three
+independent hot-path wins, no user-visible behaviour change.
+
+**LSP snapshot cache.** Every cross-file LSP request — diagnostics on
+`didChange`, hover, definition, completion — previously walked the
+project root and re-read every closed `.pyk` file from disk. Now a
+tiered cache keyed on `(project_root, pyproject_anchor, pykrete.json
+mtime)` holds closed-file bodies as `Arc<String>`: a HOT tier reads
+open editor buffers live, WARM stat-checks recently-touched closed
+files at most once a second, and COLD does a full `read_dir` walk only
+on first request, every 30 s, or on project-key drift /
+`didChangeWatchedFiles` / didOpen for a path outside the tracked
+union. A 20 MB body cap falls back to fingerprint-only mode for very
+large projects. A new `pykrete/refreshSnapshot` custom LSP command
+drops every tier — the escape hatch for the 30 s cold-walk staleness
+window when no file watcher is wired.
+
+**`Schema::fields` memoization.** The schema-field inheritance walk +
+override merge ran on every diagnostic, hover, completion, and symbol
+pass — for a file with ~20 schemas, hundreds of redundant walks per
+request. Cached behind a per-instance `OnceLock`; the return type
+shifts from `Vec<…>` to `&[…]` so callers see the cached slice
+directly. Uses `OnceLock` (not `OnceCell`) to keep `Schema` `Sync` for
+future parallel checker passes.
+
+**`word_range_at` O(line) scan.** The wasm playground hover path was
+building a `Vec<(line, col, char)>` over the entire source file just
+to find the identifier under the cursor. Rewritten as a two-pass char
+scan that buffers only the current line — no whole-source allocation.
+
 ## [0.1.29]
 
 Spark coverage hardening, part 4 — the "important"-tier audit follow-ups.
