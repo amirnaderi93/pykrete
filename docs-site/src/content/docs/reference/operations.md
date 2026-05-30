@@ -64,7 +64,7 @@ A typo anywhere in that chain — `.select("regoin", ...)`, `.drop("amunt")` —
 | `filter` | modeled | Column expression or SQL string — identifiers checked against the schema. |
 | `where` | modeled | Alias of `filter`. |
 | `dropDuplicates` | modeled | `subset=` keys checked; schema preserved. |
-| `drop_duplicates` | column-check only | `subset=` keys checked; schema not re-derived. |
+| `drop_duplicates` | modeled | Snake-case alias of `dropDuplicates` — same checks, same schema preservation. |
 | `distinct` | pass-through | No columns named, no shape change. |
 | `dropDuplicatesWithinWatermark` | unmodeled | Streaming-only. |
 
@@ -134,7 +134,7 @@ The result schema is the grouping keys plus each aggregation, named by `.alias(.
 
 | Method | Status | Notes |
 | --- | --- | --- |
-| `pivot` | column-check only | Pivot column checked; output columns depend on runtime data, so the schema becomes opaque. |
+| `pivot` | column-check only | Pivot column checked; a follow-up `.agg(...)` still checks its column references against the pre-pivot schema, but the post-`.agg` output columns depend on runtime data, so the schema becomes opaque. |
 | `melt` | modeled | `ids` and `values` column refs checked against the receiver; output schema is `ids + [variableColumnName: string, valueColumnName: T]`, where `T` is the common type across the `values` columns (or all non-`id` columns when `values` is omitted/`None`). `Nullable(T)` if any branch is nullable. Defaults: `variable` / `value`. Falls back to the receiver schema when `ids`/`values` aren't list literals of strings. |
 | `unpivot` | modeled | Spark 3.4+ alias of `melt` — same shape and checks. |
 | `transpose` | unmodeled | Spark 4.0+; unmodeled. |
@@ -153,7 +153,7 @@ All of these change rows or row order, never columns. The schema flows straight 
 | `limit` | pass-through | Same. |
 | `offset` | pass-through | Same. |
 | `sample` | pass-through | Same. |
-| `sampleBy` | unmodeled | Stratified sampling; not yet tracked. |
+| `sampleBy` | pass-through | Stratified sampling — same schema-shape contract as `sample`. |
 | `randomSplit` | unmodeled | Returns a list of frames — special-cased shape. |
 
 ## Caching / partitioning
@@ -310,9 +310,9 @@ def with_defaults(sales: DataFrame[Sale]) -> DataFrame:
 | `collect` / `first` / `head` / `take` / `tail` | modeled | Recognized terminals. |
 | `show` | modeled | Recognized terminal (returns None). |
 | `stat.crosstab` / `freqItems` / `approxQuantile` / `corr` / `cov` | unmodeled | |
-| `summary` | unmodeled | |
-| `describe` | unmodeled | |
-| `observe` | unmodeled | |
+| `summary` | opaque | Returns a statistics table whose schema depends on the receiver's numeric subset. Re-anchor with `.cast(DataFrame[X])`. |
+| `describe` | opaque | Same as `summary`. |
+| `observe` | pass-through | Observability hook — returns the receiver unchanged. |
 | `inputFiles` | unmodeled | |
 | `sameSemantics` / `semanticHash` | unmodeled | |
 | `rdd` | opaque | RDD-level. |
@@ -335,7 +335,7 @@ A spot-check of the families:
 | Math | `abs`, `round`, `sqrt`, `log`, `pow`, `sin`, `floor` | checked | inferred |
 | String | `length`, `lower`, `upper`, `trim`, `concat`, `regexp_replace`, `split` | mostly checked | inferred |
 | Date/time | `year`, `month`, `to_date`, `date_format`, `date_add`, `datediff`, `date_trunc` | first-arg checked | inferred |
-| Collection | `array`, `explode`, `size`, `array_distinct`, `map_keys` | checked | inferred |
+| Collection | `array`, `explode`, `posexplode`, `size`, `array_distinct`, `map_keys` | checked | inferred (`posexplode` expands to `{pos: int, col: T}` inside `select` / `agg`) |
 | Higher-order | `transform`, `filter`, `aggregate`, `exists`, `forall` | first-arg checked | inferred (lambda body resolved best-effort) |
 | Conditional | `when` / `otherwise`, `coalesce`, `isnull` | walked | `when/otherwise` inferred from branches; `coalesce` drops nullability |
 | Struct | `struct`, `named_struct` | walked | inferred — field names from `.alias()` / `F.col(...)` / literal name slots |
@@ -343,6 +343,8 @@ A spot-check of the families:
 | Sort helpers | `asc`, `desc`, `asc_nulls_first`, ... | checked | sort spec |
 
 A handful of misc functions — `bin`, `conv`, `decode`, `encode`, `to_json`, `from_json`, `assert_true` — are unmodeled. `expr(...)` is partially modeled: its SQL string is parsed for column references (so typos still fire), but the result type isn't tracked.
+
+Spark 3.4+ additions covered: `try_divide` (→ `double`), `any_value` (passthrough), `array_agg` (wraps as `array<T>`), `count_if` (→ `long`), `date_diff` (→ `int`), `unix_date` (→ `int`), `get` (array element type — the null-on-out-of-bounds sibling of `element_at`).
 
 ### `F.broadcast` — join optimization hint
 

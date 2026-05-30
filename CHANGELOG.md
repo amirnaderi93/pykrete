@@ -6,6 +6,56 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.29]
+
+Spark coverage hardening, part 4 — the "important"-tier audit follow-ups.
+Six high-traffic gaps from the pre-launch audit are now closed.
+
+**High-traffic `F.*` functions.** Seven Spark 3.4–3.5 additions —
+`F.try_divide`, `F.any_value`, `F.array_agg`, `F.count_if`,
+`F.date_diff`, `F.unix_date`, `F.get` — get column-ref checking and a
+modeled result type. `F.try_divide(a, b)` returns `double`,
+`F.any_value(col)` passes through the input type, `F.array_agg(col)`
+wraps the input as `array<T>`, `F.count_if(predicate)` returns `long`,
+`F.date_diff(end, start)` and `F.unix_date(date)` return `int`, and
+`F.get(array, i)` returns the element type (same shape as
+`F.element_at` on arrays — `get` is just the null-on-out-of-bounds
+sibling). Typos in any of these now fire `D0030`, and the result
+flows into downstream `.cast(...)` / return-type checks.
+
+**`posexplode` / `posexplode_outer`** now expand to **two** output
+columns — `pos: int` and `col: <element-type>` — when used inside
+`select` or `agg`. Previously pykrete named only `col` (matching the
+`explode` special case), which silently lost `pos`; a follow-up
+`.select(col("pos"))` mis-reported the column as missing.
+
+**`df.summary` / `df.describe` / `df.observe`** are modeled. `summary`
+and `describe` produce a statistics table whose schema depends on the
+receiver's numeric subset (data-dependent), so pykrete treats them as
+opaque — the chain dies cleanly and the user re-anchors with
+`.cast(DataFrame[X])`. `observe(...)` is an observability hook that
+returns the receiver unchanged, so it's a pass-through: a downstream
+typo still resolves against the original schema.
+
+**`groupBy(...).pivot(...).agg(...)`** now checks the agg's column
+references against the pre-pivot schema. Previously the pivot killed
+the chain, so a typo like `agg(F.sum("amunt"))` went silent. The
+post-`.agg` result schema is Unknown — pivot's output columns depend
+on the runtime pivot values pykrete can't see — but the input check
+covers the common bug.
+
+**`dropDuplicates` / `drop_duplicates` parity.** Both names are Spark
+aliases for the same method; pykrete previously modeled the camelCase
+form as schema-preserving and the snake_case form as column-check-only
+(silently losing the schema downstream). Both names now route to the
+same handler: arguments are checked AND the schema flows through.
+
+**`sampleBy`** joins `sample` as a pass-through. It's stratified
+sampling — same schema-shape contract: rows change, columns don't.
+`randomSplit` remains unmodeled — it returns `list[DataFrame]`, a
+shape pykrete can't yet thread through tuple unpacking; documented
+as a v1.1 gap.
+
 ## [0.1.28]
 
 Spark coverage hardening, part 3 — the last v1.0.0 audit blocker:

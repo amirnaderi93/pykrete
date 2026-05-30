@@ -85,9 +85,8 @@ enum TwoDfMethod {
 
 fn column_method_shape(method: &str) -> Option<ColumnMethodShape> {
     match method {
-        "select" | "drop" | "dropDuplicates" | "groupBy" | "groupby" | "cube" | "rollup" => {
-            Some(ColumnMethodShape::AllColumnName)
-        }
+        "select" | "drop" | "dropDuplicates" | "drop_duplicates" | "groupBy" | "groupby"
+        | "cube" | "rollup" => Some(ColumnMethodShape::AllColumnName),
         "filter" | "where" | "dropna" => Some(ColumnMethodShape::AllExpression),
         "withColumn" => Some(ColumnMethodShape::Positional(&[
             ArgRole::NewName,
@@ -1553,7 +1552,9 @@ fn analyze_method_call<'a>(
     // recognizer (which fires for `df.count()` → long, the genuinely
     // terminal case).
     if method == "count"
-        && let SchemaView::Grouped { keys, underlying } = &receiver
+        && let SchemaView::Grouped {
+            keys, underlying, ..
+        } = &receiver
     {
         return Some(grouped_count_schema(keys, underlying, ctx.schemas()));
     }
@@ -1590,14 +1591,7 @@ fn analyze_method_call<'a>(
     }
 
     if method == "agg" {
-        return Some(handle_agg(
-            call,
-            &receiver,
-            ctx,
-            source,
-            line_index,
-            diagnostics,
-        ));
+        return handle_agg(call, &receiver, ctx, source, line_index, diagnostics);
     }
     if method == "selectExpr" {
         // Args are SQL expression strings, not column names. Check the
@@ -1668,41 +1662,52 @@ fn analyze_method_call<'a>(
     }
     if method == "pivot" {
         // `groupBy(keys).pivot("col")` — verify the pivot column exists
-        // on the grouped input, then bail: the pivoted output has one
-        // column per distinct value of `col`, so the result schema is
-        // genuinely data-dependent. The user re-anchors the chain with
-        // `.cast(DataFrame[…])`.
-        if let SchemaView::Grouped { underlying, .. } = &receiver
-            && let Some(lit) = call
+        // on the grouped input, then carry the Grouped state forward
+        // with `after_pivot: true`. A follow-up `.agg(F.sum("amount"))`
+        // still checks `amount` against the pre-pivot underlying
+        // schema; the agg's result schema is then Unknown (pivot values
+        // are runtime data). The user re-anchors the chain with
+        // `.cast(DataFrame[…])` when ready.
+        if let SchemaView::Grouped {
+            keys, underlying, ..
+        } = &receiver
+        {
+            if let Some(lit) = call
                 .arguments
                 .args
                 .first()
                 .and_then(|a| a.as_string_literal_expr())
-        {
-            let name = lit.value.to_str();
-            if let FieldPathResult::Missing { field, on } =
-                resolve_path(underlying.as_ref(), name, ctx.schemas())
             {
-                let suggestion = on.as_ref().and_then(|v| suggest_field_name(field, v));
-                let on_phrase = on
-                    .as_ref()
-                    .map_or_else(|| "the nested struct".to_string(), SchemaView::display_name);
-                let mut message = format!("Column '{field}' does not exist on {on_phrase}.");
-                if let Some(s) = &suggestion {
-                    message.push_str(&format!(" Did you mean '{s}'?"));
+                let name = lit.value.to_str();
+                if let FieldPathResult::Missing { field, on } =
+                    resolve_path(underlying.as_ref(), name, ctx.schemas())
+                {
+                    let suggestion = on.as_ref().and_then(|v| suggest_field_name(field, v));
+                    let on_phrase = on
+                        .as_ref()
+                        .map_or_else(|| "the nested struct".to_string(), SchemaView::display_name);
+                    let mut message = format!("Column '{field}' does not exist on {on_phrase}.");
+                    if let Some(s) = &suggestion {
+                        message.push_str(&format!(" Did you mean '{s}'?"));
+                    }
+                    diagnostics.push(
+                        Diagnostic::at_range(
+                            Severity::Error,
+                            "D0030",
+                            message,
+                            lit.range(),
+                            source,
+                            line_index,
+                        )
+                        .with_suggestion(suggestion),
+                    );
                 }
-                diagnostics.push(
-                    Diagnostic::at_range(
-                        Severity::Error,
-                        "D0030",
-                        message,
-                        lit.range(),
-                        source,
-                        line_index,
-                    )
-                    .with_suggestion(suggestion),
-                );
             }
+            return Some(SchemaView::Grouped {
+                keys: keys.clone(),
+                underlying: underlying.clone(),
+                after_pivot: true,
+            });
         }
         return None;
     }
@@ -1792,6 +1797,9 @@ fn analyze_method_call<'a>(
     if is_pass_through_method(method) {
         return Some(receiver);
     }
+    if is_opaque_reshape_method(method) {
+        return None;
+    }
     None
 }
 
@@ -1819,13 +1827,31 @@ fn is_pass_through_method(method: &str) -> bool {
             | "offset"
             | "distinct"
             | "sample"
+            // `sampleBy` is stratified sampling — same schema-shape
+            // contract as `sample` (rows change, columns don't).
+            | "sampleBy"
             | "alias"
+            // `observe(...)` attaches a named metrics listener and
+            // returns the receiver unchanged — it's an observability
+            // hook, never a schema-shaping op.
+            | "observe"
             // `replace` swaps values but doesn't specifically clear
             // nulls, so the schema — nullability included — is the
             // receiver's. (`fillna` / `dropna` *do* clear nulls; they
             // are handled explicitly, not as pass-throughs.)
             | "replace"
     )
+}
+
+/// Methods that return a DataFrame whose schema is **not** the
+/// receiver's — `summary()` and `describe()` produce a statistics
+/// table whose columns are `summary` + the numeric subset of the
+/// receiver's columns (data-dependent, since `describe(*cols)` filters
+/// it). Pykrete leaves the result Unknown and lets the chain die; the
+/// user re-anchors with `.cast(DataFrame[X])` if they want further
+/// checking.
+fn is_opaque_reshape_method(method: &str) -> bool {
+    matches!(method, "summary" | "describe")
 }
 
 /// Walk a receiver expression and report the class name its result
@@ -2658,10 +2684,14 @@ fn handle_agg<'a>(
     source: &str,
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
-) -> SchemaView<'a> {
-    let (keys, underlying): (Vec<&'a str>, SchemaView<'a>) = match receiver {
-        SchemaView::Grouped { keys, underlying } => (keys.clone(), (**underlying).clone()),
-        other => (Vec::new(), other.clone()),
+) -> Option<SchemaView<'a>> {
+    let (keys, underlying, after_pivot): (Vec<&'a str>, SchemaView<'a>, bool) = match receiver {
+        SchemaView::Grouped {
+            keys,
+            underlying,
+            after_pivot,
+        } => (keys.clone(), (**underlying).clone(), *after_pivot),
+        other => (Vec::new(), other.clone(), false),
     };
 
     let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
@@ -2686,6 +2716,14 @@ fn handle_agg<'a>(
             line_index,
             diagnostics,
         );
+        if let Some(pair) = posexplode_fields(arg, &underlying, ctx.type_ctx()) {
+            for f in pair {
+                if !fields.iter().any(|existing| existing.name == f.name) {
+                    fields.push(f);
+                }
+            }
+            continue;
+        }
         if let Some(name) = select_output_name(arg)
             && !fields.iter().any(|f| f.name == name)
         {
@@ -2696,7 +2734,15 @@ fn handle_agg<'a>(
         }
     }
     report_column_refs(&refs, &underlying, ctx, source, line_index, diagnostics);
-    SchemaView::Derived(fields)
+    if after_pivot {
+        // `groupBy(...).pivot(...).agg(...)` — the agg input was checked
+        // against the pre-pivot underlying schema (above), but the OUTPUT
+        // columns depend on the runtime pivot values pykrete can't see.
+        // Bail with Unknown so the chain dies cleanly here; the user
+        // re-anchors with `.cast(DataFrame[X])` for further checking.
+        return None;
+    }
+    Some(SchemaView::Derived(fields))
 }
 
 /// Result schema of `groupBy(keys).count()` — the grouping keys followed
@@ -2744,7 +2790,10 @@ fn grouped_aggregate_schema<'a>(
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> SchemaView<'a> {
-    let SchemaView::Grouped { keys, underlying } = receiver else {
+    let SchemaView::Grouped {
+        keys, underlying, ..
+    } = receiver
+    else {
         return receiver.clone();
     };
     let underlying = underlying.as_ref();
@@ -3711,6 +3760,7 @@ fn function_result_type(name: &str, first_arg: Option<ColumnType>) -> Option<Col
         "count"
         | "countDistinct"
         | "count_distinct"
+        | "count_if"
         | "approx_count_distinct"
         | "unix_timestamp"
         | "monotonically_increasing_id"
@@ -3720,11 +3770,12 @@ fn function_result_type(name: &str, first_arg: Option<ColumnType>) -> Option<Col
         | "cume_dist" | "rand" | "randn" | "sqrt" | "exp" | "expm1" | "ln" | "log" | "log2"
         | "log10" | "log1p" | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "atan2"
         | "sinh" | "cosh" | "tanh" | "degrees" | "radians" | "cbrt" | "pow" | "power" | "hypot"
-        | "signum" | "months_between" => return Some(Double),
+        | "signum" | "months_between" | "try_divide" => return Some(Double),
         "length" | "char_length" | "character_length" | "ascii" | "instr" | "locate"
         | "levenshtein" | "year" | "month" | "dayofmonth" | "day" | "dayofweek" | "dayofyear"
-        | "hour" | "minute" | "second" | "weekofyear" | "quarter" | "datediff" | "row_number"
-        | "rank" | "dense_rank" | "ntile" | "spark_partition_id" | "size" => return Some(Int),
+        | "hour" | "minute" | "second" | "weekofyear" | "quarter" | "datediff" | "date_diff"
+        | "unix_date" | "row_number" | "rank" | "dense_rank" | "ntile" | "spark_partition_id"
+        | "size" => return Some(Int),
         "lower" | "upper" | "initcap" | "trim" | "ltrim" | "rtrim" | "reverse" | "concat_ws"
         | "substring" | "substring_index" | "regexp_replace" | "regexp_extract" | "lpad"
         | "rpad" | "translate" | "repeat" | "soundex" | "base64" | "format_string"
@@ -3750,8 +3801,10 @@ fn function_result_type(name: &str, first_arg: Option<ColumnType>) -> Option<Col
         // Null-coalescing — the result is non-null when *any* argument
         // is. Conservatively drop nullability (this only under-reports).
         "coalesce" | "nvl" | "ifnull" => first_arg.map(|t| t.base().clone()),
-        "min" | "max" | "first" | "last" | "first_value" | "last_value" | "greatest" | "least"
-        | "nanvl" | "abs" | "round" | "bround" | "negative" | "positive" => first_arg,
+        "min" | "max" | "first" | "last" | "first_value" | "last_value" | "any_value"
+        | "greatest" | "least" | "nanvl" | "abs" | "round" | "bround" | "negative" | "positive" => {
+            first_arg
+        }
         "ceil" | "ceiling" | "floor" => Some(Long),
         // `sum` widens any integral input (byte/short/int/long) to long;
         // a double stays double; a decimal stays decimal (precision-growth
@@ -3773,7 +3826,7 @@ fn function_result_type(name: &str, first_arg: Option<ColumnType>) -> Option<Col
             _ => None,
         },
         // Collection constructors — wrap the input as the element type.
-        "collect_list" | "collect_set" | "array" | "array_repeat" | "sequence" => {
+        "collect_list" | "collect_set" | "array_agg" | "array" | "array_repeat" | "sequence" => {
             Some(Array(first_arg.map(Box::new)))
         }
         // Array → array of the same element type.
@@ -3796,8 +3849,10 @@ fn function_result_type(name: &str, first_arg: Option<ColumnType>) -> Option<Col
             _ => None,
         },
         // `element_at` indexes into a collection — array element or map
-        // value type.
-        "element_at" => match first_arg {
+        // value type. `get(array, index)` (Spark 3.4+) is the array-only
+        // sibling that returns null on out-of-bounds instead of erroring;
+        // the result type is the same shape.
+        "element_at" | "get" => match first_arg {
             Some(Array(elem)) => elem.map(|b| *b),
             Some(Map(_, value)) => value.map(|b| *b),
             _ => None,
@@ -4504,6 +4559,10 @@ fn apply_column_method<'a>(
                     fields.extend(recv.typed_fields(tcx.schemas));
                     continue;
                 }
+                if let Some(pair) = posexplode_fields(arg, recv, tcx) {
+                    fields.extend(pair);
+                    continue;
+                }
                 if let Some(name) = select_output_name(arg) {
                     fields.push(DerivedField {
                         name,
@@ -4513,7 +4572,7 @@ fn apply_column_method<'a>(
             }
             Some(SchemaView::Derived(fields))
         }
-        "filter" | "where" | "dropDuplicates" => Some(recv.clone()),
+        "filter" | "where" | "dropDuplicates" | "drop_duplicates" => Some(recv.clone()),
         // `dropna` drops rows containing nulls — the surviving rows have
         // none, so the columns are no longer nullable.
         "dropna" => Some(strip_nullability(recv, tcx.schemas)),
@@ -4599,6 +4658,7 @@ fn apply_column_method<'a>(
             Some(SchemaView::Grouped {
                 keys,
                 underlying: Box::new(recv.clone()),
+                after_pivot: false,
             })
         }
         _ => None,
@@ -4907,6 +4967,50 @@ fn select_output_name(arg: &Expr) -> Option<&str> {
         }
     }
     None
+}
+
+/// Returns `Some` if `arg` is a bare `F.posexplode(arr)` /
+/// `posexplode_outer(arr)` call (not wrapped in `.alias(...)`), in which
+/// case the call expands to TWO columns: `pos: int` and `col: <element>`.
+///
+/// An explicit `.alias(...)` on the call falls through here — Spark
+/// interprets `posexplode(arr).alias("p", "c")` as renaming the pair
+/// (multi-name alias), but the single-name `.alias("x")` form is a
+/// runtime error. Pykrete chooses to leave any aliased posexplode to
+/// `select_output_name` (which returns one name) rather than guess.
+fn posexplode_fields<'a>(
+    arg: &Expr,
+    recv: &SchemaView<'a>,
+    tcx: TypeCtx<'a>,
+) -> Option<Vec<DerivedField<'a>>> {
+    let call = arg.as_call_expr()?;
+    let fname = match call.func.as_ref() {
+        Expr::Name(n) => n.id.as_str(),
+        Expr::Attribute(a) => a.attr.id.as_str(),
+        _ => return None,
+    };
+    if !matches!(fname, "posexplode" | "posexplode_outer") {
+        return None;
+    }
+    let first_arg = call
+        .arguments
+        .args
+        .first()
+        .and_then(|a| select_arg_type(a, recv, tcx));
+    let elem_ty = match first_arg {
+        Some(ColumnType::Array(elem)) => elem.map(|b| *b),
+        _ => None,
+    };
+    Some(vec![
+        DerivedField {
+            name: "pos",
+            ty: Some(ColumnType::Int),
+        },
+        DerivedField {
+            name: "col",
+            ty: elem_ty,
+        },
+    ])
 }
 
 fn column_name_arg(arg: &Expr) -> Option<&str> {
@@ -5419,6 +5523,14 @@ const COLUMN_REF_FUNCTIONS: &[&str] = &[
     "covar_pop",
     "covar_samp",
     "grouping",
+    // Spark 3.4+ additions — every positional column-name string is a ref.
+    "any_value",
+    "array_agg",
+    "count_if",
+    "try_divide",
+    "date_diff",
+    "unix_date",
+    "get",
     // Window
     "row_number",
     "rank",
