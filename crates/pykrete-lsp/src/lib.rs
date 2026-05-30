@@ -99,9 +99,49 @@ pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
     });
     connection.initialize_finish(init_id, initialize_result)?;
 
+    // If the client supports dynamic registration for
+    // `workspace/didChangeWatchedFiles`, register a `**/*.pyk` watcher
+    // so external edits (git checkout, scratchpad, another editor)
+    // invalidate the snapshot cache immediately — without it, the
+    // practical staleness window is the 30s cold-walk interval. Skipped
+    // silently when the client lacks dynamic registration; the user
+    // still has the `pykrete/refreshSnapshot` escape hatch.
+    if client_supports_did_change_watched_files(&init_params) {
+        // `client/registerCapability` is a request per the spec; the
+        // client's reply lands in `handle_editor_response`, which
+        // ignores unrecognised ids — so we don't have to plumb the
+        // response anywhere. If the registration fails for any
+        // reason, the user still has the `pykrete/refreshSnapshot`
+        // escape hatch and the 30s cold-walk window as the fallback.
+        let request = Request {
+            id: RequestId::from("pykrete-register-watch-pyk".to_string()),
+            method: "client/registerCapability".to_string(),
+            params: serde_json::json!({
+                "registrations": [{
+                    "id": "pykrete-watch-pyk",
+                    "method": "workspace/didChangeWatchedFiles",
+                    "registerOptions": {
+                        "watchers": [{ "globPattern": "**/*.pyk" }]
+                    }
+                }]
+            }),
+        };
+        connection.sender.send(Message::Request(request))?;
+    }
+
     main_loop(connection, multiplexer)?;
     io_threads.join()?;
     Ok(())
+}
+
+/// `true` when the editor advertised `workspace/didChangeWatchedFiles`
+/// dynamic-registration support. VS Code does; minimal LSP clients
+/// (lsp-server's own test harness, some terminal editors) don't.
+fn client_supports_did_change_watched_files(init_params: &serde_json::Value) -> bool {
+    init_params
+        .pointer("/capabilities/workspace/didChangeWatchedFiles/dynamicRegistration")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
 }
 
 /// Read the embedded Python engine's launch spec out of the editor's
@@ -144,6 +184,11 @@ fn main_loop(
     // In-memory shadow of every open document. `didOpen` adds; `didChange`
     // overwrites (FULL sync); `didClose` removes.
     let mut docs: HashMap<Url, String> = HashMap::new();
+    // Cross-file snapshot cache; survives every request in this session.
+    // Open docs are read live; on-disk files are tiered by recency. The
+    // `pykrete/refreshSnapshot` custom command and didOpen/didClose for
+    // paths outside the tracked union drop it.
+    let mut snapshot_cache = project::SnapshotCache::new();
 
     // The embedded Python engine's outbound message channel. When no
     // engine is embedded we use a never-ready receiver so `select!`
@@ -184,10 +229,22 @@ fn main_loop(
                             multiplexer.shutdown();
                             return Ok(());
                         }
-                        handle_request(&connection, &docs, &mut multiplexer, req)?;
+                        handle_request(
+                            &connection,
+                            &docs,
+                            &mut multiplexer,
+                            &mut snapshot_cache,
+                            req,
+                        )?;
                     }
                     Message::Notification(notif) => {
-                        handle_notification(&connection, &mut docs, &mut multiplexer, notif)?;
+                        handle_notification(
+                            &connection,
+                            &mut docs,
+                            &mut multiplexer,
+                            &mut snapshot_cache,
+                            notif,
+                        )?;
                     }
                     Message::Response(resp) => {
                         // A response from the editor to a request we
@@ -425,6 +482,7 @@ fn handle_request(
     connection: &Connection,
     docs: &HashMap<Url, String>,
     multiplexer: &mut multiplex::Multiplexer,
+    snapshot_cache: &mut project::SnapshotCache,
     req: Request,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
     match req.method.as_str() {
@@ -435,18 +493,32 @@ fn handle_request(
         // (see `fanout_request` / `handle_child_message`).
         "textDocument/hover" => {
             let params: HoverParams = serde_json::from_value(req.params.clone())?;
-            let pykrete_result = serde_json::to_value(handle_hover(docs, params))?;
+            let pykrete_result = serde_json::to_value(handle_hover(docs, snapshot_cache, params))?;
             fanout_request(connection, multiplexer, docs, req, pykrete_result)?;
         }
         "textDocument/definition" => {
             let params: GotoDefinitionParams = serde_json::from_value(req.params.clone())?;
-            let pykrete_result = serde_json::to_value(handle_definition(docs, params))?;
+            let pykrete_result =
+                serde_json::to_value(handle_definition(docs, snapshot_cache, params))?;
             fanout_request(connection, multiplexer, docs, req, pykrete_result)?;
         }
         "textDocument/completion" => {
             let params: CompletionParams = serde_json::from_value(req.params.clone())?;
-            let pykrete_result = serde_json::to_value(handle_completion(docs, params))?;
+            let pykrete_result =
+                serde_json::to_value(handle_completion(docs, snapshot_cache, params))?;
             fanout_request(connection, multiplexer, docs, req, pykrete_result)?;
+        }
+        // Custom command — drop every tier of the snapshot cache. Useful
+        // for users hitting "Restart LSP server" replacement workflows
+        // without actually restarting; also the escape hatch for the 30s
+        // cold-walk staleness window when no file watcher is wired.
+        "pykrete/refreshSnapshot" => {
+            snapshot_cache.invalidate();
+            connection.sender.send(Message::Response(Response {
+                id: req.id,
+                result: Some(serde_json::Value::Null),
+                error: None,
+            }))?;
         }
         "textDocument/references" => {
             let params: ReferenceParams = serde_json::from_value(req.params.clone())?;
@@ -568,14 +640,18 @@ fn fanout_request(
 /// `pykrete::hover`. Returns `None` if no symbol is at the cursor —
 /// LSP's contract is that the response body in that case is `null`,
 /// which our `serde_json::to_value(None::<Hover>)` produces.
-pub fn handle_hover(docs: &HashMap<Url, String>, params: HoverParams) -> Option<Hover> {
+pub fn handle_hover(
+    docs: &HashMap<Url, String>,
+    snapshot_cache: &mut project::SnapshotCache,
+    params: HoverParams,
+) -> Option<Hover> {
     let uri = &params.text_document_position_params.text_document.uri;
     let pos = params.text_document_position_params.position;
     let _ = docs.get(uri)?; // ensure the URI is open
     // LSP positions are 0-indexed; pykrete's hover entry point is 1-indexed.
     let line = (pos.line as usize).checked_add(1)?;
     let column = (pos.character as usize).checked_add(1)?;
-    let info = match project::build_project_snapshot(docs) {
+    let info = match snapshot_cache.snapshot(docs) {
         Some(snapshot) => {
             let focus_path = uri.to_file_path().ok()?;
             let focus_path_str = focus_path.to_string_lossy().to_string();
@@ -615,6 +691,7 @@ pub fn handle_document_symbol(
 /// that the cursor points at (single-file only in v0.1).
 pub fn handle_definition(
     docs: &HashMap<Url, String>,
+    snapshot_cache: &mut project::SnapshotCache,
     params: GotoDefinitionParams,
 ) -> Option<GotoDefinitionResponse> {
     let uri = params
@@ -628,7 +705,7 @@ pub fn handle_definition(
     let column = (pos.character as usize).checked_add(1)?;
     // `(target_uri, span)` — the definition may live in a different
     // file than the cursor (a column declared in an imported schema).
-    let (target_uri, span) = match project::build_project_snapshot(docs) {
+    let (target_uri, span) = match snapshot_cache.snapshot(docs) {
         Some(snapshot) => {
             let focus_path = uri.to_file_path().ok()?;
             let focus_path_str = focus_path.to_string_lossy().to_string();
@@ -724,6 +801,7 @@ pub fn handle_prepare_rename(
 /// no completions apply at the cursor.
 pub fn handle_completion(
     docs: &HashMap<Url, String>,
+    snapshot_cache: &mut project::SnapshotCache,
     params: CompletionParams,
 ) -> Option<CompletionResponse> {
     let uri = &params.text_document_position.text_document.uri;
@@ -731,7 +809,7 @@ pub fn handle_completion(
     let _ = docs.get(uri)?;
     let line = (pos.line as usize).checked_add(1)?;
     let column = (pos.character as usize).checked_add(1)?;
-    let raw_items = match project::build_project_snapshot(docs) {
+    let raw_items = match snapshot_cache.snapshot(docs) {
         Some(snapshot) => {
             let focus_path = uri.to_file_path().ok()?;
             let focus_path_str = focus_path.to_string_lossy().to_string();
@@ -800,6 +878,7 @@ fn handle_notification(
     connection: &Connection,
     docs: &mut HashMap<Url, String>,
     multiplexer: &mut multiplex::Multiplexer,
+    snapshot_cache: &mut project::SnapshotCache,
     notif: Notification,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
     match notif.method.as_str() {
@@ -816,8 +895,14 @@ fn handle_notification(
                 params.text_document.version as i64,
                 &text,
             );
+            // didOpen for a `.pyk` outside whatever the cache was last
+            // tracking means the project key (anchor or root) may have
+            // shifted. Drop the cache so the next snapshot rewalks.
+            if uri_is_outside_cache(snapshot_cache, &uri) {
+                snapshot_cache.invalidate();
+            }
             docs.insert(uri, text);
-            publish_project_diagnostics(connection, docs, multiplexer)?;
+            publish_project_diagnostics(connection, docs, multiplexer, snapshot_cache)?;
         }
         "textDocument/didChange" => {
             let params: DidChangeTextDocumentParams = serde_json::from_value(notif.params)?;
@@ -829,7 +914,7 @@ fn handle_notification(
                 let text = change.text;
                 multiplexer.forward_did_change(&uri, version, &text);
                 docs.insert(uri, text);
-                publish_project_diagnostics(connection, docs, multiplexer)?;
+                publish_project_diagnostics(connection, docs, multiplexer, snapshot_cache)?;
             }
         }
         "textDocument/didClose" => {
@@ -844,13 +929,29 @@ fn handle_notification(
             // an import target).
             multiplexer.diagnostics.clear(&uri);
             publish_empty_diagnostics(connection, &uri)?;
-            publish_project_diagnostics(connection, docs, multiplexer)?;
+            publish_project_diagnostics(connection, docs, multiplexer, snapshot_cache)?;
+        }
+        "workspace/didChangeWatchedFiles" => {
+            // The client is telling us a watched file changed outside the
+            // editor. Drop the cache and let the next snapshot rewalk.
+            snapshot_cache.invalidate();
         }
         // didSave, willSave, etc. are ignored — diagnostics already update
         // on every didChange. `initialized` arrives once and is a no-op.
         _ => {}
     }
     Ok(())
+}
+
+/// `true` when `uri` resolves to a filesystem path that the snapshot
+/// cache hasn't seen yet — opening such a file may shift the project
+/// key (a different `pyproject.toml` ancestor), so the safe move is to
+/// drop the cache.
+fn uri_is_outside_cache(cache: &project::SnapshotCache, uri: &Url) -> bool {
+    let Ok(path) = uri.to_file_path() else {
+        return false;
+    };
+    !cache.tracks_path(&path)
 }
 
 /// Run the analyzer over the entire project — every `.pyk` file under
@@ -865,8 +966,9 @@ fn publish_project_diagnostics(
     connection: &Connection,
     docs: &HashMap<Url, String>,
     multiplexer: &mut multiplex::Multiplexer,
+    snapshot_cache: &mut project::SnapshotCache,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
-    let Some(snapshot) = project::build_project_snapshot(docs) else {
+    let Some(snapshot) = snapshot_cache.snapshot(docs) else {
         // Fall back: no usable project root. Check each open doc on
         // its own so we still publish *something* — the user will
         // see the same single-file behaviour we had before iteration 33.
@@ -879,7 +981,7 @@ fn publish_project_diagnostics(
     // Project config — `pykrete.json` at or above the project root. Its
     // `typeCheckingMode` overrides the editor's setting; `rules`
     // re-levels or drops codes; `exclude` silences whole files.
-    let config = project::load_config(docs);
+    let config = snapshot_cache.config(docs);
     let mode = config
         .check_mode_override()
         .unwrap_or(multiplexer.type_checking_mode);
@@ -1177,7 +1279,11 @@ mod tests {
         // return None (which serializes to null per the LSP contract).
         let docs: HashMap<Url, String> = HashMap::new();
         let uri = Url::parse("file:///nonexistent.pyk").unwrap();
-        let result = handle_hover(&docs, hover_params_at(&uri, 0, 0));
+        let result = handle_hover(
+            &docs,
+            &mut project::SnapshotCache::new(),
+            hover_params_at(&uri, 0, 0),
+        );
         assert!(result.is_none());
     }
 
@@ -1194,7 +1300,12 @@ mod tests {
 
         // LSP position is 0-indexed: line 0, character 6 lands inside
         // "Orders" on the first line.
-        let result = handle_hover(&docs, hover_params_at(&uri, 0, 6)).expect("hover");
+        let result = handle_hover(
+            &docs,
+            &mut project::SnapshotCache::new(),
+            hover_params_at(&uri, 0, 6),
+        )
+        .expect("hover");
         match result.contents {
             HoverContents::Markup(m) => {
                 let md = &m.value;
@@ -1236,7 +1347,11 @@ mod tests {
         docs.insert(uri.clone(), src.to_string());
 
         // Line 1 (0-indexed), character 6 → "Orders".
-        let result = handle_hover(&docs, hover_params_at(&uri, 1, 6));
+        let result = handle_hover(
+            &docs,
+            &mut project::SnapshotCache::new(),
+            hover_params_at(&uri, 1, 6),
+        );
         assert!(result.is_some());
     }
 
@@ -1305,7 +1420,11 @@ mod tests {
     fn handle_definition_returns_none_when_uri_not_open() {
         let docs: HashMap<Url, String> = HashMap::new();
         let uri = Url::parse("file:///nonexistent.pyk").unwrap();
-        let result = handle_definition(&docs, def_params_at(&uri, 0, 0));
+        let result = handle_definition(
+            &docs,
+            &mut project::SnapshotCache::new(),
+            def_params_at(&uri, 0, 0),
+        );
         assert!(result.is_none());
     }
 
@@ -1321,7 +1440,12 @@ mod tests {
         docs.insert(uri.clone(), src.to_string());
 
         // Click on `Orders` inside `DataFrame[Orders]` on line 3.
-        let result = handle_definition(&docs, def_params_at(&uri, 3, 22)).expect("response");
+        let result = handle_definition(
+            &docs,
+            &mut project::SnapshotCache::new(),
+            def_params_at(&uri, 3, 22),
+        )
+        .expect("response");
         match result {
             GotoDefinitionResponse::Scalar(loc) => {
                 assert_eq!(loc.uri, uri);
@@ -1354,7 +1478,11 @@ mod tests {
     fn handle_completion_returns_none_when_uri_not_open() {
         let docs: HashMap<Url, String> = HashMap::new();
         let uri = Url::parse("file:///nonexistent.pyk").unwrap();
-        let result = handle_completion(&docs, completion_params_at(&uri, 0, 0));
+        let result = handle_completion(
+            &docs,
+            &mut project::SnapshotCache::new(),
+            completion_params_at(&uri, 0, 0),
+        );
         assert!(result.is_none());
     }
 
@@ -1489,7 +1617,12 @@ mod tests {
         // Cursor inside the `Orders` token of `DataFrame[Orders]` on line 6.
         // `def f(raw: DataFrame[` is 21 characters, so character 22 lands
         // on the first letter of `Orders`.
-        let result = handle_completion(&docs, completion_params_at(&uri, 6, 22)).expect("response");
+        let result = handle_completion(
+            &docs,
+            &mut project::SnapshotCache::new(),
+            completion_params_at(&uri, 6, 22),
+        )
+        .expect("response");
         match result {
             CompletionResponse::Array(items) => {
                 let mut names: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();

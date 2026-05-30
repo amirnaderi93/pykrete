@@ -24,7 +24,7 @@ use crate::diagnostics::{CheckMode, Diagnostic, Severity, rule_name};
 
 /// Parsed `pykrete.json`. Unknown keys are ignored, so a config written
 /// for a newer pykrete still loads.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Config {
     /// `"off"` / `"basic"` / `"standard"` / `"strict"`. Absent or

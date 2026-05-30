@@ -298,55 +298,58 @@ fn completion_kind_label(kind: pykrete::CompletionItemKind) -> &'static str {
 /// editor compute "word at cursor". Doing it here keeps the change
 /// scoped to `pykrete-wasm` and gives Monaco a precise range.
 fn word_range_at(source: &str, line: usize, column: usize) -> ((usize, usize), (usize, usize)) {
-    // Walk the source one char at a time, tracking line / column, until
-    // we hit the cursor. Then expand left/right while the predicate
-    // holds. Operating on Rust chars (not bytes) keeps the column
-    // arithmetic in step with how the LSP / pykrete count columns
-    // (one column per Unicode scalar value).
     let is_word_char = |c: char| c.is_ascii_alphanumeric() || c == '_';
 
     let mut current_line = 1usize;
     let mut current_col = 1usize;
-    let mut chars: Vec<(usize, usize, char)> = Vec::new();
-    for ch in source.chars() {
-        chars.push((current_line, current_col, ch));
+    let mut line_buf: Vec<char> = Vec::new();
+    let mut cursor_ch: Option<char> = None;
+    let mut chars = source.chars();
+    for ch in chars.by_ref() {
+        if current_line == line && current_col == column {
+            cursor_ch = Some(ch);
+            break;
+        }
         if ch == '\n' {
+            if current_line == line {
+                // Hit EOL on the target line before reaching the cursor.
+                return ((line, column), (line, column));
+            }
             current_line += 1;
             current_col = 1;
+            line_buf.clear();
         } else {
+            line_buf.push(ch);
             current_col += 1;
         }
     }
-    // Sentinel for "cursor past EOF or at EOL" — points just after the
-    // last char on the requested line.
-    let cursor_idx = chars
-        .iter()
-        .position(|(l, c, _)| *l == line && *c == column)
-        .unwrap_or(chars.len());
-
-    if cursor_idx >= chars.len() {
+    let Some(cur_ch) = cursor_ch else {
         return ((line, column), (line, column));
-    }
-    let (cur_line, cur_col, cur_ch) = chars[cursor_idx];
+    };
     if !is_word_char(cur_ch) {
-        return ((cur_line, cur_col), (cur_line, cur_col + 1));
+        return ((line, column), (line, column + 1));
     }
-
-    // Expand left.
-    let mut start_idx = cursor_idx;
-    while start_idx > 0 && is_word_char(chars[start_idx - 1].2) {
-        start_idx -= 1;
+    line_buf.push(cur_ch);
+    for ch in chars {
+        if ch == '\n' {
+            break;
+        }
+        line_buf.push(ch);
     }
-    // Expand right.
-    let mut end_idx = cursor_idx;
-    while end_idx + 1 < chars.len() && is_word_char(chars[end_idx + 1].2) {
-        end_idx += 1;
+    // The cursor char sits at index (column - 1) in line_buf. Columns
+    // are 1-indexed, line_buf is 0-indexed, so line_buf[i] is at column
+    // i + 1.
+    let mut start_col = column;
+    while start_col > 1 && is_word_char(line_buf[start_col - 2]) {
+        start_col -= 1;
     }
-    let (sl, sc, _) = chars[start_idx];
-    let (el, ec, _) = chars[end_idx];
-    // end column is exclusive in LSP / Monaco — point one past the
-    // last word char.
-    ((sl, sc), (el, ec + 1))
+    let mut end_col = column;
+    while end_col < line_buf.len() && is_word_char(line_buf[end_col]) {
+        end_col += 1;
+    }
+    // end column is exclusive in LSP / Monaco — point one past the last
+    // word char.
+    ((line, start_col), (line, end_col + 1))
 }
 
 #[cfg(test)]
@@ -740,5 +743,55 @@ def keep(df: DataFrame[Users]) -> DataFrame[Users]:
         let (start, end) = word_range_at(source, 1, 6);
         assert_eq!(start, (1, 6));
         assert_eq!(end, (1, 7));
+    }
+
+    /// Cursor on the last char of an identifier that ends a line (no
+    /// trailing newline) still expands across the whole identifier.
+    #[test]
+    fn word_range_on_last_char_of_line_expands_full_identifier() {
+        let source = "abc def";
+        let (start, end) = word_range_at(source, 1, 7);
+        assert_eq!(start, (1, 5));
+        assert_eq!(end, (1, 8));
+    }
+
+    /// Cursor at EOF on a word char expands left to the start of the
+    /// identifier.
+    #[test]
+    fn word_range_at_eof_on_word_char_expands_left() {
+        let source = "hello";
+        let (start, end) = word_range_at(source, 1, 5);
+        assert_eq!(start, (1, 1));
+        assert_eq!(end, (1, 6));
+    }
+
+    /// Cursor sitting on whitespace returns the single-char range — the
+    /// non-word-char branch.
+    #[test]
+    fn word_range_on_whitespace_returns_single_char_range() {
+        let source = "foo bar";
+        let (start, end) = word_range_at(source, 1, 4);
+        assert_eq!(start, (1, 4));
+        assert_eq!(end, (1, 5));
+    }
+
+    /// Cursor past the end of a line (column beyond the visible chars)
+    /// returns a zero-width range at the requested position — same
+    /// sentinel as the original whole-source-allocating implementation.
+    #[test]
+    fn word_range_past_eol_returns_zero_width_range() {
+        let source = "abc\ndef\n";
+        let (start, end) = word_range_at(source, 1, 10);
+        assert_eq!(start, (1, 10));
+        assert_eq!(end, (1, 10));
+    }
+
+    /// Single-char identifier at the start of the file.
+    #[test]
+    fn word_range_single_char_identifier_at_file_start() {
+        let source = "x = 1\n";
+        let (start, end) = word_range_at(source, 1, 1);
+        assert_eq!(start, (1, 1));
+        assert_eq!(end, (1, 2));
     }
 }

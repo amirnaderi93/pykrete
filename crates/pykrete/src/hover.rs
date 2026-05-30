@@ -384,7 +384,7 @@ fn column_type_label(view: &SchemaView<'_>, name: &str, schemas: &[Schema<'_>]) 
         SchemaView::Declared(s) => *s,
         _ => return None,
     };
-    let field = schema.fields().into_iter().find(|f| f.name == name)?;
+    let field = schema.fields().iter().find(|f| f.name == name)?;
     Some(match field.resolve(schemas) {
         FieldResolution::Resolved(ct) => format!("`{}`", ct.as_str()),
         FieldResolution::ResolvedNested(nested) => format!("`{}` (nested)", nested.name()),

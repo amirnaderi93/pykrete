@@ -507,18 +507,13 @@ impl<'a> ProjectContext<'a> {
                     } else {
                         Some(imp.local_name)
                     };
-                    Schema {
-                        class: s.class,
-                        // Carry the resolved ancestor chain so an imported
-                        // schema's inherited columns still resolve. The
-                        // bases were resolved against the target file's
-                        // classes, where this schema and its bases live.
-                        bases: s.bases.clone(),
-                        alias,
-                        // The schema lives in the imported module's file;
-                        // go-to-definition must point there, not here.
-                        file_index: target_idx,
-                    }
+                    // Carry the resolved ancestor chain so an imported
+                    // schema's inherited columns still resolve. The
+                    // bases were resolved against the target file's
+                    // classes, where this schema and its bases live.
+                    // The schema lives in the imported module's file;
+                    // go-to-definition must point there, not here.
+                    Schema::new(s.class, s.bases.clone(), alias, target_idx)
                 });
             let found_class = target_bundle.local_registry.classes.get(imp.source_name);
             let found_constant = target_bundle.local_registry.constants.get(imp.source_name);
@@ -588,12 +583,7 @@ impl<'a> ProjectContext<'a> {
                 }
                 for class in promote {
                     let bases = schema_base_chain(class, &bundle.local_classes, &visible_schemas);
-                    visible_schemas.push(Schema {
-                        class,
-                        bases,
-                        alias: None,
-                        file_index: focus_idx,
-                    });
+                    visible_schemas.push(Schema::new(class, bases, None, focus_idx));
                 }
             }
         }
