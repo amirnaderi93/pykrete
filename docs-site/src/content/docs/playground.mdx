@@ -40,21 +40,24 @@ matter on a `.pyk` file:
 
 ## What's NOT here
 
-This is a single-file pykrete sandbox. It is **not** a general Python
-type checker:
+This is a single-file pykrete sandbox. Scope-wise:
 
-- No general Python type checking. `int`/`str`/`bool` and the rest of
-  Python's standard library are not validated here — pykrete focuses
-  on schema and DataFrame semantics. For full Python typing, install
-  the [VS Code extension](/pykrete/getting-started/install/) — it
-  runs pykrete alongside basedpyright (or pyright), so you get both.
-- No cross-file resolution. Multi-file imports, project
+- **No project-wide Python type checking.** The playground runs
+  pykrete's schema checker plus the static PySpark-symbol layer
+  (hover, completion, go-to-def on `sales.select`, `F.sum`, etc.).
+  General Python typing — `int` / `str` flow, third-party library
+  inference, your own imports — is not validated here. For that,
+  install the [VS Code extension](/pykrete/getting-started/install/):
+  pykrete runs alongside basedpyright (or pyright), so you get both.
+- **No cross-file resolution.** Multi-file imports, project
   configuration, and the `.pyk-import` mechanism need real file
   system access — use the CLI for those.
-- `Schema`, `DataFrame`, `col`, `F`, and the lowercase PySpark-style
-  type aliases (`string`, `double`, `long`, …) are pre-declared for
-  you here so you can start typing without import boilerplate. Real
-  projects use explicit imports — see the Install page.
+- **Pre-declared globals.** `Schema`, `DataFrame`, `col`, `F`, and
+  the lowercase PySpark-style type aliases (`string`, `double`,
+  `long`, …) are pre-declared in the playground so you can start
+  typing without import boilerplate. Real projects use explicit
+  imports — see the [Install](/pykrete/getting-started/install/)
+  page.
 
 ## Limits
 
@@ -69,11 +72,26 @@ type checker:
 
 ## Want it locally?
 
+pykrete is a single native binary (no Python runtime; not on PyPI).
+Pick whichever install fits your setup:
+
 ```bash
-pip install pykrete
+# macOS / Linux — Homebrew
+brew install amirnaderi93/pykrete/pykrete
+
+# Any platform with a Rust toolchain
+cargo install --git https://github.com/amirnaderi93/pykrete pykrete
+cargo install --git https://github.com/amirnaderi93/pykrete pykrete-lsp
+```
+
+Windows installs from the `.msi` attached to each [release](https://github.com/amirnaderi93/pykrete/releases/latest). Then check a file:
+
+```bash
 pykrete check path/to/your/file.pyk
 ```
 
-The [Install](/pykrete/getting-started/install/) page walks through
-the full editor setup (LSP for autocomplete and hover, the VS Code
-extension, project configuration).
+For live diagnostics in your editor, install the **pykrete** VS Code
+extension from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=amirnaderi.pykrete) or [Open VSX](https://open-vsx.org/extension/amirnaderi/pykrete) (Cursor, VSCodium,
+code-server, Theia). The [Install](/pykrete/getting-started/install/)
+page covers every install path, Neovim / Helix / Emacs setup, and
+project configuration.

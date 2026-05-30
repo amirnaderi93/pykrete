@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.31
+
+Tracks the v0.1.34 pykrete release — docs honesty pass and a new
+"Reliability and trust" README section. No LSP behaviour changes; the
+bundled `pykrete-lsp` is unchanged from 0.2.30. See the
+[main CHANGELOG](../../CHANGELOG.md#0134---2026-05-31) for details.
+
+## 0.2.30
+
+Tracks the v0.1.33 pykrete release — `pykrete check --format json`
+ships, and the per-D-code diagnostic snapshot suite pins every error
+message as a reviewable artifact. No editor-visible behaviour change;
+the LSP gains the JSON-output stability contract documented in
+production-readiness. See the
+[main CHANGELOG](../../CHANGELOG.md#0133---2026-05-31) for details.
+
 ## 0.2.29
 
 Tracks the v0.1.32 pykrete release — architecture cleanups pass.
@@ -17,11 +33,32 @@ operations checker (single 6,000-line file split into nine sibling
 modules along its existing section banners). No behaviour change. See
 the [main CHANGELOG](../../CHANGELOG.md#0131---2026-05-30) for details.
 
+## 0.2.23 – 0.2.27
+
+Tracked the v0.1.26 → v0.1.30 pykrete releases — Spark coverage
+closures (decimal / byte / short / binary atomic types, `melt` /
+`unpivot` reconciliation, `drop_duplicates` / `pivot` / `sampleBy` /
+`observe`, expression-form join keys + `fillna` dict keys,
+control-flow descent + `groupBy` aggregate schema preservation) and
+playground polish. The bundled `pykrete-lsp` followed each pykrete
+release. See the [main CHANGELOG](../../CHANGELOG.md) for the
+per-release breakdown.
+
 ## 0.2.22
 
 Marketplace metadata refresh tracking the v0.1.25 docs-only release
 (playground tokenizer polish). The bundled `pykrete-lsp` is unchanged
 from 0.2.21.
+
+## 0.2.14 – 0.2.21
+
+Tracked the v0.1.16 → v0.1.24 pykrete releases — playground (wasm
+analyzer surface + Monaco integration), static PySpark symbol layer
+for hover / completion / go-to-definition on `sales.select` / `F.sum`
+etc., per-platform `.vsix` packaging refinements, CHANGELOG and docs
+maintenance. The bundled `pykrete-lsp` followed each pykrete release.
+See the [main CHANGELOG](../../CHANGELOG.md) for the per-release
+breakdown.
 
 ## 0.2.13
 

@@ -54,9 +54,32 @@ Each install gives you two binaries: `pykrete` (the checker, for CLI and CI) and
 - **Typos caught as you type** — every column reference, against the schema in scope, with a _did you mean_.
 - **Checks that follow the data** — `select` / `filter` / `withColumn` / `drop` / `join` / `groupBy` + `agg` / `pivot` / `union` and the rest; a reference to a column three transforms after it was dropped is still caught.
 - **Schema visibility** — hover a `DataFrame[…]` parameter to see its columns; go-to-definition jumps to the schema.
+- **TypeScript-style schema composition** — `Pick`, `Omit`, and `Merge` build derived shapes without redeclaring columns.
 - **Column-name autocomplete** in string arguments.
 - **Inline SQL checked too** — identifiers inside `filter("…")`, `selectExpr(...)`, `spark.sql("SELECT …")`.
 - **Zero runtime cost** — `.pyk` is a strict superset of Python; the deployed job is ordinary Python.
+
+## Reliability and trust
+
+Pykrete is a development-time checker, not a runtime dependency. Your `.pyk` files transpile to plain Python — Spark runs the same Python it always did. **Pykrete cannot break a production pipeline because pykrete is not in the production pipeline.**
+
+What this means in practice:
+
+- **Static analysis runs in your editor, pre-commit hook, or CI.** The `pykrete` binary never ships to production hosts.
+- **The transpile step is small and well-defined.** It prepends `from __future__ import annotations` and strips the pykrete-only `.cast(DataFrame[Schema])` re-anchor calls — these exist purely to help the checker; PySpark's `DataFrame` has no `.cast` method, so the call would `AttributeError` at runtime regardless. Everything else is copied verbatim, line numbers preserved. Run `pykrete transpile path/to/file.pyk` and diff against the source to see exactly what changed.
+- **Adopting pykrete is reversible.** Run `pykrete transpile` once to bake the `.pyk` → `.py` rewrite into your repo, commit the result, and you've vendored your way off pykrete. No runtime dependency to remove (there isn't one), no binary on production hosts (there never was one).
+
+### How we earn confidence
+
+We hold pykrete to PySpark's standard because that's the standard that matters:
+
+- **Cross-tested against real PySpark code on every release.** The [pykrete-tests](https://github.com/amirnaderi93/pykrete-tests) repo vendors annotated snapshots from Apache Spark's and MLflow's own Spark integrations, and CI runs `pykrete check` against them on every push and nightly. During the v1.0 hardening sprint pykrete is also run as a check-only pass against a production PySpark codebase the maintainer has direct access to (a data-engineering team's daily-shipped Spark jobs); the explicit adopter donor list and continuous-loop wire-up lands in v0.1.36. A false positive on real Spark code is a release blocker.
+- **1,018 tests in CI across the analyzer, LSP, and wasm crates.** Every release has to pass the full suite, plus per-D-code snapshot tests that pin every error message — wording drifts fail the build until explicitly accepted.
+- **JSON output is a stability contract from v1.0.0.** Field names, types, semantics, and D-code identity will not change without a SemVer-major bump and a corresponding `schemaVersion` bump. See [Production readiness → JSON output stability contract](https://amirnaderi93.github.io/pykrete/about/production-readiness/#json-output-stability-contract).
+- **No-false-positives policy.** When pykrete cannot determine a schema or a type with confidence, it stops checking that subtree rather than guessing. A static checker that cries wolf gets switched off.
+- **Pre-major-release audit cycle.** Every X.0.0 bump runs three independent fresh-eyes audits (architecture, Spark coverage, docs sync) before the tag. Findings ship in the release notes.
+
+If pykrete is wrong on your code, [open an issue](https://github.com/amirnaderi93/pykrete/issues) — false positives are triaged ahead of everything else.
 
 ## Editor integration
 

@@ -5,13 +5,15 @@ description: Stability commitments, false-positive policy, release cadence, and 
 
 ## TL;DR
 
-pykrete [v0.1.15](https://github.com/amirnaderi93/pykrete/releases/tag/v0.1.15) is feature-complete for PySpark. A deliberate "degrade to Unknown rather than fabricate" policy keeps the checker honest: when pykrete can't determine a schema or a type with confidence, it stops checking that subtree rather than guessing. A real-codebase integration loop ([pykrete-tests](/pykrete/about/pykrete-tests/)) catches regressions before they ship.
+pykrete is feature-complete for PySpark as of the [v0.1 release line](https://github.com/amirnaderi93/pykrete/releases). A deliberate "degrade to Unknown rather than fabricate" policy keeps the checker honest: when pykrete can't determine a schema or a type with confidence, it stops checking that subtree rather than guessing. A real-codebase integration loop ([pykrete-tests](/pykrete/about/pykrete-tests/)) catches regressions before they ship.
+
+For the trust posture behind the engineering — why pykrete cannot break a production pipeline, and how each release is validated — see the [Reliability and trust](https://github.com/amirnaderi93/pykrete#reliability-and-trust) section of the README.
 
 ## Stability commitments
 
 Once a piece of surface ships in a release, the project commits to backward-compatible behavior on the following:
 
-- **Schema declaration syntax.** `Schema` classes, the `array` / `map` / `struct` / `Nullable` constructors, the TypeScript-style operators (`Pick`, `Omit`, `Join`, `GroupBy`, `Merge`).
+- **Schema declaration syntax.** `Schema` classes, `Optional[T]` for nullable columns, the `Array` / `Map` / struct-class nested-type forms, and the TypeScript-style schema operators (`Pick`, `Omit`, `Merge`).
 - **The `DataFrame[Schema]` annotation surface.** Variable annotations, function parameter and return types, `.cast(DataFrame[Schema])` re-anchors.
 - **Diagnostic codes.** `D0001`, `D0010`, `D0011`, `D0020`, `D0021`, `D0030`, `D0040`, `D0050`, `D0051`, `D0060`, `D0070`, `D0071`, `D0072`, `D0080`, `D0081`, `D0082`, `D0083`. The numeric code and the rule name are part of the contract; the diagnostic message text is not.
 - **`pykrete.json` keys.** `typeCheckingMode`, `exclude`, `rules`. New keys may be added; existing ones won't change shape.
@@ -35,7 +37,7 @@ Bumping `schemaVersion` to `"2"` only happens alongside a SemVer-major pykrete r
 What may still change without notice:
 
 - The internal LSP wire protocol with the embedded Python engine (today's multiplexer is interim — see the [roadmap](/pykrete/about/roadmap/#forking-ty)).
-- The wasm API surface — not yet shipped.
+- The wasm API surface (`pykrete-wasm`): shipped in v0.1.16 and consumed by the in-browser [playground](/pykrete/playground/). The current export shape (`check_source`, `hover_at`, `complete_at`, `definition_at`) is stable in spirit until v1.0.0 and becomes part of the SemVer contract from v1.0 onward. The crate is a single-file analyzer wrapper, not a general-purpose embedding library — multi-file / cross-import support stays a CLI / LSP capability.
 - Internal type representations exposed by `--debug` flags.
 
 ## False-positive policy
@@ -51,7 +53,7 @@ A static checker that cries wolf gets switched off; pykrete prefers to stay quie
 
 ## Release cadence
 
-Nine releases in 48 hours (v0.1.7 → v0.1.15, late May 2026) — the finishing pass on the Spark-coverage closure sprint, not a steady-state cadence. Expect a more measured pace once v1.0.0 ships and focus shifts to pandas / polars. See the [GitHub Releases page](https://github.com/amirnaderi93/pykrete/releases) for the full history.
+The Spark-coverage closure sprint (v0.1.7 onward, May 2026) ran at multiple releases per week — the finishing pass on the v1.0.0 surface, not a steady-state cadence. Expect a more measured pace once v1.0.0 ships and focus shifts to pandas / polars. See the [GitHub Releases page](https://github.com/amirnaderi93/pykrete/releases) for the full per-release history.
 
 ## Real-codebase testing
 
@@ -71,4 +73,6 @@ The full unmodeled list, with the rationale for each, is in [Operations → What
 
 ## Production deployments
 
-Currently being trialed inside production data engineering teams. We'll add named references here as adopters give the go-ahead.
+Pykrete is being run as a check-only pass against a production PySpark codebase the maintainer has direct access to (a data-engineering team's daily-shipped Spark jobs at a former employer) as part of the pre-v1.0 hardening loop. This is hands-on access, not arm's-length adopter validation — it surfaces real-world false positives early but doesn't substitute for independent adopter signal. The public, reproducible coverage lives in [pykrete-tests](/pykrete/about/pykrete-tests/), which vendors annotated snapshots from Apache Spark's and MLflow's own codebases; the explicit donor list and per-donor coverage matrix land there in v0.1.36. Named external adopter references will be added here as teams give the go-ahead.
+
+Pykrete itself is a development-time checker — it does not ship to production hosts and cannot affect a running pipeline. See the [Reliability and trust](https://github.com/amirnaderi93/pykrete#reliability-and-trust) section of the README for the full story.
