@@ -424,10 +424,10 @@ fn fields_of(view: &SchemaView<'_>, schemas: &[Schema<'_>]) -> Vec<CompletionIte
         SchemaView::Declared(s) => {
             return s
                 .fields()
-                .into_iter()
+                .iter()
                 .map(|f| CompletionItem {
                     label: f.name.to_string(),
-                    detail: Some(field_detail(&f, schemas)),
+                    detail: Some(field_detail(f, schemas)),
                     kind: CompletionItemKind::Field,
                 })
                 .collect();

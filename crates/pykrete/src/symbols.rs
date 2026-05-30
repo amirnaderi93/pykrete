@@ -566,7 +566,7 @@ fn definition_on_column_ref(
         SchemaView::Declared(s) => *s,
         _ => return None,
     };
-    let field = schema.fields().into_iter().find(|f| f.name == trace.name)?;
+    let field = schema.fields().iter().find(|f| f.name == trace.name)?;
     // Return the range of the field's target name (`foo` in `foo: int`)
     // by walking the class body for the matching AnnAssign. Falls back
     // to the annotation range if anything looks off.

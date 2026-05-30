@@ -5,6 +5,9 @@
 //! (`name: type_expression`). Methods, docstrings, plain assignments without
 //! annotations, and nested classes are ignored.
 
+use std::marker::PhantomData;
+use std::sync::OnceLock;
+
 use ruff_python_ast::{Expr, Number};
 use ruff_text_size::{Ranged, TextRange};
 
@@ -36,6 +39,21 @@ pub struct Schema<'ast> {
     /// imported from another module. `0` in single-file contexts (the
     /// only file) and until [`crate::ProjectContext`] tags it.
     pub file_index: usize,
+    /// Populated on first call to [`Schema::fields`]; cached for the
+    /// lifetime of this `Schema` instance. The inheritance walk +
+    /// override merge can fire dozens of times per request — hover,
+    /// completion, symbol indexing all hit `fields()` repeatedly — and
+    /// the result is pure with respect to the schema's own AST.
+    ///
+    /// Stored with `'static` to keep `Schema<'ast>` covariant in `'ast`
+    /// (an `OnceLock<Vec<SchemaField<'ast>>>` field would force
+    /// invariance through interior mutability, which would cascade into
+    /// the cross-module borrow sites). The cache only ever holds values
+    /// the schema itself produced from its own `'ast`-bound AST, and is
+    /// only ever read back as `&[SchemaField<'ast>]` — so the lifetime
+    /// extension is sound. See [`Schema::fields`] for the unsafe block.
+    fields_cache: OnceLock<Vec<SchemaField<'static>>>,
+    _ast: PhantomData<&'ast ()>,
 }
 
 #[derive(Debug)]
@@ -103,6 +121,26 @@ impl<'ast> SchemaField<'ast> {
 }
 
 impl<'ast> Schema<'ast> {
+    /// Construct a `Schema` with an empty `fields_cache`. The cache is
+    /// private (it carries an `unsafe`-managed lifetime widening); this
+    /// is the single entry point so cross-module construction sites
+    /// don't have to spell out the internal fields.
+    pub fn new(
+        class: &'ast DiscoveredClass<'ast>,
+        bases: Vec<&'ast DiscoveredClass<'ast>>,
+        alias: Option<&'ast str>,
+        file_index: usize,
+    ) -> Self {
+        Self {
+            class,
+            bases,
+            alias,
+            file_index,
+            fields_cache: OnceLock::new(),
+            _ast: PhantomData,
+        }
+    }
+
     /// The name this schema should resolve under in the current scope —
     /// the alias if one is set, otherwise the class's declared name.
     pub fn name(&self) -> &'ast str {
@@ -120,17 +158,33 @@ impl<'ast> Schema<'ast> {
     /// ancestor to nearest), then this class's own. A column redeclared
     /// in a subclass overrides the inherited one: it keeps the inherited
     /// position but takes the subclass's annotation.
-    pub fn fields(&self) -> Vec<SchemaField<'ast>> {
-        let mut fields: Vec<SchemaField<'ast>> = Vec::new();
-        for base in self.bases.iter().rev() {
-            for field in class_body_fields(base) {
+    pub fn fields(&self) -> &[SchemaField<'ast>] {
+        let raw = self.fields_cache.get_or_init(|| {
+            let mut fields: Vec<SchemaField<'ast>> = Vec::new();
+            for base in self.bases.iter().rev() {
+                for field in class_body_fields(base) {
+                    push_or_override(&mut fields, field);
+                }
+            }
+            for field in class_body_fields(self.class) {
                 push_or_override(&mut fields, field);
             }
-        }
-        for field in class_body_fields(self.class) {
-            push_or_override(&mut fields, field);
-        }
-        fields
+            // SAFETY: every `SchemaField<'ast>` in `fields` borrows from
+            // AST data owned outside this `Schema` and outliving it (the
+            // caller-supplied arena that backs `'ast`). Storing them as
+            // `'static` extends the apparent lifetime; we immediately
+            // narrow it back to `'ast` on every read below, and the
+            // cache is never observable as `'static` from outside this
+            // method. The transmute is purely a variance workaround for
+            // `OnceLock`'s invariance over its payload.
+            unsafe {
+                std::mem::transmute::<Vec<SchemaField<'ast>>, Vec<SchemaField<'static>>>(fields)
+            }
+        });
+        // SAFETY: the cache was populated above from `SchemaField<'ast>`
+        // values; the `'static` widening is purely structural. Restoring
+        // `'ast` here is the same lifetime the values were created with.
+        unsafe { std::mem::transmute::<&[SchemaField<'static>], &[SchemaField<'ast>]>(raw) }
     }
 
     pub fn has_field(&self, name: &str) -> bool {
@@ -362,12 +416,7 @@ pub fn discover_schemas<'ast>(classes: &'ast [DiscoveredClass<'ast>]) -> Vec<Sch
         .iter()
         .enumerate()
         .filter(|&(i, _)| is_schema[i])
-        .map(|(_, class)| Schema {
-            class,
-            bases: schema_base_chain(class, classes, &[]),
-            alias: None,
-            file_index: 0,
-        })
+        .map(|(_, class)| Schema::new(class, schema_base_chain(class, classes, &[]), None, 0))
         .collect()
 }
 
@@ -922,6 +971,46 @@ pub(crate) fn levenshtein(a: &str, b: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::walk::discover_top_level_classes;
+
+    /// `fields()` is called repeatedly per request (hover, completion,
+    /// symbols all walk every schema). The OnceLock cache must return
+    /// the same backing slice each call so callers see the dedup work
+    /// happen exactly once. A 3-level inheritance chain exercises the
+    /// `push_or_override` codepath the cache wraps.
+    #[test]
+    fn fields_returns_pointer_stable_slice_across_calls() {
+        let source = r#"
+class Base(Schema):
+    a: int
+    b: string
+
+class Mid(Base):
+    c: int
+    a: string
+
+class Leaf(Mid):
+    d: int
+    b: int
+"#;
+        let parsed = ruff_python_parser::parse_module(source).expect("parses");
+        let module = parsed.syntax();
+        let classes = discover_top_level_classes(module);
+        let schemas = discover_schemas(&classes);
+        let leaf = schemas.iter().find(|s| s.name() == "Leaf").unwrap();
+
+        let first = leaf.fields();
+        let second = leaf.fields();
+        // Cache hit — same backing slice, not just equal contents.
+        assert!(std::ptr::eq(first, second));
+
+        // Inheritance order preserved: Base fields first (with overrides
+        // taking the subclass's annotation), then Mid's own, then Leaf's
+        // own. `a` is overridden by Mid, `b` by Leaf; both keep Base's
+        // position.
+        let names: Vec<&str> = first.iter().map(|f| f.name).collect();
+        assert_eq!(names, vec!["a", "b", "c", "d"]);
+    }
 
     #[test]
     fn derived_schema_has_field_returns_true_for_known_columns() {
