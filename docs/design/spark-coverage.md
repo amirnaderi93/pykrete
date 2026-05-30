@@ -573,3 +573,27 @@ deferred to keep the patch focused.
    for `get`, which is dead code in practice (the input would have
    been rejected upstream) but cosmetically wrong. Cost: trivial —
    split the arm or guard the Map branch behind a method-name check.
+
+### v0.1.29 PR #59 round-2 review minors (v1.1)
+
+Surfaced by the v0.1.29 round-2 multi-lens re-review (PR #59). All
+non-blocking; the round-2 PR shipped with the blocker + 3 importants
+closed.
+
+5. **`operations.md` labels for `sampleBy` / `observe`.** The reference
+   table needs explicit rows noting that `sampleBy` now col-ref-checks
+   its first positional arg and `observe` walks expressions. Without
+   the rows, the docs imply they are pure pass-throughs. Cost: trivial.
+
+6. **`completion.rs` `SchemaView::Grouped` rest-pattern.** The
+   completion code path still destructures `Grouped` with `..` and
+   ignores `after_pivot`. Since completion doesn't currently key
+   suggestions on grouping state, this is silent rather than wrong —
+   but it's a latent footgun if completion grows pivot-aware
+   suggestions. Cost: small — bind the field and assert handling.
+
+7. **`describe([list])` form unchecked.** `check_describe_args` covers
+   positional `*cols` and `col(...)` Column forms; the
+   `df.describe(["amount", "region"])` list-of-strings form falls
+   through to opaque without col-ref checking. Spark accepts both
+   forms. Cost: small — branch on `Expr::List` and walk its strings.
