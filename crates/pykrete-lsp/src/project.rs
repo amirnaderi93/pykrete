@@ -13,7 +13,13 @@
 //! imports.
 //!
 //! Caching strategy — three tiers around a single composite key
-//! `(project_root, pyproject_anchor, pykrete_json_fingerprint)`:
+//! `(project_root, pykrete_json_fingerprint)`. The project root is
+//! derived from the lexicographically-smallest open doc path (sorted so
+//! the choice is stable across `HashMap` iteration orders), then the
+//! anchor itself is dropped from the key — two different anchors that
+//! resolve to the same project root produce identical cache state, so
+//! including the anchor would only invalidate spuriously on every
+//! `didOpen` / `didClose` with 2+ open files.
 //!
 //! - HOT — rebuilt from `docs` on every call. The user's editor buffers
 //!   never go stale; this is what makes hover-during-typing feel live.
@@ -30,9 +36,14 @@
 //! body string at the API boundary (downstream callers expect owned
 //! `String`s).
 //!
-//! A hard memory cap (~20 MB) falls the cache back to fingerprint-only
-//! re-read-on-miss for very large projects — better to pay the disk
-//! cost than blow up the LSP's RSS.
+//! Hard memory cap (~20 MB): COLD does a two-pass walk. Pass 1
+//! enumerates every `.pyk` path under the root with no I/O beyond
+//! `read_dir`. Pass 2 reads bodies into Arcs until the cumulative size
+//! crosses the cap, then stops reading — but the remaining paths still
+//! land in the tracked union with `body = None`. Snapshot assembly does
+//! an on-demand `read_to_string` for any `None` entry. This keeps the
+//! tracked union complete on big codebases, so `didOpen` on an uncached
+//! path is not "outside the union" and does not thrash the cold walk.
 
 use std::collections::HashMap;
 use std::fs;
@@ -58,25 +69,32 @@ const WARM_AGE: Duration = Duration::from_secs(5 * 60);
 const MAX_BODY_BYTES: usize = 20 * 1024 * 1024;
 
 /// Fingerprint for the project root + pykrete.json. Any drift in this
-/// tuple invalidates all three tiers atomically.
+/// tuple invalidates all three tiers atomically. The anchor doc itself
+/// is intentionally NOT part of the key — two different anchors under
+/// the same project root produce identical cache state, so including
+/// the anchor would spuriously invalidate on every `didOpen` /
+/// `didClose` once 2+ files are open.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ProjectKey {
     project_root: PathBuf,
-    pyproject_anchor: PathBuf,
     /// `(path, mtime)` of the closest `pykrete.json`, if any. `None`
     /// when no config file is present.
     pykrete_json: Option<(PathBuf, SystemTime)>,
 }
 
-/// One cached on-disk `.pyk` file.
+/// One cached on-disk `.pyk` file. `body` is `None` when the cold walk
+/// hit the memory cap before reading this file — snapshot assembly
+/// re-reads it from disk on demand. `mtime` is the file's mtime when
+/// the entry was created (or `UNIX_EPOCH` for uncached entries, which
+/// also keeps them out of the warm sweep).
 #[derive(Clone, Debug)]
 struct CacheEntry {
-    body: Arc<String>,
+    body: Option<Arc<String>>,
     mtime: SystemTime,
 }
 
 /// Tiered hot/warm/cold snapshot cache, one instance per LSP session.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SnapshotCache {
     /// `(key, entries)` — both populated together; cleared together on
     /// key drift. Closed-on-disk files only; open docs are overlaid live
@@ -86,22 +104,37 @@ pub struct SnapshotCache {
     last_cold_walk: Option<Instant>,
     /// Last time the WARM stat sweep ran.
     last_warm_sweep: Option<Instant>,
-    /// `true` when the cached bodies exceeded `MAX_BODY_BYTES` and we
-    /// switched to fingerprint-only mode for this key. Cleared on key
-    /// drift.
-    fingerprint_only: bool,
+    /// Hard cap on cached body bytes during the cold walk. Lifted to a
+    /// field so tests can construct a cache with a tiny cap and pin the
+    /// two-pass-over-cap behavior without writing 20 MB of fixtures.
+    max_body_bytes: usize,
     /// Test-only counter: how many full cold walks have run. Used by
     /// the typing-burst regression to pin the rate-limit guarantee.
     #[cfg(test)]
     cold_walk_count: usize,
 }
 
+impl Default for SnapshotCache {
+    fn default() -> Self {
+        Self {
+            state: None,
+            last_cold_walk: None,
+            last_warm_sweep: None,
+            max_body_bytes: MAX_BODY_BYTES,
+            #[cfg(test)]
+            cold_walk_count: 0,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct CachedState {
     key: ProjectKey,
     /// Every `.pyk` file the project root walk found, last we looked.
-    /// In `fingerprint_only` mode `body` is a placeholder (empty Arc);
-    /// the real bytes are re-read on each `snapshot`.
+    /// Entries whose `body` is `None` were past the memory cap during
+    /// pass 2 — their paths are still tracked (so `didOpen` doesn't
+    /// trigger an outside-union invalidate) but the body is re-read on
+    /// every snapshot.
     entries: HashMap<PathBuf, CacheEntry>,
     /// Cached `pykrete.json` contents, if any.
     config: pykrete::Config,
@@ -130,7 +163,6 @@ impl SnapshotCache {
         self.state = None;
         self.last_cold_walk = None;
         self.last_warm_sweep = None;
-        self.fingerprint_only = false;
     }
 
     /// Compute the project snapshot for the current `docs`. Returns
@@ -162,14 +194,15 @@ impl SnapshotCache {
         for path in paths {
             let source = if let Some(in_memory) = open_by_path.get(&path) {
                 (*in_memory).clone()
-            } else if self.fingerprint_only {
-                // Past the memory cap — re-read on every snapshot.
-                match fs::read_to_string(&path) {
-                    Ok(s) => s,
-                    Err(_) => continue,
-                }
             } else if let Some(entry) = state.entries.get(&path) {
-                (*entry.body).clone()
+                match &entry.body {
+                    Some(body) => (**body).clone(),
+                    // Past the cap during cold walk — re-read on demand.
+                    None => match fs::read_to_string(&path) {
+                        Ok(s) => s,
+                        Err(_) => continue,
+                    },
+                }
             } else {
                 continue;
             };
@@ -231,6 +264,9 @@ impl SnapshotCache {
         {
             self.cold_walk_count += 1;
         }
+        // Pass 1: enumerate every `.pyk` path under the project root.
+        // No body reads, no sizing — just the path list, so memory is
+        // bounded by the count of `.pyk` files even on huge codebases.
         let mut paths: Vec<PathBuf> = Vec::new();
         if collect_pyk_paths(&key.project_root, &mut paths).is_err() {
             paths.clear();
@@ -238,21 +274,43 @@ impl SnapshotCache {
         paths.sort();
         paths.dedup();
 
-        // Reuse the previous entry where we can (path + mtime match) so
-        // the Arc bodies stay shared and we skip the read_to_string.
+        // Pass 2: read bodies into Arcs, accumulating size. Reuse the
+        // previous entry where we can (path + mtime match) so the Arc
+        // bodies stay shared. Once we cross `MAX_BODY_BYTES`, stop
+        // reading — but keep inserting `body = None` entries so the
+        // tracked union still contains every `.pyk` path. That avoids
+        // an invalidate-loop on `didOpen` for files past the cap.
         let previous = self.state.take().map(|s| s.entries).unwrap_or_default();
         let mut entries: HashMap<PathBuf, CacheEntry> = HashMap::with_capacity(paths.len());
         let mut total_bytes: usize = 0;
-        let mut hit_cap = false;
+        let mut over_cap = false;
         for path in paths {
+            if over_cap {
+                entries.insert(
+                    path,
+                    CacheEntry {
+                        body: None,
+                        mtime: SystemTime::UNIX_EPOCH,
+                    },
+                );
+                continue;
+            }
             let mtime = mtime_of(&path).unwrap_or(SystemTime::UNIX_EPOCH);
             if let Some(prev) = previous.get(&path)
                 && prev.mtime == mtime
+                && let Some(body) = prev.body.as_ref()
             {
-                total_bytes = total_bytes.saturating_add(prev.body.len());
-                if total_bytes > MAX_BODY_BYTES {
-                    hit_cap = true;
-                    break;
+                total_bytes = total_bytes.saturating_add(body.len());
+                if total_bytes > self.max_body_bytes {
+                    over_cap = true;
+                    entries.insert(
+                        path,
+                        CacheEntry {
+                            body: None,
+                            mtime: SystemTime::UNIX_EPOCH,
+                        },
+                    );
+                    continue;
                 }
                 entries.insert(path, prev.clone());
                 continue;
@@ -262,60 +320,46 @@ impl SnapshotCache {
                 Err(_) => continue,
             };
             total_bytes = total_bytes.saturating_add(body.len());
-            if total_bytes > MAX_BODY_BYTES {
-                hit_cap = true;
-                break;
+            if total_bytes > self.max_body_bytes {
+                over_cap = true;
+                entries.insert(
+                    path,
+                    CacheEntry {
+                        body: None,
+                        mtime: SystemTime::UNIX_EPOCH,
+                    },
+                );
+                continue;
             }
             entries.insert(
                 path,
                 CacheEntry {
-                    body: Arc::new(body),
+                    body: Some(Arc::new(body)),
                     mtime,
                 },
             );
         }
 
-        if hit_cap {
-            // Drop bodies; keep just the path list (placeholder Arcs)
-            // so snapshot still knows what to read on demand.
-            self.fingerprint_only = true;
-            let path_only: HashMap<PathBuf, CacheEntry> = entries
-                .into_keys()
-                .map(|p| {
-                    (
-                        p,
-                        CacheEntry {
-                            body: Arc::new(String::new()),
-                            mtime: SystemTime::UNIX_EPOCH,
-                        },
-                    )
-                })
-                .collect();
-            self.state = Some(CachedState {
-                key: key.clone(),
-                entries: path_only,
-                config: load_pykrete_json(&key.project_root),
-            });
-        } else {
-            self.fingerprint_only = false;
-            self.state = Some(CachedState {
-                key: key.clone(),
-                entries,
-                config: load_pykrete_json(&key.project_root),
-            });
-        }
+        self.state = Some(CachedState {
+            key: key.clone(),
+            entries,
+            config: load_pykrete_json(&key.project_root),
+        });
     }
 
     fn run_warm_sweep(&mut self) {
-        if self.fingerprint_only {
-            return;
-        }
         let Some(state) = self.state.as_mut() else {
             return;
         };
         let now = SystemTime::now();
         let mut to_refresh: Vec<PathBuf> = Vec::new();
         for (path, entry) in &state.entries {
+            // Uncached entries (past the cold-walk cap) are excluded
+            // from the warm sweep — their bytes are re-read on demand
+            // in `snapshot`, so we don't want to warm them in.
+            if entry.body.is_none() {
+                continue;
+            }
             // Only files that were recently touched on disk; older files
             // sit in the cold tier and get rechecked on the next walk.
             let age = now.duration_since(entry.mtime).unwrap_or(WARM_AGE);
@@ -337,7 +381,7 @@ impl SnapshotCache {
             state.entries.insert(
                 path,
                 CacheEntry {
-                    body: Arc::new(body),
+                    body: Some(Arc::new(body)),
                     mtime,
                 },
             );
@@ -346,7 +390,16 @@ impl SnapshotCache {
 }
 
 fn derive_project_key(docs: &HashMap<Url, String>) -> Option<ProjectKey> {
-    let anchor = docs.keys().find_map(|uri| uri.to_file_path().ok())?;
+    // Sort the candidate anchor paths so the pick is stable across
+    // `HashMap` iteration orders — otherwise `ProjectKey` would differ
+    // between calls on the same project state and the cache would
+    // invalidate on every didOpen / didClose with 2+ open files.
+    let mut anchor_candidates: Vec<PathBuf> = docs
+        .keys()
+        .filter_map(|uri| uri.to_file_path().ok())
+        .collect();
+    anchor_candidates.sort();
+    let anchor = anchor_candidates.into_iter().next()?;
     let project_root = find_pyproject_root(&anchor).unwrap_or_else(|| {
         anchor
             .parent()
@@ -357,7 +410,6 @@ fn derive_project_key(docs: &HashMap<Url, String>) -> Option<ProjectKey> {
         .and_then(|path| mtime_of(&path).map(|mtime| (path, mtime)));
     Some(ProjectKey {
         project_root,
-        pyproject_anchor: anchor,
         pykrete_json,
     })
 }
@@ -526,7 +578,7 @@ mod tests {
             .entries
             .iter()
             .find(|(p, _)| p.ends_with("b.pyk"))
-            .map(|(_, e)| Arc::clone(&e.body))
+            .and_then(|(_, e)| e.body.as_ref().map(Arc::clone))
             .unwrap();
         cache.snapshot(&docs).expect("snapshot 2");
         let second_arc = cache
@@ -536,7 +588,7 @@ mod tests {
             .entries
             .iter()
             .find(|(p, _)| p.ends_with("b.pyk"))
-            .map(|(_, e)| Arc::clone(&e.body))
+            .and_then(|(_, e)| e.body.as_ref().map(Arc::clone))
             .unwrap();
         assert!(
             Arc::ptr_eq(&first_arc, &second_arc),
@@ -569,7 +621,7 @@ mod tests {
             .entries
             .iter()
             .find(|(p, _)| p.ends_with("b.pyk"))
-            .map(|(_, e)| Arc::clone(&e.body))
+            .and_then(|(_, e)| e.body.as_ref().map(Arc::clone))
             .unwrap();
 
         // Simulate didChange on a.pyk — just mutate the docs map.
@@ -582,7 +634,7 @@ mod tests {
             .entries
             .iter()
             .find(|(p, _)| p.ends_with("b.pyk"))
-            .map(|(_, e)| Arc::clone(&e.body))
+            .and_then(|(_, e)| e.body.as_ref().map(Arc::clone))
             .unwrap();
         assert!(
             Arc::ptr_eq(&first_b_arc, &second_b_arc),
@@ -634,7 +686,7 @@ mod tests {
             .entries
             .iter()
             .find(|(p, _)| p.ends_with("b.pyk"))
-            .map(|(_, e)| Arc::clone(&e.body))
+            .and_then(|(_, e)| e.body.as_ref().map(Arc::clone))
             .unwrap();
 
         // Bump b.pyk on disk. We have to outwait the filesystem's mtime
@@ -654,7 +706,7 @@ mod tests {
             .entries
             .iter()
             .find(|(p, _)| p.ends_with("b.pyk"))
-            .map(|(_, e)| Arc::clone(&e.body))
+            .and_then(|(_, e)| e.body.as_ref().map(Arc::clone))
             .unwrap();
         assert!(
             !Arc::ptr_eq(&first_b_arc, &second_b_arc),
@@ -805,6 +857,147 @@ mod tests {
         let mut cache = SnapshotCache::new();
         let config = cache.config(&docs);
         assert_eq!(config.check_mode_override(), None);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Two-pass cold walk at the cap boundary: every `.pyk` path lands
+    /// in the tracked union — those past the cap as `body = None`, the
+    /// snapshot composer fills them via on-demand `read_to_string`.
+    /// Without this guarantee, a >cap codebase would silently drop the
+    /// excess files from every analysis.
+    #[test]
+    fn cold_walk_two_pass_keeps_all_paths_in_tracked_union_past_cap() {
+        let root = tmpdir();
+        // Three files, ~50 bytes each; cap set to 60 bytes so the first
+        // file fits in the cache and the second + third spill to None.
+        write(&root.join("a.pyk"), "class A(Schema):\n    x: int\n");
+        write(&root.join("b.pyk"), "class B(Schema):\n    y: int\n");
+        write(&root.join("c.pyk"), "class C(Schema):\n    z: int\n");
+
+        let a_uri = Url::from_file_path(root.join("a.pyk")).unwrap();
+        let mut docs: HashMap<Url, String> = HashMap::new();
+        docs.insert(a_uri, "class A(Schema):\n    x: int\n".into());
+
+        let mut cache = SnapshotCache::new();
+        cache.max_body_bytes = 30;
+
+        let snapshot = cache.snapshot(&docs).expect("snapshot");
+        let paths: Vec<&str> = snapshot.iter().map(|(p, _)| p.as_str()).collect();
+        assert!(paths.iter().any(|p| p.ends_with("a.pyk")));
+        assert!(paths.iter().any(|p| p.ends_with("b.pyk")));
+        assert!(paths.iter().any(|p| p.ends_with("c.pyk")));
+
+        // Tracked union has all three paths, even though the cache
+        // can only hold one body's worth.
+        let state = cache.state.as_ref().unwrap();
+        assert!(state.entries.contains_key(&root.join("a.pyk")));
+        assert!(state.entries.contains_key(&root.join("b.pyk")));
+        assert!(state.entries.contains_key(&root.join("c.pyk")));
+
+        // At least one entry must be over-cap (body = None) — exact
+        // count depends on which file the iteration order hit first.
+        let uncached = state.entries.values().filter(|e| e.body.is_none()).count();
+        assert!(
+            uncached >= 1,
+            "expected at least one entry past the cap, got 0 of {}",
+            state.entries.len(),
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Paired regression for the invalidate-loop: opening a `.pyk` file
+    /// whose body is None (past the cold-walk cap) does NOT trigger an
+    /// outside-union invalidate, because the path IS in the tracked
+    /// union. Without this, `tracks_path` would return false for
+    /// uncached paths and the cache would thrash on every `didOpen`.
+    #[test]
+    fn tracks_path_includes_uncached_entries_past_cap() {
+        let root = tmpdir();
+        write(&root.join("a.pyk"), "class A(Schema):\n    x: int\n");
+        write(&root.join("b.pyk"), "class B(Schema):\n    y: int\n");
+        write(&root.join("c.pyk"), "class C(Schema):\n    z: int\n");
+
+        let a_uri = Url::from_file_path(root.join("a.pyk")).unwrap();
+        let mut docs: HashMap<Url, String> = HashMap::new();
+        docs.insert(a_uri, "class A(Schema):\n    x: int\n".into());
+
+        let mut cache = SnapshotCache::new();
+        cache.max_body_bytes = 30;
+        cache.snapshot(&docs).expect("snapshot");
+
+        // Every `.pyk` path under root should pass `tracks_path`, even
+        // the entries with body = None.
+        assert!(cache.tracks_path(&root.join("a.pyk")));
+        assert!(cache.tracks_path(&root.join("b.pyk")));
+        assert!(cache.tracks_path(&root.join("c.pyk")));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// `ProjectKey` derived from the same `docs` map across multiple
+    /// builds must compare equal — otherwise `refresh` would think the
+    /// project drifted on every call and re-run the cold walk on every
+    /// didOpen / didClose with 2+ open files (`HashMap` iteration order
+    /// is randomized per-process and per-insert).
+    #[test]
+    fn project_key_is_deterministic_across_builds() {
+        let root = tmpdir();
+        write(&root.join("a.pyk"), "class A(Schema):\n    x: int\n");
+        write(&root.join("b.pyk"), "class B(Schema):\n    y: int\n");
+        write(&root.join("c.pyk"), "class C(Schema):\n    z: int\n");
+
+        let mut docs: HashMap<Url, String> = HashMap::new();
+        docs.insert(
+            Url::from_file_path(root.join("a.pyk")).unwrap(),
+            "class A(Schema):\n    x: int\n".into(),
+        );
+        docs.insert(
+            Url::from_file_path(root.join("b.pyk")).unwrap(),
+            "class B(Schema):\n    y: int\n".into(),
+        );
+        docs.insert(
+            Url::from_file_path(root.join("c.pyk")).unwrap(),
+            "class C(Schema):\n    z: int\n".into(),
+        );
+
+        // Re-derive many times; randomized hash order should not change
+        // the chosen anchor → resolved project root → key.
+        let first = derive_project_key(&docs).expect("key");
+        for _ in 0..32 {
+            let again = derive_project_key(&docs).expect("key");
+            assert_eq!(again, first);
+        }
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Same project state, different anchor doc → same key. Two files
+    /// in the same project shouldn't produce different keys depending
+    /// on which one happens to win the anchor pick. Pairs with the
+    /// determinism test above to pin the "no spurious invalidation on
+    /// didOpen/didClose" guarantee.
+    #[test]
+    fn project_key_same_for_different_anchors_in_same_project() {
+        let root = tmpdir();
+        write(&root.join("a.pyk"), "class A(Schema):\n    x: int\n");
+        write(&root.join("b.pyk"), "class B(Schema):\n    y: int\n");
+
+        let mut docs_a: HashMap<Url, String> = HashMap::new();
+        docs_a.insert(
+            Url::from_file_path(root.join("a.pyk")).unwrap(),
+            "class A(Schema):\n    x: int\n".into(),
+        );
+        let mut docs_b: HashMap<Url, String> = HashMap::new();
+        docs_b.insert(
+            Url::from_file_path(root.join("b.pyk")).unwrap(),
+            "class B(Schema):\n    y: int\n".into(),
+        );
+
+        let key_a = derive_project_key(&docs_a).expect("key a");
+        let key_b = derive_project_key(&docs_b).expect("key b");
+        assert_eq!(key_a, key_b);
 
         std::fs::remove_dir_all(&root).ok();
     }

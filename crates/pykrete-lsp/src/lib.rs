@@ -99,9 +99,49 @@ pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
     });
     connection.initialize_finish(init_id, initialize_result)?;
 
+    // If the client supports dynamic registration for
+    // `workspace/didChangeWatchedFiles`, register a `**/*.pyk` watcher
+    // so external edits (git checkout, scratchpad, another editor)
+    // invalidate the snapshot cache immediately — without it, the
+    // practical staleness window is the 30s cold-walk interval. Skipped
+    // silently when the client lacks dynamic registration; the user
+    // still has the `pykrete/refreshSnapshot` escape hatch.
+    if client_supports_did_change_watched_files(&init_params) {
+        // `client/registerCapability` is a request per the spec; the
+        // client's reply lands in `handle_editor_response`, which
+        // ignores unrecognised ids — so we don't have to plumb the
+        // response anywhere. If the registration fails for any
+        // reason, the user still has the `pykrete/refreshSnapshot`
+        // escape hatch and the 30s cold-walk window as the fallback.
+        let request = Request {
+            id: RequestId::from("pykrete-register-watch-pyk".to_string()),
+            method: "client/registerCapability".to_string(),
+            params: serde_json::json!({
+                "registrations": [{
+                    "id": "pykrete-watch-pyk",
+                    "method": "workspace/didChangeWatchedFiles",
+                    "registerOptions": {
+                        "watchers": [{ "globPattern": "**/*.pyk" }]
+                    }
+                }]
+            }),
+        };
+        connection.sender.send(Message::Request(request))?;
+    }
+
     main_loop(connection, multiplexer)?;
     io_threads.join()?;
     Ok(())
+}
+
+/// `true` when the editor advertised `workspace/didChangeWatchedFiles`
+/// dynamic-registration support. VS Code does; minimal LSP clients
+/// (lsp-server's own test harness, some terminal editors) don't.
+fn client_supports_did_change_watched_files(init_params: &serde_json::Value) -> bool {
+    init_params
+        .pointer("/capabilities/workspace/didChangeWatchedFiles/dynamicRegistration")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
 }
 
 /// Read the embedded Python engine's launch spec out of the editor's

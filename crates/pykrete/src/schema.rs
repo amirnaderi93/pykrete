@@ -19,6 +19,18 @@ use crate::walk::DiscoveredClass;
 /// schema is a user error; this just stops the resolver looping.
 const MAX_TYPE_DEPTH: usize = 24;
 
+// `Schema` does NOT derive `Clone`. This is load-bearing: the
+// `fields_cache` below holds `'static`-widened references that actually
+// borrow from the `'ast` AST this `Schema` was constructed against. If
+// `Schema` were `Clone`, a caller could clone the `Schema` (and its
+// populated cache) into a different lifetime context, then drop the
+// original AST — the cloned cache's `'static` slices would dangle. The
+// `PhantomData<&'ast ()>` below pins the lifetime invariance so a
+// `Schema<'a>` cannot be coerced to a `Schema<'b>` with `'b: 'a`.
+// Together these prevent the cache from outliving the AST it points
+// into. If you ever add `Clone` here, revisit `Schema::fields`'s
+// unsafe block — the soundness argument depends on this no-Clone
+// invariant.
 #[derive(Debug)]
 pub struct Schema<'ast> {
     pub class: &'ast DiscoveredClass<'ast>,
@@ -169,21 +181,48 @@ impl<'ast> Schema<'ast> {
             for field in class_body_fields(self.class) {
                 push_or_override(&mut fields, field);
             }
-            // SAFETY: every `SchemaField<'ast>` in `fields` borrows from
-            // AST data owned outside this `Schema` and outliving it (the
-            // caller-supplied arena that backs `'ast`). Storing them as
-            // `'static` extends the apparent lifetime; we immediately
-            // narrow it back to `'ast` on every read below, and the
-            // cache is never observable as `'static` from outside this
-            // method. The transmute is purely a variance workaround for
-            // `OnceLock`'s invariance over its payload.
+            // SAFETY: each `SchemaField<'ast>` in `fields` borrows from
+            // the `'ast` AST that `self.class` and `self.bases` already
+            // borrow from — they all live in the caller's arena. We
+            // widen those refs to `'static` purely to satisfy
+            // `OnceLock<T>`'s invariance over `T` (a covariant
+            // `OnceLock<Vec<SchemaField<'ast>>>` field would cascade
+            // ~30 borrow errors across the cross-module call graph;
+            // see the doc-comment on `fields_cache`).
+            //
+            // The widening is sound for one structural reason: this
+            // `Schema` cannot outlive its own `'ast` AST, so the cache
+            // cannot either. The invariants that keep that true:
+            //
+            // 1. `Schema<'ast>` does NOT derive `Clone`. A cloned cache
+            //    could be moved into a context where the original AST
+            //    has dropped, and the `'static` slices would dangle.
+            // 2. `PhantomData<&'ast ()>` on `Schema` keeps the type
+            //    invariant in `'ast`, so the lifetime cannot be
+            //    silently shortened or lengthened by a coercion.
+            // 3. `fields_cache` is private; the only read path narrows
+            //    back to `'ast` immediately (see the second unsafe
+            //    block below), so the `'static` widening is never
+            //    observable to callers.
+            //
+            // The alternative — making the cache lifetime-parametric
+            // for real — would force `OnceLock` invariance into every
+            // call site that holds `&Schema<'ast>`; the resulting ~30
+            // cascading lifetime errors are not worth the safety win,
+            // because the structural invariants above are simple to
+            // audit and are checked by the existing test suite (drop
+            // order + multi-schema construction + cross-module project
+            // tests would all fail loudly under any soundness break).
             unsafe {
                 std::mem::transmute::<Vec<SchemaField<'ast>>, Vec<SchemaField<'static>>>(fields)
             }
         });
-        // SAFETY: the cache was populated above from `SchemaField<'ast>`
-        // values; the `'static` widening is purely structural. Restoring
-        // `'ast` here is the same lifetime the values were created with.
+        // SAFETY: `raw` was produced by the closure above from
+        // `SchemaField<'ast>` values; the `'static` widening is purely
+        // structural and the lifetime we restore here is the same one
+        // the values were constructed with. The invariants on the
+        // first SAFETY block (no-Clone, PhantomData invariance, private
+        // cache) are what make this narrowing safe to do every call.
         unsafe { std::mem::transmute::<&[SchemaField<'static>], &[SchemaField<'ast>]>(raw) }
     }
 

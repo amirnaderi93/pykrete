@@ -597,3 +597,45 @@ closed.
    `df.describe(["amount", "region"])` list-of-strings form falls
    through to opaque without col-ref checking. Spark accepts both
    forms. Cost: small — branch on `Expr::List` and walk its strings.
+
+### v0.1.30 LSP perf review minors (v1.0.0 prerequisites)
+
+Surfaced by the v0.1.30 multi-lens review (PR #61). Round-1 closed the
+blocker (two-pass cold walk + tracked-union invariant) and the two
+importants (deterministic `ProjectKey`, `workspace/didChangeWatchedFiles`
+dynamic registration); these are tracking items for the v1.0.0 ship.
+
+8. **Miri job in CI for `Schema::fields` unsafe block.** The
+   widen-to-`'static` / narrow-back-to-`'ast` pattern in
+   `crates/pykrete/src/schema.rs` is sound by three structural
+   invariants (no `Clone` derive, `PhantomData<&'ast ()>` invariance,
+   private cache) but the borrow checker can't actually prove the
+   transmute on its own. Adding a `cargo +nightly miri test` job
+   under the MIR interpreter would catch any future use-after-free
+   pattern that violates the invariants — particularly if someone
+   adds `Clone` or splits the cache out of the struct. Cost: small —
+   one nightly job in the existing GitHub Actions workflow, gated to
+   `pykrete` crate only (the LSP and wasm crates pull in `tokio` /
+   `wasm-bindgen` which Miri can't run).
+
+9. **VS Code `contributes.commands` entry for `pykrete/refreshSnapshot`.**
+   The LSP server registers the `pykrete/refreshSnapshot` custom command
+   and wires it through to `SnapshotCache::invalidate`, but
+   `editors/vscode/package.json contributes.commands` doesn't expose it
+   in the Command Palette. The file-watcher (v0.1.30 I3) eliminates
+   most of the use cases — staleness collapses to the watcher's debounce
+   window for clients that support it — but a manual command is still
+   useful for clients without dynamic registration and for diagnosing
+   stuck caches in the field. Cost: trivial — one entry in
+   `contributes.commands` + a one-line `extension.ts` handler that
+   sends the LSP request.
+
+10. **Parsed-module memoization inside `ProjectContext::build`.** Today
+    every snapshot rebuild re-parses every `.pyk` body the cache hands
+    out, even when neither the path nor the body bytes changed. A
+    keyed-on-`(path, content_hash)` parse cache on top of the snapshot
+    cache would eliminate the per-keystroke parse cost on closed files
+    — the bigger win for project-mode scaling than the snapshot cache
+    alone. Cost: medium — the parsed AST borrows from the body string,
+    so the cache has to own both, and `ProjectContext`'s lifetime story
+    has to widen to accept owned arenas. Mirrored from the PR #61 body.
