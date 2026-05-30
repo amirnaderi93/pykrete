@@ -213,23 +213,25 @@ fn hover_on_column_ref(
 
 fn render_column_ref_hover(trace: &ColumnRefTrace<'_>, schemas: &[Schema<'_>]) -> HoverInfo {
     let mut md = String::new();
-    writeln!(md, "**column `{}`**", trace.name).unwrap();
-    writeln!(md).unwrap();
-    writeln!(md, "on {}", trace.schema.display_name()).unwrap();
-    writeln!(md).unwrap();
+    // `writeln!` to a `String` only fails on allocator failure, which we
+    // propagate-or-panic at the call sites. The `let _ =` shape keeps the
+    // intent explicit without re-stamping `.unwrap()` on every line.
+    let _ = writeln!(md, "**column `{}`**", trace.name);
+    let _ = writeln!(md);
+    let _ = writeln!(md, "on {}", trace.schema.display_name());
+    let _ = writeln!(md);
 
     match resolve_path(&trace.schema, trace.name, schemas) {
         FieldPathResult::Missing { field, on } => {
             let on_phrase = on
                 .as_ref()
                 .map_or_else(|| "the nested struct".to_string(), SchemaView::display_name);
-            writeln!(
+            let _ = writeln!(
                 md,
                 "_Column `{field}` does not exist on {on_phrase} — see D0030._",
-            )
-            .unwrap();
+            );
             if let Some(suggestion) = on.as_ref().and_then(|v| suggest_field_name(field, v)) {
-                writeln!(md, "Did you mean `{suggestion}`?").unwrap();
+                let _ = writeln!(md, "Did you mean `{suggestion}`?");
             }
         }
         FieldPathResult::Resolved => {
@@ -238,7 +240,7 @@ fn render_column_ref_hover(trace: &ColumnRefTrace<'_>, schemas: &[Schema<'_>]) -
             // carries a Declared one) — Derived/Grouped views drop types,
             // so we just show the field name.
             if let Some(label) = column_type_label(&trace.schema, trace.name, schemas) {
-                writeln!(md, "Type: {label}").unwrap();
+                let _ = writeln!(md, "Type: {label}");
             }
         }
     }
@@ -349,17 +351,17 @@ fn render_local_binding_hover(
     schemas: &[Schema<'_>],
 ) -> HoverInfo {
     let mut md = String::new();
-    writeln!(md, "**local `{}`**", binding.name).unwrap();
-    writeln!(md).unwrap();
-    writeln!(md, "Bound to {}", binding.schema.display_name()).unwrap();
+    let _ = writeln!(md, "**local `{}`**", binding.name);
+    let _ = writeln!(md);
+    let _ = writeln!(md, "Bound to {}", binding.schema.display_name());
     // For Declared views, also dump the field list so the user can see
     // what's available without going to look up the schema.
     if let SchemaView::Declared(schema) = &binding.schema {
         let fields = schema.fields();
         if !fields.is_empty() {
-            writeln!(md).unwrap();
-            writeln!(md, "Fields:").unwrap();
-            writeln!(md).unwrap();
+            let _ = writeln!(md);
+            let _ = writeln!(md, "Fields:");
+            let _ = writeln!(md);
             for field in fields {
                 let label = match field.resolve(schemas) {
                     FieldResolution::Resolved(ct) => format!("`{}`", ct.as_str()),
@@ -369,7 +371,7 @@ fn render_local_binding_hover(
                     FieldResolution::UnknownType { name } => format!("`{name}` (unresolved)"),
                     FieldResolution::NotABareName => "_unresolved_".to_string(),
                 };
-                writeln!(md, "- `{}`: {}", field.name, label).unwrap();
+                let _ = writeln!(md, "- `{}`: {}", field.name, label);
             }
         }
     }
@@ -399,15 +401,15 @@ fn column_type_label(view: &SchemaView<'_>, name: &str, schemas: &[Schema<'_>]) 
 
 fn render_schema_hover(schema: &Schema<'_>, all_schemas: &[Schema<'_>]) -> HoverInfo {
     let mut md = String::new();
-    writeln!(md, "**schema** `{}`", schema.name()).unwrap();
+    let _ = writeln!(md, "**schema** `{}`", schema.name());
     let fields = schema.fields();
     if fields.is_empty() {
-        writeln!(md).unwrap();
-        writeln!(md, "_no fields_").unwrap();
+        let _ = writeln!(md);
+        let _ = writeln!(md, "_no fields_");
     } else {
-        writeln!(md).unwrap();
-        writeln!(md, "```python").unwrap();
-        writeln!(md, "class {}(Schema):", schema.name()).unwrap();
+        let _ = writeln!(md);
+        let _ = writeln!(md, "```python");
+        let _ = writeln!(md, "class {}(Schema):", schema.name());
         let max_name_len = fields.iter().map(|f| f.name.len()).max().unwrap_or(0);
         for field in fields {
             let type_text = match field.resolve(all_schemas) {
@@ -417,9 +419,9 @@ fn render_schema_hover(schema: &Schema<'_>, all_schemas: &[Schema<'_>]) -> Hover
                 FieldResolution::NotABareName => "Unknown".to_string(),
             };
             let padding = " ".repeat(max_name_len - field.name.len());
-            writeln!(md, "    {}:{} {}", field.name, padding, type_text).unwrap();
+            let _ = writeln!(md, "    {}:{} {}", field.name, padding, type_text);
         }
-        writeln!(md, "```").unwrap();
+        let _ = writeln!(md, "```");
     }
     HoverInfo { markdown: md }
 }
@@ -430,12 +432,12 @@ fn render_function_hover(
     _schemas: &[Schema<'_>],
 ) -> HoverInfo {
     let mut md = String::new();
-    writeln!(md, "**fn `{}`**", func.name()).unwrap();
-    writeln!(md).unwrap();
-    writeln!(md, "Typed signature:").unwrap();
-    writeln!(md).unwrap();
-    writeln!(md, "```").unwrap();
-    write!(md, "{}(", func.name()).unwrap();
+    let _ = writeln!(md, "**fn `{}`**", func.name());
+    let _ = writeln!(md);
+    let _ = writeln!(md, "Typed signature:");
+    let _ = writeln!(md);
+    let _ = writeln!(md, "```");
+    let _ = write!(md, "{}(", func.name());
     let params: Vec<String> = slots
         .iter()
         .filter_map(|slot| match slot.label {
@@ -443,13 +445,13 @@ fn render_function_hover(
             SlotLabel::Return => None,
         })
         .collect();
-    write!(md, "{}", params.join(", ")).unwrap();
-    write!(md, ")").unwrap();
+    let _ = write!(md, "{}", params.join(", "));
+    let _ = write!(md, ")");
     if let Some(ret) = slots.iter().find(|s| matches!(s.label, SlotLabel::Return)) {
-        write!(md, " -> {}", render_annotation(&ret.kind)).unwrap();
+        let _ = write!(md, " -> {}", render_annotation(&ret.kind));
     }
-    writeln!(md).unwrap();
-    writeln!(md, "```").unwrap();
+    let _ = writeln!(md);
+    let _ = writeln!(md, "```");
     HoverInfo { markdown: md }
 }
 

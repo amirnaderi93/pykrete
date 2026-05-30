@@ -140,6 +140,20 @@ struct CachedState {
     entries: HashMap<PathBuf, CacheEntry>,
     /// Cached `pykrete.json` contents, if any.
     config: pykrete::Config,
+    /// Set when this cache build saw a malformed `pykrete.json`. The LSP
+    /// layer drains it via [`SnapshotCache::take_pending_warning`] and
+    /// pushes one `window/showMessage` + one `window/logMessage` so the
+    /// user knows defaults are being used. Cleared after the first drain;
+    /// re-populates only when the key (path + mtime) drifts and the next
+    /// cold walk re-reads a still-malformed file.
+    malformed_warning: Option<MalformedConfig>,
+}
+
+/// A `pykrete.json` that couldn't be parsed during the last cold walk.
+#[derive(Debug, Clone)]
+pub struct MalformedConfig {
+    pub path: PathBuf,
+    pub error: String,
 }
 
 impl SnapshotCache {
@@ -224,6 +238,16 @@ impl SnapshotCache {
             .as_ref()
             .map(|s| s.config.clone())
             .unwrap_or_default()
+    }
+
+    /// Drain any "this `pykrete.json` was malformed, defaults are in
+    /// effect" notification that the most recent cold walk produced.
+    /// Surfacing it is the LSP layer's job (`window/showMessage` +
+    /// `window/logMessage`). Returns `None` when there's nothing pending,
+    /// either because the file is well-formed or because the warning was
+    /// already drained for this cache key.
+    pub fn take_pending_warning(&mut self) -> Option<MalformedConfig> {
+        self.state.as_mut().and_then(|s| s.malformed_warning.take())
     }
 
     /// Recompute the cold list if needed and run the warm sweep if the
@@ -342,10 +366,12 @@ impl SnapshotCache {
             );
         }
 
+        let (config, malformed_warning) = load_pykrete_json(&key.project_root);
         self.state = Some(CachedState {
             key: key.clone(),
             entries,
-            config: load_pykrete_json(&key.project_root),
+            config,
+            malformed_warning,
         });
     }
 
@@ -429,14 +455,24 @@ fn find_pykrete_json(project_root: &Path) -> Option<PathBuf> {
     }
 }
 
-fn load_pykrete_json(project_root: &Path) -> pykrete::Config {
+/// Read the project's `pykrete.json` (if any). Returns the parsed
+/// config plus, when parsing failed, a [`MalformedConfig`] the caller
+/// can surface to the editor. A missing or unreadable file is silent —
+/// only a present-but-malformed file produces a warning.
+fn load_pykrete_json(project_root: &Path) -> (pykrete::Config, Option<MalformedConfig>) {
     let Some(path) = find_pykrete_json(project_root) else {
-        return pykrete::Config::default();
+        return (pykrete::Config::default(), None);
     };
-    fs::read_to_string(&path)
-        .ok()
-        .and_then(|content| pykrete::Config::parse(&content).ok())
-        .unwrap_or_default()
+    let Ok(content) = fs::read_to_string(&path) else {
+        return (pykrete::Config::default(), None);
+    };
+    match pykrete::Config::parse(&content) {
+        Ok(cfg) => (cfg, None),
+        Err(err) => (
+            pykrete::Config::default(),
+            Some(MalformedConfig { path, error: err }),
+        ),
+    }
 }
 
 fn mtime_of(path: &Path) -> Option<SystemTime> {
@@ -859,6 +895,51 @@ mod tests {
         let mut cache = SnapshotCache::new();
         let config = cache.config(&docs);
         assert_eq!(config.check_mode_override(), None);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn malformed_pykrete_json_falls_back_to_defaults_and_queues_warning() {
+        let root = tmpdir();
+        write(&root.join("pykrete.json"), r#"{ this is not json"#);
+        let docs = docs_with(&root);
+
+        let mut cache = SnapshotCache::new();
+        let config = cache.config(&docs);
+        // Defaults remain in effect — `typeCheckingMode` override absent.
+        assert_eq!(config.check_mode_override(), None);
+
+        let warning = cache
+            .take_pending_warning()
+            .expect("malformed pykrete.json should queue a warning");
+        assert_eq!(warning.path, root.join("pykrete.json"));
+        assert!(
+            !warning.error.is_empty(),
+            "warning error string should carry the parse failure detail"
+        );
+
+        // Drain semantics: the warning fires once per cache build.
+        assert!(
+            cache.take_pending_warning().is_none(),
+            "warning should be consumed after the first drain"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn well_formed_pykrete_json_does_not_queue_a_warning() {
+        let root = tmpdir();
+        write(
+            &root.join("pykrete.json"),
+            r#"{"typeCheckingMode": "strict"}"#,
+        );
+        let docs = docs_with(&root);
+
+        let mut cache = SnapshotCache::new();
+        let _config = cache.config(&docs);
+        assert!(cache.take_pending_warning().is_none());
 
         std::fs::remove_dir_all(&root).ok();
     }

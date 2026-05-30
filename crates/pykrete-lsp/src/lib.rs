@@ -654,8 +654,13 @@ pub fn handle_hover(
     let info = match snapshot_cache.snapshot(docs) {
         Some(snapshot) => {
             let focus_path = uri.to_file_path().ok()?;
-            let focus_path_str = focus_path.to_string_lossy().to_string();
-            pykrete::hover_in_project(&snapshot, &focus_path_str, line, column)?
+            // Strict UTF-8: paths that aren't representable as `&str`
+            // could never have been keyed into the snapshot (which itself
+            // stores paths as `String`), so the lookup would fail anyway.
+            // Bail with `None` instead of round-tripping through a lossy
+            // string that masks the mismatch.
+            let focus_path_str = focus_path.to_str()?;
+            pykrete::hover_in_project(&snapshot, focus_path_str, line, column)?
         }
         None => {
             // Single-file fallback for untitled / non-file URIs.
@@ -708,13 +713,16 @@ pub fn handle_definition(
     let (target_uri, span) = match snapshot_cache.snapshot(docs) {
         Some(snapshot) => {
             let focus_path = uri.to_file_path().ok()?;
-            let focus_path_str = focus_path.to_string_lossy().to_string();
+            let focus_path_str = focus_path.to_str()?;
             let (target_path, span) =
-                pykrete::definition_in_project(&snapshot, &focus_path_str, line, column)?;
-            (
-                Url::from_file_path(&target_path).unwrap_or_else(|()| uri.clone()),
-                span,
-            )
+                pykrete::definition_in_project(&snapshot, focus_path_str, line, column)?;
+            // The target file lives in the snapshot, which already stored
+            // it as a `String` — but rebuilding a `Url` can still fail
+            // (e.g. a relative path). Bail with `None` instead of falling
+            // back to the focus URI, which would silently teleport the
+            // user to the wrong file. LSP spec allows a `null` response.
+            let target_uri = Url::from_file_path(&target_path).ok()?;
+            (target_uri, span)
         }
         None => {
             let text = docs.get(&uri)?;
@@ -812,8 +820,8 @@ pub fn handle_completion(
     let raw_items = match snapshot_cache.snapshot(docs) {
         Some(snapshot) => {
             let focus_path = uri.to_file_path().ok()?;
-            let focus_path_str = focus_path.to_string_lossy().to_string();
-            pykrete::completions_in_project(&snapshot, &focus_path_str, line, column)
+            let focus_path_str = focus_path.to_str()?;
+            pykrete::completions_in_project(&snapshot, focus_path_str, line, column)
         }
         None => {
             let text = docs.get(uri)?;
@@ -982,6 +990,12 @@ fn publish_project_diagnostics(
     // `typeCheckingMode` overrides the editor's setting; `rules`
     // re-levels or drops codes; `exclude` silences whole files.
     let config = snapshot_cache.config(docs);
+    // A malformed `pykrete.json` quietly fell back to defaults inside
+    // the snapshot cache — surface that to the user so they don't sit
+    // with stale rules and never know why. Drained once per cache key.
+    if let Some(warning) = snapshot_cache.take_pending_warning() {
+        publish_malformed_config_warning(connection, &warning)?;
+    }
     let mode = config
         .check_mode_override()
         .unwrap_or(multiplexer.type_checking_mode);
@@ -1063,6 +1077,36 @@ fn send_diagnostics(
     connection.sender.send(Message::Notification(Notification {
         method: "textDocument/publishDiagnostics".to_string(),
         params: serde_json::to_value(params)?,
+    }))?;
+    Ok(())
+}
+
+/// Push two notifications: a user-visible `window/showMessage` ("we
+/// fell back to defaults") and a `window/logMessage` carrying the
+/// parse-error detail for the LSP output channel.
+fn publish_malformed_config_warning(
+    connection: &Connection,
+    warning: &project::MalformedConfig,
+) -> Result<(), Box<dyn Error + Sync + Send>> {
+    let path_str = warning.path.display().to_string();
+    let show_params = lsp_types::ShowMessageParams {
+        typ: lsp_types::MessageType::WARNING,
+        message: format!("pykrete: malformed pykrete.json at {path_str} — using defaults",),
+    };
+    connection.sender.send(Message::Notification(Notification {
+        method: "window/showMessage".to_string(),
+        params: serde_json::to_value(show_params)?,
+    }))?;
+    let log_params = lsp_types::LogMessageParams {
+        typ: lsp_types::MessageType::WARNING,
+        message: format!(
+            "pykrete: failed to parse pykrete.json at {path_str}: {err}",
+            err = warning.error
+        ),
+    };
+    connection.sender.send(Message::Notification(Notification {
+        method: "window/logMessage".to_string(),
+        params: serde_json::to_value(log_params)?,
     }))?;
     Ok(())
 }
@@ -1451,6 +1495,39 @@ mod tests {
                 assert_eq!(loc.uri, uri);
                 // Should jump to the class declaration name on line 0 at
                 // character 6 ("class " is 6 chars).
+                assert_eq!(loc.range.start.line, 0);
+                assert_eq!(loc.range.start.character, 6);
+            }
+            other => panic!("expected Scalar location, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn handle_definition_resolves_through_a_non_ascii_path() {
+        // A path containing non-ASCII (but valid UTF-8) chars must
+        // survive the path → str → URL → path round-trip without going
+        // through `to_string_lossy`, which would silently corrupt
+        // non-UTF-8 byte paths on Linux.
+        let mut docs: HashMap<Url, String> = HashMap::new();
+        // The single open doc is enough to drive single-file analysis;
+        // we don't need an on-disk snapshot. The lossy-conversion bug
+        // would also surface here when the LSP layer fell back through
+        // single-file mode after a snapshot miss — but the goal of the
+        // assertion is to pin that the non-ASCII URI doesn't break the
+        // request path.
+        let uri = Url::parse("file:///t%C3%A9st.pyk").unwrap(); // /tést.pyk
+        let src = "class Orders(Schema):\n    x: int\n\ndef f(raw: DataFrame[Orders]) -> DataFrame[Orders]:\n    return raw\n";
+        docs.insert(uri.clone(), src.to_string());
+
+        let result = handle_definition(
+            &docs,
+            &mut project::SnapshotCache::new(),
+            def_params_at(&uri, 3, 22),
+        )
+        .expect("response");
+        match result {
+            GotoDefinitionResponse::Scalar(loc) => {
+                assert_eq!(loc.uri, uri);
                 assert_eq!(loc.range.start.line, 0);
                 assert_eq!(loc.range.start.character, 6);
             }

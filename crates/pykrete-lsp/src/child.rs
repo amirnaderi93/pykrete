@@ -168,20 +168,12 @@ pub fn discover(explicit: Option<(String, Vec<String>)>) -> Option<(String, Vec<
     None
 }
 
-/// Whether `program` is an executable findable on `PATH`. Uses a probe
-/// spawn rather than re-implementing `PATH` resolution.
+/// Whether `program` is an executable findable on `PATH`. Routed through
+/// the `which` crate (single PATH scan, zero spawns) so discovery can't
+/// block LSP startup on a candidate whose `--version` doesn't exit, and
+/// so we don't run arbitrary binaries that happen to share the name.
 fn is_on_path(program: &str) -> bool {
-    Command::new(program)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map(|mut c| {
-            let _ = c.wait();
-            true
-        })
-        .unwrap_or(false)
+    which::which(program).is_ok()
 }
 
 #[cfg(test)]
@@ -255,5 +247,13 @@ mod tests {
         // No spec → PATH discovery. The result depends on the host, so
         // we only assert the call doesn't panic.
         let _ = discover(None);
+    }
+
+    #[test]
+    fn is_on_path_returns_false_for_a_nonexistent_program() {
+        // No host has this name; the `which` scan must come back empty
+        // without spawning anything. Pre-`which` we couldn't pin this:
+        // the old probe path would still spawn (and quietly fail).
+        assert!(!is_on_path("pykrete-definitely-nonexistent-zzz-xyq"));
     }
 }

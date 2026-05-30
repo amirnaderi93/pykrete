@@ -105,6 +105,10 @@ fn check_chained_field_access<'a>(
                         diagnostics,
                     );
                 }
+                // The outer match arm already pinned `expr` to
+                // `Attribute | Subscript` — the inner re-match cannot see
+                // any other variant. A new `Expr::Foo` would have to add
+                // itself to BOTH matches before reaching here.
                 _ => unreachable!(),
             }
         }
