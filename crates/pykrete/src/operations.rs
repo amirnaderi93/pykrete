@@ -3764,12 +3764,13 @@ fn function_result_type(name: &str, first_arg: Option<ColumnType>) -> Option<Col
         },
         // `mean` / `avg` mirrors the groupBy shortcut path: a decimal
         // stays decimal (precision-growth collapsed); any other numeric
-        // input promotes to double. Without this branch the `F.mean(...)`
-        // path would disagree with `groupBy.mean(...)` on decimal input.
+        // input promotes to double. Non-numeric input (string, bool,
+        // date, binary) yields `None` on both surfaces — Spark rejects
+        // such an average at runtime, so neither path pins a type.
         "avg" | "mean" => match first_arg.as_ref().map(ColumnType::base) {
             Some(ColumnType::Decimal { .. }) => Some(ColumnType::DEFAULT_DECIMAL),
-            Some(_) => Some(Double),
-            None => None,
+            Some(ColumnType::Byte | ColumnType::Short | Int | Long | Double) => Some(Double),
+            _ => None,
         },
         // Collection constructors — wrap the input as the element type.
         "collect_list" | "collect_set" | "array" | "array_repeat" | "sequence" => {
@@ -4411,7 +4412,10 @@ fn report_expr_type_errors<'a>(
             // can't pin the result, but never warns either). Restricted
             // to string literals so the type-constructor form
             // (`.cast(IntegerType())`) and any computed expression stay
-            // permissive.
+            // permissive. Targets that are real Spark types pykrete
+            // hasn't modeled yet (`varchar(n)`, `timestamp_ntz`, …)
+            // fall through silently via `is_unmodeled_spark_type` — a
+            // false D0011 on legitimate code would be a v0.1.27 regression.
             if let Some(attr) = call.func.as_attribute_expr()
                 && attr.attr.id.as_str() == "cast"
                 && let Some(lit) = call
@@ -4421,7 +4425,9 @@ fn report_expr_type_errors<'a>(
                     .and_then(Expr::as_string_literal_expr)
             {
                 let target = lit.value.to_str();
-                if ColumnType::from_spark_name(target).is_none() {
+                if ColumnType::from_spark_name(target).is_none()
+                    && !ColumnType::is_unmodeled_spark_type(target)
+                {
                     diagnostics.push(Diagnostic::at_range(
                         Severity::Error,
                         "D0011",
@@ -5825,6 +5831,51 @@ mod tests {
                 aggregate_output_type("mean", Some(&input)),
                 Some(ColumnType::Double),
                 "mean({input}) should promote to Double",
+            );
+        }
+    }
+
+    /// Multi-lens-review finding: previously the `F.mean(...)` /
+    /// `F.avg(...)` path returned `Some(Double)` for non-numeric input
+    /// (string, bool, date, binary) via a permissive `Some(_)` arm,
+    /// while the `groupBy.mean(col)` shortcut returned `None`. Both
+    /// surfaces must now return `None` — Spark rejects the aggregate
+    /// at runtime, so pinning a (wrong) Double from the function form
+    /// was an actively misleading signal. `sum`/`min`/`max` already
+    /// agreed on `None`; this assertion locks all five against future
+    /// drift.
+    #[test]
+    fn aggregates_on_non_numeric_input_agree_between_paths() {
+        for method in ["sum", "mean", "avg", "min", "max"] {
+            for input in [
+                ColumnType::String,
+                ColumnType::Bool,
+                ColumnType::Date,
+                ColumnType::Binary,
+            ] {
+                assert_agg_paths_agree(method, input.clone());
+            }
+        }
+        for input in [
+            ColumnType::String,
+            ColumnType::Bool,
+            ColumnType::Date,
+            ColumnType::Binary,
+        ] {
+            assert_eq!(
+                function_result_type("mean", Some(input.clone())),
+                None,
+                "F.mean({input}) must return None — Spark rejects this aggregate",
+            );
+            assert_eq!(
+                function_result_type("avg", Some(input.clone())),
+                None,
+                "F.avg({input}) must return None — Spark rejects this aggregate",
+            );
+            assert_eq!(
+                function_result_type("sum", Some(input.clone())),
+                None,
+                "F.sum({input}) must return None — Spark rejects this aggregate",
             );
         }
     }

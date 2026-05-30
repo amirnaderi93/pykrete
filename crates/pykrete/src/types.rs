@@ -87,6 +87,30 @@ impl ColumnType {
         parse_type_expr(name, &atomic_lenient)
     }
 
+    /// True when `name` is a legitimate Spark type that pykrete doesn't
+    /// model yet — `varchar(n)`, `char(n)`, `interval`, `timestamp_ntz`,
+    /// `void`, `null`. The cast-typo check uses this to avoid false-
+    /// rejecting code that worked before v0.1.28: a `.cast("varchar(100)")`
+    /// or `.cast("timestamp_ntz")` is real Spark, just not something
+    /// pykrete pins a type on. Returning `true` means "skip the D0011
+    /// emission, fall through silently."
+    ///
+    /// See `pyspark.sql.types` for the canonical list. Modeling these
+    /// (VARCHAR/CHAR width, IntervalType, TimestampNTZType) is tracked
+    /// for v1.1 polish — until then, recognizing-but-not-pinning is the
+    /// honest stance.
+    pub fn is_unmodeled_spark_type(name: &str) -> bool {
+        let trimmed = name.trim();
+        let base = match trimmed.find('(') {
+            Some(i) => trimmed[..i].trim(),
+            None => trimmed,
+        };
+        matches!(
+            base.to_ascii_lowercase().as_str(),
+            "varchar" | "char" | "interval" | "timestamp_ntz" | "void" | "null"
+        ) || is_unmodeled_interval_compound(trimmed)
+    }
+
     /// Map a Spark type-object constructor name (`IntegerType`,
     /// `ArrayType`, …) to a [`ColumnType`]. Element types of an
     /// `ArrayType(…)` / `MapType(…)` aren't recovered here (the name
@@ -190,7 +214,11 @@ fn parse_type<'s, F: Fn(&str) -> Option<ColumnType>>(
     let word = &s[..end];
     let after = s[end..].trim_start();
     match word.to_ascii_lowercase().as_str() {
-        "decimal" => {
+        // `numeric` and `dec` are Spark SQL aliases for `decimal` —
+        // same parameterized form, same default. Route them through
+        // the decimal arm so casts like `.cast("numeric(18, 2)")` and
+        // `.cast("dec")` resolve identically.
+        "decimal" | "numeric" | "dec" => {
             let Some(inner) = after.strip_prefix('(') else {
                 return Some((ColumnType::DEFAULT_DECIMAL, after));
             };
@@ -284,6 +312,35 @@ fn parse_struct_fields<'s, F: Fn(&str) -> Option<ColumnType>>(
             rest = after.trim_start();
         }
     }
+}
+
+/// Spark's `INTERVAL` types come in compound forms like
+/// `interval year to month` and `interval day to second`. They aren't
+/// real `varchar(n)`-style parenthesized constructors, so the simple
+/// `find('(')` split in [`ColumnType::is_unmodeled_spark_type`] doesn't
+/// catch them. This helper recognises the small fixed set Spark accepts
+/// — matching the SQL standard surface — and returns `true` for any of
+/// them. Case-insensitive; whitespace inside is collapsed to a single
+/// space before comparison.
+fn is_unmodeled_interval_compound(name: &str) -> bool {
+    let lowered = name.to_ascii_lowercase();
+    let normalized: String = lowered.split_whitespace().collect::<Vec<_>>().join(" ");
+    matches!(
+        normalized.as_str(),
+        "interval year"
+            | "interval year to month"
+            | "interval month"
+            | "interval day"
+            | "interval day to hour"
+            | "interval day to minute"
+            | "interval day to second"
+            | "interval hour"
+            | "interval hour to minute"
+            | "interval hour to second"
+            | "interval minute"
+            | "interval minute to second"
+            | "interval second"
+    )
 }
 
 /// The strict pykrete atomic vocabulary — case-sensitive lowercase.
@@ -615,5 +672,70 @@ mod tests {
         assert_eq!(format!("{}", ColumnType::Byte), "Byte");
         assert_eq!(format!("{}", ColumnType::Short), "Short");
         assert_eq!(format!("{}", ColumnType::Binary), "Binary");
+    }
+
+    #[test]
+    fn numeric_and_dec_are_aliases_for_decimal_on_every_surface() {
+        for name in ["numeric", "dec", "NUMERIC", "Dec"] {
+            assert_eq!(
+                ColumnType::from_name(name),
+                Some(ColumnType::DEFAULT_DECIMAL),
+                "{name} should resolve to default decimal",
+            );
+            assert_eq!(
+                ColumnType::from_spark_name(name),
+                Some(ColumnType::DEFAULT_DECIMAL),
+                "{name} should resolve to default decimal on the cast path too",
+            );
+        }
+        assert_eq!(
+            ColumnType::from_spark_name("numeric(18, 2)"),
+            Some(ColumnType::Decimal {
+                precision: 18,
+                scale: 2,
+            })
+        );
+        assert_eq!(
+            ColumnType::from_spark_name("dec(10)"),
+            Some(ColumnType::Decimal {
+                precision: 10,
+                scale: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn is_unmodeled_spark_type_recognises_real_but_unpinned_targets() {
+        // Trust-critical: these are legitimate Spark types, just not
+        // ones pykrete pins a type on yet. The cast-typo emission has to
+        // skip them to avoid regressing v0.1.27 behavior.
+        for name in [
+            "varchar(100)",
+            "varchar(1)",
+            "char(10)",
+            "char(1)",
+            "interval",
+            "INTERVAL",
+            "interval year",
+            "interval year to month",
+            "interval day to second",
+            "interval hour to minute",
+            "timestamp_ntz",
+            "TIMESTAMP_NTZ",
+            "void",
+            "null",
+        ] {
+            assert!(
+                ColumnType::is_unmodeled_spark_type(name),
+                "{name} should be recognised as a real-but-unmodeled Spark type",
+            );
+        }
+        // Negative pairs: typos must not slip through the allowlist.
+        for name in ["decimial(18,2)", "intger", "varhar(10)", "intervals"] {
+            assert!(
+                !ColumnType::is_unmodeled_spark_type(name),
+                "{name} should NOT be on the unmodeled allowlist",
+            );
+        }
     }
 }

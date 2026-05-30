@@ -36,7 +36,13 @@ The `mean(decimal)` and `avg(decimal)` rule now applies to
 both the `groupBy.mean(col)` shortcut and `F.mean(col)` inside
 `.agg(...)` — previously the function-form path short-circuited
 to `Double` regardless of input, while the shortcut path
-correctly kept the decimal. Both surfaces now agree.
+correctly kept the decimal. Both surfaces now agree on
+**every** input: `mean`/`avg` of a numeric input promotes to
+`double` (decimal stays decimal), and `mean`/`avg`/`sum` of a
+non-numeric column (string, bool, date, binary) pins no result
+type on either path — Spark rejects those aggregates at
+runtime, so the previous "function form pins a wrong Double"
+behaviour was an actively misleading signal.
 
 `decimal(p)` (single-arg form) is accepted with scale defaulted
 to 0, matching Spark SQL's `DECIMAL(p)` shorthand. Precision is
@@ -48,7 +54,16 @@ Spark type (e.g. `decimial(18,2)`) is now flagged with
 `D0011` — previously the typo was silently swallowed (no type
 pinned, no warning either). The type-constructor form
 (`.cast(IntegerType())`) and any computed expression stay
-permissive.
+permissive. The typo check skips known-Spark-but-unmodeled
+types (`varchar(n)`, `char(n)`, `interval` and its compound
+forms, `timestamp_ntz`, `void`, `null`) so legitimate Spark
+casts that pykrete simply doesn't pin a type on yet aren't
+false-rejected.
+
+`numeric` and `dec` are accepted as aliases for `decimal` end-
+to-end — Spark SQL treats them as synonyms, so `amount:
+numeric(18, 2)` in a Schema and `.cast("dec(10)")` in a chain
+both resolve identically to the corresponding `decimal`.
 
 `schemas.md` updated to list the real v0.1.28 atomic set —
 `float` and `bytes` (which were never recognised) are out;

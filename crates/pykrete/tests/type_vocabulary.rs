@@ -266,3 +266,122 @@ def f(o: DataFrame[Order]) -> DataFrame:
 ";
     assert_no_diagnostics(&check(src));
 }
+
+#[test]
+fn cast_to_unmodeled_spark_types_does_not_fire_d0011() {
+    // Round-3 multi-lens-review fix: the new D0011 cast-typo emission
+    // must not false-reject legitimate Spark types that pykrete simply
+    // hasn't modeled yet. Code that worked in v0.1.27 (no D0011 because
+    // the cast was silently swallowed) must still pass in v0.1.28 — the
+    // allowlist threads that needle.
+    let src = "\
+class Sale(Schema):
+    region: string
+    amount: int
+
+def f(sales: DataFrame[Sale]) -> DataFrame:
+    return sales.select(
+        col(\"region\").cast(\"varchar(100)\").alias(\"v\"),
+        col(\"region\").cast(\"char(10)\").alias(\"c\"),
+        col(\"amount\").cast(\"timestamp_ntz\").alias(\"t\"),
+        col(\"amount\").cast(\"interval\").alias(\"i\"),
+        col(\"amount\").cast(\"interval year to month\").alias(\"iym\"),
+        col(\"amount\").cast(\"void\").alias(\"vd\"),
+        col(\"amount\").cast(\"null\").alias(\"nl\"),
+    )
+";
+    assert_does_not_have_code(&check(src), "D0011");
+}
+
+#[test]
+fn cast_to_numeric_and_dec_are_accepted_as_decimal_aliases() {
+    // `numeric` and `dec` are Spark SQL aliases for `decimal` — same
+    // parameterized form. v0.1.28 routes them through the decimal arm so
+    // a typo-checker doesn't false-reject perfectly valid SQL.
+    let src = "\
+class Sale(Schema):
+    amount: int
+
+def f(sales: DataFrame[Sale]) -> DataFrame:
+    return sales.select(
+        col(\"amount\").cast(\"numeric(18, 2)\").alias(\"n\"),
+        col(\"amount\").cast(\"dec(10, 0)\").alias(\"d\"),
+        col(\"amount\").cast(\"numeric\").alias(\"nb\"),
+        col(\"amount\").cast(\"dec\").alias(\"db\"),
+    )
+";
+    assert_does_not_have_code(&check(src), "D0011");
+}
+
+#[test]
+fn schema_field_accepts_numeric_and_dec_aliases() {
+    // Same alias treatment in schema field annotations — `amount:
+    // numeric(18, 2)` is a legal Spark surface form.
+    let src = "\
+class Sale(Schema):
+    region: string
+    amount: numeric(18, 2)
+    qty: dec(10)
+
+def f(sales: DataFrame[Sale]) -> DataFrame:
+    return sales.select(col(\"amount\"), col(\"qty\"))
+";
+    assert_no_diagnostics(&check(src));
+}
+
+#[test]
+fn cast_typo_still_fires_d0011_even_with_allowlist() {
+    // Allowlist negative pair — the bonafide typos `decimial` (for
+    // decimal) and `intger` (for int) match neither the recognized set
+    // nor the unmodeled-Spark allowlist, so D0011 must still fire. Pins
+    // the allowlist hasn't accidentally over-broadened.
+    for typo in ["decimial(18,2)", "intger"] {
+        let src = format!(
+            "class Sale(Schema):
+    amount: int
+
+def f(s: DataFrame[Sale]) -> DataFrame:
+    return s.select(col(\"amount\").cast(\"{typo}\").alias(\"a\"))
+"
+        );
+        assert_has_code(&check(&src), "D0011");
+    }
+}
+
+#[test]
+fn agg_mean_of_string_does_not_pin_a_double_on_either_path() {
+    // Multi-lens-review finding (Important #1): the `F.mean(string_col)`
+    // path used to short-circuit to `Double`, while
+    // `groupBy.mean(string_col)` returned None. The same input would type
+    // differently depending on which surface the user used. With both
+    // paths now returning None, declaring the output as `string`
+    // (Spark would reject the aggregate at runtime, but pykrete is
+    // permissive on Unknown) leaves the pipeline clean — and crucially,
+    // there's no false D0080 from a wrongly-pinned Double.
+    let shortcut = "\
+class Raw(Schema):
+    city: string
+    label: string
+
+class Out(Schema):
+    city: string
+    label: string
+
+def f(raw: DataFrame[Raw]) -> DataFrame[Out]:
+    return raw.groupBy(\"city\").mean(\"label\").select(col(\"city\"), col(\"mean(label)\").alias(\"label\"))
+";
+    let agg = "\
+class Raw(Schema):
+    city: string
+    label: string
+
+class Out(Schema):
+    city: string
+    label: string
+
+def f(raw: DataFrame[Raw]) -> DataFrame[Out]:
+    return raw.groupBy(\"city\").agg(F.mean(col(\"label\")).alias(\"label\"))
+";
+    assert_does_not_have_code(&check(shortcut), "D0080");
+    assert_does_not_have_code(&check(agg), "D0080");
+}

@@ -178,12 +178,13 @@ fn resolve_annotation_type(
                 .map(|sc| schema_as_struct(sc, schemas, depth))
         }
         // `decimal(18, 2)` — the parameterized atomic. The callee must
-        // be the bare name `decimal`; the args must be integer literals
-        // fitting Spark's caps (`1..=38` for precision, `scale <= p`).
-        // `decimal(p)` defaults scale to 0, mirroring Spark SQL.
+        // be the bare name `decimal` (or its Spark aliases `numeric` /
+        // `dec`); the args must be integer literals fitting Spark's caps
+        // (`1..=38` for precision, `scale <= p`). `decimal(p)` defaults
+        // scale to 0, mirroring Spark SQL.
         Expr::Call(call) => {
             let callee = call.func.as_name_expr()?.id.as_str();
-            if callee != "decimal" {
+            if !matches!(callee, "decimal" | "numeric" | "dec") {
                 return None;
             }
             let args = call.arguments.args.as_ref();
