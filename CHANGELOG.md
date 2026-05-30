@@ -14,16 +14,21 @@ independent hot-path wins, no user-visible behaviour change.
 **LSP snapshot cache.** Every cross-file LSP request — diagnostics on
 `didChange`, hover, definition, completion — previously walked the
 project root and re-read every closed `.pyk` file from disk. Now a
-tiered cache keyed on `(project_root, pyproject_anchor, pykrete.json
-mtime)` holds closed-file bodies as `Arc<String>`: a HOT tier reads
-open editor buffers live, WARM stat-checks recently-touched closed
-files at most once a second, and COLD does a full `read_dir` walk only
-on first request, every 30 s, or on project-key drift /
+tiered cache keyed on `(project_root, pykrete.json mtime)` holds
+closed-file bodies as `Arc<String>`: a HOT tier reads open editor
+buffers live, WARM stat-checks recently-touched closed files at most
+once a second, and COLD does a full `read_dir` walk only on first
+request, every 30 s, or on project-key drift /
 `didChangeWatchedFiles` / didOpen for a path outside the tracked
-union. A 20 MB body cap falls back to fingerprint-only mode for very
-large projects. A new `pykrete/refreshSnapshot` custom LSP command
-drops every tier — the escape hatch for the 30 s cold-walk staleness
-window when no file watcher is wired.
+union. A 20 MB body cap engages a two-pass cold walk: pass 1
+enumerates every `.pyk` path with no body I/O, pass 2 reads bodies
+into `Arc`s until the cap is reached and then leaves remaining entries
+with `body = None`. Snapshot assembly does an on-demand
+`read_to_string` for any `None` entry, so the tracked union stays
+complete on big codebases and `didOpen` outside the union doesn't
+thrash the cold walk. A new `pykrete/refreshSnapshot` custom LSP
+command drops every tier — the escape hatch for the 30 s cold-walk
+staleness window when no file watcher is wired.
 
 **`Schema::fields` memoization.** The schema-field inheritance walk +
 override merge ran on every diagnostic, hover, completion, and symbol

@@ -639,3 +639,39 @@ dynamic registration); these are tracking items for the v1.0.0 ship.
     alone. Cost: medium — the parsed AST borrows from the body string,
     so the cache has to own both, and `ProjectContext`'s lifetime story
     has to widen to accept owned arenas. Mirrored from the PR #61 body.
+
+11. **On-demand read cost on >20 MB codebases.** The round-2 two-pass
+    cold walk leaves `body = None` for paths the 20 MB cap evicts;
+    snapshot assembly then does a synchronous `fs::read_to_string` for
+    each `None` at request time. On codebases whose total `.pyk` body
+    bytes exceed the cap, every hover / definition / completion that
+    touches an uncached file pays disk I/O on the LSP loop thread.
+    Mitigation candidates: (a) make the cap configurable via
+    `pykrete.json`, (b) move the on-demand read to a background-prefetch
+    pool with a future the loop awaits, (c) keep a small LRU sub-cache
+    of recently on-demand-read bodies so the second hover on the same
+    file is hot. Cost: small for (a), medium for (b)/(c) — needs an
+    async pool wired into the snapshot composition path.
+
+12. **`client/registerCapability` timing vs LSP spec.** The
+    `workspace/didChangeWatchedFiles` dynamic registration is sent
+    from `initialize_finish` today. The LSP spec is explicit that
+    capability registration must follow the client's `initialized`
+    notification (distinct from the server's `initialize` response).
+    Clients that strictly enforce ordering may drop or error on the
+    early registration. Verify the timing against the spec; if
+    incorrect, move the registration call to the `initialized`
+    notification handler. Cost: trivial — relocating one call site,
+    plus a regression test that asserts ordering.
+
+13. **File-watcher glob excludes `pykrete.json`.** The watcher glob
+    registered in v0.1.30 I3 is `**/*.pyk`, but `pykrete.json` mtime
+    is part of the `ProjectKey` cache key — an external edit to
+    `pykrete.json` (e.g. `git checkout`, manual edit, formatter) won't
+    fire `workspace/didChangeWatchedFiles`, so the cache holds stale
+    config until the 30 s cold-walk window elapses or
+    `pykrete/refreshSnapshot` is invoked. Fix: extend the watcher to
+    `**/{*.pyk,pykrete.json}` (or register a second pattern); or
+    document the gap and require LSP restart / refresh command on
+    `pykrete.json` edits. Cost: trivial — one extra glob entry in the
+    `DidChangeWatchedFilesRegistrationOptions`.

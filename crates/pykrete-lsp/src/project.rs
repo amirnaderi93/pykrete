@@ -62,10 +62,12 @@ const COLD_WALK_INTERVAL: Duration = Duration::from_secs(30);
 /// An on-disk file with mtime within this window is considered "warm" —
 /// stat-checked every WARM_SWEEP_INTERVAL until it cools off.
 const WARM_AGE: Duration = Duration::from_secs(5 * 60);
-/// Hard ceiling on cached body bytes. Past this the cache drops its
-/// stored bodies and falls back to fingerprint-only mode (it still keeps
-/// the path list and `pykrete.json` fingerprint, just re-reads bodies on
-/// every snapshot).
+/// Hard ceiling on cached body bytes. The cold walk runs in two
+/// passes: pass 1 enumerates every `.pyk` path with no body I/O, pass
+/// 2 reads bodies into `Arc`s until the cumulative size crosses this
+/// cap, then stops reading. Remaining entries still land in the
+/// tracked union with `body = None`; snapshot assembly re-reads those
+/// from disk on demand.
 const MAX_BODY_BYTES: usize = 20 * 1024 * 1024;
 
 /// Fingerprint for the project root + pykrete.json. Any drift in this
