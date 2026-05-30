@@ -172,30 +172,41 @@ impl Diagnostic {
     }
 }
 
+/// The canonical list of `(code, rule_name)` pairs — the source of truth
+/// for every diagnostic pykrete can emit. `rule_name` looks up against
+/// this table; the diagnostic-catalog snapshot test iterates it to assert
+/// that every code has a fixture and a snapshot. Adding a new code without
+/// updating the catalog breaks the test, forcing the discipline.
+pub const DIAGNOSTIC_CATALOG: &[(&str, &str)] = &[
+    ("D0001", "parseError"),
+    ("D0010", "unknownColumnType"),
+    ("D0011", "invalidColumnType"),
+    ("D0020", "unknownSchema"),
+    ("D0021", "invalidSchemaExpression"),
+    ("D0030", "unknownColumn"),
+    ("D0040", "unionSchemaMismatch"),
+    ("D0050", "returnColumnsMismatch"),
+    ("D0051", "argumentColumnsMismatch"),
+    ("D0060", "missingJoinKey"),
+    ("D0070", "unresolvedImport"),
+    ("D0071", "unexportedName"),
+    ("D0072", "duplicateSchemaName"),
+    ("D0080", "returnTypeMismatch"),
+    ("D0081", "nonNumericArithmetic"),
+    ("D0082", "crossTypeComparison"),
+    ("D0083", "nullabilityMismatch"),
+];
+
 /// The human-readable name for a diagnostic code — what the CLI and
 /// editor display, and what `pykrete.json`'s `rules` block keys on. The
 /// `D00xx` code stays the stable internal identifier (and the form the
 /// docs index by); this is the friendly surface. An unrecognized code
 /// (shouldn't happen) is returned unchanged.
 pub fn rule_name(code: &str) -> &str {
-    match code {
-        "D0001" => "parseError",
-        "D0010" => "unknownColumnType",
-        "D0011" => "invalidColumnType",
-        "D0020" => "unknownSchema",
-        "D0021" => "invalidSchemaExpression",
-        "D0030" => "unknownColumn",
-        "D0040" => "unionSchemaMismatch",
-        "D0050" => "returnColumnsMismatch",
-        "D0051" => "argumentColumnsMismatch",
-        "D0060" => "missingJoinKey",
-        "D0070" => "unresolvedImport",
-        "D0071" => "unexportedName",
-        "D0072" => "duplicateSchemaName",
-        "D0080" => "returnTypeMismatch",
-        "D0081" => "nonNumericArithmetic",
-        "D0082" => "crossTypeComparison",
-        "D0083" => "nullabilityMismatch",
-        other => other,
+    for (c, name) in DIAGNOSTIC_CATALOG {
+        if *c == code {
+            return name;
+        }
     }
+    code
 }

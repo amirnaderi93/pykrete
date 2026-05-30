@@ -1,0 +1,5 @@
+---
+source: crates/pykrete/tests/diagnostic_catalog.rs
+expression: captured
+---
+d0071_unexported_name/pipeline.pyk:1:21-1:28 error D0071 unexportedName: Name 'Phantom' is not exported by module 'schemas'.

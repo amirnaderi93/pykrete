@@ -1,0 +1,5 @@
+---
+source: crates/pykrete/tests/diagnostic_catalog.rs
+expression: captured
+---
+d0082_cross_type_comparison.pyk:7:21-7:50 warning D0082 crossTypeComparison: Comparison between unrelated types String and Int. Spark coerces them; cast explicitly if intended.

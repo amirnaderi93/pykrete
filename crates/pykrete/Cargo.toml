@@ -25,3 +25,10 @@ sqlparser = { version = "0.62", features = ["visitor"] }
 # `pykrete.json` project-config parsing.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[dev-dependencies]
+# Snapshot testing for the per-D-code diagnostic catalog. Snapshots live
+# under `tests/snapshots/` and double as the canonical "what pykrete says
+# when D00xx fires" reference — a wording change fails the test until
+# explicitly accepted with `cargo insta accept`.
+insta = "1"

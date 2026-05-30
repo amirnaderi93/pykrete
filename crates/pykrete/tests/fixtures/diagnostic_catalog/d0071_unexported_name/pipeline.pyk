@@ -1,0 +1,5 @@
+from schemas import Phantom
+
+
+def f(d: DataFrame[Phantom]) -> DataFrame:
+    return d

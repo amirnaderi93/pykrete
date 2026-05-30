@@ -15,7 +15,7 @@ Once a piece of surface ships in a release, the project commits to backward-comp
 - **The `DataFrame[Schema]` annotation surface.** Variable annotations, function parameter and return types, `.cast(DataFrame[Schema])` re-anchors.
 - **Diagnostic codes.** `D0030`, `D0040`, `D0050`, `D0051`, `D0060`, `D0080`, `D0081`, `D0082`. The numeric code and the rule name are part of the contract; the diagnostic message text is not.
 - **`pykrete.json` keys.** `typeCheckingMode`, `exclude`, `rules`. New keys may be added; existing ones won't change shape.
-- **The CLI's machine-readable output** (`pykrete check --format json`) and exit codes.
+- **The CLI's machine-readable output** (`pykrete check --format json`) and exit codes. Shipped in [v0.1.33](https://github.com/amirnaderi93/pykrete/releases/tag/v0.1.33); the JSON schema becomes a stability contract at v1.0.0 (breaking changes after that point require a SemVer major bump).
 
 What may still change without notice:
 

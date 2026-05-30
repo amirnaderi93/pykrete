@@ -1,0 +1,5 @@
+---
+source: crates/pykrete/tests/diagnostic_catalog.rs
+expression: captured
+---
+d0051_argument_columns_mismatch.pyk:15:20-15:21 error D0051 argumentColumnsMismatch: Argument schema mismatch for parameter 'd': expected DataFrame[Sale], got schema 'Other'. Missing: [amount, region]; extra: [foo].

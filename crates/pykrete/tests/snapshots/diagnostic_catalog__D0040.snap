@@ -1,0 +1,5 @@
+---
+source: crates/pykrete/tests/diagnostic_catalog.rs
+expression: captured
+---
+d0040_union_schema_mismatch.pyk:12:26-12:27 error D0040 unionSchemaMismatch: unionByName between schema 'A' and schema 'B': schemas differ. Missing in schema 'B': [y]; missing in schema 'A': [z].

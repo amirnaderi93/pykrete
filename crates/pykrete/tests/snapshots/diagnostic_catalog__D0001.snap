@@ -1,0 +1,5 @@
+---
+source: crates/pykrete/tests/diagnostic_catalog.rs
+expression: captured
+---
+d0001_parse_error.pyk:2:1-2:1 error D0001 parseError: unexpected EOF while parsing

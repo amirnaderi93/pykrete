@@ -1,0 +1,5 @@
+---
+source: crates/pykrete/tests/diagnostic_catalog.rs
+expression: captured
+---
+d0030_unknown_column.pyk:7:25-7:33 error D0030 unknownColumn: Column 'regoin' does not exist on schema 'Sale'. Did you mean 'region'?  suggestion: region

@@ -1,0 +1,5 @@
+---
+source: crates/pykrete/tests/diagnostic_catalog.rs
+expression: captured
+---
+d0070_unresolved_import.pyk:1:37-1:38 error D0070 unresolvedImport: Cannot resolve module path '......way_too_many_dots' — too many leading dots.

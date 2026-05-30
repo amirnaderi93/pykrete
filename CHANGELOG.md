@@ -6,6 +6,71 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.33] - 2026-05-31
+
+Leg 8 of 10 in the v1.0.0 hardening sprint. Two items, both surfaced by
+the pre-launch audit: deliver the long-promised JSON CLI output, and
+add a per-D-code snapshot test that doubles as the canonical "what
+pykrete says when D00xx fires" reference.
+
+**`pykrete check --format json`.** Production-readiness has been
+promising machine-readable output since v0.1.15; this release delivers
+it. New `--format <text|json>` flag on `pykrete check` — default
+`text` is byte-identical to today's CLI behaviour, `json` emits one
+object on stdout with the shape:
+
+```json
+{
+  "version": "0.1.33",
+  "diagnostics": [
+    {
+      "file": "path/to/file.pyk",
+      "line": 12, "column": 8,
+      "endLine": 12, "endColumn": 14,
+      "code": "D0030",
+      "ruleName": "unknownColumn",
+      "severity": "error",
+      "message": "Column 'regoin' does not exist on schema 'Sale'. Did you mean 'region'?",
+      "relatedInformation": []
+    }
+  ],
+  "summary": {
+    "filesChecked": 12,
+    "errorCount": 1,
+    "warningCount": 0
+  }
+}
+```
+
+Positions are 1-indexed (matching the existing `text` output);
+pykrete-lsp re-indexes to 0-indexed on the wire per the LSP spec, so
+tools consuming the CLI's JSON directly should not. Exit codes are
+unchanged: `0` when no diagnostics, `1` when any diagnostic fires
+(error or warning). The schema becomes a **stability contract at
+v1.0.0** — any breaking change post-v1.0 requires a SemVer major bump.
+Until then it's a `0.x` API and may still shift if a real adopter
+surfaces a fork in the design.
+
+**Diagnostic catalog snapshot test.** New
+`crates/pykrete/tests/diagnostic_catalog.rs` builds a minimal `.pyk`
+fixture per D-code (17 codes total), runs the checker, and snapshots
+the rendered diagnostic with `insta`. A coverage assertion at the top
+iterates `pykrete::diagnostics::DIAGNOSTIC_CATALOG` and fails if any
+code lacks a fixture — adding a new D-code now forces an accompanying
+snapshot. Wording changes fail the snapshot test until explicitly
+accepted with `cargo insta accept`, locking in the message text as a
+reviewable artifact rather than something that drifts silently. The
+`rule_name` lookup itself moved from an inline `match` to iterating
+`DIAGNOSTIC_CATALOG`, so the catalog list is the single source of
+truth for both the runtime mapping and the test.
+
+**`DIAGNOSTIC_CATALOG` is now a public const.** Exposed from
+`pykrete::diagnostics` so the catalog test (and future tooling) can
+iterate every known code without going through the private `match`.
+Public API surface: a `&[(&str, &str)]` of `(code, rule_name)` pairs.
+Adding a code to this list is what makes the snapshot test require a
+fixture.
+
 ## [0.1.32] - 2026-05-31
 
 Architecture-cleanups pass — leg 7 of the v1.0.0 hardening sprint.
