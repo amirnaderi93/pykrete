@@ -21,14 +21,17 @@ class Sale(Schema):
 |---|---|
 | `int` | `int` |
 | `long` | `bigint` |
-| `string` | `string` |
+| `short` | `smallint` |
+| `byte` | `tinyint` |
 | `double` | `double` |
-| `float` | `float` |
+| `decimal(p, s)` | `decimal(p, s)` |
+| `string` | `string` |
+| `binary` | `binary` |
 | `bool` | `boolean` |
 | `date` | `date` |
 | `timestamp` | `timestamp` |
-| `decimal` | `decimal(p, s)` |
-| `bytes` | `binary` |
+
+`decimal` accepts an optional `(precision, scale)`: write `decimal(18, 2)` for money, `decimal(38, 18)` for high precision, `decimal(p)` for a single-arg form (scale defaults to 0, matching Spark SQL), or `decimal` on its own (Spark's default `decimal(10, 0)`). Precision must fit `1..=38` (Spark's cap) and scale must not exceed precision; either violation fires `D0011`.
 
 The pykrete name is what you write in `.pyk`; the Spark column is the type in the actual dataframe. Names are case-sensitive.
 

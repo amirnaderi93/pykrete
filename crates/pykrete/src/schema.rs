@@ -5,10 +5,10 @@
 //! (`name: type_expression`). Methods, docstrings, plain assignments without
 //! annotations, and nested classes are ignored.
 
-use ruff_python_ast::Expr;
+use ruff_python_ast::{Expr, Number};
 use ruff_text_size::{Ranged, TextRange};
 
-use crate::types::{COLUMN_TYPE_NAMES, ColumnType, StructField};
+use crate::types::{COLUMN_TYPE_NAMES, ColumnType, StructField, validate_decimal_args};
 use crate::walk::DiscoveredClass;
 
 /// Recursion ceiling for resolving a (possibly self-referential) schema
@@ -92,6 +92,11 @@ impl<'ast> SchemaField<'ast> {
                 Some(ct) => FieldResolution::Resolved(ct),
                 None => FieldResolution::NotABareName,
             },
+            // `decimal(p, s)` — the one parameterized atomic.
+            Expr::Call(_) => match resolve_annotation_type(self.annotation, schemas, 0) {
+                Some(ct) => FieldResolution::Resolved(ct),
+                None => FieldResolution::NotABareName,
+            },
             _ => FieldResolution::NotABareName,
         }
     }
@@ -172,6 +177,25 @@ fn resolve_annotation_type(
                 .find(|sc| sc.name() == id)
                 .map(|sc| schema_as_struct(sc, schemas, depth))
         }
+        // `decimal(18, 2)` — the parameterized atomic. The callee must
+        // be the bare name `decimal` (or its Spark aliases `numeric` /
+        // `dec`); the args must be integer literals fitting Spark's caps
+        // (`1..=38` for precision, `scale <= p`). `decimal(p)` defaults
+        // scale to 0, mirroring Spark SQL.
+        Expr::Call(call) => {
+            let callee = call.func.as_name_expr()?.id.as_str();
+            if !matches!(callee, "decimal" | "numeric" | "dec") {
+                return None;
+            }
+            let args = call.arguments.args.as_ref();
+            let (precision_expr, scale) = match args {
+                [precision] => (precision, 0u8),
+                [precision, scale] => (precision, int_literal_u8(scale)?),
+                _ => return None,
+            };
+            let precision = int_literal_u8(precision_expr)?;
+            validate_decimal_args(precision, scale)
+        }
         // `Array[T]` / `Map[K, V]`.
         Expr::Subscript(sub) => {
             let base = sub.value.as_name_expr()?.id.as_str();
@@ -198,6 +222,18 @@ fn resolve_annotation_type(
         }
         _ => None,
     }
+}
+
+/// A bare integer literal as a `u8` — for `decimal(p, s)` precision /
+/// scale args. Rejects negative, non-integer, or out-of-range values.
+fn int_literal_u8(expr: &Expr) -> Option<u8> {
+    let Expr::NumberLiteral(n) = expr else {
+        return None;
+    };
+    let Number::Int(i) = &n.value else {
+        return None;
+    };
+    i.as_u8()
 }
 
 /// Resolve a declared `Schema` class to a [`ColumnType::Struct`] — each

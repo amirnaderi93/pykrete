@@ -496,3 +496,43 @@ collector through `walk_function_def`. Cost: small-to-medium; the
 ordering question (which scope wins on a hover at the boundary?) is the
 real work, not the plumbing. Punted to v1.1 because v1.0 promises
 correctness, not full IDE polish in every nesting depth.
+
+### v0.1.28 type-vocabulary polish (v1.1)
+
+Surfaced by the v0.1.28 multi-lens review; the round-4 fixes closed
+the trust-critical contradictions but five smaller items were
+deferred as v1.1 to keep this PR focused.
+
+1. **Tailored `D0011` message on out-of-range decimal cast.**
+   `.cast("decimal(40, 2)")` currently fires the generic "Cast target
+   '…' is not a recognized Spark type" message. A tailored variant
+   ("precision 40 exceeds Spark's cap of 38" / "scale 25 exceeds
+   precision 18") would be more actionable. Cost: small — branch the
+   diagnostic message in `operations.rs` when the failure shape is
+   "valid keyword, invalid args".
+
+2. **Nullable parity on `min` / `max`.** The `mean(decimal)` /
+   `sum(decimal)` paths agreed on nullability after v0.1.28, but the
+   `min` / `max` paths weren't audited together — verify both `groupBy`
+   shortcut and `agg(F.min(...))` form propagate `Nullable(T)`
+   identically on nullable inputs.
+
+3. **`numeric` / `dec` in completion + did-you-mean.**
+   `COLUMN_TYPE_NAMES` and `COLUMN_TYPE_NAMES_LIST` list `decimal` but
+   not its aliases, so LSP completion inside a `name: "<cursor>"`
+   annotation never suggests them, and "did you mean" doesn't surface
+   them on a near-miss like `dec`. Add them as canonicalised
+   completions (lowercase preferred) and to the did-you-mean candidate
+   pool.
+
+4. **`schemas.md` documenting the aliases.** The v0.1.28 docs update
+   mentions the alias support in the changelog but `schemas.md`'s
+   atomic-types table itself doesn't list `numeric` / `dec` as
+   alternative spellings of `decimal`. Folding that in keeps the
+   docs honest about what's accepted at the schema-annotation
+   surface.
+
+5. **Pre-existing `synthetic_name_pool` flake.** A flaky property
+   test surfaced during v0.1.26 work; the round-4 review picked it
+   up but it's an older issue and out of scope for v0.1.28. Track as
+   a standalone hygiene item, separate from the type-vocab work.

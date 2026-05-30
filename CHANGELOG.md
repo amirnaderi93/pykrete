@@ -6,6 +6,93 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.28]
+
+Spark coverage hardening, part 3 — the last v1.0.0 audit blocker:
+pykrete's type vocabulary now includes Spark's `DecimalType`,
+`ByteType`, `ShortType`, and `BinaryType`.
+
+`decimal(p, s)` is now a first-class atomic. Write `amount:
+decimal(18, 2)` in a Schema, or `col("amount").cast("decimal(18,2)")`
+in a chain, and pykrete tracks the type through downstream column
+references and return-type checks. Production money columns —
+the canonical case from the audit — finally type as decimal
+instead of degrading to Unknown.
+
+`byte`, `short`, and `binary` join the atomic set too. `byte`
+and `short` are full integers under the type-family rules
+(numeric, sum-widens-to-long matching Spark); `binary` is
+opaque (no arithmetic, no string comparison — strict-mode
+operator checks treat it like a collection).
+
+Aggregate widening is honest but simplified. `sum`/`mean` of
+a decimal stays a (bare) decimal in pykrete's model; Spark
+widens precision and scale (`decimal(p+10, s)` for sum,
+`decimal(p+4, s+4)` for mean, both capped at 38), and the
+precision-growth refinement is parked as a v1.1 polish item.
+`sum(byte)` and `sum(short)` widen to `long`, matching Spark.
+
+The `mean(decimal)` and `avg(decimal)` rule now applies to
+both the `groupBy.mean(col)` shortcut and `F.mean(col)` inside
+`.agg(...)` — previously the function-form path short-circuited
+to `Double` regardless of input, while the shortcut path
+correctly kept the decimal. Both surfaces now agree on
+**every** input: `mean`/`avg` of a numeric input promotes to
+`double` (decimal stays decimal), and `mean`/`avg`/`sum` of a
+non-numeric column (string, bool, date, binary) pins no result
+type on either path — Spark rejects those aggregates at
+runtime, so the previous "function form pins a wrong Double"
+behaviour was an actively misleading signal.
+
+`decimal(p)` (single-arg form) is accepted with scale defaulted
+to 0, matching Spark SQL's `DECIMAL(p)` shorthand. Precision is
+validated against Spark's cap (`1..=38`) and scale must not
+exceed precision; violating either fires `D0011`.
+
+`.cast("...")` with a target string that isn't a recognized
+Spark type (e.g. `decimial(18,2)`) is now flagged with
+`D0011` — previously the typo was silently swallowed (no type
+pinned, no warning either). The type-constructor form
+(`.cast(IntegerType())`) and any computed expression stay
+permissive. The typo check skips known-Spark-but-unmodeled
+types (`varchar(n)`, `char(n)`, `interval` and its compound
+forms, `timestamp_ntz`, `void`, `null`) so legitimate Spark
+casts that pykrete simply doesn't pin a type on yet aren't
+false-rejected.
+
+`numeric` and `dec` are accepted as aliases for `decimal` end-
+to-end — Spark SQL treats them as synonyms, so `amount:
+numeric(18, 2)` in a Schema and `.cast("dec(10)")` in a chain
+both resolve identically to the corresponding `decimal`. The
+strict schema-annotation surface keeps its long-standing case-
+sensitivity contract (`Int` is rejected, and the alias forms
+follow the same rule — `Numeric(18, 2)` in a class body fires
+`D0011`); the Spark cast path stays case-insensitive
+(`NUMERIC`, `Dec`, `DECIMAL` all resolve), matching Spark SQL's
+own behaviour on type names.
+
+Decimal bounds validation (`1..=38` precision, `scale <=
+precision`) is now driven by a single shared helper
+(`validate_decimal_args`), so the same rules fire from both the
+cast-string parser and the schema-annotation parser. Previously
+the two paths each carried their own bounds check; the
+extraction protects against drift on future tweaks.
+
+The cast-typo allowlist for unmodeled Spark types now handles
+parenthesised forms more tightly: `varchar(n)` and `char(n)`
+require a positive integer `n`, and bare-only types
+(`interval`, `void`, `null`, `timestamp_ntz`) reject paren
+forms outright — `.cast("interval(5)")` and `.cast("void(0)")`
+now fire `D0011` instead of being silently allowed. The
+compound `INTERVAL <unit> TO <unit>` form is normalised case-
+insensitively and accepts per-unit precision args (`INTERVAL
+DAY(3) TO SECOND(6)`), so real Spark compound-interval casts
+aren't false-rejected.
+
+`schemas.md` updated to list the real v0.1.28 atomic set —
+`float` and `bytes` (which were never recognised) are out;
+`decimal(p, s)`, `byte`, `short`, and `binary` are in.
+
 ## [0.1.27]
 
 Spark coverage hardening, part 2. Three more pre-v1.0.0 audit
