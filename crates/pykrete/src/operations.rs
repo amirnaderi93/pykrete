@@ -45,7 +45,7 @@ use crate::schema::{
     suggest_field_name,
 };
 use crate::temp_views::TempViewRegistry;
-use crate::types::{ColumnType, StructField};
+use crate::types::{COLUMN_TYPE_NAMES, ColumnType, StructField};
 use crate::walk::DiscoveredFunction;
 
 // ---------------------------------------------------------------------------
@@ -1159,7 +1159,7 @@ fn types_compatible(a: &ColumnType, b: &ColumnType) -> bool {
                 | ColumnType::Double
                 | ColumnType::Byte
                 | ColumnType::Short
-                | ColumnType::Decimal(..)
+                | ColumnType::Decimal { .. }
         )
     }
     // An unknown element/key/value type is permissive — like an unknown
@@ -2821,9 +2821,9 @@ fn aggregate_output_type(method: &str, input: Option<&ColumnType>) -> Option<Col
             }
             ColumnType::Double => Some(ColumnType::Double),
             // Spark widens to `decimal(p + 10, s)` (capped at 38); pykrete
-            // collapses that to a bare `Decimal` for v1.0 — the audit
-            // flagged precision-growth modeling as v1.1 polish.
-            ColumnType::Decimal(..) => Some(ColumnType::Decimal(None, None)),
+            // collapses that to Spark's default `decimal(10, 0)` for v1.0
+            // — the audit flagged precision-growth modeling as v1.1 polish.
+            ColumnType::Decimal { .. } => Some(ColumnType::DEFAULT_DECIMAL),
             _ => None,
         },
         "mean" | "avg" => match unwrapped? {
@@ -2834,7 +2834,7 @@ fn aggregate_output_type(method: &str, input: Option<&ColumnType>) -> Option<Col
             | ColumnType::Double => Some(ColumnType::Double),
             // Same simplification as `sum`: Spark widens to
             // `decimal(p + 4, s + 4)` (cap 38); pykrete collapses.
-            ColumnType::Decimal(..) => Some(ColumnType::Decimal(None, None)),
+            ColumnType::Decimal { .. } => Some(ColumnType::DEFAULT_DECIMAL),
             _ => None,
         },
         "max" | "min" => unwrapped.cloned(),
@@ -3715,12 +3715,12 @@ fn function_result_type(name: &str, first_arg: Option<ColumnType>) -> Option<Col
         | "unix_timestamp"
         | "monotonically_increasing_id"
         | "factorial" => return Some(Long),
-        "avg" | "mean" | "stddev" | "stddev_pop" | "stddev_samp" | "variance" | "var_pop"
-        | "var_samp" | "skewness" | "kurtosis" | "corr" | "covar_pop" | "covar_samp"
-        | "percent_rank" | "cume_dist" | "rand" | "randn" | "sqrt" | "exp" | "expm1" | "ln"
-        | "log" | "log2" | "log10" | "log1p" | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
-        | "atan2" | "sinh" | "cosh" | "tanh" | "degrees" | "radians" | "cbrt" | "pow" | "power"
-        | "hypot" | "signum" | "months_between" => return Some(Double),
+        "stddev" | "stddev_pop" | "stddev_samp" | "variance" | "var_pop" | "var_samp"
+        | "skewness" | "kurtosis" | "corr" | "covar_pop" | "covar_samp" | "percent_rank"
+        | "cume_dist" | "rand" | "randn" | "sqrt" | "exp" | "expm1" | "ln" | "log" | "log2"
+        | "log10" | "log1p" | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "atan2"
+        | "sinh" | "cosh" | "tanh" | "degrees" | "radians" | "cbrt" | "pow" | "power" | "hypot"
+        | "signum" | "months_between" => return Some(Double),
         "length" | "char_length" | "character_length" | "ascii" | "instr" | "locate"
         | "levenshtein" | "year" | "month" | "dayofmonth" | "day" | "dayofweek" | "dayofyear"
         | "hour" | "minute" | "second" | "weekofyear" | "quarter" | "datediff" | "row_number"
@@ -3756,11 +3756,20 @@ fn function_result_type(name: &str, first_arg: Option<ColumnType>) -> Option<Col
         // `sum` widens any integral input (byte/short/int/long) to long;
         // a double stays double; a decimal stays decimal (precision-growth
         // intentionally collapsed — see `aggregate_output_type`).
-        "sum" | "sumDistinct" | "sum_distinct" => match first_arg {
+        "sum" | "sumDistinct" | "sum_distinct" => match first_arg.as_ref().map(ColumnType::base) {
             Some(ColumnType::Byte | ColumnType::Short | Int | Long) => Some(Long),
             Some(Double) => Some(Double),
-            Some(ColumnType::Decimal(..)) => Some(ColumnType::Decimal(None, None)),
+            Some(ColumnType::Decimal { .. }) => Some(ColumnType::DEFAULT_DECIMAL),
             _ => None,
+        },
+        // `mean` / `avg` mirrors the groupBy shortcut path: a decimal
+        // stays decimal (precision-growth collapsed); any other numeric
+        // input promotes to double. Without this branch the `F.mean(...)`
+        // path would disagree with `groupBy.mean(...)` on decimal input.
+        "avg" | "mean" => match first_arg.as_ref().map(ColumnType::base) {
+            Some(ColumnType::Decimal { .. }) => Some(ColumnType::DEFAULT_DECIMAL),
+            Some(_) => Some(Double),
+            None => None,
         },
         // Collection constructors — wrap the input as the element type.
         "collect_list" | "collect_set" | "array" | "array_repeat" | "sequence" => {
@@ -4228,7 +4237,7 @@ fn type_family(t: &ColumnType) -> TypeFamily {
         | ColumnType::Double
         | ColumnType::Byte
         | ColumnType::Short
-        | ColumnType::Decimal(..) => TypeFamily::Numeric,
+        | ColumnType::Decimal { .. } => TypeFamily::Numeric,
         // `binary` doesn't fit cleanly into any family — Spark won't
         // arithmetic on it, compare it with strings, etc. Group it with
         // collections (the catch-all for non-combining atomics) so the
@@ -4394,6 +4403,36 @@ fn report_expr_type_errors<'a>(
                     if let Some(lit) = arg.as_string_literal_expr() {
                         report_get_field_typo(&recv_ty, lit, source, line_index, diagnostics);
                     }
+                }
+            }
+            // `<col>.cast("string-literal")` — flag a target that doesn't
+            // parse as a Spark type. Without this, a typo like
+            // `.cast("decimial(18,2)")` is silently accepted (pykrete
+            // can't pin the result, but never warns either). Restricted
+            // to string literals so the type-constructor form
+            // (`.cast(IntegerType())`) and any computed expression stay
+            // permissive.
+            if let Some(attr) = call.func.as_attribute_expr()
+                && attr.attr.id.as_str() == "cast"
+                && let Some(lit) = call
+                    .arguments
+                    .args
+                    .first()
+                    .and_then(Expr::as_string_literal_expr)
+            {
+                let target = lit.value.to_str();
+                if ColumnType::from_spark_name(target).is_none() {
+                    diagnostics.push(Diagnostic::at_range(
+                        Severity::Error,
+                        "D0011",
+                        format!(
+                            "Cast target '{target}' is not a recognized Spark type. \
+                             Expected one of: {COLUMN_TYPE_NAMES}.",
+                        ),
+                        lit.range(),
+                        source,
+                        line_index,
+                    ));
                 }
             }
             report_expr_type_errors(&call.func, schema, tcx, source, line_index, diagnostics);
@@ -5705,5 +5744,88 @@ fn collect_col_refs<'a>(
         }
         Expr::Starred(s) => collect_col_refs(&s.value, ctx, out),
         _ => {}
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `aggregate_output_type` (groupBy.<method>(col)) and
+    /// `function_result_type` (F.<name>(col) inside agg) must agree on
+    /// numeric/decimal aggregates — otherwise the same expression
+    /// produces different types depending on which surface the user
+    /// happens to reach for.
+    fn assert_agg_paths_agree(method: &str, input: ColumnType) {
+        let via_shortcut = aggregate_output_type(method, Some(&input));
+        let via_function = function_result_type(method, Some(input.clone()));
+        assert_eq!(
+            via_shortcut, via_function,
+            "{method}({input}) — groupBy shortcut returned {via_shortcut:?}, F.{method} returned {via_function:?}",
+        );
+    }
+
+    #[test]
+    fn sum_decimal_agrees_between_groupby_shortcut_and_agg_function() {
+        let input = ColumnType::Decimal {
+            precision: 18,
+            scale: 2,
+        };
+        assert_agg_paths_agree("sum", input.clone());
+        assert_eq!(
+            aggregate_output_type("sum", Some(&input)),
+            Some(ColumnType::DEFAULT_DECIMAL),
+        );
+    }
+
+    #[test]
+    fn mean_decimal_agrees_between_groupby_shortcut_and_agg_function() {
+        let input = ColumnType::Decimal {
+            precision: 18,
+            scale: 2,
+        };
+        assert_agg_paths_agree("mean", input.clone());
+        assert_agg_paths_agree("avg", input.clone());
+        // The unified rule: mean(decimal) stays decimal, not double.
+        assert_eq!(
+            aggregate_output_type("mean", Some(&input)),
+            Some(ColumnType::DEFAULT_DECIMAL),
+        );
+    }
+
+    #[test]
+    fn min_max_decimal_agree_and_preserve_precision_scale() {
+        let input = ColumnType::Decimal {
+            precision: 18,
+            scale: 2,
+        };
+        assert_agg_paths_agree("min", input.clone());
+        assert_agg_paths_agree("max", input.clone());
+        assert_eq!(
+            aggregate_output_type("min", Some(&input)),
+            Some(input.clone()),
+        );
+    }
+
+    #[test]
+    fn mean_non_decimal_numerics_still_promote_to_double_on_both_paths() {
+        for input in [
+            ColumnType::Int,
+            ColumnType::Long,
+            ColumnType::Byte,
+            ColumnType::Short,
+            ColumnType::Double,
+        ] {
+            assert_agg_paths_agree("mean", input.clone());
+            assert_eq!(
+                aggregate_output_type("mean", Some(&input)),
+                Some(ColumnType::Double),
+                "mean({input}) should promote to Double",
+            );
+        }
     }
 }

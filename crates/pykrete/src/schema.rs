@@ -178,19 +178,26 @@ fn resolve_annotation_type(
                 .map(|sc| schema_as_struct(sc, schemas, depth))
         }
         // `decimal(18, 2)` — the parameterized atomic. The callee must
-        // be the bare name `decimal`; both arguments must be integer
-        // literals fitting in u8 (Spark caps at 38).
+        // be the bare name `decimal`; the args must be integer literals
+        // fitting Spark's caps (`1..=38` for precision, `scale <= p`).
+        // `decimal(p)` defaults scale to 0, mirroring Spark SQL.
         Expr::Call(call) => {
             let callee = call.func.as_name_expr()?.id.as_str();
             if callee != "decimal" {
                 return None;
             }
-            let [precision, scale] = call.arguments.args.as_ref() else {
-                return None;
+            let args = call.arguments.args.as_ref();
+            let (precision_expr, scale) = match args {
+                [precision] => (precision, 0u8),
+                [precision, scale] => (precision, int_literal_u8(scale)?),
+                _ => return None,
             };
-            let p = int_literal_u8(precision)?;
-            let s = int_literal_u8(scale)?;
-            Some(ColumnType::Decimal(Some(p), Some(s)))
+            let precision = int_literal_u8(precision_expr)?;
+            if precision == 0 || precision > ColumnType::MAX_DECIMAL_PRECISION || scale > precision
+            {
+                return None;
+            }
+            Some(ColumnType::Decimal { precision, scale })
         }
         // `Array[T]` / `Map[K, V]`.
         Expr::Subscript(sub) => {

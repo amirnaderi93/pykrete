@@ -5,7 +5,10 @@
 
 mod common;
 
-use common::{assert_does_not_have_code, assert_has_code, assert_no_diagnostics, check};
+use common::{
+    assert_does_not_have_code, assert_has_code, assert_message_contains, assert_no_diagnostics,
+    check,
+};
 
 #[test]
 fn schema_declares_decimal_with_precision_and_scale() {
@@ -81,12 +84,12 @@ def f(sales: DataFrame[Sale]) -> DataFrame:
 }
 
 #[test]
-fn cast_to_a_typo_is_not_silently_accepted() {
-    // Negative: a typo in the cast string must not roll over to a
-    // known type. The cast still parses syntactically (Spark accepts
-    // any string at runtime — that's its problem, not pykrete's), but
-    // the schema-cast vs Column.cast distinction means we don't pin
-    // the column to anything spurious.
+fn cast_to_a_typo_is_flagged_with_d0011() {
+    // A typo in the `.cast("...")` target was previously silently
+    // accepted — pykrete couldn't pin the result, but never warned
+    // either. v0.1.28 surfaces a `D0011` (invalidColumnType) on the
+    // string-literal target. The message reproduces the bad target so
+    // the user sees what didn't parse.
     let src = "\
 class Sale(Schema):
     amount: int
@@ -94,12 +97,26 @@ class Sale(Schema):
 def f(sales: DataFrame[Sale]) -> DataFrame:
     return sales.select(col(\"amount\").cast(\"decimial(18,2)\").alias(\"amount\"))
 ";
-    // The cast itself doesn't fire a diagnostic — pykrete is permissive
-    // on unknown cast targets. But the downstream return-type check
-    // must not accept this as `decimal`. We assert no false positives
-    // by checking nothing surfaces from the cast (no D0080 either, since
-    // the return type is `DataFrame` with no schema).
-    assert_no_diagnostics(&check(src));
+    let result = check(src);
+    assert_has_code(&result, "D0011");
+    assert_message_contains(&result, "D0011", "decimial(18,2)");
+}
+
+#[test]
+fn cast_with_recognized_target_does_not_fire_d0011() {
+    // Negative pair for the above — a legitimate cast (parameterized
+    // decimal, byte, etc.) must NOT fire D0011, only the typo arm does.
+    let src = "\
+class Sale(Schema):
+    amount: int
+
+def f(sales: DataFrame[Sale]) -> DataFrame:
+    return sales.select(
+        col(\"amount\").cast(\"decimal(18, 2)\").alias(\"d\"),
+        col(\"amount\").cast(\"byte\").alias(\"b\"),
+    )
+";
+    assert_does_not_have_code(&check(src), "D0011");
 }
 
 #[test]
@@ -126,6 +143,11 @@ def f(raw: DataFrame[Raw]) -> DataFrame[Totals]:
 fn group_by_sum_of_decimal_stays_decimal() {
     // `sum(decimal)` stays decimal in pykrete's simplified rule
     // (Spark widens to decimal(p+10, s), capped at 38; we collapse).
+    // Positive shape: the whole pipeline is clean (no spurious D-codes).
+    // Type pinning that decimal-vs-double don't agree is covered by the
+    // unit tests on `aggregate_output_type` and `function_result_type`
+    // (which the permissive numeric-numeric `types_compatible` rule
+    // would otherwise hide at this integration layer).
     let src = "\
 class Raw(Schema):
     city: string
@@ -138,7 +160,64 @@ class Totals(Schema):
 def f(raw: DataFrame[Raw]) -> DataFrame[Totals]:
     return raw.groupBy(\"city\").sum(\"amount\").select(col(\"city\"), col(\"sum(amount)\").alias(\"total\"))
 ";
-    assert_does_not_have_code(&check(src), "D0080");
+    assert_no_diagnostics(&check(src));
+}
+
+#[test]
+fn group_by_sum_of_decimal_flagged_when_declared_non_numeric() {
+    // Companion to the above: when the declared output column type is
+    // categorically wrong for `sum(decimal)` (string, not numeric), the
+    // return-type check DOES surface D0080. This pins that the column
+    // type is actually being inferred and threaded through, not silently
+    // dropped.
+    let src = "\
+class Raw(Schema):
+    city: string
+    amount: decimal(18, 2)
+
+class Totals(Schema):
+    city: string
+    total: string
+
+def f(raw: DataFrame[Raw]) -> DataFrame[Totals]:
+    return raw.groupBy(\"city\").sum(\"amount\").select(col(\"city\"), col(\"sum(amount)\").alias(\"total\"))
+";
+    assert_has_code(&check(src), "D0080");
+}
+
+#[test]
+fn agg_mean_of_decimal_matches_groupby_mean_shortcut() {
+    // The two surfaces for `mean(decimal)` must agree — the previous
+    // implementation routed `F.mean(...)` through a fixed-Double branch
+    // while `groupBy.mean(...)` kept the decimal, so the same input
+    // produced different types depending on which API the user reached
+    // for. Both pipelines below must accept a `decimal` output column.
+    let shortcut = "\
+class Raw(Schema):
+    city: string
+    amount: decimal(18, 2)
+
+class Avg(Schema):
+    city: string
+    average: decimal
+
+def f(raw: DataFrame[Raw]) -> DataFrame[Avg]:
+    return raw.groupBy(\"city\").mean(\"amount\").select(col(\"city\"), col(\"mean(amount)\").alias(\"average\"))
+";
+    let agg = "\
+class Raw(Schema):
+    city: string
+    amount: decimal(18, 2)
+
+class Avg(Schema):
+    city: string
+    average: decimal
+
+def f(raw: DataFrame[Raw]) -> DataFrame[Avg]:
+    return raw.groupBy(\"city\").agg(F.mean(col(\"amount\")).alias(\"average\"))
+";
+    assert_no_diagnostics(&check(shortcut));
+    assert_no_diagnostics(&check(agg));
 }
 
 #[test]
@@ -151,4 +230,39 @@ class Bad(Schema):
     amount: decimal(\"oops\", 2)
 ";
     assert_has_code(&check(src), "D0011");
+}
+
+#[test]
+fn decimal_precision_above_spark_cap_is_rejected() {
+    // Spark caps `DECIMAL` precision at 38. pykrete used to silently
+    // accept `decimal(39, 0)` (and any precision up to u8::MAX); v0.1.28
+    // rejects it on every surface — schema annotations and cast strings.
+    let in_schema = "\
+class Bad(Schema):
+    amount: decimal(39, 0)
+";
+    assert_has_code(&check(in_schema), "D0011");
+    let in_cast = "\
+class Sale(Schema):
+    amount: int
+
+def f(s: DataFrame[Sale]) -> DataFrame:
+    return s.select(col(\"amount\").cast(\"decimal(39, 0)\").alias(\"a\"))
+";
+    assert_has_code(&check(in_cast), "D0011");
+}
+
+#[test]
+fn decimal_single_arg_defaults_scale_to_zero() {
+    // `decimal(p)` is Spark SQL shorthand for `decimal(p, 0)`. pykrete
+    // used to reject the single-arg form outright; v0.1.28 accepts it
+    // with scale defaulted to 0 — same behavior as Spark.
+    let src = "\
+class Order(Schema):
+    qty: decimal(10)
+
+def f(o: DataFrame[Order]) -> DataFrame:
+    return o.select(col(\"qty\"))
+";
+    assert_no_diagnostics(&check(src));
 }

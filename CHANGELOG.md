@@ -32,6 +32,24 @@ widens precision and scale (`decimal(p+10, s)` for sum,
 precision-growth refinement is parked as a v1.1 polish item.
 `sum(byte)` and `sum(short)` widen to `long`, matching Spark.
 
+The `mean(decimal)` and `avg(decimal)` rule now applies to
+both the `groupBy.mean(col)` shortcut and `F.mean(col)` inside
+`.agg(...)` — previously the function-form path short-circuited
+to `Double` regardless of input, while the shortcut path
+correctly kept the decimal. Both surfaces now agree.
+
+`decimal(p)` (single-arg form) is accepted with scale defaulted
+to 0, matching Spark SQL's `DECIMAL(p)` shorthand. Precision is
+validated against Spark's cap (`1..=38`) and scale must not
+exceed precision; violating either fires `D0011`.
+
+`.cast("...")` with a target string that isn't a recognized
+Spark type (e.g. `decimial(18,2)`) is now flagged with
+`D0011` — previously the typo was silently swallowed (no type
+pinned, no warning either). The type-constructor form
+(`.cast(IntegerType())`) and any computed expression stay
+permissive.
+
 `schemas.md` updated to list the real v0.1.28 atomic set —
 `float` and `bytes` (which were never recognised) are out;
 `decimal(p, s)`, `byte`, `short`, and `binary` are in.

@@ -17,13 +17,16 @@ pub enum ColumnType {
     /// 16-bit signed integer — Spark `ShortType`.
     Short,
     /// Fixed-precision decimal — Spark `DecimalType(precision, scale)`.
-    /// `(None, None)` means the precision/scale weren't carried (`decimal`
-    /// with no args, written either as a bare annotation or as a cast
-    /// target). Precision-growth on aggregation is intentionally not
-    /// modeled in v1.0 — `sum(decimal(p, s))` reduces to a plain
-    /// `decimal`, matching the simpler-rules-than-Spark stance the
-    /// checker takes elsewhere.
-    Decimal(Option<u8>, Option<u8>),
+    /// The bare `decimal` keyword (in a schema annotation, cast target,
+    /// or type constructor) resolves to Spark's default `decimal(10, 0)`
+    /// — see [`Self::DEFAULT_DECIMAL`]. Precision-growth on aggregation
+    /// is intentionally not modeled in v1.0 — `sum(decimal(p, s))`
+    /// reduces to the default, matching the simpler-rules-than-Spark
+    /// stance the checker takes elsewhere.
+    Decimal {
+        precision: u8,
+        scale: u8,
+    },
     String,
     /// Raw byte array — Spark `BinaryType`.
     Binary,
@@ -57,6 +60,17 @@ pub struct StructField {
 }
 
 impl ColumnType {
+    /// Spark's default for the unparameterized `DECIMAL` SQL type. Pykrete
+    /// uses this for the bare `decimal` keyword (no `(p, s)` args) and
+    /// for aggregation outputs where precision-growth is collapsed.
+    pub const DEFAULT_DECIMAL: Self = Self::Decimal {
+        precision: 10,
+        scale: 0,
+    };
+
+    /// Spark caps decimal precision at 38 (`Decimal128`'s upper bound).
+    pub const MAX_DECIMAL_PRECISION: u8 = 38;
+
     /// Parse a pykrete type annotation — an atomic name, or a nested
     /// `array<…>` / `map<…>`. Atomic names are the strict pykrete
     /// vocabulary (`int`, `long`, …); `array` / `map` keywords are
@@ -85,7 +99,7 @@ impl ColumnType {
             "DoubleType" | "FloatType" => Some(Self::Double),
             "ByteType" => Some(Self::Byte),
             "ShortType" => Some(Self::Short),
-            "DecimalType" => Some(Self::Decimal(None, None)),
+            "DecimalType" => Some(Self::DEFAULT_DECIMAL),
             "StringType" => Some(Self::String),
             "BinaryType" => Some(Self::Binary),
             "BooleanType" => Some(Self::Bool),
@@ -131,7 +145,7 @@ impl ColumnType {
             Self::Double => "Double",
             Self::Byte => "Byte",
             Self::Short => "Short",
-            Self::Decimal(..) => "Decimal",
+            Self::Decimal { .. } => "Decimal",
             Self::String => "String",
             Self::Binary => "Binary",
             Self::Bool => "Bool",
@@ -178,13 +192,26 @@ fn parse_type<'s, F: Fn(&str) -> Option<ColumnType>>(
     match word.to_ascii_lowercase().as_str() {
         "decimal" => {
             let Some(inner) = after.strip_prefix('(') else {
-                return Some((ColumnType::Decimal(None, None), after));
+                return Some((ColumnType::DEFAULT_DECIMAL, after));
             };
             let (precision, rest) = parse_u8(inner)?;
-            let rest = rest.trim_start().strip_prefix(',')?;
-            let (scale, rest) = parse_u8(rest)?;
+            if precision == 0 || precision > ColumnType::MAX_DECIMAL_PRECISION {
+                return None;
+            }
+            let rest = rest.trim_start();
+            // Single-arg form `decimal(p)` defaults scale to 0 — matches
+            // Spark SQL's `DECIMAL(p)` shorthand.
+            let (scale, rest) = if let Some(after_comma) = rest.strip_prefix(',') {
+                let (scale, rest) = parse_u8(after_comma)?;
+                (scale, rest)
+            } else {
+                (0u8, rest)
+            };
+            if scale > precision {
+                return None;
+            }
             let rest = rest.trim_start().strip_prefix(')')?;
-            Some((ColumnType::Decimal(Some(precision), Some(scale)), rest))
+            Some((ColumnType::Decimal { precision, scale }, rest))
         }
         "array" => {
             let Some(inner) = after.strip_prefix('<') else {
@@ -296,8 +323,7 @@ fn atomic_lenient(name: &str) -> Option<ColumnType> {
 impl fmt::Display for ColumnType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Decimal(Some(p), Some(s)) => write!(f, "Decimal({p}, {s})"),
-            Self::Decimal(..) => f.write_str("Decimal"),
+            Self::Decimal { precision, scale } => write!(f, "Decimal({precision}, {scale})"),
             Self::Array(Some(elem)) => write!(f, "array<{elem}>"),
             Self::Array(None) => f.write_str("array"),
             Self::Map(Some(key), Some(value)) => write!(f, "map<{key}, {value}>"),
@@ -323,9 +349,11 @@ impl fmt::Display for ColumnType {
 }
 
 /// Comma-separated list of the source-form names users can write in a
-/// `.pyk` file. Used inside error messages.
-pub const COLUMN_TYPE_NAMES: &str =
-    "int, long, double, byte, short, decimal, string, binary, bool, date, timestamp, Array, Map";
+/// `.pyk` file. Used inside error messages. `decimal` accepts an optional
+/// `(precision, scale)` — `decimal` alone resolves to Spark's default
+/// `decimal(10, 0)`.
+pub const COLUMN_TYPE_NAMES: &str = "int, long, double, byte, short, decimal, decimal(p, s), \
+    string, binary, bool, date, timestamp, Array, Map";
 
 /// Same vocabulary as [`COLUMN_TYPE_NAMES`] but as a slice — fed to the
 /// completion engine when the cursor sits inside a `name: "<cursor>"`
@@ -337,6 +365,7 @@ pub const COLUMN_TYPE_NAMES_LIST: &[&str] = &[
     "byte",
     "short",
     "decimal",
+    "decimal(p, s)",
     "string",
     "binary",
     "bool",
@@ -446,6 +475,9 @@ mod tests {
             "byte",
             "short",
             "decimal",
+            // The parameterized form must be surfaced so users discover it
+            // in error messages.
+            "decimal(p, s)",
             "string",
             "binary",
             "bool",
@@ -458,6 +490,10 @@ mod tests {
                 COLUMN_TYPE_NAMES.contains(name),
                 "COLUMN_TYPE_NAMES should list '{name}'",
             );
+            assert!(
+                COLUMN_TYPE_NAMES_LIST.contains(&name),
+                "COLUMN_TYPE_NAMES_LIST should list '{name}'",
+            );
         }
     }
 
@@ -466,29 +502,48 @@ mod tests {
         assert_eq!(ColumnType::from_name("byte"), Some(ColumnType::Byte));
         assert_eq!(ColumnType::from_name("short"), Some(ColumnType::Short));
         assert_eq!(ColumnType::from_name("binary"), Some(ColumnType::Binary));
+        // Bare `decimal` resolves to Spark's default `decimal(10, 0)`.
         assert_eq!(
             ColumnType::from_name("decimal"),
-            Some(ColumnType::Decimal(None, None))
+            Some(ColumnType::DEFAULT_DECIMAL)
         );
         assert_eq!(
             ColumnType::from_name("decimal(18, 2)"),
-            Some(ColumnType::Decimal(Some(18), Some(2)))
+            Some(ColumnType::Decimal {
+                precision: 18,
+                scale: 2,
+            })
         );
         // Whitespace inside the parens is tolerated.
         assert_eq!(
             ColumnType::from_name("decimal( 38 , 18 )"),
-            Some(ColumnType::Decimal(Some(38), Some(18)))
+            Some(ColumnType::Decimal {
+                precision: 38,
+                scale: 18,
+            })
+        );
+        // Single-arg form defaults scale to 0 (Spark's `DECIMAL(p)`).
+        assert_eq!(
+            ColumnType::from_name("decimal(18)"),
+            Some(ColumnType::Decimal {
+                precision: 18,
+                scale: 0,
+            })
         );
     }
 
     #[test]
     fn from_name_rejects_malformed_decimal() {
-        // Missing scale, garbage args, typo in keyword.
-        assert_eq!(ColumnType::from_name("decimal(18)"), None);
+        // Garbage args, typo in keyword, unbalanced parens.
         assert_eq!(ColumnType::from_name("decimal(18,)"), None);
         assert_eq!(ColumnType::from_name("decimal(a, b)"), None);
         assert_eq!(ColumnType::from_name("decimal(18, 2"), None);
         assert_eq!(ColumnType::from_name("decimial(18, 2)"), None);
+        // Precision must be in `1..=38` (Spark's `Decimal128` cap).
+        assert_eq!(ColumnType::from_name("decimal(0, 0)"), None);
+        assert_eq!(ColumnType::from_name("decimal(39, 0)"), None);
+        // Scale must not exceed precision.
+        assert_eq!(ColumnType::from_name("decimal(5, 6)"), None);
     }
 
     #[test]
@@ -512,12 +567,15 @@ mod tests {
         );
         assert_eq!(
             ColumnType::from_spark_name("decimal(18, 2)"),
-            Some(ColumnType::Decimal(Some(18), Some(2)))
+            Some(ColumnType::Decimal {
+                precision: 18,
+                scale: 2,
+            })
         );
         // Case-insensitive on the keyword.
         assert_eq!(
             ColumnType::from_spark_name("DECIMAL(10, 0)"),
-            Some(ColumnType::Decimal(Some(10), Some(0)))
+            Some(ColumnType::DEFAULT_DECIMAL),
         );
     }
 
@@ -533,7 +591,7 @@ mod tests {
         );
         assert_eq!(
             ColumnType::from_type_constructor("DecimalType"),
-            Some(ColumnType::Decimal(None, None))
+            Some(ColumnType::DEFAULT_DECIMAL),
         );
         assert_eq!(
             ColumnType::from_type_constructor("BinaryType"),
@@ -544,10 +602,16 @@ mod tests {
     #[test]
     fn display_decimal_carries_precision_and_scale() {
         assert_eq!(
-            format!("{}", ColumnType::Decimal(Some(18), Some(2))),
-            "Decimal(18, 2)"
+            format!(
+                "{}",
+                ColumnType::Decimal {
+                    precision: 18,
+                    scale: 2,
+                }
+            ),
+            "Decimal(18, 2)",
         );
-        assert_eq!(format!("{}", ColumnType::Decimal(None, None)), "Decimal");
+        assert_eq!(format!("{}", ColumnType::DEFAULT_DECIMAL), "Decimal(10, 0)");
         assert_eq!(format!("{}", ColumnType::Byte), "Byte");
         assert_eq!(format!("{}", ColumnType::Short), "Short");
         assert_eq!(format!("{}", ColumnType::Binary), "Binary");
