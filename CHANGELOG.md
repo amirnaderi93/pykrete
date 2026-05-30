@@ -21,6 +21,7 @@ object on stdout with the shape:
 
 ```json
 {
+  "schemaVersion": "1",
   "version": "0.1.33",
   "diagnostics": [
     {
@@ -30,7 +31,9 @@ object on stdout with the shape:
       "code": "D0030",
       "ruleName": "unknownColumn",
       "severity": "error",
+      "source": "pykrete",
       "message": "Column 'regoin' does not exist on schema 'Sale'. Did you mean 'region'?",
+      "suggestion": "region",
       "relatedInformation": []
     }
   ],
@@ -42,14 +45,29 @@ object on stdout with the shape:
 }
 ```
 
-Positions are 1-indexed (matching the existing `text` output);
-pykrete-lsp re-indexes to 0-indexed on the wire per the LSP spec, so
-tools consuming the CLI's JSON directly should not. Exit codes are
-unchanged: `0` when no diagnostics, `1` when any diagnostic fires
-(error or warning). The schema becomes a **stability contract at
-v1.0.0** — any breaking change post-v1.0 requires a SemVer major bump.
-Until then it's a `0.x` API and may still shift if a real adopter
-surfaces a fork in the design.
+`schemaVersion` versions the wire format itself (consumers pin to
+that, not the pykrete `version`); `source` always equals `"pykrete"`
+so CI aggregators like reviewdog can disambiguate from other linters;
+`suggestion` carries the structured "did you mean…" replacement that
+LSP already round-trips for quick-fixes, or `null` when the
+diagnostic doesn't have one. Positions are 1-indexed (matching the
+existing `text` output); pykrete-lsp re-indexes to 0-indexed on the
+wire per the LSP spec, so tools consuming the CLI's JSON directly
+should not.
+
+Exit codes are unchanged: `0` when no diagnostics, `1` when any
+diagnostic fires (error _or_ warning). This is deliberate — it
+matches today's text-format behaviour and lets CI scripts react
+uniformly to warnings like `D0072 duplicateSchemaName` without
+having to parse the summary block. Consumers that want "errors only"
+semantics will be able to opt in via a future `--max-severity` flag
+(tracked in `docs/design/spark-coverage.md` as a v1.1 follow-up).
+The JSON schema and exit codes become a **stability contract at
+v1.0.0** — any breaking change post-v1.0 requires a SemVer-major
+bump (and a `schemaVersion` bump to `"2"`); see `Production
+readiness → JSON output stability contract` for the full scope of
+what's covered. Until v1.0 it's a `0.x` API and may still shift if a
+real adopter surfaces a fork in the design.
 
 **Diagnostic catalog snapshot test.** New
 `crates/pykrete/tests/diagnostic_catalog.rs` builds a minimal `.pyk`

@@ -717,3 +717,24 @@ ninth item below is a follow-up to the I8 fix shipped in this PR.
     compare in `run_cold_walk`, plus a test that pins a malformed
     file produces exactly one warning across many cold walks until
     its mtime changes.
+
+### v0.1.33 JSON CLI deferrals (v1.1)
+
+Surfaced by the v0.1.33 multi-lens review (PR #64). Round-2 closed the
+schema-stability blocker and three importants; the item below is a
+customization knob that the round-2 docs entry references.
+
+16. **`pykrete check --max-severity <error|warning>` flag.** Today
+    `pykrete check` exits `1` whenever any diagnostic fires, error or
+    warning — matches the text format's behaviour and lets CI scripts
+    react uniformly to warnings like `D0072 duplicateSchemaName`.
+    Some consumers want "errors only" semantics (warnings should be
+    visible but not fail the build); the future `--max-severity
+    <error|warning>` flag would let them opt into that. Default stays
+    `warning` (today's behaviour) for backwards compatibility. Cost:
+    small — one extra `parse_check_args` branch, threading the
+    threshold into the exit-code decision in `render_text` /
+    `render_json`, plus tests. Deferred to v1.1 because v1.0 promises
+    the JSON shape as a stability contract and a flag whose default is
+    today's behaviour is purely additive — adding it later is non-
+    breaking. Filed in response to the schema-stability lens M1.

@@ -13,9 +13,24 @@ Once a piece of surface ships in a release, the project commits to backward-comp
 
 - **Schema declaration syntax.** `Schema` classes, the `array` / `map` / `struct` / `Nullable` constructors, the TypeScript-style operators (`Pick`, `Omit`, `Join`, `GroupBy`, `Merge`).
 - **The `DataFrame[Schema]` annotation surface.** Variable annotations, function parameter and return types, `.cast(DataFrame[Schema])` re-anchors.
-- **Diagnostic codes.** `D0030`, `D0040`, `D0050`, `D0051`, `D0060`, `D0080`, `D0081`, `D0082`. The numeric code and the rule name are part of the contract; the diagnostic message text is not.
+- **Diagnostic codes.** `D0001`, `D0010`, `D0011`, `D0020`, `D0021`, `D0030`, `D0040`, `D0050`, `D0051`, `D0060`, `D0070`, `D0071`, `D0072`, `D0080`, `D0081`, `D0082`, `D0083`. The numeric code and the rule name are part of the contract; the diagnostic message text is not.
 - **`pykrete.json` keys.** `typeCheckingMode`, `exclude`, `rules`. New keys may be added; existing ones won't change shape.
-- **The CLI's machine-readable output** (`pykrete check --format json`) and exit codes. Shipped in [v0.1.33](https://github.com/amirnaderi93/pykrete/releases/tag/v0.1.33); the JSON schema becomes a stability contract at v1.0.0 (breaking changes after that point require a SemVer major bump).
+- **The CLI's machine-readable output** (`pykrete check --format json`) and exit codes. Shipped in [v0.1.33](https://github.com/amirnaderi93/pykrete/releases/tag/v0.1.33); the JSON schema becomes a stability contract at v1.0.0 (breaking changes after that point require a SemVer major bump). Exit codes are also part of the contract: `0` when no diagnostics, `1` when any diagnostic fires (error _or_ warning — matches the text format and lets CI scripts react uniformly to warnings like `D0072 duplicateSchemaName`). A future `--max-severity` flag may let consumers customize this; tracked in `docs/design/spark-coverage.md`.
+
+### JSON output stability contract
+
+The `--format json` payload carries an explicit `schemaVersion` field (currently `"1"`). Consumers pin to that; the pykrete `version` is informational. The contract covers:
+
+- **JSON field names — STABLE.** Renaming a field requires a SemVer-major bump and a `schemaVersion` bump.
+- **JSON field types — STABLE.** Changing a string to an integer (or similar) requires a SemVer-major bump.
+- **JSON field semantics — STABLE.** Changing what a field means requires a SemVer-major bump.
+- **D-code identity — STABLE.** `D0030` will always mean `unknownColumn`; codes are never reassigned.
+- **Diagnostic message wording — NOT STABLE.** Rewording for clarity is a SemVer-minor change. Consumers should match on `code` / `ruleName` / `severity`, not on message text.
+- **Adding a new top-level or per-diagnostic field — NON-BREAKING.** Consumers must accept unknown fields. `schemaVersion` stays at `"1"`.
+- **Adding a new severity — NON-BREAKING.** Consumers must handle unknown severities gracefully (a sensible default is to treat unknown as `error`). `schemaVersion` stays at `"1"`.
+- **Adding a new D-code — NON-BREAKING.** Consumers must handle unknown codes gracefully. `schemaVersion` stays at `"1"`.
+
+Bumping `schemaVersion` to `"2"` only happens alongside a SemVer-major pykrete release.
 
 What may still change without notice:
 

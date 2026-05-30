@@ -254,14 +254,27 @@ fn render_text(project: &pykrete::ProjectCheckResult, verbose: bool) -> ExitCode
 ///
 /// ```json
 /// {
+///   "schemaVersion": "1",
 ///   "version": "X.Y.Z",
 ///   "diagnostics": [
 ///     { "file", "line", "column", "endLine", "endColumn",
-///       "code", "severity", "message", "relatedInformation" }
+///       "code", "ruleName", "severity", "source", "message",
+///       "suggestion", "relatedInformation" }
 ///   ],
 ///   "summary": { "filesChecked", "errorCount", "warningCount" }
 /// }
 /// ```
+///
+/// `schemaVersion` is the version of this JSON shape, distinct from
+/// `version` (the pykrete release that produced the output). Consumers
+/// pin to `schemaVersion`. Bump policy:
+/// - Adding a new top-level or per-diagnostic field: non-breaking, keep
+///   `schemaVersion` at `"1"`. Consumers must accept unknown fields.
+/// - Adding a new severity or D-code: non-breaking, keep at `"1"`.
+///   Consumers must handle unknown severities/codes gracefully.
+/// - Renaming a field, changing its type, or changing its meaning:
+///   breaking — bump `schemaVersion` to `"2"` alongside the pykrete
+///   SemVer-major bump.
 ///
 /// Positions are 1-indexed (matching the `text` format and most editor
 /// gutter labels). pykrete-lsp re-indexes to 0-indexed on the wire per
@@ -289,13 +302,16 @@ fn render_json(project: &pykrete::ProjectCheckResult) -> ExitCode {
                 "code": d.code,
                 "ruleName": pykrete::diagnostics::rule_name(d.code),
                 "severity": severity,
+                "source": "pykrete",
                 "message": d.message,
+                "suggestion": d.suggestion,
                 "relatedInformation": [],
             }));
         }
     }
 
     let payload = serde_json::json!({
+        "schemaVersion": "1",
         "version": VERSION,
         "diagnostics": diagnostics_json,
         "summary": {
