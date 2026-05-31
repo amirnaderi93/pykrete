@@ -56,7 +56,7 @@ The Spark-coverage closure sprint (v0.1.7 onward, May 2026) ran at multiple rele
 
 ## Real-codebase testing
 
-Every release is regression-tested against vendored snapshots of Apache Spark and MLflow — see [Real-codebase tests](/pykrete/about/pykrete-tests/) for the methodology. CI on every push and nightly runs `pykrete check` against the annotated snapshots; pykrete is rebuilt fresh from `main` each run, so any regression surfaces before it gets released.
+Every release is regression-tested against **32 annotated fixtures from 10 upstream codebases** — Apache Spark, Delta Lake, Apache Iceberg ([iceberg-python](https://github.com/apache/iceberg-python)), Apache Hudi, MLflow, Feast, Kedro ([kedro-plugins](https://github.com/kedro-org/kedro-plugins)), [quinn](https://github.com/MrPowers/quinn), [dbt-spark](https://github.com/dbt-labs/dbt-spark), and [python-deequ](https://github.com/awslabs/python-deequ). See [Real-codebase tests](/pykrete/about/pykrete-tests/) for the methodology and the [pykrete-tests README](https://github.com/amirnaderi93/pykrete-tests#the-donors) for the per-donor matrix. Every fixture currently emits zero diagnostics against the released binary; each push rebuilds pykrete fresh from `main`, re-runs `pykrete check` against all 32 fixtures, and JSON-diffs the output against the committed golden. Any drift fails the build before it gets released.
 
 Gaps closed in earlier releases (`df["X"]` subscript, GroupedData shortcut aggregates, chained nested-field access, `intersect` / `subtract` / `exceptAll`, lowercase `groupby`) all have regression tests in `crates/pykrete/tests/`. They can't reopen silently.
 
@@ -72,6 +72,6 @@ The full unmodeled list, with the rationale for each, is in [Operations → What
 
 ## Production deployments
 
-Pykrete is a development-time checker — it does not ship to production hosts and cannot affect a running pipeline. The public, reproducible cross-testing coverage lives in [pykrete-tests](/pykrete/about/pykrete-tests/), which vendors annotated snapshots from Apache Spark's and MLflow's own codebases. The full donor list and per-donor coverage matrix land there in v0.1.38. Named external adopter references will be added here as teams give the go-ahead.
+Pykrete is a development-time checker — it does not ship to production hosts and cannot affect a running pipeline. The public, reproducible cross-testing coverage lives in [pykrete-tests](/pykrete/about/pykrete-tests/), which vendors 32 annotated fixtures across the 10 donors listed above. Each fixture is pinned to a specific upstream commit (see the [per-donor matrix](https://github.com/amirnaderi93/pykrete-tests#the-donors) in the pykrete-tests README) so the coverage is reproducible — anyone can `pip install` the same upstream code pykrete is being tested against. Named external adopter references will be added here as teams give the go-ahead.
 
 See the [Reliability and trust](https://github.com/amirnaderi93/pykrete#reliability-and-trust) section of the README for the full story.
