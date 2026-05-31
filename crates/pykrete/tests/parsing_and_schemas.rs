@@ -144,18 +144,18 @@ class Orders(Schema):
 }
 
 #[test]
-fn d0010_fires_for_python_float_which_we_do_not_accept() {
-    // PySpark distinguishes FloatType (32-bit) from DoubleType (64-bit).
-    // pykrete v0.1 only accepts `double`; `float` is rejected to keep
-    // the runtime mapping unambiguous.
+fn python_float_resolves_as_double_in_schema() {
+    // v0.1.39: PySpark passes Python floats to Spark's runtime, which
+    // always coerces them to DoubleType. Pykrete now accepts `float`
+    // as an alias for `double` so production codebases that mix the
+    // two spellings don't see false positives.
     let result = check(
         r#"
 class Orders(Schema):
     x: float
 "#,
     );
-    assert_has_code(&result, "D0010");
-    assert_message_contains(&result, "D0010", "float");
+    assert_does_not_have_code(&result, "D0010");
 }
 
 #[test]

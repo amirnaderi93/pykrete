@@ -22,10 +22,12 @@ use crate::types::ColumnType;
 // Column-method checking + result inference
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn check_column_method_args<'a>(
     call: &'a ExprCall,
     schema: &SchemaView<'a>,
     shape: &ColumnMethodShape,
+    method: &str,
     ctx: &BodyContext<'a>,
     source: &str,
     line_index: &LineIndex,
@@ -46,7 +48,20 @@ pub(super) fn check_column_method_args<'a>(
         // are still handled by collect_arg_column_refs above.
         check_chained_field_access(arg, schema, ctx, source, line_index, diagnostics);
     }
-    report_column_refs(&refs, schema, ctx, source, line_index, diagnostics);
+    if tolerates_missing_column_names(method) {
+        record_column_refs_tolerating_missing(&refs, schema, ctx);
+    } else {
+        report_column_refs(&refs, schema, ctx, source, line_index, diagnostics);
+    }
+}
+
+// Spark's `df.drop(*cols)` silently ignores names that aren't in the
+// schema (per its source / docs: "drop columns ... ignored if schema
+// doesn't contain column name(s)"). Firing D0030 on a missing name
+// here would flag working production code; match Spark's behavior
+// instead.
+pub(super) fn tolerates_missing_column_names(method: &str) -> bool {
+    matches!(method, "drop")
 }
 
 /// Walks `expr` for chained DataFrame-column accesses of the form
@@ -329,9 +344,9 @@ pub(super) fn apply_with_columns_renamed<'a>(
     call: &'a ExprCall,
     recv: &SchemaView<'a>,
     ctx: &BodyContext<'a>,
-    source: &str,
-    line_index: &LineIndex,
-    diagnostics: &mut Vec<Diagnostic>,
+    _source: &str,
+    _line_index: &LineIndex,
+    _diagnostics: &mut Vec<Diagnostic>,
 ) -> SchemaView<'a> {
     let Some(dict) = call.arguments.args.first().and_then(Expr::as_dict_expr) else {
         return recv.clone();
@@ -345,11 +360,13 @@ pub(super) fn apply_with_columns_renamed<'a>(
         ) else {
             continue;
         };
-        // The old name must exist — check it like any column reference.
+        // Record for LSP. PySpark's `withColumnsRenamed` silently
+        // ignores keys that aren't in the schema (same design as
+        // `df.drop`), so missing names must not fire D0030.
         refs.push((key.value.to_str(), key.range()));
         renames.push((key.value.to_str(), val.value.to_str()));
     }
-    report_column_refs(&refs, recv, ctx, source, line_index, diagnostics);
+    record_column_refs_tolerating_missing(&refs, recv, ctx);
     let fields: Vec<DerivedField<'a>> = recv
         .typed_fields(ctx.schemas())
         .into_iter()
@@ -664,6 +681,21 @@ pub(super) fn report_column_refs<'a>(
     }
 }
 
+/// LSP-only variant of `report_column_refs`: record each ref against
+/// `schema` for hover/jump-to-definition, but DO NOT emit D0030 for
+/// names that fail to resolve. Used by `df.drop` and
+/// `df.withColumnsRenamed`, which Spark designs to silently ignore
+/// missing names rather than error.
+pub(super) fn record_column_refs_tolerating_missing<'a>(
+    refs: &[(&'a str, TextRange)],
+    schema: &SchemaView<'a>,
+    ctx: &BodyContext<'a>,
+) {
+    for &(col_name, col_range) in refs {
+        ctx.record_column_ref(col_range, col_name, schema.clone());
+    }
+}
+
 /// Split a column reference of the form `"alias.col"` into its alias
 /// and column halves. Returns `None` for unqualified names (no `.`),
 /// for empty halves on either side, and for names with more than one
@@ -673,8 +705,16 @@ pub(super) fn report_column_refs<'a>(
 /// canonical `df.alias("L"); col("L.region")` pattern without
 /// rerouting real dotted paths.
 pub(super) fn split_qualified(name: &str) -> Option<(&str, &str)> {
-    let (prefix, suffix) = name.split_once('.')?;
-    if prefix.is_empty() || suffix.is_empty() || suffix.contains('.') {
+    // Backtick-aware split so `` `a.b` `` (one literal name) doesn't
+    // get torn apart into an alias prefix, and `` `info`.`name` ``
+    // (struct access) splits at the unquoted dot.
+    let segments = crate::schema::split_backtick_aware(name);
+    if segments.len() != 2 {
+        return None;
+    }
+    let prefix = segments[0];
+    let suffix = segments[1];
+    if prefix.is_empty() || suffix.is_empty() {
         return None;
     }
     Some((prefix, suffix))

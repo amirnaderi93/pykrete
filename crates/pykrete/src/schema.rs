@@ -619,7 +619,7 @@ pub fn resolve_path<'a>(
     path: &'a str,
     schemas: &'a [Schema<'a>],
 ) -> FieldPathResult<'a> {
-    let segments: Vec<&str> = path.split('.').collect();
+    let segments: Vec<&str> = split_backtick_aware(path);
     let mut current = view.clone();
 
     for (i, &segment) in segments.iter().enumerate() {
@@ -668,6 +668,57 @@ pub fn resolve_path<'a>(
     FieldPathResult::Resolved
 }
 
+/// Split a dotted column path into segments, honoring Spark's
+/// backtick-quoting: dots INSIDE backticks are literal characters in
+/// the name, not segment separators, and the backticks themselves are
+/// stripped from the returned segments. `` `info`.`name` `` →
+/// `["info", "name"]`; `` `a.b` `` → `["a.b"]`; `alias.col` →
+/// `["alias", "col"]`. A trailing or unmatched backtick degrades to a
+/// plain `split('.')` so we never lose data.
+pub fn split_backtick_aware(path: &str) -> Vec<&str> {
+    if !path.contains('`') {
+        return path.split('.').collect();
+    }
+    let mut out: Vec<&str> = Vec::new();
+    let bytes = path.as_bytes();
+    let mut i = 0;
+    let mut seg_start = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'`' => {
+                // Mixed unquoted prefix + quoted suffix isn't a pattern
+                // Spark generates; degrade to plain split.
+                if seg_start != i {
+                    return path.split('.').collect();
+                }
+                let Some(rel) = path[i + 1..].find('`') else {
+                    return path.split('.').collect();
+                };
+                let close = i + 1 + rel;
+                out.push(&path[i + 1..close]);
+                i = close + 1;
+                if i < bytes.len() {
+                    if bytes[i] != b'.' {
+                        return path.split('.').collect();
+                    }
+                    i += 1;
+                }
+                seg_start = i;
+            }
+            b'.' => {
+                out.push(&path[seg_start..i]);
+                i += 1;
+                seg_start = i;
+            }
+            _ => i += 1,
+        }
+    }
+    if seg_start < bytes.len() {
+        out.push(&path[seg_start..]);
+    }
+    out
+}
+
 /// Walk the remaining dotted segments through a resolved composite
 /// [`ColumnType`].
 fn resolve_in_type<'a>(ty: &ColumnType, segments: &[&'a str]) -> FieldPathResult<'a> {
@@ -677,6 +728,12 @@ fn resolve_in_type<'a>(ty: &ColumnType, segments: &[&'a str]) -> FieldPathResult
     match ty {
         // A dotted access on an array pierces to the element type.
         ColumnType::Array(Some(elem)) => resolve_in_type(elem, segments),
+        // An opaque struct (`field: Struct` — no inner fields
+        // modeled) degrades to `Resolved`. Same posture as
+        // `Array(None) | Map(..)`: pykrete can't verify the rest of
+        // the path, but flagging it would false-fire on legitimate
+        // accesses into nested data the user just hasn't declared.
+        ColumnType::Struct(fields) if fields.is_empty() => FieldPathResult::Resolved,
         ColumnType::Struct(fields) => match fields.iter().find(|f| f.name == seg) {
             None => FieldPathResult::Missing {
                 field: seg,

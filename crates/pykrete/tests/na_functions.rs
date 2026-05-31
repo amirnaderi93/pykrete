@@ -59,16 +59,18 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 }
 
 #[test]
-fn plain_drop_still_checks_column_names() {
-    // The `.na` interception must not weaken the ordinary `df.drop`
-    // column check.
+fn plain_drop_tolerates_missing_names_per_spark() {
+    // Spark's `df.drop(*cols)` silently ignores names not in the schema
+    // (per its source / docs). Pykrete v0.1.39 matches that. The `.na`
+    // interception path doesn't affect this — what matters is that
+    // `raw.drop("nonexistent")` produces no D0030.
     let src = format!(
         "{SCHEMA}
 def f(raw: DataFrame[Raw]) -> DataFrame:
     return raw.drop(\"nonexistent\")
 "
     );
-    assert_has_code(&check(&src), "D0030");
+    assert_does_not_have_code(&check(&src), "D0030");
 }
 
 #[test]

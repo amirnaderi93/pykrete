@@ -157,10 +157,20 @@ fn drop_with_known_columns_is_clean() {
 }
 
 #[test]
-fn d0030_fires_when_drop_references_an_unknown_column() {
+fn drop_silently_tolerates_unknown_column_names() {
+    // PySpark's `df.drop(*cols)` ignores names that aren't in the schema
+    // by design (per Spark source / docs). Firing D0030 on `"nope"` here
+    // would flag working production code as broken.
     let result = check(&with_orders(r#"return raw.drop("nope")"#));
-    assert_has_code(&result, "D0030");
-    assert_message_contains(&result, "D0030", "nope");
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn drop_silently_tolerates_mix_of_known_and_unknown_names() {
+    // `df.drop("known", "missing")` succeeds and just drops the known
+    // one. Neither side fires D0030.
+    let result = check(&with_orders(r#"return raw.drop("place_code", "missing")"#));
+    assert_does_not_have_code(&result, "D0030");
 }
 
 #[test]

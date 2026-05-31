@@ -6,6 +6,102 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.39] - 2026-05-31
+
+Penultimate pre-v1.0.0 release. Closes the last seven false positives
+surfaced by the v0.1.38 cross-codebase suite — a ten-donor sweep of
+real OSS PySpark fixtures (apache/spark, mlflow, hudi, iceberg-python,
+delta, kedro-plugins, feast, dbt-spark, quinn, python-deequ). Every
+one of those goldens now emits zero diagnostics, which is the
+v1.0.0 bar. Skipped 0.1.38 in this repo: that version was
+pykrete-tests-only, wiring in the goldens that surfaced this work.
+
+### Fixed
+
+- **F1: `df.drop(*cols)` silently tolerates names not in the schema.**
+  Spark's `drop` is designed to ignore unknown names — its source
+  reads "ignored if schema doesn't contain column name(s)". Pykrete
+  used to fire `D0030`, telling users their working production code
+  was broken. The new `tolerates_missing_column_names(method)`
+  classifier routes `drop`'s name refs through an LSP-only path that
+  records them for hover / jump-to-definition but suppresses the
+  diagnostic. `drop("region", "missing")` is clean on both names.
+- **F2: `df.withColumnsRenamed({"missing": "new_name"})` silently
+  tolerates dict keys not in the schema.** Same Spark-design rationale
+  as `drop`. `apply_with_columns_renamed` now uses the same LSP-only
+  recording path. A mixed dict — known + missing keys — is clean
+  end-to-end.
+- **F3: Backtick-quoted column refs resolve correctly.** Spark allows
+  `` `name` `` to escape identifiers that contain special chars; a
+  backtick-wrapped column like `F.col("`info`")` used to false-fire
+  `D0030`. Added `split_backtick_aware` in `schema.rs`: it segments
+  on `.` outside backticks AND strips backticks from each segment,
+  so `` "`info`" `` → `info`, `` "`info`.`name`" `` →
+  `["info", "name"]`, `` "`a.b`" `` → one literal segment `a.b`.
+  `resolve_path` and `split_qualified` both go through it. A typo
+  inside backticks still fires `D0030`.
+- **F4: Bare `Struct` is an opaque-struct atomic type.** Real
+  production codebases carry nested structs whose shape the user
+  hasn't fully modeled (third-party telemetry blobs, opaque
+  metadata). `field: Struct` now parses as
+  `ColumnType::Struct(vec![])` — the column counts as composite, so
+  `F.col("field")` resolves, but inner-field navigation
+  (`F.col("field.x")`) degrades silently rather than fire `D0030`.
+  Same posture as bare `Array` / `Map` without an element/key-value
+  parameter. Added to `COLUMN_TYPE_NAMES` and documented in
+  `schemas.md`.
+- **F5: `float` is an alias for `double`.** PySpark passes Python
+  floats to Spark's runtime, which always coerces them to
+  `DoubleType` — `IntegerType` / `FloatType` / `DoubleType` all
+  receive float-typed values as Double. Mixed `field: float` and
+  `field: double` in the same codebase used to fire `D0010` on the
+  former. Strict atomics now resolve `float` to
+  `ColumnType::Double`; nested `Array[float]` works; strict mode
+  treats `float` and `double` as interchangeable.
+- **F6: `F.explode(map_col).alias("k", "v")` emits both columns.**
+  Spark's two-arg alias on an exploded map is the canonical way to
+  name the (key, value) pair. Pykrete used to take only the first
+  alias and drop the second, leaving a one-column derived schema and
+  false-firing downstream refs to the value column. New
+  `explode_map_aliased_fields` helper, wired into both the
+  `apply_column_method("select")` and the `groupBy(...).agg(...)`
+  arg-walking paths. Single-arg alias on a map explode (which Spark
+  errors at runtime) is left to the existing `select_output_name`
+  one-name path.
+- **F7: `df.select(F.explode(arr).alias("a"), df.other)` keeps both
+  columns in the inferred schema.** `select_output_name` used to
+  recognise `col("X")` / `F.col("X")` / `"X"` / `.alias("X")` but
+  NOT the attribute / subscript shapes (`df.X`, `df["X"]`) — even
+  though `collect_col_refs` already accepted them as column
+  references. The mismatch meant the select walked all the way
+  through but the second arg's contribution was silently dropped from
+  the derived schema, so a downstream `col("other")` false-fired
+  `D0030`. `select_output_name` now recognises both shapes, returning
+  the attribute name / subscript-literal as the output column name.
+
+### Internal
+
+- `check_column_method_args` takes the method name so it can route
+  drop's refs through the silent-skip path.
+- New `record_column_refs_tolerating_missing(refs, schema, ctx)`:
+  LSP-records each ref without emitting `D0030`.
+- New `split_backtick_aware(path)` in `schema.rs`: shared by
+  `resolve_path` and `split_qualified`. Unit-tested directly.
+- New `explode_map_aliased_fields(arg, recv, tcx)` in
+  `strict_operators.rs`: alongside `posexplode_fields`, recognises
+  the explode-of-map dual-alias shape.
+- `select_output_name` extended with two new arms for the attribute
+  and subscript receiver patterns.
+
+### Coordinated golden refresh (pykrete-tests)
+
+Six of the v0.1.38 cross-codebase goldens were captured with the
+v0.1.37-baseline false-positive diagnostics. After v0.1.39 lands and
+the binary is rebuilt, a coordinated PR on pykrete-tests refreshes
+those six goldens to empty-diagnostic arrays. The remaining 24 stay
+unchanged. The full 32-fixture sweep then carries a single shared
+expectation: zero diagnostics, which is the v1.0.0 bar.
+
 ## [0.1.37] - 2026-05-31
 
 Final pre-v1.0.0 polish. Two false-positive blockers + four important

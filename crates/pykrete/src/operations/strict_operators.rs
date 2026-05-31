@@ -311,6 +311,10 @@ pub(super) fn apply_column_method<'a>(
                     fields.extend(pair);
                     continue;
                 }
+                if let Some(pair) = explode_map_aliased_fields(arg, recv, tcx) {
+                    fields.extend(pair);
+                    continue;
+                }
                 if let Some(name) = select_output_name(arg) {
                     fields.push(DerivedField {
                         name,
@@ -697,6 +701,23 @@ pub(super) fn select_output_name(arg: &Expr) -> Option<&str> {
     if let Some((name, _)) = col_reference(arg) {
         return Some(name);
     }
+    // `df.X` — attribute-access column ref. Spark projects this as a
+    // column named `X` in the output schema, so a select arg like
+    // `lines.timestamp` carries `timestamp` through. The collect_col_refs
+    // side already recognises this shape; surfacing it here as well
+    // keeps the inferred output schema in sync with the validated refs.
+    if let Some(attr) = arg.as_attribute_expr()
+        && attr.value.is_name_expr()
+    {
+        return Some(attr.attr.id.as_str());
+    }
+    // `df["X"]` — subscript sibling of the attribute form above.
+    if let Some(sub) = arg.as_subscript_expr()
+        && sub.value.is_name_expr()
+        && let Some(s) = sub.slice.as_string_literal_expr()
+    {
+        return Some(s.value.to_str());
+    }
     if let Some(call) = arg.as_call_expr() {
         if let Some(attr) = call.func.as_attribute_expr()
             && attr.attr.id.as_str() == "cast"
@@ -715,6 +736,97 @@ pub(super) fn select_output_name(arg: &Expr) -> Option<&str> {
         }
     }
     None
+}
+
+/// Resolve the column type of an `F.explode(<arg>)` payload — `<arg>`
+/// may be a string literal (`"map_col"`), a `col("map_col")` /
+/// `F.col(...)` ref, OR an attribute/subscript-style ref
+/// (`data.map_col`, `data["map_col"]`). The last two shapes are common
+/// in real PySpark code but `infer_expr_type` doesn't bottom them out
+/// to the receiver field, so this helper steps in.
+fn explode_map_arg_type<'a>(
+    arg: &Expr,
+    recv: &SchemaView<'a>,
+    tcx: TypeCtx<'a>,
+) -> Option<ColumnType> {
+    if let Some(ty) = select_arg_type(arg, recv, tcx) {
+        return Some(ty);
+    }
+    if let Some(attr) = arg.as_attribute_expr()
+        && attr.value.is_name_expr()
+    {
+        return recv.field_type(attr.attr.id.as_str(), tcx.schemas);
+    }
+    if let Some(sub) = arg.as_subscript_expr()
+        && sub.value.is_name_expr()
+        && let Some(s) = sub.slice.as_string_literal_expr()
+    {
+        return recv.field_type(s.value.to_str(), tcx.schemas);
+    }
+    None
+}
+
+/// Returns `Some` if `arg` is `F.explode(map_col).alias(k_name, v_name)`
+/// — a two-arg alias on an explode of a Map column. Spark expands this
+/// to TWO columns named per the alias args, typed as the map's key and
+/// value. A single-arg alias on a map explode is a runtime error in
+/// Spark; this helper bails on it and lets `select_output_name` produce
+/// the one-name interpretation.
+pub(super) fn explode_map_aliased_fields<'a>(
+    arg: &'a Expr,
+    recv: &SchemaView<'a>,
+    tcx: TypeCtx<'a>,
+) -> Option<Vec<DerivedField<'a>>> {
+    let outer = arg.as_call_expr()?;
+    let outer_attr = outer.func.as_attribute_expr()?;
+    if outer_attr.attr.id.as_str() != "alias" {
+        return None;
+    }
+    // Two string-literal positional args to .alias(...) — Spark's
+    // signature for naming a (key, value) pair.
+    if outer.arguments.args.len() != 2 {
+        return None;
+    }
+    let key_name = outer.arguments.args[0]
+        .as_string_literal_expr()?
+        .value
+        .to_str();
+    let val_name = outer.arguments.args[1]
+        .as_string_literal_expr()?
+        .value
+        .to_str();
+    let inner = outer_attr.value.as_call_expr()?;
+    let inner_fname = match inner.func.as_ref() {
+        Expr::Name(n) => n.id.as_str(),
+        Expr::Attribute(a) => a.attr.id.as_str(),
+        _ => return None,
+    };
+    if !matches!(inner_fname, "explode" | "explode_outer") {
+        return None;
+    }
+    let map_arg = inner.arguments.args.first()?;
+    let map_ty = explode_map_arg_type(map_arg, recv, tcx)?;
+    // Peel `Optional[Map<...>]` so the outer-explode nullability
+    // wrapper doesn't hide the underlying map.
+    let base = match &map_ty {
+        ColumnType::Nullable(inner) => inner.as_ref(),
+        other => other,
+    };
+    let ColumnType::Map(key_ty, val_ty) = base else {
+        return None;
+    };
+    let key_ty = key_ty.as_deref().cloned();
+    let val_ty = val_ty.as_deref().cloned();
+    Some(vec![
+        DerivedField {
+            name: key_name,
+            ty: key_ty,
+        },
+        DerivedField {
+            name: val_name,
+            ty: val_ty,
+        },
+    ])
 }
 
 /// Returns `Some` if `arg` is a bare `F.posexplode(arr)` /

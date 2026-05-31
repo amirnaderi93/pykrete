@@ -319,7 +319,15 @@ fn parse_type<'s, F: Fn(&str) -> Option<ColumnType>>(
         ));
     }
     if word.eq_ignore_ascii_case("struct") {
-        let inner = after.strip_prefix('<')?;
+        // `struct<…>` carries inner fields; bare `struct` (no `<`) is
+        // the opaque-struct sentinel — the user is declaring a nested
+        // struct they haven't fully modeled. Pykrete tracks the field
+        // as composite but degrades on inner-field navigation rather
+        // than false-flagging. Same posture as `Array` / `Map` without
+        // an element/key-value parameter.
+        let Some(inner) = after.strip_prefix('<') else {
+            return Some((ColumnType::Struct(Vec::new()), after));
+        };
         return parse_struct_fields(inner, leaf, case);
     }
     Some((leaf(word)?, after))
@@ -442,7 +450,14 @@ fn atomic_strict(name: &str) -> Option<ColumnType> {
     match name {
         "int" => Some(ColumnType::Int),
         "long" => Some(ColumnType::Long),
-        "double" => Some(ColumnType::Double),
+        // `float` is Python's float (which Spark's PySpark API maps to
+        // DoubleType across the board — `IntegerType` / `FloatType` /
+        // `DoubleType` all coerce float-typed values to Double). Real
+        // codebases mix `field: float` and `field: double` freely;
+        // pykrete accepts both as Double rather than false-flag the
+        // former. The lenient (cast-string) parser already does this;
+        // surfacing it strictly here keeps annotation and cast in sync.
+        "double" | "float" => Some(ColumnType::Double),
         "byte" => Some(ColumnType::Byte),
         "short" => Some(ColumnType::Short),
         "string" => Some(ColumnType::String),
@@ -504,7 +519,7 @@ impl fmt::Display for ColumnType {
 /// `(precision, scale)` — `decimal` alone resolves to Spark's default
 /// `decimal(10, 0)`.
 pub const COLUMN_TYPE_NAMES: &str = "int, long, double, byte, short, decimal, decimal(p, s), \
-    string, binary, bool, date, timestamp, Array, Map";
+    string, binary, bool, date, timestamp, Array, Map, Struct";
 
 /// Same vocabulary as [`COLUMN_TYPE_NAMES`] but as a slice — fed to the
 /// completion engine when the cursor sits inside a `name: "<cursor>"`
@@ -524,6 +539,7 @@ pub const COLUMN_TYPE_NAMES_LIST: &[&str] = &[
     "timestamp",
     "Array",
     "Map",
+    "Struct",
 ];
 
 // ---------------------------------------------------------------------------
@@ -587,12 +603,30 @@ mod tests {
         assert_eq!(ColumnType::from_name(""), None);
         // Atomic names are case-sensitive.
         assert_eq!(ColumnType::from_name("Int"), None);
-        assert_eq!(ColumnType::from_name("float"), None);
+        assert_eq!(ColumnType::from_name("Float"), None);
         // A parameterized atomic, and unbalanced / malformed nesting.
         assert_eq!(ColumnType::from_name("int<x>"), None);
         assert_eq!(ColumnType::from_name("array<int"), None);
         assert_eq!(ColumnType::from_name("array<>"), None);
         assert_eq!(ColumnType::from_name("map<string>"), None);
+    }
+
+    #[test]
+    fn from_name_accepts_float_as_alias_for_double() {
+        assert_eq!(ColumnType::from_name("float"), Some(ColumnType::Double));
+        assert_eq!(ColumnType::from_name("double"), Some(ColumnType::Double));
+    }
+
+    #[test]
+    fn from_name_accepts_bare_struct_as_opaque_struct() {
+        assert_eq!(
+            ColumnType::from_name("Struct"),
+            Some(ColumnType::Struct(Vec::new())),
+        );
+        assert_eq!(
+            ColumnType::from_name("struct"),
+            Some(ColumnType::Struct(Vec::new())),
+        );
     }
 
     #[test]
@@ -636,6 +670,7 @@ mod tests {
             "timestamp",
             "Array",
             "Map",
+            "Struct",
         ] {
             assert!(
                 COLUMN_TYPE_NAMES.contains(name),
