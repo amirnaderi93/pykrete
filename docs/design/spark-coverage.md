@@ -942,9 +942,12 @@ working code. Probes close that gap with two assertion shapes:
 
 **Bright-line framing** (inherited from `literal-value-vocabulary.md`):
 probes verify *static* schema tracking — column names, column types,
-nullability after a chain of operations — at edit time. Probes do
-NOT verify row values, runtime behaviour, or anything requiring code
-execution. Pykrete has no runtime; probes inherit that constraint.
+nullability after a chain of operations — at edit time, via the seven
+marker kinds defined in the spec (`PROBE-EXPECTS`, `PROBE-RESOLVES`,
+`PROBE-TYPE-IS`, `PROBE-NULLABLE`, `PROBE-OUTPUT-COLUMNS`,
+`PROBE-FILE-CLEAN-OF`, `PROBE-FILE-COUNT`). Probes do NOT verify row
+values, runtime behaviour, or anything requiring code execution.
+Pykrete has no runtime; probes inherit that constraint.
 
 Sibling-of-trust feature with the enum-constraints tracker below: both
 exist because *the v1.0 trust pitch needs positive evidence on top of
@@ -952,17 +955,29 @@ the absence-of-negatives proof*.
 
 Full design tracker at
 [`docs/design/schema-tracking-probes.md`](./schema-tracking-probes.md) —
-chosen syntax (inline-comment markers in the existing `.pyk` fixtures:
-`# PROBE-EXPECTS: D0030 on "product"`; `# PROBE-RESOLVES: col("region")`),
-extended `golden.sh` integration (parses comments → expectations table
-→ diffs against existing `diagnostics[]` JSON, no new CLI surface, no
-new D-code), 8 open design questions (ID scope, Unicode/whitespace
-policy on `on` span matching, multi-file probes deferred to v1.2,
-etc.), cost estimate 5-7 days (one engineer-week, pykrete-tests v1.1.0
-only — no pykrete-core release needed), v1.1 work plan (spec PR →
-multi-lens review correctness/adversarial/schema-stability → three
-sequential implementation PRs → seed probes across all 32 fixtures →
-flip coverage guard to release-blocking).
+chosen syntax (inline-comment markers in the existing `.pyk` fixtures
+and a separate `probes_negative/` tree per donor for synthetic typos:
+`# PROBE-EXPECTS: D0030 on "product"`; `# PROBE-RESOLVES`;
+`# PROBE-TYPE-IS: amount :: double`; `# PROBE-NULLABLE: region = false`;
+`# PROBE-OUTPUT-COLUMNS: [region, amount]`; `# PROBE-FILE-CLEAN-OF` /
+`# PROBE-FILE-COUNT`), extended `golden.sh` integration (parses
+comments → expectations table → diffs against existing `diagnostics[]`
+JSON; type/nullability/output-columns via a synthesizer rewrite that
+keeps the JSON contract intact; no new CLI surface on pykrete-core, no
+new D-code), 16 open design questions (8 original — ID scope,
+Unicode/whitespace policy, multi-file probes deferred to v1.2, etc. —
+plus 8 added in round 2 of the spec review: stacked-EXPECTS pairing,
+target-line resolution, in-string probe extraction, column-unit
+semantics, probes stability contract, path normalisation, negative-
+probe seeding methodology, coverage-guard grace window), a "Probes
+stability surface" section paralleling the v1.0 JSON output stability
+contract (`probesSchemaVersion: "1"`), cost estimate 6-8 days (one
+engineer-week-plus, pykrete-tests v1.1.0 only — no pykrete-core
+release needed for the EXPECTS / RESOLVES / FILE-* markers), v1.1 work
+plan (spec PR → multi-lens review correctness/adversarial/schema-
+stability → three sequential implementation PRs → seed probes across
+all 32 fixtures plus bootstrap `probes_negative/` per donor → coverage
+guard informational at v1.1 ship, becomes release-blocking in v1.2).
 
 ### Literal value vocabulary — enum constraints on string columns (v1.1)
 
