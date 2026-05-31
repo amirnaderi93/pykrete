@@ -829,3 +829,32 @@ keep the round-3 patch laser-focused on the regression fix.
     backtick-aware tokenizer that respects quoted segments. Filed as
     v1.0.1 because the form is rare enough that no real user has
     complained.
+
+### Literal value vocabulary — enum constraints on string columns (v1.1)
+
+User-proposed (2026-05-31) during pre-v1.0.0 sprint, deferred per
+trust-first sprint discipline. Schema authors declare the allowed
+value set for an enum-shaped string column (`status: enum["pending",
+"shipped", "delivered", "cancelled"]`) and pykrete catches off-enum
+literals in `== "..."`, `.isin(...)`, `.fillna({...})` and
+`lit("...")`-into-sink positions. Catches the silent-empty-DataFrame
+class of bug (`df.filter(col("status") == "actiev")`).
+
+**Bright-line framing**: pykrete validates things known at edit time;
+enum literals qualify (constraint and data are both source literals);
+runtime row values do not. Drawn deliberately to keep pykrete out of
+validation-library territory and avoid a runtime component. The
+explicit out-of-scope list (numeric min/max, date ranges, regex on
+row values, NOT NULL, foreign keys) is part of the framing principle,
+not a backlog.
+
+Full design tracker at
+[`docs/design/literal-value-vocabulary.md`](./literal-value-vocabulary.md)
+— syntax sketch (Form A: `enum[...]` subscript), 8 open design
+questions (unification on off-enum `withColumn(lit())`, string-op
+constraint drop, cast-from-string, schema-operator carry-through,
+aggregations, F.expr SQL fragment, JSON contract), cost estimate
+5-9 days, v1.1 work plan (spec PR first → multi-lens review on the
+spec → implementation PR → cross-codebase fixtures targeting enum
+patterns like Hudi `_hoodie_operation`, Delta `_change_type`, MLflow
+run states).
