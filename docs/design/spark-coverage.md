@@ -926,6 +926,44 @@ small-surface, low-traffic edits that don't gate the v1.0.0 tag.
     of scope for v1.0.1) or add a "pegged at v1.0.0 release" caveat so
     readers don't expect the prose to track HEAD. Cost: trivial.
 
+### Schema-tracking probes — cross-codebase positive verification (v1.1)
+
+User-directed (2026-05-31) immediately post-v1.0.0 launch: the v1.0
+cross-codebase suite verifies pykrete emits zero diagnostics on real
+working PySpark code, but doesn't prove the schema-tracking is
+*correct*. A checker that does nothing also emits zero diagnostics on
+working code. Probes close that gap with two assertion shapes:
+
+1. **Positive probe**: "after this transform, pykrete's tracked schema
+   should resolve `<column>` cleanly — if it doesn't, we lost the
+   schema."
+2. **Negative probe**: "after this transform, pykrete should fire
+   `D0030` on `<column>` — if it doesn't, we silently widened."
+
+**Bright-line framing** (inherited from `literal-value-vocabulary.md`):
+probes verify *static* schema tracking — column names, column types,
+nullability after a chain of operations — at edit time. Probes do
+NOT verify row values, runtime behaviour, or anything requiring code
+execution. Pykrete has no runtime; probes inherit that constraint.
+
+Sibling-of-trust feature with the enum-constraints tracker below: both
+exist because *the v1.0 trust pitch needs positive evidence on top of
+the absence-of-negatives proof*.
+
+Full design tracker at
+[`docs/design/schema-tracking-probes.md`](./schema-tracking-probes.md) —
+chosen syntax (inline-comment markers in the existing `.pyk` fixtures:
+`# PROBE-EXPECTS: D0030 on "product"`; `# PROBE-RESOLVES: col("region")`),
+extended `golden.sh` integration (parses comments → expectations table
+→ diffs against existing `diagnostics[]` JSON, no new CLI surface, no
+new D-code), 8 open design questions (ID scope, Unicode/whitespace
+policy on `on` span matching, multi-file probes deferred to v1.2,
+etc.), cost estimate 5-7 days (one engineer-week, pykrete-tests v1.1.0
+only — no pykrete-core release needed), v1.1 work plan (spec PR →
+multi-lens review correctness/adversarial/schema-stability → three
+sequential implementation PRs → seed probes across all 32 fixtures →
+flip coverage guard to release-blocking).
+
 ### Literal value vocabulary — enum constraints on string columns (v1.1)
 
 User-proposed (2026-05-31) during pre-v1.0.0 sprint, deferred per
