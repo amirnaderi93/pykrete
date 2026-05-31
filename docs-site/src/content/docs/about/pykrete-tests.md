@@ -25,7 +25,7 @@ description: How pykrete is tested against 32 annotated fixtures from 10 upstrea
 | **dbt-spark** | [dbt-labs/dbt-spark](https://github.com/dbt-labs/dbt-spark) | 2 |
 | **python-deequ** | [awslabs/python-deequ](https://github.com/awslabs/python-deequ) | 2 |
 
-Every fixture currently emits zero diagnostics against the released binary; the golden snapshots are all empty-diagnostic arrays as of v0.1.40, after the v0.1.39 false-positive sweep cleared the six findings the v0.1.38 baseline surfaced. The donor table with pinned commits and per-donor coverage rationale — what each codebase exercises, why it earned a slot — lives in the [pykrete-tests README](https://github.com/amirnaderi93/pykrete-tests#the-donors).
+Every fixture currently emits zero diagnostics against the released binary; the golden snapshots are all empty-diagnostic arrays after the v0.1.39 false-positive sweep cleared the six v0.1.38-baseline fixtures (seven underlying findings total) that the cross-codebase suite had surfaced. The donor table with pinned commits and per-donor coverage rationale — what each codebase exercises, why it earned a slot — lives in the [pykrete-tests README](https://github.com/amirnaderi93/pykrete-tests#the-donors).
 
 ## How it works
 

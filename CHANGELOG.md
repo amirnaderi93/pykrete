@@ -36,9 +36,10 @@ work.
 ### Coordinated with
 
 - pykrete-tests v0.1.40 (PR amirnaderi93/pykrete-tests#3, merged):
-  refreshed the six v0.1.37-baseline goldens that v0.1.39 cleaned up,
-  plus the two restored pilots, bringing the suite to 32 fixtures all
-  emitting `diagnostics: []` against v0.1.39 and v0.1.40.
+  refreshed the six v0.1.37-baseline goldens (which together carried
+  seven findings) that v0.1.39 cleaned up, plus the two restored
+  pilots, bringing the suite to 32 fixtures all emitting
+  `diagnostics: []` against v0.1.39 and v0.1.40.
 
 ### Versions
 
@@ -47,8 +48,9 @@ work.
 
 ## [0.1.39] - 2026-05-31
 
-Penultimate pre-v1.0.0 release. Closes the last seven false positives
-surfaced by the v0.1.38 cross-codebase suite — a ten-donor sweep of
+Penultimate pre-v1.0.0 release. Closes the last seven false-positive
+findings (across six affected fixtures) surfaced by the v0.1.38
+cross-codebase suite — a ten-donor sweep of
 real OSS PySpark fixtures (apache/spark, mlflow, hudi, iceberg-python,
 delta, kedro-plugins, feast, dbt-spark, quinn, python-deequ). Every
 one of those goldens now emits zero diagnostics, which is the
@@ -135,11 +137,12 @@ pykrete-tests-only, wiring in the goldens that surfaced this work.
 ### Coordinated golden refresh (pykrete-tests)
 
 Six of the v0.1.38 cross-codebase goldens were captured with the
-v0.1.37-baseline false-positive diagnostics. After v0.1.39 lands and
-the binary is rebuilt, a coordinated PR on pykrete-tests refreshes
-those six goldens to empty-diagnostic arrays. The remaining 24 stay
-unchanged. The full 32-fixture sweep then carries a single shared
-expectation: zero diagnostics, which is the v1.0.0 bar.
+v0.1.37-baseline false-positive diagnostics (seven findings total
+across those six fixtures). After v0.1.39 lands and the binary is
+rebuilt, a coordinated PR on pykrete-tests refreshes those six
+goldens to empty-diagnostic arrays. The remaining 24 stay unchanged.
+The full 32-fixture sweep then carries a single shared expectation:
+zero diagnostics, which is the v1.0.0 bar.
 
 ## [0.1.37] - 2026-05-31
 
@@ -1361,7 +1364,9 @@ full contract.
 - **Multi-file analysis** via imported typed declarations.
 - **`pykrete.json`** project configuration with non-strict / strict modes.
 
-[Unreleased]: https://github.com/amirnaderi93/pykrete/compare/v0.1.37...HEAD
+[Unreleased]: https://github.com/amirnaderi93/pykrete/compare/v0.1.40...HEAD
+[0.1.40]: https://github.com/amirnaderi93/pykrete/compare/v0.1.39...v0.1.40
+[0.1.39]: https://github.com/amirnaderi93/pykrete/compare/v0.1.37...v0.1.39
 [0.1.37]: https://github.com/amirnaderi93/pykrete/compare/v0.1.34...v0.1.37
 [0.1.34]: https://github.com/amirnaderi93/pykrete/compare/v0.1.33...v0.1.34
 [0.1.33]: https://github.com/amirnaderi93/pykrete/compare/v0.1.32...v0.1.33
