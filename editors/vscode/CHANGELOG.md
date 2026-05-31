@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.2.35
+
+Tracks the v0.1.40 pykrete release — final pre-v1.0.0 docs-only
+release wiring the 10-donor / 32-fixture cross-codebase suite into the
+main README's "Reliability and trust" section now that every fixture
+emits zero diagnostics. No LSP behaviour changes; the bundled
+`pykrete-lsp` is unchanged from 0.2.34. See the
+[main CHANGELOG](../../CHANGELOG.md#0140---2026-05-31) for details.
+
+## 0.2.34
+
+Tracks the v0.1.39 pykrete release — cross-codebase false-positive
+sweep. Closes the last seven false positives surfaced by the v0.1.38
+cross-codebase suite: `df.drop(*cols)` and `withColumnsRenamed({…})`
+now tolerate missing names (Spark-design behaviour), backtick-quoted
+column refs resolve correctly, transient `.alias()` rename helpers
+no longer false-fire, `F.posexplode(arr).alias("p", "v")` and
+`F.explode(F.map(...)).alias("k", "v")` are recognized as dual-column,
+the strict-mode atomic vocabulary accepts `float`, and `getField` on
+opaque structs degrades cleanly. See the
+[main CHANGELOG](../../CHANGELOG.md#0139---2026-05-31) for details.
+
+## 0.2.33
+
+Skipped — pykrete v0.1.38 was a pykrete-tests-only release wiring in
+the cross-codebase goldens, with no extension-facing changes. The
+next published extension is 0.2.34 (tracking pykrete v0.1.39).
+
 ## 0.2.32
 
 Tracks the v0.1.37 pykrete release — final pre-v1.0.0 polish. Two

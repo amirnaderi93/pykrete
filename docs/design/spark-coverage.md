@@ -830,14 +830,16 @@ keep the round-3 patch laser-focused on the regression fix.
     v1.0.1 because the form is rare enough that no real user has
     complained.
 
-### v0.1.39 PR #69 round-1 review minors (v0.1.40 or v1.0.1)
+### v0.1.39 PR #69 round-1 review minors (v1.0.1)
 
 Surfaced by the v0.1.39 PR #69 round-1 multi-lens re-review (correctness
 / adversarial / cross-codebase). The round-1 BLOCKER (F4 opaque-Struct
 hole in `types_compatible` + `report_get_field_typo`) and both round-1
 IMPORTANTS (F7 unconditional Attribute arm, F1 over-broad string-form
-tolerance) shipped in round 2. The eight MINORS below are filed to
-v0.1.40 / v1.0.1 to keep the round-2 patch laser-focused.
+tolerance) shipped in round 2. The eight MINORS below carry their
+original "v0.1.40 or v1.0.1" disposition; v0.1.40 ultimately shipped
+as a docs-only release (wiring the 10-donor cross-codebase suite into
+the README), so every item below now defers to v1.0.1.
 
 24. **Schemas docs sentence on `Struct[...]` reads awkwardly.**
     `docs-site/src/content/docs/reference/schemas.md` (~line 44/131)
@@ -853,14 +855,14 @@ v0.1.40 / v1.0.1 to keep the round-2 patch laser-focused.
     to single-column.** Donor fixtures use the attribute form, so 32/32
     stay clean. Cost: small — extend `explode_map_aliased_fields` to
     accept the `F.col(...)` argument shape and the `posexplode`
-    variant. Filed as v0.1.40.
+    variant. Filed as v1.0.1.
 
 26. **`ColumnType::Struct(vec![])` `Display` impl renders as
     `struct<>`** (`crates/pykrete/src/types.rs:497-510`). Latent today
     because the degrade-to-Resolved path keeps opaque structs out of
     user-visible messages. Cost: trivial — render as bare `struct` (no
     angle brackets) to mirror bare `Array` / `Map` shapes. Filed as
-    cosmetic v0.1.40.
+    cosmetic v1.0.1.
 
 27. **`tolerates_missing_column_names` is a generic name but only
     matches `drop`** (`crates/pykrete/src/operations/column_methods.rs`).
@@ -872,7 +874,7 @@ v0.1.40 / v1.0.1 to keep the round-2 patch laser-focused.
 28. **`apply_with_columns_renamed` keeps unused `_source` /
     `_line_index` / `_diagnostics` params**
     (`crates/pykrete/src/operations/column_methods.rs:352-358`).
-    Cleaner to drop them from the signature. Cost: trivial; v0.1.40.
+    Cleaner to drop them from the signature. Cost: trivial; v1.0.1.
 
 29. **F5 strict-mode atomic accepts `float` but it's not in
     `COLUMN_TYPE_NAMES` / `COLUMN_TYPE_NAMES_LIST`**
@@ -880,18 +882,49 @@ v0.1.40 / v1.0.1 to keep the round-2 patch laser-focused.
     getting D0010 sees a candidate list without `float`. Cost: small
     — add to both constants for surface consistency, OR explicitly
     document `double` as canonical and `float` as a tolerated alias.
-    Filed as v0.1.40.
+    Filed as v1.0.1.
 
 30. **`split_backtick_aware` doesn't handle Spark's doubled-backtick
     escape, and consecutive empty backticks produce empty segments**
     (`crates/pykrete/src/schema.rs:678-720`). Edge cases — Spark's
     doubled-backtick form (`` `a``b` ``) and the empty-name form
-    (`` `` ``) are exotic. Cost: small; v0.1.40.
+    (`` `` ``) are exotic. Cost: small; v1.0.1.
 
 31. **F5 docs miss the FloatType (32-bit) vs DoubleType (64-bit) JVM
     distinction** (`docs-site/src/content/docs/reference/schemas.md`
     ~line 35). A one-line caveat would help users mapping Hive
-    metastore FloatType columns. Cost: trivial docs nit; v0.1.40.
+    metastore FloatType columns. Cost: trivial docs nit; v1.0.1.
+
+### v0.1.40 PR #68 round-1 review minors (v1.0.1 docs hygiene)
+
+Surfaced by the v0.1.40 PR #68 round-1 multi-lens review (correctness /
+voice / drift-hunter) on the donor-list wire-in. Blockers + importants
+shipped in round 2; the four minors below are deferred to v1.0.1 as
+small-surface, low-traffic edits that don't gate the v1.0.0 tag.
+
+32. **README "Apache Spark itself" could read as "Spark's entire Python
+    codebase".** Tighten to a concrete framing like "Apache Spark (8
+    fixtures from its `examples/` and `tests/` trees)". Cost: one-line
+    edit to `README.md` Reliability section.
+
+33. **"anyone can `pip install` the same upstream code" in
+    `docs-site/src/content/docs/about/production-readiness.md` (~line
+    75) is slightly imprecise.** Pinned commits suggest `git clone`/
+    checkout, not `pip install` (which resolves to tagged releases).
+    Rephrase to "anyone can clone the same upstream commits". Cost:
+    one-line edit.
+
+34. **"planted probes" mentioned in `pykrete-tests.md` methodology step
+    4 but the donor table shows zero-diagnostic goldens across the
+    board.** Add a clarifying sentence — "Probes used during pilot
+    review are not committed to the golden corpus" — so the language
+    closes the loop. Cost: one sentence in
+    `docs-site/src/content/docs/about/pykrete-tests.md`.
+
+35. **Hardcoded "1,084 tests" in `README.md` Reliability section will
+    drift on the next test addition.** Either CI-badge the count (out
+    of scope for v1.0.1) or add a "pegged at v1.0.0 release" caveat so
+    readers don't expect the prose to track HEAD. Cost: trivial.
 
 ### Literal value vocabulary — enum constraints on string columns (v1.1)
 

@@ -6,10 +6,51 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.40] - 2026-05-31
+
+Final pre-v1.0.0 release. Docs-only: wires the 10-donor cross-codebase
+suite into the main README's "Reliability and trust" section now that
+every fixture in the suite emits zero diagnostics against the v0.1.39
+binary. After this lands, v1.0.0 is the SemVer bump plus tag — no new
+work.
+
+### Changed
+
+- **README "Reliability and trust" section** names all 10 donor
+  codebases (apache/spark, delta-io/delta, apache/iceberg-python,
+  apache/hudi, mlflow/mlflow, feast-dev/feast,
+  kedro-org/kedro-plugins, MrPowers/quinn, dbt-labs/dbt-spark,
+  awslabs/python-deequ), links the per-donor matrix in the
+  pykrete-tests README, and states the now-true claim: every push
+  golden-diffs `pykrete check` against 32 annotated fixtures across
+  those 10 codebases, and regressions block release. CI badge points
+  at `cross-codebase.yml`.
+- **docs-site "Real-codebase tests" page** rewritten around the
+  10-donor / 32-fixture / all-clean reality. No more v0.1.37-baseline
+  or known-finding language: the suite has been clean against the
+  current binary since the v0.1.39 coordinated golden refresh.
+- **production-readiness "Real-codebase testing" + "Production
+  deployments" sections** updated to the same all-clean framing and
+  cross-link the donor matrix.
+
+### Coordinated with
+
+- pykrete-tests v0.1.40 (PR amirnaderi93/pykrete-tests#3, merged):
+  refreshed the six v0.1.37-baseline goldens (which together carried
+  seven findings) that v0.1.39 cleaned up, plus the two restored
+  pilots, bringing the suite to 32 fixtures all emitting
+  `diagnostics: []` against v0.1.39 and v0.1.40.
+
+### Versions
+
+- Workspace `Cargo.toml`: 0.1.39 → 0.1.40
+- VS Code extension: 0.2.34 → 0.2.35
+
 ## [0.1.39] - 2026-05-31
 
-Penultimate pre-v1.0.0 release. Closes the last seven false positives
-surfaced by the v0.1.38 cross-codebase suite — a ten-donor sweep of
+Penultimate pre-v1.0.0 release. Closes the last seven false-positive
+findings (across six affected fixtures) surfaced by the v0.1.38
+cross-codebase suite — a ten-donor sweep of
 real OSS PySpark fixtures (apache/spark, mlflow, hudi, iceberg-python,
 delta, kedro-plugins, feast, dbt-spark, quinn, python-deequ). Every
 one of those goldens now emits zero diagnostics, which is the
@@ -96,11 +137,12 @@ pykrete-tests-only, wiring in the goldens that surfaced this work.
 ### Coordinated golden refresh (pykrete-tests)
 
 Six of the v0.1.38 cross-codebase goldens were captured with the
-v0.1.37-baseline false-positive diagnostics. After v0.1.39 lands and
-the binary is rebuilt, a coordinated PR on pykrete-tests refreshes
-those six goldens to empty-diagnostic arrays. The remaining 24 stay
-unchanged. The full 32-fixture sweep then carries a single shared
-expectation: zero diagnostics, which is the v1.0.0 bar.
+v0.1.37-baseline false-positive diagnostics (seven findings total
+across those six fixtures). After v0.1.39 lands and the binary is
+rebuilt, a coordinated PR on pykrete-tests refreshes those six
+goldens to empty-diagnostic arrays. The remaining 24 stay unchanged.
+The full 32-fixture sweep then carries a single shared expectation:
+zero diagnostics, which is the v1.0.0 bar.
 
 ## [0.1.37] - 2026-05-31
 
@@ -1322,7 +1364,9 @@ full contract.
 - **Multi-file analysis** via imported typed declarations.
 - **`pykrete.json`** project configuration with non-strict / strict modes.
 
-[Unreleased]: https://github.com/amirnaderi93/pykrete/compare/v0.1.37...HEAD
+[Unreleased]: https://github.com/amirnaderi93/pykrete/compare/v0.1.40...HEAD
+[0.1.40]: https://github.com/amirnaderi93/pykrete/compare/v0.1.39...v0.1.40
+[0.1.39]: https://github.com/amirnaderi93/pykrete/compare/v0.1.37...v0.1.39
 [0.1.37]: https://github.com/amirnaderi93/pykrete/compare/v0.1.34...v0.1.37
 [0.1.34]: https://github.com/amirnaderi93/pykrete/compare/v0.1.33...v0.1.34
 [0.1.33]: https://github.com/amirnaderi93/pykrete/compare/v0.1.32...v0.1.33
