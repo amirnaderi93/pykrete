@@ -94,6 +94,70 @@ pub(super) fn analyze_expr<'a>(
             let _ = analyze_expr(&a.value, ctx, source, line_index, diagnostics);
             None
         }
+        // Compound expressions — descend into each child so any embedded
+        // method call (`df.select("typo").count() > 0`) is still
+        // analyzed. The result of these forms isn't itself a DataFrame,
+        // so this returns None unconditionally; descent is purely a
+        // side-effect to drive diagnostic collection on the children.
+        Expr::Compare(c) => {
+            let _ = analyze_expr(&c.left, ctx, source, line_index, diagnostics);
+            for cmp in &c.comparators {
+                let _ = analyze_expr(cmp, ctx, source, line_index, diagnostics);
+            }
+            None
+        }
+        Expr::BoolOp(b) => {
+            for v in &b.values {
+                let _ = analyze_expr(v, ctx, source, line_index, diagnostics);
+            }
+            None
+        }
+        Expr::UnaryOp(u) => {
+            let _ = analyze_expr(&u.operand, ctx, source, line_index, diagnostics);
+            None
+        }
+        Expr::BinOp(b) => {
+            let _ = analyze_expr(&b.left, ctx, source, line_index, diagnostics);
+            let _ = analyze_expr(&b.right, ctx, source, line_index, diagnostics);
+            None
+        }
+        Expr::Tuple(t) => {
+            for e in &t.elts {
+                let _ = analyze_expr(e, ctx, source, line_index, diagnostics);
+            }
+            None
+        }
+        Expr::List(l) => {
+            for e in &l.elts {
+                let _ = analyze_expr(e, ctx, source, line_index, diagnostics);
+            }
+            None
+        }
+        Expr::Set(s) => {
+            for e in &s.elts {
+                let _ = analyze_expr(e, ctx, source, line_index, diagnostics);
+            }
+            None
+        }
+        Expr::Dict(d) => {
+            for item in &d.items {
+                if let Some(k) = item.key.as_ref() {
+                    let _ = analyze_expr(k, ctx, source, line_index, diagnostics);
+                }
+                let _ = analyze_expr(&item.value, ctx, source, line_index, diagnostics);
+            }
+            None
+        }
+        Expr::If(if_exp) => {
+            let _ = analyze_expr(&if_exp.test, ctx, source, line_index, diagnostics);
+            let _ = analyze_expr(&if_exp.body, ctx, source, line_index, diagnostics);
+            let _ = analyze_expr(&if_exp.orelse, ctx, source, line_index, diagnostics);
+            None
+        }
+        Expr::Starred(s) => {
+            let _ = analyze_expr(&s.value, ctx, source, line_index, diagnostics);
+            None
+        }
         _ => None,
     }
 }
@@ -569,6 +633,21 @@ pub(super) fn analyze_method_call<'a>(
         return Some(receiver);
     }
     if is_pass_through_method(method) {
+        // `df.alias("L")` registers `L` as a SQL-style alias for the
+        // receiver's schema. Consulted by the join expression-form
+        // resolver so `col("L.region")` resolves through to the
+        // underlying schema (the canonical join-disambiguation pattern).
+        // The alias name is the first string-literal positional arg;
+        // anything else (a non-literal, missing arg) is left to runtime.
+        if method == "alias"
+            && let Some(lit) = call
+                .arguments
+                .args
+                .first()
+                .and_then(|a| a.as_string_literal_expr())
+        {
+            ctx.record_alias(lit.value.to_str(), receiver.clone());
+        }
         return Some(receiver);
     }
     if is_opaque_reshape_method(method) {
@@ -1346,7 +1425,7 @@ fn check_transform_input(
     );
     diagnostics.push(Diagnostic::at_range(
         Severity::Error,
-        "D0070",
+        "D0073",
         message,
         range,
         source,

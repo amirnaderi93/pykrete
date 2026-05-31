@@ -1,0 +1,5 @@
+---
+source: crates/pykrete/tests/diagnostic_catalog.rs
+expression: captured
+---
+d0073_transform_input_mismatch.pyk:17:12-17:13 error D0073 transformInputMismatch: transform('enrich') expects a DataFrame matching schema 'Raw', but the receiver (schema 'Enriched') does not. Missing: []; extra: [bonus].

@@ -240,6 +240,125 @@ def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame[A]:
 }
 
 // ===========================================================================
+// unionByName(allowMissingColumns=True) — schema-evolution merge
+//
+// `allowMissingColumns=True` is the kwarg PySpark added to merge two
+// DataFrames whose schemas differ (the canonical schema-evolution
+// pattern). When present, D0040 is suppressed and the output schema is
+// the union of both sides.
+// ===========================================================================
+
+#[test]
+fn unionByName_with_allow_missing_true_does_not_fire_d0040() {
+    let result = check(
+        r#"
+class Sale(Schema):
+    region: string
+    amount: int
+
+class SaleV2(Schema):
+    region: string
+    amount: int
+    timestamp: timestamp
+
+def f(old: DataFrame[Sale], new: DataFrame[SaleV2]) -> DataFrame:
+    return old.unionByName(new, allowMissingColumns=True)
+"#,
+    );
+    assert_does_not_have_code(&result, "D0040");
+}
+
+#[test]
+fn unionByName_with_allow_missing_true_output_carries_all_columns() {
+    // Output schema is the union: timestamp lives in the result too,
+    // so selecting it downstream is valid (and selecting a non-existent
+    // column still fires D0030).
+    let result = check(
+        r#"
+class Sale(Schema):
+    region: string
+    amount: int
+
+class SaleV2(Schema):
+    region: string
+    amount: int
+    timestamp: timestamp
+
+def f(old: DataFrame[Sale], new: DataFrame[SaleV2]) -> DataFrame:
+    return old.unionByName(new, allowMissingColumns=True).select(col("timestamp"))
+"#,
+    );
+    assert_does_not_have_code(&result, "D0030");
+    assert_does_not_have_code(&result, "D0040");
+}
+
+#[test]
+fn unionByName_with_allow_missing_false_still_fires_d0040() {
+    // Explicit `False` keeps the strict default — schemas must match.
+    let result = check(
+        r#"
+class Sale(Schema):
+    region: string
+    amount: int
+
+class SaleV2(Schema):
+    region: string
+    amount: int
+    timestamp: timestamp
+
+def f(old: DataFrame[Sale], new: DataFrame[SaleV2]) -> DataFrame:
+    return old.unionByName(new, allowMissingColumns=False)
+"#,
+    );
+    assert_has_code(&result, "D0040");
+}
+
+#[test]
+fn unionByName_without_allow_missing_kwarg_still_fires_d0040() {
+    // Default behavior (kwarg absent) — schemas must match.
+    let result = check(
+        r#"
+class Sale(Schema):
+    region: string
+    amount: int
+
+class SaleV2(Schema):
+    region: string
+    amount: int
+    timestamp: timestamp
+
+def f(old: DataFrame[Sale], new: DataFrame[SaleV2]) -> DataFrame:
+    return old.unionByName(new)
+"#,
+    );
+    assert_has_code(&result, "D0040");
+}
+
+#[test]
+fn unionByName_with_non_literal_allow_missing_falls_through_conservatively() {
+    // A non-literal flag (variable, expression) is statically
+    // unresolvable. The checker suppresses D0040 here to avoid
+    // false-flagging a possibly-True flag — under-checking is
+    // preferred over false positives.
+    let result = check(
+        r#"
+class Sale(Schema):
+    region: string
+    amount: int
+
+class SaleV2(Schema):
+    region: string
+    amount: int
+    timestamp: timestamp
+
+def f(old: DataFrame[Sale], new: DataFrame[SaleV2], flag: bool) -> DataFrame:
+    return old.unionByName(new, allowMissingColumns=flag)
+"#,
+    );
+    assert_does_not_have_code(&result, "D0040");
+}
+
+// ===========================================================================
 // Set operations — intersect/intersectAll/subtract/except/exceptAll
 //
 // Same shape as union: result = receiver's schema, both sides must have

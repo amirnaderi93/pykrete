@@ -52,6 +52,17 @@ pub(super) fn handle_two_df_method<'a>(
     let right = analyze_expr(arg, ctx, source, line_index, diagnostics)?;
 
     match kind {
+        TwoDfMethod::UnionByName if allow_missing_columns(call) => {
+            // `unionByName(other, allowMissingColumns=True)` — schemas
+            // are allowed to differ; missing fields on either side
+            // become nullable in the output. Suppress D0040 and return
+            // the union of both schemas.
+            Some(apply_union_by_name_with_missing(
+                left,
+                &right,
+                ctx.schemas(),
+            ))
+        }
         TwoDfMethod::Union | TwoDfMethod::UnionByName | TwoDfMethod::SetOp => {
             check_union_schemas(
                 method,
@@ -66,7 +77,7 @@ pub(super) fn handle_two_df_method<'a>(
         }
         TwoDfMethod::Join => {
             let on = parse_on_arg(extract_on_arg(call), ctx);
-            check_join_keys(left, &right, &on, source, line_index, diagnostics);
+            check_join_keys(left, &right, &on, ctx, source, line_index, diagnostics);
             // Record each `on=` key as a column reference so the LSP
             // layer offers column completion inside `join(on="…")`.
             if let JoinOn::Keys(keys) = &on {
@@ -84,6 +95,57 @@ pub(super) fn handle_two_df_method<'a>(
         }
         TwoDfMethod::CrossJoin => Some(apply_concat(left, &right, ctx.schemas())),
     }
+}
+
+/// Whether the call carries an `allowMissingColumns` keyword that
+/// suppresses D0040.
+///
+/// Three cases:
+/// - `True` literal → suppress.
+/// - `False` literal or kwarg absent → keep the strict-match default.
+/// - Non-literal (a variable, an expression) → suppress, on the
+///   conservative-against-false-positives principle: the user has
+///   asked for `unionByName` with a flag we can't statically resolve,
+///   and emitting D0040 against a possibly-True flag is worse than
+///   missing a possibly-False one.
+fn allow_missing_columns(call: &ExprCall) -> bool {
+    for kw in &call.arguments.keywords {
+        if let Some(name) = kw.arg.as_ref()
+            && name.id.as_str() == "allowMissingColumns"
+        {
+            return match kw.value.as_boolean_literal_expr() {
+                Some(b) => b.value,
+                None => true,
+            };
+        }
+    }
+    false
+}
+
+/// Output schema of `df.unionByName(other, allowMissingColumns=True)` —
+/// the union of both sides' columns. Left columns appear first in
+/// their original order; right-only columns are appended in the order
+/// they appear on the right. Every field is made nullable (a row from
+/// either side may not have populated the other side's columns).
+fn apply_union_by_name_with_missing<'a>(
+    left: &SchemaView<'a>,
+    right: &SchemaView<'a>,
+    schemas: &'a [Schema<'a>],
+) -> SchemaView<'a> {
+    let left_fields = left.typed_fields(schemas);
+    let right_fields = right.typed_fields(schemas);
+    let left_names: HashSet<&str> = left_fields.iter().map(|f| f.name).collect();
+    let mut out: Vec<DerivedField<'a>> = left_fields
+        .into_iter()
+        .map(|f| with_nullability(f, true))
+        .collect();
+    for f in right_fields {
+        if left_names.contains(f.name) {
+            continue;
+        }
+        out.push(with_nullability(f, true));
+    }
+    SchemaView::Derived(out)
 }
 
 fn check_union_schemas(
@@ -208,10 +270,11 @@ fn parse_on_arg<'a>(expr: Option<&'a Expr>, ctx: &BodyContext<'a>) -> JoinOn<'a>
     JoinOn::Expression(refs)
 }
 
-fn check_join_keys(
-    left: &SchemaView<'_>,
-    right: &SchemaView<'_>,
+fn check_join_keys<'a>(
+    left: &SchemaView<'a>,
+    right: &SchemaView<'a>,
     on: &JoinOn<'_>,
+    ctx: &BodyContext<'a>,
     source: &str,
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
@@ -252,7 +315,63 @@ fn check_join_keys(
             // Column-expression on-clause: each ref must live on at
             // least one side (we can't know WHICH side a bare `col("X")`
             // belongs to). Names missing from both → D0030.
+            //
+            // Alias-qualified refs (`col("L.region")`) split on the
+            // first `.` and resolve the prefix against any
+            // `df.alias("L")` registered in scope. With the prefix
+            // recognized, the suffix is checked against the aliased
+            // schema specifically — the canonical join-disambiguation
+            // pattern in real PySpark code. An unrecognized prefix
+            // still fires D0030, but on the alias rather than the
+            // whole name, with the in-scope aliases listed so the typo
+            // is obvious.
             for (name, range) in refs {
+                if let Some((prefix, suffix)) = split_qualified(name) {
+                    if let Some(aliased) = ctx.lookup_alias(prefix) {
+                        if !aliased.has_field(suffix) {
+                            let suggestion = suggest_field_name(suffix, &aliased);
+                            let mut message = format!(
+                                "Column '{suffix}' does not exist on alias '{prefix}' ({}).",
+                                aliased.display_name(),
+                            );
+                            if let Some(s) = &suggestion {
+                                message.push_str(&format!(" Did you mean '{s}'?"));
+                            }
+                            diagnostics.push(
+                                Diagnostic::at_range(
+                                    Severity::Error,
+                                    "D0030",
+                                    message,
+                                    *range,
+                                    source,
+                                    line_index,
+                                )
+                                .with_suggestion(suggestion),
+                            );
+                        }
+                        continue;
+                    }
+                    // Prefix didn't match a registered alias. The
+                    // diagnostic targets the prefix (the actual typo
+                    // site) and lists what aliases ARE in scope so the
+                    // fix is obvious.
+                    let known = ctx.known_aliases();
+                    let mut message = format!("Alias '{prefix}' is not in scope on this join.");
+                    if known.is_empty() {
+                        message.push_str(" No `.alias(...)` bindings have been registered.");
+                    } else {
+                        message.push_str(&format!(" Known aliases: {}.", known.join(", ")));
+                    }
+                    diagnostics.push(Diagnostic::at_range(
+                        Severity::Error,
+                        "D0030",
+                        message,
+                        *range,
+                        source,
+                        line_index,
+                    ));
+                    continue;
+                }
                 if left.has_field(name) || right.has_field(name) {
                     continue;
                 }
@@ -280,6 +399,22 @@ fn check_join_keys(
             }
         }
     }
+}
+
+/// Split a column reference of the form `"alias.col"` into its alias
+/// and column halves. Returns `None` for unqualified names (no `.`),
+/// for empty halves on either side, and for names with more than one
+/// `.` (nested-struct accesses like `addr.city` aren't aliases and
+/// must keep their existing field-path semantics — those are handled
+/// elsewhere, never reaching this resolver). The narrow allowance
+/// captures the canonical `df.alias("L"); col("L.region")` pattern
+/// without rerouting real dotted paths.
+fn split_qualified(name: &str) -> Option<(&str, &str)> {
+    let (prefix, suffix) = name.split_once('.')?;
+    if prefix.is_empty() || suffix.is_empty() || suffix.contains('.') {
+        return None;
+    }
+    Some((prefix, suffix))
 }
 
 /// Result schema of a join, given the on= clause.

@@ -75,6 +75,13 @@ pub fn synthetic_pool_len() -> usize {
 /// impossible: each helper's borrow lifetime ends before it returns.
 pub(crate) struct BodyContext<'a> {
     df_bindings: HashMap<&'a str, SchemaView<'a>>,
+    /// SQL-style aliases registered via `df.alias("L")`. Maps the alias
+    /// string (the argument to `.alias`, NOT the local-variable name on
+    /// the LHS of the assignment) to the schema of the aliased
+    /// DataFrame. Consulted by the join expression-form column-ref
+    /// resolver so `col("L.region")` is checked against the L-side
+    /// schema instead of false-flagging the qualified name.
+    df_aliases: RefCell<HashMap<&'a str, SchemaView<'a>>>,
     /// Function-parameter / local names that are class **instances** (not
     /// DataFrames). Maps `name` → class name (e.g. `"dal"` → `"DataAccessLayer"`).
     instance_bindings: HashMap<&'a str, &'a str>,
@@ -169,6 +176,7 @@ impl<'a> BodyContext<'a> {
     pub(crate) fn new(schemas: &'a [Schema<'a>], registry: &'a Registry<'a>) -> Self {
         Self {
             df_bindings: HashMap::new(),
+            df_aliases: RefCell::new(HashMap::new()),
             instance_bindings: HashMap::new(),
             local_names: RefCell::new(HashSet::new()),
             schemas,
@@ -336,6 +344,29 @@ impl<'a> BodyContext<'a> {
     pub(crate) fn bind_df(&mut self, name: &'a str, view: SchemaView<'a>) {
         self.df_bindings.insert(name, view);
         self.mark_local(name);
+    }
+
+    /// Record a SQL-style alias (`df.alias("L")`) → schema mapping so
+    /// `col("L.region")` can resolve through to the underlying schema.
+    /// `&self` rather than `&mut self` so this can fire from the
+    /// expression-walking analysis pass (which already holds an
+    /// immutable context borrow).
+    pub(crate) fn record_alias(&self, alias: &'a str, schema: SchemaView<'a>) {
+        self.df_aliases.borrow_mut().insert(alias, schema);
+    }
+
+    /// The schema registered for `alias` via [`record_alias`], if any.
+    pub(crate) fn lookup_alias(&self, alias: &str) -> Option<SchemaView<'a>> {
+        self.df_aliases.borrow().get(alias).cloned()
+    }
+
+    /// Every alias name currently in scope. Used by the join
+    /// expression-form resolver to surface "known aliases: L, R" in a
+    /// D0030 message when the user typos the alias prefix.
+    pub(crate) fn known_aliases(&self) -> Vec<&'a str> {
+        let mut names: Vec<&'a str> = self.df_aliases.borrow().keys().copied().collect();
+        names.sort();
+        names
     }
 
     /// Intern a synthetic column name (e.g. `sum(amount)` produced by

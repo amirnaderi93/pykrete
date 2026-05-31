@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.32
+
+Tracks the v0.1.37 pykrete release — final pre-v1.0.0 polish. Two
+false-positive blockers fixed: aliased-DataFrame qualified column
+refs (`L = df.alias("L"); col("L.region")`) no longer false-flag on
+joins, and `unionByName(other, allowMissingColumns=True)` no longer
+fires D0040 on schema-evolution merges. The expression-level walker
+now descends into compound expressions so typos inside `if
+df.select("typo").count() > 0:` and similar forms are caught.
+Transform-input-mismatch gets its own diagnostic code (D0073,
+`transformInputMismatch`) instead of inheriting D0070's
+`unresolvedImport` name. The malformed-`pykrete.json` warning stops
+re-firing every 30 seconds — it now only re-emits when the file's
+mtime moves. See the
+[main CHANGELOG](../../CHANGELOG.md#0137---2026-05-31) for details.
+
 ## 0.2.31
 
 Tracks the v0.1.34 pykrete release — docs honesty pass and a new

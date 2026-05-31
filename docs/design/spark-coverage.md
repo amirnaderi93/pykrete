@@ -2,9 +2,10 @@
 
 How pykrete handles every method/function on the Spark public surface.
 A living document — update when a method's handling changes. Sources
-of truth: [`crates/pykrete/src/operations.rs`](../../crates/pykrete/src/operations.rs)
-(method dispatch, `infer_expr_type`, `function_result_type`,
-`COLUMN_REF_FUNCTIONS`, `is_pass_through_method`) and the
+of truth: [`crates/pykrete/src/operations/`](../../crates/pykrete/src/operations/)
+(`expr.rs` for method dispatch / `infer_expr_type` / `function_result_type` /
+`is_pass_through_method`, `col_refs.rs` for `COLUMN_REF_FUNCTIONS`,
+`two_df.rs` for join / union / set ops) and the
 [integration tests](../../crates/pykrete/tests/).
 
 Legend:
@@ -60,7 +61,7 @@ The headline gaps:
 | `filter` | ✅ | Column expr or SQL string; idents checked |
 | `where` | ✅ | Alias of `filter` |
 | `dropDuplicates` | ✅ | `subset=` checked |
-| `drop_duplicates` | 🔍 | `subset=` checked; schema not re-derived |
+| `drop_duplicates` | ✅ | Alias of `dropDuplicates`; `subset=` checked, schema preserved (v0.1.29) |
 | `distinct` | ⚙️ | Pass-through |
 | `dropDuplicatesWithinWatermark` | ⚠️ | Unmodeled |
 
@@ -107,7 +108,7 @@ The headline gaps:
 | `limit` | ⚙️ | Pass-through |
 | `offset` | ⚙️ | Pass-through |
 | `sample` | ⚙️ | Pass-through |
-| `sampleBy` | ⚠️ | Unmodeled |
+| `sampleBy` | 🔍 | First-arg column ref checked; schema preserved (v0.1.29) |
 | `randomSplit` | ⚠️ | Unmodeled (returns a list) |
 
 ### Caching / partitioning
@@ -189,12 +190,12 @@ The headline gaps:
 | `transform` | ✅ | `fn` arg resolved; input + output checked |
 | `spark.sql("…")` | ✅ | Projection columns inferred best-effort; looks up registered tempViews by name and checks column refs (SELECT / WHERE / GROUP BY / ORDER BY / HAVING) against the view's schema |
 | `stat.crosstab` / `freqItems` / `approxQuantile` / `corr` / `cov` | ⚠️ | Unmodeled |
-| `summary` | ⚠️ | Unmodeled |
-| `describe` | ⚠️ | Unmodeled |
+| `summary` | 🚫 | Output is a data-dependent stats table; chain dies cleanly (v0.1.29) |
+| `describe` | 🔍 | Positional column refs checked; output is opaque stats table (v0.1.29) |
 | `count` | ✅ | Recognized terminal (returns long) |
 | `collect` / `first` / `head` / `take` / `tail` | ✅ | Recognized terminals |
 | `show` | ✅ | Recognized terminal (returns None) |
-| `observe` | ⚠️ | Unmodeled |
+| `observe` | 🔍 | Expression args walked for column refs; receiver schema preserved (v0.1.29) |
 | `inputFiles` | ⚠️ | Unmodeled |
 | `sameSemantics` / `semanticHash` | ⚠️ | Unmodeled |
 | `rdd` | 🚫 | RDD-level, opaque |
@@ -282,7 +283,7 @@ column's type is inferred (`infer_expr_type` / `function_result_type`).
 | `array_max`, `array_min` | ✅ | ⚠️ | In COLUMN_REF; result type not inferred |
 | `flatten` | ⚠️ | ✅ | Peels one layer |
 | `explode`, `explode_outer` | ✅ | ✅ | `array<T>` → T |
-| `posexplode`, `posexplode_outer` | ✅ | ⚠️ | Produces two cols; result not modeled |
+| `posexplode`, `posexplode_outer` | ✅ | ✅ | Produces two cols — `pos: int`, `col: <element-type>` (v0.1.29) |
 | `element_at` | ⚠️ | ✅ | Array elem or map value |
 | `size` | ✅ | ✅ | → int |
 | `arrays_zip` | ⚠️ | ✅ | → `array<struct>` |
@@ -508,7 +509,7 @@ deferred as v1.1 to keep this PR focused.
    '…' is not a recognized Spark type" message. A tailored variant
    ("precision 40 exceeds Spark's cap of 38" / "scale 25 exceeds
    precision 18") would be more actionable. Cost: small — branch the
-   diagnostic message in `operations.rs` when the failure shape is
+   diagnostic message in `operations/expr.rs` when the failure shape is
    "valid keyword, invalid args".
 
 2. **Nullable parity on `min` / `max`.** The `mean(decimal)` /
@@ -548,7 +549,7 @@ deferred to keep the patch focused.
    statically knowable — pykrete could materialize a concrete Derived
    schema (`{keys..., "a", "b"}`) instead of bailing Unknown. The
    no-values form (`pivot("col")`) stays Unknown by necessity. Cost:
-   small — extend the pivot handler in `operations.rs` to read the
+   small — extend the pivot handler in `operations/expr.rs` to read the
    second positional arg when it's a list literal of string literals.
 
 2. **`posexplode` in agg context lacks a test.** `handle_agg` calls
@@ -701,22 +702,55 @@ ninth item below is a follow-up to the I8 fix shipped in this PR.
     recogniser, plus a heuristic for "this binding came from
     `SparkSession.builder.…getOrCreate()`" or import-based detection.
 
-15. **Suppress malformed `pykrete.json` re-warns until mtime drifts.**
-    v0.1.32 I8 introduced a `window/showMessage` + `window/logMessage`
-    fan-out for malformed `pykrete.json`, drained once per cache
-    build. The cold-walk interval (`COLD_WALK_INTERVAL`, 30 s) then
-    re-populates the warning unconditionally as long as the file
-    stays malformed, so in practice the user sees the toast roughly
-    every 30 s — annoying but not load-bearing for correctness. Fix:
-    add `last_warned_mtime: Option<SystemTime>` on `CachedState` (or
-    `SnapshotCache`); in `run_cold_walk`, when `load_pykrete_json`
-    returns a `MalformedConfig`, suppress queuing the warning when
-    the `pykrete.json` mtime matches the previously-warned mtime;
-    reset (or update) the field on every mtime drift, on a successful
-    parse, and on `invalidate()`. Cost: small — one field, one
-    compare in `run_cold_walk`, plus a test that pins a malformed
-    file produces exactly one warning across many cold walks until
-    its mtime changes.
+15. ~~**Suppress malformed `pykrete.json` re-warns until mtime drifts.**~~
+    SHIPPED in v0.1.37. `SnapshotCache.last_warned_pykrete_json_mtime`
+    now gates re-emission; same broken file at the same mtime stays
+    silent, mtime drift re-warns.
+
+### v0.1.37 pre-launch deferrals (v1.0.1)
+
+Surfaced by the v0.1.35 pre-launch re-audit. The two blockers
+(aliased-DataFrame qualified col refs, `unionByName(allowMissingColumns=True)`)
+and four importants (expression-walker descent, D0073 transformInputMismatch
+split, path-strictening sister site, malformed-config mtime gate) all shipped
+in v0.1.37. The three items below were deferred to v1.0.1 to keep the launch
+focused.
+
+17. **Window spec bound to a local variable.** `w =
+    Window.partitionBy("typo"); df.over(w)` doesn't catch the typo —
+    the Window spec is bound to a name, so the column ref isn't
+    checked against the receiver of the eventual `.over(...)` call.
+    Tests at `crates/pykrete/tests/window.rs:7` already document this
+    as an accepted v1 gap. The general pattern (column expression
+    bound to a variable, then used later against a DataFrame) needs
+    a deferred-resolution model — at the `df.filter(cond)` /
+    `df.over(spec)` call site, walk the previously-collected
+    expression for its embedded column refs. Cost: medium —
+    `BodyContext` already collects column-ref traces; the missing
+    piece is binding the trace set to the local name and re-checking
+    against the receiver schema at the use site. Surface as a
+    documented limitation in the v1.0 release notes.
+
+18. **`.orderBy` / `.sort` / `.write.partitionBy` column-ref checks.**
+    These are currently routed through `is_pass_through_method` so
+    the receiver schema flows through correctly, but their string
+    arguments aren't column-ref-checked. A typo in
+    `df.orderBy("regoin")` is a silent miss. The fix is to lift
+    `orderBy`/`sort`/`sortWithinPartitions` from the pass-through
+    list into a tiny "pass-through but check args" handler (the same
+    shape `sampleBy` uses for its first arg). `.write.partitionBy` is
+    on the writer chain, slightly different — needs the writer-mode
+    plumbing. Cost: small for the DataFrame methods, medium for
+    `partitionBy`. Surface as a documented limitation in v1.0 release
+    notes.
+
+19. **Miri job for `Schema::fields` lifetime widening.** Duplicate of
+    item 8 above (v0.1.30 LSP perf review minors). The widen-to-
+    `'static`/narrow-back pattern in `crates/pykrete/src/schema.rs` is
+    sound by structural invariants but the borrow checker can't prove
+    the transmute. A `cargo +nightly miri test` job would catch any
+    future invariant violation (e.g. someone adding `Clone`). Listed
+    here too so the v1.0.1 follow-up sweep finds it.
 
 ### v0.1.33 JSON CLI deferrals (v1.1)
 

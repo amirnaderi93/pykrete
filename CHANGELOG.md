@@ -6,6 +6,129 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.37] - 2026-05-31
+
+Final pre-v1.0.0 polish. Two false-positive blockers + four important
+items surfaced by the v0.1.35 pre-launch re-audit. Skipped 0.1.35 and
+0.1.36 to align the workspace version with the audit's recommendation.
+
+The blockers are trust-killers: pykrete was telling users their
+working production code was broken. A senior Spark engineer trialing
+pykrete on real code hit one within minutes. Under the project's
+"trust > speed, default to delay" principle, these had to land before
+v1.0.0.
+
+### Fixed (blockers)
+
+- **B1: Aliased-DataFrame qualified column refs no longer
+  false-flag.** The canonical join-disambiguation pattern —
+  `L = left.alias("L"); R = right.alias("R"); L.join(R, col("L.region")
+  == col("R.region"))` — used to fire `D0030` because the prefixed
+  name `"L.region"` doesn't literally exist on either schema. Pykrete
+  now tracks SQL-style aliases via `BodyContext.df_aliases` and
+  resolves alias-qualified column refs through to the underlying
+  schema. A typo on the suffix (`col("L.regoin")`) still fires
+  `D0030`; a typo on the prefix (`col("BAD.region")`) fires `D0030`
+  on the alias part with the in-scope aliases listed.
+- **B2: `unionByName(other, allowMissingColumns=True)` no longer
+  false-flags.** The kwarg PySpark added for schema-evolution merges
+  used to be ignored — `D0040` fired whenever the two sides differed
+  in column set, the exact case the kwarg exists to permit. Pykrete
+  now reads `allowMissingColumns`: a literal `True` suppresses
+  `D0040` and returns the union of both schemas (all columns from
+  both sides); a literal `False` or absent kwarg keeps the
+  strict-match default; a non-literal value falls through
+  conservatively (suppress, on the under-checking-over-false-positives
+  principle).
+
+### Fixed (importants)
+
+- **I1: Expression-level walker now descends into compound expression
+  nodes.** v0.1.26 closed the statement-level blind spot; v0.1.37
+  closes the expression-level analog. `analyze_expr` now descends
+  into `Expr::Compare`, `Expr::BoolOp`, `Expr::UnaryOp`,
+  `Expr::BinOp`, `Expr::Tuple`, `Expr::List`, `Expr::Set`,
+  `Expr::Dict`, `Expr::If`, and `Expr::Starred` so an embedded method
+  call (`df.select("typo").count() > 0`, `df.select("typo") is not
+  None`, `[df.select("typo")]`) still gets its column refs checked.
+  Before this, the test expression of an `if` and the right side of
+  many other compound forms were silent misses.
+- **I4: D0070 split into D0070 (`unresolvedImport`) and D0073
+  (`transformInputMismatch`).** The transform-input-mismatch check
+  was reusing D0070's code and inheriting its `ruleName`
+  (`unresolvedImport`) — a label that didn't describe what the check
+  actually does. With v1.0.0's JSON output stability contract about
+  to land, this had to be split before users started pinning CI
+  suppressions to the wrong name. D0073 is the new code for
+  transform input mismatches; D0070 retains its original meaning
+  (unresolved relative-import path).
+- **Architecture: missed `to_string_lossy()` site.** v0.1.32 swept
+  LSP paths from `to_string_lossy()` to `to_str()?` but missed
+  `project.rs:229`. Now matches the sister sites in `lib.rs` —
+  non-UTF8 paths are skipped instead of round-tripped through a lossy
+  string that masks the mismatch.
+- **Architecture: malformed-`pykrete.json` warning no longer re-fires
+  every 30s.** The cold-walk loop used to re-populate the
+  `window/showMessage` warning unconditionally as long as the file
+  stayed malformed, producing a toast-every-30-seconds loop on a
+  chronically broken config. `SnapshotCache` now tracks
+  `last_warned_pykrete_json_mtime` and suppresses the warning when
+  the mtime is unchanged. Editing the file (even if it stays broken)
+  surfaces a fresh warning; fixing it clears the watermark so the
+  next break re-warns immediately.
+
+### Added
+
+- **D0073 `transformInputMismatch`** — new diagnostic code split from
+  D0070. Fires when `df.transform(fn)` is given a DataFrame whose
+  schema doesn't match `fn`'s declared parameter schema. Same wording
+  as before, new code + rule name.
+
+### Changed
+
+- **`docs/design/spark-coverage.md`** — refreshed the
+  `drop_duplicates`, `sampleBy`, `summary`, `describe`, `observe`,
+  and `posexplode` rows to reflect their actual v0.1.29 modeling
+  (previously showed pre-v0.1.29 status); migrated three
+  `operations.rs` filename references to `operations/<sibling>.rs`
+  after the v0.1.31 split; added v0.1.37 deferrals section.
+- **`CONTRIBUTING.md`** — project-layout tree now shows the
+  9-sibling split under `operations/` (was the pre-split single
+  `operations.rs`).
+- **`docs-site/.../about/production-readiness.md`** — removed the
+  mention of a `--debug` flag the CLI doesn't have (only `-V` / `-h`
+  / `-v` / `--format` exist on `pykrete check`).
+
+### Known limitations (v1.0 release notes)
+
+Two patterns still produce silent misses; surfaced here so first-day
+users hit a documented limitation rather than a surprise. Both are
+deferred to v1.0.1 per the audit recommendation.
+
+- **Window spec bound to a local variable.** `w =
+  Window.partitionBy("typo"); df.over(w)` doesn't catch the typo —
+  the Window spec is bound to a name, so the column ref isn't checked
+  against the receiver of the eventual `.over(...)` call. Inline
+  usage (`df.over(Window.partitionBy("typo"))`) is checked normally.
+  Tracker: `docs/design/spark-coverage.md` item 17.
+- **`.orderBy` / `.sort` / `.write.partitionBy` column-ref checks.**
+  These methods are currently routed through `is_pass_through_method`
+  so the receiver schema flows through correctly, but their string
+  arguments aren't column-ref-checked. A typo in
+  `df.orderBy("regoin")` is a silent miss. Tracker:
+  `docs/design/spark-coverage.md` item 18.
+
+### Verification
+
+`cargo test --workspace` (1,040 passing), `cargo fmt --check`,
+`cargo clippy --workspace --all-targets -- -D warnings`,
+`cd docs-site && npm run build`,
+`cd editors/vscode && npm run compile` all green. Five new sharper
+launch-gate snippets verified manually: aliased-DataFrame join (B1),
+`unionByName(allowMissingColumns=True)` (B2), `if df.select("typo")`
+compare-form (I1). Two snippets (window-as-local, .orderBy column
+checks) confirmed as documented limitations.
+
 ## [0.1.34] - 2026-05-31
 
 Leg 9 of 10 in the v1.0.0 hardening sprint — a docs-only release that
@@ -1054,7 +1177,8 @@ full contract.
 - **Multi-file analysis** via imported typed declarations.
 - **`pykrete.json`** project configuration with non-strict / strict modes.
 
-[Unreleased]: https://github.com/amirnaderi93/pykrete/compare/v0.1.34...HEAD
+[Unreleased]: https://github.com/amirnaderi93/pykrete/compare/v0.1.37...HEAD
+[0.1.37]: https://github.com/amirnaderi93/pykrete/compare/v0.1.34...v0.1.37
 [0.1.34]: https://github.com/amirnaderi93/pykrete/compare/v0.1.33...v0.1.34
 [0.1.33]: https://github.com/amirnaderi93/pykrete/compare/v0.1.32...v0.1.33
 [0.1.32]: https://github.com/amirnaderi93/pykrete/compare/v0.1.31...v0.1.32

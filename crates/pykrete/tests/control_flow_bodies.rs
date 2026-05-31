@@ -503,3 +503,149 @@ def outer(raw: DataFrame[Sale]) -> DataFrame[Sale]:
     let result = check(&src);
     assert_has_code(&result, "D0030");
 }
+
+// ---------------------------------------------------------------------------
+// Expression-level descent — typos inside compound expressions
+//
+// v0.1.26 fixed statement-level descent. v0.1.37 fixes the
+// expression-level analog: a method call embedded inside a Compare,
+// BoolOp, UnaryOp, BinOp, Tuple, List, Set, Dict, or IfExp still gets
+// its column refs checked. Before this, `if df.select("typo").count()
+// > 0:` was a silent miss because the test expression was a Compare
+// and analyze_expr returned None without descending.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn typo_inside_compare_left_is_caught() {
+    let src = format!(
+        "{SCHEMA}
+def f(df: DataFrame[Sale]) -> bool:
+    if df.select(\"regoin\").count() > 0:
+        return True
+    return False
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "regoin");
+}
+
+#[test]
+fn typo_inside_is_not_none_compare_is_caught() {
+    let src = format!(
+        "{SCHEMA}
+def g(df: DataFrame[Sale]) -> bool:
+    return df.select(\"regoin\") is not None
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "regoin");
+}
+
+#[test]
+fn typo_inside_boolop_value_is_caught() {
+    // `or` short-circuit — embedded df.select call must be analyzed.
+    let src = format!(
+        "{SCHEMA}
+def f(df: DataFrame[Sale]) -> int:
+    return df.select(\"regoin\").count() or df.select(\"region\").count()
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "regoin");
+}
+
+#[test]
+fn typo_inside_unary_not_is_caught() {
+    let src = format!(
+        "{SCHEMA}
+def f(df: DataFrame[Sale]) -> bool:
+    return not df.select(\"regoin\").isEmpty()
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "regoin");
+}
+
+#[test]
+fn typo_inside_binop_arm_is_caught() {
+    let src = format!(
+        "{SCHEMA}
+def f(df: DataFrame[Sale]) -> int:
+    return df.select(\"regoin\").count() + df.select(\"region\").count()
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "regoin");
+}
+
+#[test]
+fn typo_inside_tuple_element_is_caught() {
+    let src = format!(
+        "{SCHEMA}
+def f(df: DataFrame[Sale]) -> tuple:
+    return (df.select(\"regoin\"), df.select(\"region\"))
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "regoin");
+}
+
+#[test]
+fn typo_inside_list_element_is_caught() {
+    let src = format!(
+        "{SCHEMA}
+def f(df: DataFrame[Sale]) -> list:
+    return [df.select(\"regoin\"), df.select(\"region\")]
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "regoin");
+}
+
+#[test]
+fn typo_inside_dict_value_is_caught() {
+    let src = format!(
+        "{SCHEMA}
+def f(df: DataFrame[Sale]) -> dict:
+    return {{\"k\": df.select(\"regoin\")}}
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "regoin");
+}
+
+#[test]
+fn typo_inside_ifexp_branch_is_caught() {
+    let src = format!(
+        "{SCHEMA}
+def f(df: DataFrame[Sale], debug: bool) -> int:
+    return df.select(\"regoin\").count() if debug else df.select(\"region\").count()
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "regoin");
+}
+
+#[test]
+fn typo_inside_nested_compound_expression_is_caught() {
+    // A Compare wrapping a BoolOp wrapping a UnaryOp wrapping a Call —
+    // descent must reach the innermost method call.
+    let src = format!(
+        "{SCHEMA}
+def f(df: DataFrame[Sale]) -> bool:
+    return (not df.select(\"regoin\").isEmpty()) and (df.count() > 0)
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "regoin");
+}
