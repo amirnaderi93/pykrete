@@ -58,8 +58,17 @@ crates/pykrete/
 │   ├── walk.rs           # Top-level AST walks (classes, functions)
 │   ├── registry.rs       # Class + constant registries (for generics)
 │   ├── transpiler.rs     # .pyk → .py emit
-│   └── operations.rs     # Body analysis, result-schema inference,
-│                         #   chain tracking, return-type checks
+│   └── operations/       # Body analysis, result-schema inference,
+│       ├── mod.rs        #   chain tracking, return-type checks
+│       ├── driver.rs     # Top-level statement walker (per function body)
+│       ├── expr.rs       # analyze_expr / analyze_method_call dispatch
+│       ├── col_refs.rs   # col() reference discovery + F.* allowlist
+│       ├── column_methods.rs   # df.<method>(...) handlers
+│       ├── column_exprs.rs     # Column-expression result-type inference
+│       ├── two_df.rs     # join / union / unionByName / set ops
+│       ├── strict_operators.rs # D0081 / D0082 / D0083 type checks
+│       ├── context.rs    # BodyContext — bindings, aliases, traces
+│       └── shapes.rs     # AST shape recognizers (reader chains, etc.)
 └── tests/
     ├── common/mod.rs     # Shared test helpers
     └── *.rs              # Integration tests — one file per feature area

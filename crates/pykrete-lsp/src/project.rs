@@ -110,6 +110,14 @@ pub struct SnapshotCache {
     /// field so tests can construct a cache with a tiny cap and pin the
     /// two-pass-over-cap behavior without writing 20 MB of fixtures.
     max_body_bytes: usize,
+    /// `pykrete.json` mtime at the last time we emitted a malformed-
+    /// config warning. A subsequent cold walk that sees the SAME mtime
+    /// suppresses the warning (the user hasn't touched the file since
+    /// we already told them); a different mtime — including the user
+    /// fixing it then re-breaking it — surfaces a fresh warning. Reset
+    /// when the file becomes well-formed (so the next break re-warns
+    /// immediately) or when the file disappears.
+    last_warned_pykrete_json_mtime: Option<SystemTime>,
     /// Test-only counter: how many full cold walks have run. Used by
     /// the typing-burst regression to pin the rate-limit guarantee.
     #[cfg(test)]
@@ -123,6 +131,7 @@ impl Default for SnapshotCache {
             last_cold_walk: None,
             last_warm_sweep: None,
             max_body_bytes: MAX_BODY_BYTES,
+            last_warned_pykrete_json_mtime: None,
             #[cfg(test)]
             cold_walk_count: 0,
         }
@@ -140,16 +149,15 @@ struct CachedState {
     entries: HashMap<PathBuf, CacheEntry>,
     /// Cached `pykrete.json` contents, if any.
     config: pykrete::Config,
-    /// Set when this cache build saw a malformed `pykrete.json`. The LSP
-    /// layer drains it via [`SnapshotCache::take_pending_warning`] and
-    /// pushes one `window/showMessage` + one `window/logMessage` so the
-    /// user knows defaults are being used. Cleared after the first drain
-    /// within a given cache build — but every cold walk (one per
-    /// `COLD_WALK_INTERVAL`, 30 s today) re-populates it unconditionally
-    /// when the file is still malformed, so the warning re-fires roughly
-    /// every 30 s rather than once-per-mtime. A v1.1 follow-up (item 15
-    /// in `docs/design/spark-coverage.md`) will gate re-emission on
-    /// mtime drift.
+    /// Set when this cache build saw a malformed `pykrete.json` AND the
+    /// file's mtime has moved since the last warning we surfaced. The
+    /// LSP layer drains it via [`SnapshotCache::take_pending_warning`]
+    /// and pushes one `window/showMessage` + one `window/logMessage` so
+    /// the user knows defaults are being used. Cleared after the first
+    /// drain within a given cache build; subsequent cold walks suppress
+    /// the warning until the file's mtime moves (the user edits the
+    /// file), preventing a 30-second toast loop on a chronically
+    /// malformed config.
     malformed_warning: Option<MalformedConfig>,
 }
 
@@ -179,10 +187,30 @@ impl SnapshotCache {
     /// Drop every tier. Wired to the `pykrete/refreshSnapshot` custom
     /// LSP command and to file-watcher events whose path falls outside
     /// the tracked union.
+    ///
+    /// `last_warned_pykrete_json_mtime` is NOT cleared here: it's keyed
+    /// by `pykrete.json` mtime and gated by `gate_malformed_warning` on
+    /// its own (re-warning on a fresh mtime, going silent on a
+    /// well-formed parse). Clearing it on every `invalidate()` re-armed
+    /// the toast loop whenever the user saved any unrelated `.pyk` file
+    /// in the workspace — the warm/cold tiers re-emitted the warning
+    /// 30 s later. Persisting the watermark across cache invalidations
+    /// is what actually delivers the "warn once per malformed state"
+    /// promise the round-1 fix claimed.
     pub fn invalidate(&mut self) {
         self.state = None;
         self.last_cold_walk = None;
         self.last_warm_sweep = None;
+    }
+
+    /// Test-only: force the next `config` / `snapshot` call to re-run
+    /// the cold walk while preserving the cross-walk watermarks (the
+    /// `pykrete.json` mtime warning gate especially). The production
+    /// path waits for the cold-walk interval to elapse; tests can't
+    /// wait 30 s.
+    #[cfg(test)]
+    fn force_cold_walk_on_next_refresh(&mut self) {
+        self.last_cold_walk = None;
     }
 
     /// Compute the project snapshot for the current `docs`. Returns
@@ -226,7 +254,16 @@ impl SnapshotCache {
             } else {
                 continue;
             };
-            out.push((path.to_string_lossy().into_owned(), source));
+            // Skip non-UTF8 paths rather than rounding-tripping through
+            // `to_string_lossy`. The snapshot stores paths as `String`;
+            // a lossy round-trip there would mask the mismatch and the
+            // file would silently fall out of project mode anyway.
+            // Matches the sister sites in `lib.rs` (focus_path,
+            // hover_in_project, completion).
+            let Some(path_str) = path.to_str() else {
+                continue;
+            };
+            out.push((path_str.to_string(), source));
         }
         Some(out)
     }
@@ -370,13 +407,40 @@ impl SnapshotCache {
             );
         }
 
-        let (config, malformed_warning) = load_pykrete_json(&key.project_root);
+        let (config, raw_warning) = load_pykrete_json(&key.project_root);
+        let malformed_warning = self.gate_malformed_warning(raw_warning, &key.project_root);
         self.state = Some(CachedState {
             key: key.clone(),
             entries,
             config,
             malformed_warning,
         });
+    }
+
+    /// Decide whether to surface a fresh malformed-config warning, given
+    /// the raw warning the cold-walk loader produced. Suppresses on
+    /// unchanged-mtime; resets the watermark when the file is no longer
+    /// malformed so the NEXT break re-warns immediately.
+    fn gate_malformed_warning(
+        &mut self,
+        raw_warning: Option<MalformedConfig>,
+        project_root: &Path,
+    ) -> Option<MalformedConfig> {
+        let Some(warning) = raw_warning else {
+            // File parsed cleanly (or is missing entirely): clear the
+            // watermark so the next time it goes malformed we warn
+            // immediately, not silently.
+            self.last_warned_pykrete_json_mtime = None;
+            return None;
+        };
+        let current_mtime = mtime_of(&warning.path);
+        if current_mtime.is_some() && current_mtime == self.last_warned_pykrete_json_mtime {
+            // Same broken file as last time we warned — stay silent.
+            return None;
+        }
+        self.last_warned_pykrete_json_mtime =
+            current_mtime.or_else(|| mtime_of(&project_root.join("pykrete.json")));
+        Some(warning)
     }
 
     fn run_warm_sweep(&mut self) {
@@ -927,6 +991,123 @@ mod tests {
         assert!(
             cache.take_pending_warning().is_none(),
             "warning should be consumed after the first drain"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn malformed_pykrete_json_suppresses_repeat_warning_on_unchanged_mtime() {
+        // The original v0.1.32 behavior re-fired the toast every cold
+        // walk (~30 s) so a chronically broken config produced an
+        // endless toast loop. v0.1.37 gates re-emission on mtime drift:
+        // same broken file at the same mtime → silence; user edits
+        // (mtime moves) → fresh warning.
+        let root = tmpdir();
+        write(&root.join("pykrete.json"), r#"{ this is not json"#);
+        let docs = docs_with(&root);
+
+        let mut cache = SnapshotCache::new();
+        let _config = cache.config(&docs);
+        cache
+            .take_pending_warning()
+            .expect("first cold walk should queue a warning");
+
+        // Force a second cold walk — same broken file, mtime unchanged.
+        cache.force_cold_walk_on_next_refresh();
+        let _config = cache.config(&docs);
+        assert!(
+            cache.take_pending_warning().is_none(),
+            "second cold walk on same-mtime broken file must NOT re-fire the warning"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Bump a file's mtime by `secs` seconds without sleeping. The
+    /// rewarn-on-edit path keys off mtime drift; in production that
+    /// drift comes from the user editing the file (which both writes
+    /// new content and updates mtime). In tests we want the same drift
+    /// signal without burning a real second of wall time — a sleep
+    /// long enough to outwait the filesystem's mtime resolution (1 s
+    /// on some FSes) makes the test slow AND flaky in CI when the
+    /// scheduler hands us back control late.
+    fn bump_mtime(path: &std::path::Path, secs: i64) {
+        let meta = std::fs::metadata(path).expect("metadata");
+        let current = filetime::FileTime::from_last_modification_time(&meta);
+        let bumped = filetime::FileTime::from_unix_time(
+            current.unix_seconds() + secs,
+            current.nanoseconds(),
+        );
+        filetime::set_file_mtime(path, bumped).expect("set_file_mtime");
+    }
+
+    #[test]
+    fn malformed_pykrete_json_rewarns_when_file_is_edited() {
+        // The complement to the suppression test: if the user edits
+        // the broken file (mtime moves) and it's STILL broken, they
+        // get a fresh warning. The most common shape of this is "I
+        // tried to fix it but introduced a different syntax error" —
+        // we want to surface that immediately, not stay silent until
+        // the cache invalidates.
+        let root = tmpdir();
+        let path = root.join("pykrete.json");
+        write(&path, r#"{ broken-v1"#);
+        let docs = docs_with(&root);
+
+        let mut cache = SnapshotCache::new();
+        let _config = cache.config(&docs);
+        cache
+            .take_pending_warning()
+            .expect("first cold walk should queue a warning");
+
+        write(&path, r#"{ broken-v2"#);
+        // Deterministically bump the mtime instead of sleeping past
+        // the filesystem's mtime resolution. A real `sleep(1100ms)`
+        // here would (a) slow the suite by 1 s per run and (b) flake
+        // in CI when the scheduler returns late OR when the FS's
+        // mtime granularity is coarser than 1 s.
+        bump_mtime(&path, 2);
+
+        cache.force_cold_walk_on_next_refresh();
+        let _config = cache.config(&docs);
+        assert!(
+            cache.take_pending_warning().is_some(),
+            "edited-but-still-broken file must surface a fresh warning"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn malformed_pykrete_json_watermark_survives_invalidate() {
+        // Round-2 fix: `SnapshotCache::invalidate()` fires on every
+        // `workspace/didChangeWatchedFiles` notification (i.e., any
+        // file save in the workspace). If `invalidate()` resets the
+        // mtime watermark, the next cold walk on the same broken file
+        // re-fires the toast — defeating the "warn once per malformed
+        // state" promise. This pins that the watermark survives an
+        // explicit invalidate (a save of an unrelated `.pyk` file
+        // happens through the same channel).
+        let root = tmpdir();
+        write(&root.join("pykrete.json"), r#"{ this is not json"#);
+        let docs = docs_with(&root);
+
+        let mut cache = SnapshotCache::new();
+        let _config = cache.config(&docs);
+        cache
+            .take_pending_warning()
+            .expect("first cold walk should queue a warning");
+
+        // Simulate the LSP layer calling `invalidate()` after a save
+        // of an unrelated `.pyk` file. The broken `pykrete.json` is
+        // untouched; only the cache tiers are dropped.
+        cache.invalidate();
+
+        let _config = cache.config(&docs);
+        assert!(
+            cache.take_pending_warning().is_none(),
+            "second cold walk after invalidate on same-mtime broken file must NOT re-fire the warning"
         );
 
         std::fs::remove_dir_all(&root).ok();

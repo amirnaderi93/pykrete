@@ -55,7 +55,7 @@ def f(e: DataFrame[Enriched]) -> DataFrame:
     return e.transform(enrich)
 "
     );
-    assert_has_code(&check(&src), "D0070");
+    assert_has_code(&check(&src), "D0073");
 }
 
 #[test]
@@ -66,7 +66,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
     return raw.transform(enrich)
 "
     );
-    assert_does_not_have_code(&check(&src), "D0070");
+    assert_does_not_have_code(&check(&src), "D0073");
 }
 
 #[test]

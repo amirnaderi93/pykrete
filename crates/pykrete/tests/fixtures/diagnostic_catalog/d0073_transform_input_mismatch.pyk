@@ -1,0 +1,17 @@
+class Raw(Schema):
+    city: string
+    amount: int
+
+
+class Enriched(Schema):
+    city: string
+    amount: int
+    bonus: int
+
+
+def enrich(df: DataFrame[Raw]) -> DataFrame[Enriched]:
+    return df.withColumn("bonus", col("amount"))
+
+
+def f(e: DataFrame[Enriched]) -> DataFrame:
+    return e.transform(enrich)

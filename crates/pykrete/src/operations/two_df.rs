@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use super::col_refs::collect_col_refs;
+use super::column_methods::{split_qualified, try_resolve_alias_ref};
 use super::context::BodyContext;
 use super::expr::analyze_expr;
 use super::shapes::TwoDfMethod;
@@ -52,6 +53,17 @@ pub(super) fn handle_two_df_method<'a>(
     let right = analyze_expr(arg, ctx, source, line_index, diagnostics)?;
 
     match kind {
+        TwoDfMethod::UnionByName if allow_missing_columns(call) => {
+            // `unionByName(other, allowMissingColumns=True)` — schemas
+            // are allowed to differ; missing fields on either side
+            // become nullable in the output. Suppress D0040 and return
+            // the union of both schemas.
+            Some(apply_union_by_name_with_missing(
+                left,
+                &right,
+                ctx.schemas(),
+            ))
+        }
         TwoDfMethod::Union | TwoDfMethod::UnionByName | TwoDfMethod::SetOp => {
             check_union_schemas(
                 method,
@@ -66,7 +78,7 @@ pub(super) fn handle_two_df_method<'a>(
         }
         TwoDfMethod::Join => {
             let on = parse_on_arg(extract_on_arg(call), ctx);
-            check_join_keys(left, &right, &on, source, line_index, diagnostics);
+            check_join_keys(left, &right, &on, ctx, source, line_index, diagnostics);
             // Record each `on=` key as a column reference so the LSP
             // layer offers column completion inside `join(on="…")`.
             if let JoinOn::Keys(keys) = &on {
@@ -84,6 +96,65 @@ pub(super) fn handle_two_df_method<'a>(
         }
         TwoDfMethod::CrossJoin => Some(apply_concat(left, &right, ctx.schemas())),
     }
+}
+
+/// Whether the call carries an `allowMissingColumns` flag that
+/// suppresses D0040. Spark accepts the flag both as the named kwarg
+/// (`allowMissingColumns=True`) AND positionally (`unionByName(other,
+/// True)`) — both forms must reach the same suppression path.
+///
+/// Three cases (applied to whichever form was used):
+/// - `True` literal → suppress.
+/// - `False` literal or flag absent → keep the strict-match default.
+/// - Non-literal (a variable, an expression) → suppress, on the
+///   conservative-against-false-positives principle: the user has
+///   asked for `unionByName` with a flag we can't statically resolve,
+///   and emitting D0040 against a possibly-True flag is worse than
+///   missing a possibly-False one.
+fn allow_missing_columns(call: &ExprCall) -> bool {
+    for kw in &call.arguments.keywords {
+        if let Some(name) = kw.arg.as_ref()
+            && name.id.as_str() == "allowMissingColumns"
+        {
+            return match kw.value.as_boolean_literal_expr() {
+                Some(b) => b.value,
+                None => true,
+            };
+        }
+    }
+    if let Some(positional) = call.arguments.args.get(1) {
+        return match positional.as_boolean_literal_expr() {
+            Some(b) => b.value,
+            None => true,
+        };
+    }
+    false
+}
+
+/// Output schema of `df.unionByName(other, allowMissingColumns=True)` —
+/// the union of both sides' columns. Left columns appear first in
+/// their original order; right-only columns are appended in the order
+/// they appear on the right. Every field is made nullable (a row from
+/// either side may not have populated the other side's columns).
+fn apply_union_by_name_with_missing<'a>(
+    left: &SchemaView<'a>,
+    right: &SchemaView<'a>,
+    schemas: &'a [Schema<'a>],
+) -> SchemaView<'a> {
+    let left_fields = left.typed_fields(schemas);
+    let right_fields = right.typed_fields(schemas);
+    let left_names: HashSet<&str> = left_fields.iter().map(|f| f.name).collect();
+    let mut out: Vec<DerivedField<'a>> = left_fields
+        .into_iter()
+        .map(|f| with_nullability(f, true))
+        .collect();
+    for f in right_fields {
+        if left_names.contains(f.name) {
+            continue;
+        }
+        out.push(with_nullability(f, true));
+    }
+    SchemaView::Derived(out)
 }
 
 fn check_union_schemas(
@@ -208,10 +279,11 @@ fn parse_on_arg<'a>(expr: Option<&'a Expr>, ctx: &BodyContext<'a>) -> JoinOn<'a>
     JoinOn::Expression(refs)
 }
 
-fn check_join_keys(
-    left: &SchemaView<'_>,
-    right: &SchemaView<'_>,
-    on: &JoinOn<'_>,
+fn check_join_keys<'a>(
+    left: &SchemaView<'a>,
+    right: &SchemaView<'a>,
+    on: &JoinOn<'a>,
+    ctx: &BodyContext<'a>,
     source: &str,
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
@@ -252,7 +324,36 @@ fn check_join_keys(
             // Column-expression on-clause: each ref must live on at
             // least one side (we can't know WHICH side a bare `col("X")`
             // belongs to). Names missing from both → D0030.
+            //
+            // Alias-qualified refs (`col("L.region")`) route through
+            // `try_resolve_alias_ref` — the shared helper used by every
+            // column-checking site so the alias pattern resolves
+            // uniformly across select/filter/withColumn/groupBy/join.
+            // On the join-on path specifically, a dotted name with NO
+            // aliases at all in scope gets the historical "no
+            // .alias(...) bindings registered" hint (the dotted name
+            // there is overwhelmingly an alias attempt, not a
+            // nested-struct access).
             for (name, range) in refs {
+                if try_resolve_alias_ref(name, *range, ctx, source, line_index, diagnostics) {
+                    continue;
+                }
+                if let Some((prefix, _suffix)) = split_qualified(name)
+                    && ctx.known_aliases().is_empty()
+                {
+                    let message = format!(
+                        "Alias '{prefix}' is not in scope on this join. No `.alias(...)` bindings have been registered.",
+                    );
+                    diagnostics.push(Diagnostic::at_range(
+                        Severity::Error,
+                        "D0030",
+                        message,
+                        *range,
+                        source,
+                        line_index,
+                    ));
+                    continue;
+                }
                 if left.has_field(name) || right.has_field(name) {
                     continue;
                 }

@@ -42,3 +42,11 @@ crossbeam-channel = "0.5"
 # promptly, and avoids running arbitrary binaries that happen to share
 # a name.
 which = "6"
+
+[dev-dependencies]
+# Deterministic mtime mutation in cache-invalidation tests. The
+# `pykrete.json` re-warn path is gated on file-mtime drift; sleeping
+# past the filesystem's mtime resolution to simulate a "user edited
+# the file" event is notoriously flaky in CI (and slow). `filetime`
+# lets the test bump the mtime explicitly without waiting.
+filetime = "0.2"

@@ -94,6 +94,11 @@ const FIXTURES: &[Fixture] = &[
         mode: CheckMode::Standard,
     },
     Fixture {
+        code: "D0073",
+        files: &["d0073_transform_input_mismatch.pyk"],
+        mode: CheckMode::Standard,
+    },
+    Fixture {
         code: "D0080",
         files: &["d0080_return_type_mismatch.pyk"],
         mode: CheckMode::Standard,
@@ -237,6 +242,7 @@ snapshot_case!(d0060, "D0060");
 snapshot_case!(d0070, "D0070");
 snapshot_case!(d0071, "D0071");
 snapshot_case!(d0072, "D0072");
+snapshot_case!(d0073, "D0073");
 snapshot_case!(d0080, "D0080");
 snapshot_case!(d0081, "D0081");
 snapshot_case!(d0082, "D0082");

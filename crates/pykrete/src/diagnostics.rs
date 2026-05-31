@@ -191,6 +191,7 @@ pub const DIAGNOSTIC_CATALOG: &[(&str, &str)] = &[
     ("D0070", "unresolvedImport"),
     ("D0071", "unexportedName"),
     ("D0072", "duplicateSchemaName"),
+    ("D0073", "transformInputMismatch"),
     ("D0080", "returnTypeMismatch"),
     ("D0081", "nonNumericArithmetic"),
     ("D0082", "crossTypeComparison"),

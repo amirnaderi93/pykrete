@@ -615,6 +615,28 @@ pub(super) fn report_column_refs<'a>(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for &(col_name, col_range) in refs {
+        // Receiver-first disambiguation: if the receiver schema can
+        // resolve this dotted path (e.g. `addr.city` on a `Customer`
+        // with `addr: Addr`), trust the nested-struct interpretation
+        // even when the prefix ALSO happens to match a registered
+        // alias name. Otherwise an unrelated `X = orders.alias("X")`
+        // in the same body would hijack `col("X.y")` on a `df` whose
+        // schema has its own `X: struct<y: ...>`. Only when the
+        // receiver can't resolve the path do we fall back to alias
+        // routing (the canonical `df.alias("L"); col("L.region")` case
+        // still works — `L` isn't a field of the aliased df itself).
+        if split_qualified(col_name).is_some()
+            && matches!(
+                resolve_path(schema, col_name, ctx.schemas()),
+                FieldPathResult::Resolved
+            )
+        {
+            ctx.record_column_ref(col_range, col_name, schema.clone());
+            continue;
+        }
+        if try_resolve_alias_ref(col_name, col_range, ctx, source, line_index, diagnostics) {
+            continue;
+        }
         ctx.record_column_ref(col_range, col_name, schema.clone());
         if let FieldPathResult::Missing { field, on } =
             resolve_path(schema, col_name, ctx.schemas())
@@ -640,4 +662,84 @@ pub(super) fn report_column_refs<'a>(
             );
         }
     }
+}
+
+/// Split a column reference of the form `"alias.col"` into its alias
+/// and column halves. Returns `None` for unqualified names (no `.`),
+/// for empty halves on either side, and for names with more than one
+/// `.` (nested-struct accesses like `addr.city` aren't aliases and
+/// must keep their existing field-path semantics — those are handled
+/// by the caller's normal resolver). The narrow allowance captures the
+/// canonical `df.alias("L"); col("L.region")` pattern without
+/// rerouting real dotted paths.
+pub(super) fn split_qualified(name: &str) -> Option<(&str, &str)> {
+    let (prefix, suffix) = name.split_once('.')?;
+    if prefix.is_empty() || suffix.is_empty() || suffix.contains('.') {
+        return None;
+    }
+    Some((prefix, suffix))
+}
+
+/// Apply `df.alias("L")`-style resolution to a single column ref. If
+/// `col_name` is `"alias.suffix"` AND the prefix matches a registered
+/// alias, route the lookup through the aliased schema (firing D0030
+/// on the suffix typo). Returns `true` ONLY when the alias path
+/// unambiguously owned the ref — callers then skip their normal
+/// resolver. Returns `false` otherwise (not alias-shaped, no aliases
+/// in scope, OR alias-shaped but prefix isn't a registered alias) so
+/// the caller's nested-struct / single-name resolver can take over.
+///
+/// The "prefix-doesn't-match-any-alias → defer" branch is load-bearing:
+/// a body containing both `X = orders.alias("X")` and `col("addr.city")`
+/// must NOT have the alias helper hijack `addr.city`. `addr` isn't a
+/// known alias, so the helper defers and the nested-struct resolver
+/// (which knows `addr: struct<city: string>`) handles it correctly.
+///
+/// Shared between `report_column_refs` (the central col-ref check used
+/// by select/filter/withColumn/groupBy/…) and `check_join_keys` (the
+/// join expression-form on-clause) so every column-checking site
+/// honors the alias pattern uniformly. Without this lift, sites other
+/// than the join-on path would false-fire D0030 on the
+/// `L = raw.alias("L"); L.select(col("L.region"))` shape — the most
+/// common form of the alias pattern in production PySpark.
+pub(super) fn try_resolve_alias_ref<'a>(
+    col_name: &'a str,
+    col_range: TextRange,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> bool {
+    let Some((prefix, suffix)) = split_qualified(col_name) else {
+        return false;
+    };
+    if ctx.known_aliases().is_empty() {
+        return false;
+    }
+    let Some(aliased) = ctx.lookup_alias(prefix) else {
+        return false;
+    };
+    ctx.record_column_ref(col_range, col_name, aliased.clone());
+    if !aliased.has_field(suffix) {
+        let suggestion = suggest_field_name(suffix, &aliased);
+        let mut message = format!(
+            "Column '{suffix}' does not exist on alias '{prefix}' ({}).",
+            aliased.display_name(),
+        );
+        if let Some(s) = &suggestion {
+            message.push_str(&format!(" Did you mean '{s}'?"));
+        }
+        diagnostics.push(
+            Diagnostic::at_range(
+                Severity::Error,
+                "D0030",
+                message,
+                col_range,
+                source,
+                line_index,
+            )
+            .with_suggestion(suggestion),
+        );
+    }
+    true
 }
