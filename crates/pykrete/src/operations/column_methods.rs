@@ -615,6 +615,9 @@ pub(super) fn report_column_refs<'a>(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for &(col_name, col_range) in refs {
+        if try_resolve_alias_ref(col_name, col_range, ctx, source, line_index, diagnostics) {
+            continue;
+        }
         ctx.record_column_ref(col_range, col_name, schema.clone());
         if let FieldPathResult::Missing { field, on } =
             resolve_path(schema, col_name, ctx.schemas())
@@ -640,4 +643,92 @@ pub(super) fn report_column_refs<'a>(
             );
         }
     }
+}
+
+/// Split a column reference of the form `"alias.col"` into its alias
+/// and column halves. Returns `None` for unqualified names (no `.`),
+/// for empty halves on either side, and for names with more than one
+/// `.` (nested-struct accesses like `addr.city` aren't aliases and
+/// must keep their existing field-path semantics — those are handled
+/// by the caller's normal resolver). The narrow allowance captures the
+/// canonical `df.alias("L"); col("L.region")` pattern without
+/// rerouting real dotted paths.
+pub(super) fn split_qualified(name: &str) -> Option<(&str, &str)> {
+    let (prefix, suffix) = name.split_once('.')?;
+    if prefix.is_empty() || suffix.is_empty() || suffix.contains('.') {
+        return None;
+    }
+    Some((prefix, suffix))
+}
+
+/// Apply `df.alias("L")`-style resolution to a single column ref. If
+/// `col_name` is `"alias.suffix"` AND any aliases are registered in
+/// scope, route the lookup through the aliased schema (firing D0030 on
+/// the suffix typo, or on the prefix when the alias isn't in scope).
+/// Returns `true` when the helper resolved or diagnosed the ref —
+/// callers should then skip their normal resolver. Returns `false`
+/// when the ref isn't alias-shaped (or no aliases are in scope), in
+/// which case the caller's nested-struct / single-name resolver
+/// continues to apply.
+///
+/// Shared between `report_column_refs` (the central col-ref check
+/// used by select/filter/withColumn/groupBy/…) and `check_join_keys`
+/// (the join expression-form on-clause) so every column-checking site
+/// honors the alias pattern uniformly. Without this lift, sites other
+/// than the join-on path would false-fire D0030 on the
+/// `L = raw.alias("L"); L.select(col("L.region"))` shape — the most
+/// common form of the alias pattern in production PySpark.
+pub(super) fn try_resolve_alias_ref<'a>(
+    col_name: &'a str,
+    col_range: TextRange,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> bool {
+    let Some((prefix, suffix)) = split_qualified(col_name) else {
+        return false;
+    };
+    if ctx.known_aliases().is_empty() {
+        return false;
+    }
+    if let Some(aliased) = ctx.lookup_alias(prefix) {
+        ctx.record_column_ref(col_range, col_name, aliased.clone());
+        if !aliased.has_field(suffix) {
+            let suggestion = suggest_field_name(suffix, &aliased);
+            let mut message = format!(
+                "Column '{suffix}' does not exist on alias '{prefix}' ({}).",
+                aliased.display_name(),
+            );
+            if let Some(s) = &suggestion {
+                message.push_str(&format!(" Did you mean '{s}'?"));
+            }
+            diagnostics.push(
+                Diagnostic::at_range(
+                    Severity::Error,
+                    "D0030",
+                    message,
+                    col_range,
+                    source,
+                    line_index,
+                )
+                .with_suggestion(suggestion),
+            );
+        }
+        return true;
+    }
+    let known = ctx.known_aliases();
+    let mut message = format!("Alias '{prefix}' is not in scope.");
+    if !known.is_empty() {
+        message.push_str(&format!(" Known aliases: {}.", known.join(", ")));
+    }
+    diagnostics.push(Diagnostic::at_range(
+        Severity::Error,
+        "D0030",
+        message,
+        col_range,
+        source,
+        line_index,
+    ));
+    true
 }

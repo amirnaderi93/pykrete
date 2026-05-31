@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use super::col_refs::collect_col_refs;
+use super::column_methods::{split_qualified, try_resolve_alias_ref};
 use super::context::BodyContext;
 use super::expr::analyze_expr;
 use super::shapes::TwoDfMethod;
@@ -97,12 +98,14 @@ pub(super) fn handle_two_df_method<'a>(
     }
 }
 
-/// Whether the call carries an `allowMissingColumns` keyword that
-/// suppresses D0040.
+/// Whether the call carries an `allowMissingColumns` flag that
+/// suppresses D0040. Spark accepts the flag both as the named kwarg
+/// (`allowMissingColumns=True`) AND positionally (`unionByName(other,
+/// True)`) — both forms must reach the same suppression path.
 ///
-/// Three cases:
+/// Three cases (applied to whichever form was used):
 /// - `True` literal → suppress.
-/// - `False` literal or kwarg absent → keep the strict-match default.
+/// - `False` literal or flag absent → keep the strict-match default.
 /// - Non-literal (a variable, an expression) → suppress, on the
 ///   conservative-against-false-positives principle: the user has
 ///   asked for `unionByName` with a flag we can't statically resolve,
@@ -118,6 +121,12 @@ fn allow_missing_columns(call: &ExprCall) -> bool {
                 None => true,
             };
         }
+    }
+    if let Some(positional) = call.arguments.args.get(1) {
+        return match positional.as_boolean_literal_expr() {
+            Some(b) => b.value,
+            None => true,
+        };
     }
     false
 }
@@ -273,7 +282,7 @@ fn parse_on_arg<'a>(expr: Option<&'a Expr>, ctx: &BodyContext<'a>) -> JoinOn<'a>
 fn check_join_keys<'a>(
     left: &SchemaView<'a>,
     right: &SchemaView<'a>,
-    on: &JoinOn<'_>,
+    on: &JoinOn<'a>,
     ctx: &BodyContext<'a>,
     source: &str,
     line_index: &LineIndex,
@@ -316,52 +325,25 @@ fn check_join_keys<'a>(
             // least one side (we can't know WHICH side a bare `col("X")`
             // belongs to). Names missing from both → D0030.
             //
-            // Alias-qualified refs (`col("L.region")`) split on the
-            // first `.` and resolve the prefix against any
-            // `df.alias("L")` registered in scope. With the prefix
-            // recognized, the suffix is checked against the aliased
-            // schema specifically — the canonical join-disambiguation
-            // pattern in real PySpark code. An unrecognized prefix
-            // still fires D0030, but on the alias rather than the
-            // whole name, with the in-scope aliases listed so the typo
-            // is obvious.
+            // Alias-qualified refs (`col("L.region")`) route through
+            // `try_resolve_alias_ref` — the shared helper used by every
+            // column-checking site so the alias pattern resolves
+            // uniformly across select/filter/withColumn/groupBy/join.
+            // On the join-on path specifically, a dotted name with NO
+            // aliases at all in scope gets the historical "no
+            // .alias(...) bindings registered" hint (the dotted name
+            // there is overwhelmingly an alias attempt, not a
+            // nested-struct access).
             for (name, range) in refs {
-                if let Some((prefix, suffix)) = split_qualified(name) {
-                    if let Some(aliased) = ctx.lookup_alias(prefix) {
-                        if !aliased.has_field(suffix) {
-                            let suggestion = suggest_field_name(suffix, &aliased);
-                            let mut message = format!(
-                                "Column '{suffix}' does not exist on alias '{prefix}' ({}).",
-                                aliased.display_name(),
-                            );
-                            if let Some(s) = &suggestion {
-                                message.push_str(&format!(" Did you mean '{s}'?"));
-                            }
-                            diagnostics.push(
-                                Diagnostic::at_range(
-                                    Severity::Error,
-                                    "D0030",
-                                    message,
-                                    *range,
-                                    source,
-                                    line_index,
-                                )
-                                .with_suggestion(suggestion),
-                            );
-                        }
-                        continue;
-                    }
-                    // Prefix didn't match a registered alias. The
-                    // diagnostic targets the prefix (the actual typo
-                    // site) and lists what aliases ARE in scope so the
-                    // fix is obvious.
-                    let known = ctx.known_aliases();
-                    let mut message = format!("Alias '{prefix}' is not in scope on this join.");
-                    if known.is_empty() {
-                        message.push_str(" No `.alias(...)` bindings have been registered.");
-                    } else {
-                        message.push_str(&format!(" Known aliases: {}.", known.join(", ")));
-                    }
+                if try_resolve_alias_ref(name, *range, ctx, source, line_index, diagnostics) {
+                    continue;
+                }
+                if let Some((prefix, _suffix)) = split_qualified(name)
+                    && ctx.known_aliases().is_empty()
+                {
+                    let message = format!(
+                        "Alias '{prefix}' is not in scope on this join. No `.alias(...)` bindings have been registered.",
+                    );
                     diagnostics.push(Diagnostic::at_range(
                         Severity::Error,
                         "D0030",
@@ -399,22 +381,6 @@ fn check_join_keys<'a>(
             }
         }
     }
-}
-
-/// Split a column reference of the form `"alias.col"` into its alias
-/// and column halves. Returns `None` for unqualified names (no `.`),
-/// for empty halves on either side, and for names with more than one
-/// `.` (nested-struct accesses like `addr.city` aren't aliases and
-/// must keep their existing field-path semantics — those are handled
-/// elsewhere, never reaching this resolver). The narrow allowance
-/// captures the canonical `df.alias("L"); col("L.region")` pattern
-/// without rerouting real dotted paths.
-fn split_qualified(name: &str) -> Option<(&str, &str)> {
-    let (prefix, suffix) = name.split_once('.')?;
-    if prefix.is_empty() || suffix.is_empty() || suffix.contains('.') {
-        return None;
-    }
-    Some((prefix, suffix))
 }
 
 /// Result schema of a join, given the on= clause.

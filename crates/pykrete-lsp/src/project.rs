@@ -187,11 +187,20 @@ impl SnapshotCache {
     /// Drop every tier. Wired to the `pykrete/refreshSnapshot` custom
     /// LSP command and to file-watcher events whose path falls outside
     /// the tracked union.
+    ///
+    /// `last_warned_pykrete_json_mtime` is NOT cleared here: it's keyed
+    /// by `pykrete.json` mtime and gated by `gate_malformed_warning` on
+    /// its own (re-warning on a fresh mtime, going silent on a
+    /// well-formed parse). Clearing it on every `invalidate()` re-armed
+    /// the toast loop whenever the user saved any unrelated `.pyk` file
+    /// in the workspace — the warm/cold tiers re-emitted the warning
+    /// 30 s later. Persisting the watermark across cache invalidations
+    /// is what actually delivers the "warn once per malformed state"
+    /// promise the round-1 fix claimed.
     pub fn invalidate(&mut self) {
         self.state = None;
         self.last_cold_walk = None;
         self.last_warm_sweep = None;
-        self.last_warned_pykrete_json_mtime = None;
     }
 
     /// Test-only: force the next `config` / `snapshot` call to re-run
@@ -1045,6 +1054,40 @@ mod tests {
         assert!(
             cache.take_pending_warning().is_some(),
             "edited-but-still-broken file must surface a fresh warning"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn malformed_pykrete_json_watermark_survives_invalidate() {
+        // Round-2 fix: `SnapshotCache::invalidate()` fires on every
+        // `workspace/didChangeWatchedFiles` notification (i.e., any
+        // file save in the workspace). If `invalidate()` resets the
+        // mtime watermark, the next cold walk on the same broken file
+        // re-fires the toast — defeating the "warn once per malformed
+        // state" promise. This pins that the watermark survives an
+        // explicit invalidate (a save of an unrelated `.pyk` file
+        // happens through the same channel).
+        let root = tmpdir();
+        write(&root.join("pykrete.json"), r#"{ this is not json"#);
+        let docs = docs_with(&root);
+
+        let mut cache = SnapshotCache::new();
+        let _config = cache.config(&docs);
+        cache
+            .take_pending_warning()
+            .expect("first cold walk should queue a warning");
+
+        // Simulate the LSP layer calling `invalidate()` after a save
+        // of an unrelated `.pyk` file. The broken `pykrete.json` is
+        // untouched; only the cache tiers are dropped.
+        cache.invalidate();
+
+        let _config = cache.config(&docs);
+        assert!(
+            cache.take_pending_warning().is_none(),
+            "second cold walk after invalidate on same-mtime broken file must NOT re-fire the warning"
         );
 
         std::fs::remove_dir_all(&root).ok();

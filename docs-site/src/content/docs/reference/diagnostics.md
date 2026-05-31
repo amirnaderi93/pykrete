@@ -34,6 +34,7 @@ The **rule name** (`unknownColumn`) is what the CLI prints and what the editor s
 | `D0070` | `unresolvedImport` | An `import` can't be resolved. |
 | `D0071` | `unexportedName` | An imported name isn't exported by the module. |
 | `D0072` | `duplicateSchemaName` | The same schema name is declared in more than one project file. Warning. |
+| `D0073` | `transformInputMismatch` | A `df.transform(fn)` receiver's schema doesn't match `fn`'s declared parameter schema. |
 | `D0080` | `returnTypeMismatch` | A returned column's **type** differs from the declared return schema. |
 | `D0081` | `nonNumericArithmetic` | Arithmetic on a non-numeric column. Strict mode only. |
 | `D0082` | `crossTypeComparison` | A comparison between unrelated types. Strict mode only. |

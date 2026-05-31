@@ -649,3 +649,72 @@ def f(df: DataFrame[Sale]) -> bool:
     assert_has_code(&result, "D0030");
     assert_message_contains(&result, "D0030", "regoin");
 }
+
+// Round-2 walker extensions — Subscript / FString / comprehensions.
+// Round-1 covered Compare/BoolOp/UnaryOp/BinOp/Tuple/List/Set/Dict/IfExp;
+// these add the rest of the compound forms a real expression can sit
+// inside. Lambda stays deferred (its body needs a new parameter scope
+// we don't track yet) — tracked as a v1.0.1 follow-up.
+
+#[test]
+fn typo_inside_subscript_value_is_caught() {
+    // `(df.select("typo"), df2)[0]` — the call is inside the value
+    // half of a Subscript.
+    let src = format!(
+        "{SCHEMA}
+def f(df: DataFrame[Sale]) -> int:
+    return (df.select(\"regoin\"), df)[0].count()
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "regoin");
+}
+
+#[test]
+fn typo_inside_f_string_interpolation_is_caught() {
+    // `f"count={df.select('typo').count()}"` — the call sits inside
+    // an interpolation, not a top-level expression.
+    let src = format!(
+        "{SCHEMA}
+def f(df: DataFrame[Sale]) -> str:
+    return f\"count={{df.select('regoin').count()}}\"
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "regoin");
+}
+
+#[test]
+fn typo_inside_list_comprehension_iter_is_caught() {
+    // `[x for x in df.select("typo").collect()]` — the typo's call is
+    // the iteration source. The bound name `x` lives in a new scope
+    // (so the comprehension's `elt` / `ifs` are not walked), but the
+    // `iter` half evaluates in the outer scope.
+    let src = format!(
+        "{SCHEMA}
+def f(df: DataFrame[Sale]) -> list:
+    return [x for x in df.select(\"regoin\").collect()]
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "regoin");
+}
+
+#[test]
+fn typo_inside_generator_expression_iter_is_caught() {
+    // `(x for x in df.select("typo").collect())` returned directly —
+    // the parenthesized generator expression's `iter` half is the
+    // call we want walked.
+    let src = format!(
+        "{SCHEMA}
+def f(df: DataFrame[Sale]):
+    return (x for x in df.select(\"regoin\").collect())
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "regoin");
+}

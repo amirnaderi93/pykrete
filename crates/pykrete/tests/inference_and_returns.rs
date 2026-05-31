@@ -358,6 +358,75 @@ def f(old: DataFrame[Sale], new: DataFrame[SaleV2], flag: bool) -> DataFrame:
     assert_does_not_have_code(&result, "D0040");
 }
 
+#[test]
+fn unionByName_with_positional_true_does_not_fire_d0040() {
+    // Spark accepts the flag positionally too: `unionByName(other,
+    // True)` is the same as `unionByName(other, allowMissingColumns=True)`.
+    // Round-1 only honored the kwarg form, so the positional shape
+    // false-fired D0040 in real production code.
+    let result = check(
+        r#"
+class Sale(Schema):
+    region: string
+    amount: int
+
+class SaleV2(Schema):
+    region: string
+    amount: int
+    timestamp: timestamp
+
+def f(old: DataFrame[Sale], new: DataFrame[SaleV2]) -> DataFrame:
+    return old.unionByName(new, True)
+"#,
+    );
+    assert_does_not_have_code(&result, "D0040");
+}
+
+#[test]
+fn unionByName_with_positional_false_still_fires_d0040() {
+    // Positional `False` keeps the strict default — same as the kwarg
+    // form. Both literal positions must reach the same suppression
+    // table.
+    let result = check(
+        r#"
+class Sale(Schema):
+    region: string
+    amount: int
+
+class SaleV2(Schema):
+    region: string
+    amount: int
+    timestamp: timestamp
+
+def f(old: DataFrame[Sale], new: DataFrame[SaleV2]) -> DataFrame:
+    return old.unionByName(new, False)
+"#,
+    );
+    assert_has_code(&result, "D0040");
+}
+
+#[test]
+fn unionByName_with_positional_non_literal_falls_through_conservatively() {
+    // A non-literal flag positionally — mirror the kwarg shape's
+    // conservative-suppress so the two forms behave identically.
+    let result = check(
+        r#"
+class Sale(Schema):
+    region: string
+    amount: int
+
+class SaleV2(Schema):
+    region: string
+    amount: int
+    timestamp: timestamp
+
+def f(old: DataFrame[Sale], new: DataFrame[SaleV2], flag: bool) -> DataFrame:
+    return old.unionByName(new, flag)
+"#,
+    );
+    assert_does_not_have_code(&result, "D0040");
+}
+
 // ===========================================================================
 // Set operations — intersect/intersectAll/subtract/except/exceptAll
 //

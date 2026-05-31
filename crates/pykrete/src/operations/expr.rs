@@ -158,7 +158,68 @@ pub(super) fn analyze_expr<'a>(
             let _ = analyze_expr(&s.value, ctx, source, line_index, diagnostics);
             None
         }
+        Expr::Subscript(s) => {
+            // `(df, df2)[1]` — neither half is a DataFrame on its own,
+            // but a method call buried in either side still needs its
+            // diagnostics collected.
+            let _ = analyze_expr(&s.value, ctx, source, line_index, diagnostics);
+            let _ = analyze_expr(&s.slice, ctx, source, line_index, diagnostics);
+            None
+        }
+        Expr::FString(f) => {
+            // `f"{df.select('typo').count()}"` — descend into every
+            // formatted interpolation so the embedded calls are still
+            // checked. The literal parts are pure text and carry
+            // nothing to analyze.
+            for element in f.value.elements() {
+                if let ruff_python_ast::InterpolatedStringElement::Interpolation(interp) = element {
+                    let _ = analyze_expr(&interp.expression, ctx, source, line_index, diagnostics);
+                }
+            }
+            None
+        }
+        Expr::ListComp(c) => {
+            descend_comprehension_iters(&c.generators, ctx, source, line_index, diagnostics);
+            None
+        }
+        Expr::SetComp(c) => {
+            descend_comprehension_iters(&c.generators, ctx, source, line_index, diagnostics);
+            None
+        }
+        Expr::DictComp(c) => {
+            descend_comprehension_iters(&c.generators, ctx, source, line_index, diagnostics);
+            None
+        }
+        Expr::Generator(g) => {
+            descend_comprehension_iters(&g.generators, ctx, source, line_index, diagnostics);
+            None
+        }
+        // `Lambda` is deliberately NOT descended: its body sits inside a
+        // new parameter scope (`lambda x: x.select("y")` binds `x` to
+        // each row, not to a DataFrame in the outer ctx), and analyzing
+        // the body without that scope could fire spurious D0030 on the
+        // lambda parameter name. Tracked as a v1.0.1 follow-up.
         _ => None,
+    }
+}
+
+/// Walk each comprehension generator's `iter` (the iteration source)
+/// for embedded method calls. The `elt` / `ifs` parts run inside a new
+/// scope where the comprehension's bound name is in effect; analyzing
+/// them without tracking that scope could trigger spurious D0030 on
+/// the bound name, so the descent is conservative — only the iter
+/// source, which evaluates in the outer scope, is walked. Catches the
+/// common shape `[f(x) for x in dfs.select("typo")]` without risking a
+/// false positive on the bound-name half.
+fn descend_comprehension_iters<'a>(
+    generators: &'a [ruff_python_ast::Comprehension],
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for comp in generators {
+        let _ = analyze_expr(&comp.iter, ctx, source, line_index, diagnostics);
     }
 }
 
@@ -1396,7 +1457,7 @@ pub(super) fn infer_transform_output<'a>(
 
 /// Check that the DataFrame fed into `df.transform(fn)` matches `fn`'s
 /// declared parameter schema. Compares column-name sets; a mismatch
-/// emits `D0070`.
+/// emits `D0073`.
 fn check_transform_input(
     receiver: &SchemaView<'_>,
     param: &Schema<'_>,

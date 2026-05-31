@@ -219,6 +219,8 @@ accepts either).
 | `D0060` | `missingJoinKey` | Join key missing on one side. |
 | `D0070` | `unresolvedImport` | Unresolved import. |
 | `D0071` | `unexportedName` | Name not exported by a module. |
+| `D0072` | `duplicateSchemaName` | The same `class X(Schema)` is declared in more than one project file. Warning. |
+| `D0073` | `transformInputMismatch` | A `df.transform(fn)` receiver's schema doesn't match `fn`'s parameter schema. |
 | `D0080` | `returnTypeMismatch` | Return type mismatch — a column's *type* differs (conservative; on by default). |
 | `D0081` | `nonNumericArithmetic` | Arithmetic on a non-numeric column (advisory; `typeCheckingMode: strict` only). |
 | `D0082` | `crossTypeComparison` | Comparison of unrelated types (advisory; `strict` only). |
