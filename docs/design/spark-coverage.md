@@ -926,6 +926,67 @@ small-surface, low-traffic edits that don't gate the v1.0.0 tag.
     of scope for v1.0.1) or add a "pegged at v1.0.0 release" caveat so
     readers don't expect the prose to track HEAD. Cost: trivial.
 
+### Schema-tracking probes — cross-codebase positive verification (v1.1)
+
+User-directed (2026-05-31) immediately post-v1.0.0 launch: the v1.0
+cross-codebase suite verifies pykrete emits zero diagnostics on real
+working PySpark code, but doesn't prove the schema-tracking is
+*correct*. A checker that does nothing also emits zero diagnostics on
+working code. Probes close that gap with two assertion shapes:
+
+1. **Positive probe**: "after this transform, pykrete's tracked schema
+   should resolve `<column>` cleanly — if it doesn't, we lost the
+   schema."
+2. **Negative probe**: "after this transform, pykrete should fire
+   `D0030` on `<column>` — if it doesn't, we silently widened."
+
+**Bright-line framing** (inherited from `literal-value-vocabulary.md`):
+probes verify *static* schema tracking — name resolution + column-type
+tracking — at edit time, via the five marker kinds defined in the spec
+(`PROBE-EXPECTS`, `PROBE-RESOLVES`, `PROBE-TYPE-IS`,
+`PROBE-FILE-CLEAN-OF`, `PROBE-FILE-COUNT`; split 3 line-anchored + 2
+file-scoped). Probes do NOT verify row values, runtime behaviour, or
+anything requiring code execution. Pykrete has no runtime; probes
+inherit that constraint. Nullability tracking and exact-output-column-
+set verification (the round-2 draft's PROBE-NULLABLE and PROBE-OUTPUT-
+COLUMNS markers) are **deferred to v1.2** — both require coordinated
+pykrete-core D-code work that would break the "no pykrete-core
+release" v1.1 cost claim.
+
+Sibling-of-trust feature with the enum-constraints tracker below: both
+exist because *the v1.0 trust pitch needs positive evidence on top of
+the absence-of-negatives proof*.
+
+Full design tracker at
+[`docs/design/schema-tracking-probes.md`](./schema-tracking-probes.md) —
+chosen syntax (inline-comment markers in the existing `.pyk` fixtures
+and a separate `probes_negative/` tree per donor for synthetic typos:
+`# PROBE-EXPECTS: D0030 on "product"`; `# PROBE-RESOLVES`;
+`# PROBE-TYPE-IS: double on "amount"`; `# PROBE-FILE-CLEAN-OF` /
+`# PROBE-FILE-COUNT`), extended `golden.sh` integration (parses
+comments → expectations table → diffs against existing `diagnostics[]`
+JSON; TYPE-IS via a synthesizer rewrite targeting existing
+D0080-D0082; no new CLI surface on pykrete-core, no new D-code),
+19 open design questions (8 original; 8 added in round 2:
+stacked-EXPECTS pairing, target-line resolution, in-string probe
+extraction, column-unit semantics, probes stability contract, path
+normalisation, negative-probe seeding methodology, coverage-guard
+grace window; 3 added in round 3: out-of-bump catalog drift surfacing,
+SemVer policy for D-code renames/removals, v1.0 trust-claim language
+migration), a "Probes stability surface" section paralleling the v1.0
+JSON output stability contract (`probesSchemaVersion: "1"`,
+order-insensitive named args, pinned `Probe` / `ProbeFailure`
+dataclasses), a "Diagnostic catalog schema" subsection pinning the
+vendored `diagnostic_catalog.json` JSON shape and a D-code lifecycle
+section (scheduled out-of-bump drift workflow + SemVer policy for
+renames/removals on pykrete-core's side), cost estimate 5-7 days (one
+engineer-week, pykrete-tests v1.1.0 only — no pykrete-core release
+needed), v1.1 work plan (spec PR → multi-lens review correctness/
+adversarial/schema-stability → three sequential implementation PRs →
+seed probes across all 32 fixtures plus bootstrap `probes_negative/`
+per donor → coverage guard informational at v1.1 ship, becomes
+release-blocking in v1.2).
+
 ### Literal value vocabulary — enum constraints on string columns (v1.1)
 
 User-proposed (2026-05-31) during pre-v1.0.0 sprint, deferred per
