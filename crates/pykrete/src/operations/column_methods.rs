@@ -5,7 +5,7 @@ use super::column_exprs::{common_branch_type, infer_expr_type};
 use super::context::BodyContext;
 use super::shapes::{ColumnMethodShape, role_at};
 use super::strict_operators::{
-    collect_arg_column_refs, report_expr_sql_refs, report_expr_type_errors,
+    collect_arg_column_refs_split, report_expr_sql_refs, report_expr_type_errors,
 };
 
 use ruff_python_ast::{Expr, ExprCall};
@@ -33,10 +33,11 @@ pub(super) fn check_column_method_args<'a>(
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
+    let mut string_refs: Vec<(&'a str, TextRange)> = Vec::new();
+    let mut column_refs: Vec<(&'a str, TextRange)> = Vec::new();
     for (i, arg) in call.arguments.args.iter().enumerate() {
         let role = role_at(shape, i);
-        collect_arg_column_refs(arg, role, ctx, &mut refs);
+        collect_arg_column_refs_split(arg, role, ctx, &mut string_refs, &mut column_refs);
         // `F.expr("…")` anywhere in the argument carries a SQL fragment;
         // its identifiers are checked against the same schema.
         report_expr_sql_refs(arg, schema, source, line_index, diagnostics);
@@ -49,9 +50,15 @@ pub(super) fn check_column_method_args<'a>(
         check_chained_field_access(arg, schema, ctx, source, line_index, diagnostics);
     }
     if tolerates_missing_column_names(method) {
-        record_column_refs_tolerating_missing(&refs, schema, ctx);
+        // Spark silently tolerates the string-literal form of missing
+        // names; Column-form refs (e.g. `df.drop(col("typo"))`) are
+        // explicit references and still get the D0030 check.
+        record_column_refs_tolerating_missing(&string_refs, schema, ctx);
+        report_column_refs(&column_refs, schema, ctx, source, line_index, diagnostics);
     } else {
-        report_column_refs(&refs, schema, ctx, source, line_index, diagnostics);
+        let mut all = string_refs;
+        all.extend(column_refs);
+        report_column_refs(&all, schema, ctx, source, line_index, diagnostics);
     }
 }
 
@@ -59,7 +66,8 @@ pub(super) fn check_column_method_args<'a>(
 // schema (per its source / docs: "drop columns ... ignored if schema
 // doesn't contain column name(s)"). Firing D0030 on a missing name
 // here would flag working production code; match Spark's behavior
-// instead.
+// instead. Scope: STRING-FORM ONLY — `df.drop(col("typo"))` is an
+// explicit Column reference and still gets the typo check.
 pub(super) fn tolerates_missing_column_names(method: &str) -> bool {
     matches!(method, "drop")
 }

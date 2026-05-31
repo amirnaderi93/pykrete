@@ -589,6 +589,50 @@ def f(r: DataFrame[Row]) -> DataFrame:
 }
 
 #[test]
+fn opaque_struct_flowing_into_typed_return_is_not_a_d0080() {
+    // The pass-through-with-refinement pattern: a function accepts a
+    // schema whose nested struct is opaque (`Struct`) and refines it
+    // on output by declaring a typed nested schema. The body produces
+    // an opaque-Struct value for `addr`; the declared return type has
+    // a typed `Addr` struct for `addr`. Pykrete must NOT fire D0080
+    // — an opaque struct flowing into a typed one is permissive, the
+    // same posture as opaque-array elements and unknown column types.
+    let src = "\
+class Addr(Schema):
+    city: string
+    zip: string
+
+class In(Schema):
+    id: int
+    addr: Struct
+
+class Out(Schema):
+    id: int
+    addr: Addr
+
+def f(d: DataFrame[In]) -> DataFrame[Out]:
+    return d
+";
+    assert_does_not_have_code(&check(src), "D0080");
+}
+
+#[test]
+fn get_field_on_opaque_struct_does_not_fire_d0030() {
+    // `col(\"payload\").getField(\"anything\")` against an opaque
+    // `Struct` — pykrete can't know the inner shape, so any field
+    // access is permissive.
+    let src = "\
+class Row(Schema):
+    id: int
+    payload: Struct
+
+def f(r: DataFrame[Row]) -> DataFrame:
+    return r.select(col(\"payload\").getField(\"anything\"))
+";
+    assert_does_not_have_code(&check(src), "D0030");
+}
+
+#[test]
 fn round4_cast_to_compound_interval_with_precision_does_not_fire_d0011() {
     // Round-4 fix: `INTERVAL DAY(3) TO SECOND(6)` is real Spark SQL —
     // a compound interval with per-unit precision args. The matcher

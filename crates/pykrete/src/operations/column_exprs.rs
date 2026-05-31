@@ -583,7 +583,7 @@ fn infer_struct_type<'a>(call: &ExprCall, schema: &SchemaView<'a>, tcx: TypeCtx<
         .iter()
         .enumerate()
         .map(|(i, arg)| {
-            let name = select_output_name(arg)
+            let name = select_output_name(arg, None)
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| format!("col{}", i + 1));
             let ty = select_arg_type(arg, schema, tcx);
@@ -704,7 +704,11 @@ pub(super) fn report_get_field_typo(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let fields = match recv_ty {
-        ColumnType::Struct(fields) => fields,
+        // An empty fields vec is F4's opaque-Struct sentinel — the user
+        // declared `Struct` without specifying the shape. Any field
+        // access is permissive; pykrete declines to fire D0030 without
+        // knowing what's inside.
+        ColumnType::Struct(fields) if !fields.is_empty() => fields,
         ColumnType::Nullable(inner) => {
             return report_get_field_typo(inner, lit, source, line_index, diagnostics);
         }

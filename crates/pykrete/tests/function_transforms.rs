@@ -164,6 +164,29 @@ def f(d: DataFrame[In]) -> DataFrame:
 }
 
 #[test]
+fn select_does_not_treat_non_dataframe_attribute_as_column_ref() {
+    // F7 follow-up: not every `obj.X` is a DataFrame column. A
+    // `helper.foo` attribute where `helper` is NOT in the DF-binding
+    // scope must NOT be projected into the output schema as column
+    // `foo`. Before the gate, the inferred schema silently grew a
+    // bogus `foo` field; a downstream `col(\"foo\")` would falsely
+    // type-check.
+    let src = format!(
+        "{IN}
+class Helper:
+    foo: int
+
+def f(d: DataFrame[In], helper: Helper) -> DataFrame:
+    return d.select(helper.foo, col(\"name\")).select(col(\"foo\"))
+"
+    );
+    // `foo` is NOT a column on the receiver schema, so the downstream
+    // `col(\"foo\")` must fire D0030 — proof the bogus name never
+    // made it into the inferred output schema.
+    assert_has_code(&check(&src), "D0030");
+}
+
+#[test]
 fn split_yields_an_array_of_strings() {
     let src = format!(
         "{IN}

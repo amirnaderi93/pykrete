@@ -292,6 +292,7 @@ pub(super) fn apply_column_method<'a>(
     method: &str,
     recv: &SchemaView<'a>,
     call: &'a ExprCall,
+    ctx: &BodyContext<'a>,
     tcx: TypeCtx<'a>,
 ) -> Option<SchemaView<'a>> {
     match method {
@@ -315,7 +316,7 @@ pub(super) fn apply_column_method<'a>(
                     fields.extend(pair);
                     continue;
                 }
-                if let Some(name) = select_output_name(arg) {
+                if let Some(name) = select_output_name(arg, Some(ctx)) {
                     fields.push(DerivedField {
                         name,
                         ty: select_arg_type(arg, recv, tcx),
@@ -683,7 +684,10 @@ pub(super) fn report_expr_sql_refs(
     }
 }
 
-pub(super) fn select_output_name(arg: &Expr) -> Option<&str> {
+pub(super) fn select_output_name<'a>(
+    arg: &'a Expr,
+    ctx: Option<&BodyContext<'a>>,
+) -> Option<&'a str> {
     if let Some(call) = arg.as_call_expr()
         && let Some(attr) = call.func.as_attribute_expr()
         && attr.attr.id.as_str() == "alias"
@@ -703,18 +707,22 @@ pub(super) fn select_output_name(arg: &Expr) -> Option<&str> {
     }
     // `df.X` — attribute-access column ref. Spark projects this as a
     // column named `X` in the output schema, so a select arg like
-    // `lines.timestamp` carries `timestamp` through. The collect_col_refs
-    // side already recognises this shape; surfacing it here as well
-    // keeps the inferred output schema in sync with the validated refs.
+    // `lines.timestamp` carries `timestamp` through. Gate on the
+    // receiver being a DataFrame in scope when ctx is available —
+    // otherwise `helper.foo` (non-DF) would be misread as a column ref
+    // and silently leak into the inferred output schema.
     if let Some(attr) = arg.as_attribute_expr()
-        && attr.value.is_name_expr()
+        && let Some(name) = attr.value.as_name_expr()
+        && ctx.is_none_or(|c| c.lookup(name.id.as_str()).is_some())
     {
         return Some(attr.attr.id.as_str());
     }
-    // `df["X"]` — subscript sibling of the attribute form above.
+    // `df["X"]` — subscript sibling of the attribute form above. Same
+    // ctx-gating so `helper["foo"]` doesn't sneak through.
     if let Some(sub) = arg.as_subscript_expr()
-        && sub.value.is_name_expr()
+        && let Some(name) = sub.value.as_name_expr()
         && let Some(s) = sub.slice.as_string_literal_expr()
+        && ctx.is_none_or(|c| c.lookup(name.id.as_str()).is_some())
     {
         return Some(s.value.to_str());
     }
@@ -722,7 +730,7 @@ pub(super) fn select_output_name(arg: &Expr) -> Option<&str> {
         if let Some(attr) = call.func.as_attribute_expr()
             && attr.attr.id.as_str() == "cast"
         {
-            return select_output_name(&attr.value);
+            return select_output_name(&attr.value, ctx);
         }
         // `F.explode("arr")` / `explode_outer(...)` — Spark names the
         // unnested column `col` when no `.alias(...)` is given.
@@ -905,11 +913,19 @@ fn column_name_arg(arg: &Expr) -> Option<&str> {
     None
 }
 
-pub(super) fn collect_arg_column_refs<'a>(
+/// Collect refs from a method-call arg, partitioned into two buckets:
+/// `string_out` for string-literal column names (`df.drop("x")`,
+/// `df.drop(["x", "y"])`) and `column_out` for everything else
+/// (`F.col("x")`, `df.x`, `df["x"]`, `F.sum("x")`, …). Callers that
+/// need to apply different policies to string-form vs Column-form refs
+/// use the partitioning — `df.drop` and `df.withColumnsRenamed`
+/// tolerate missing names only in the string form.
+pub(super) fn collect_arg_column_refs_split<'a>(
     arg: &'a Expr,
     role: ArgRole,
     ctx: &BodyContext<'a>,
-    out: &mut Vec<(&'a str, TextRange)>,
+    string_out: &mut Vec<(&'a str, TextRange)>,
+    column_out: &mut Vec<(&'a str, TextRange)>,
 ) {
     match role {
         ArgRole::NewName => {}
@@ -918,7 +934,7 @@ pub(super) fn collect_arg_column_refs<'a>(
             // name — never check or collect it as a reference.
             if let Some(s) = arg.as_string_literal_expr() {
                 if s.value.to_str() != "*" {
-                    out.push((s.value.to_str(), s.range()));
+                    string_out.push((s.value.to_str(), s.range()));
                 }
                 return;
             }
@@ -926,16 +942,16 @@ pub(super) fn collect_arg_column_refs<'a>(
                 for elt in &list.elts {
                     if let Some(s) = elt.as_string_literal_expr() {
                         if s.value.to_str() != "*" {
-                            out.push((s.value.to_str(), s.range()));
+                            string_out.push((s.value.to_str(), s.range()));
                         }
                     } else {
-                        collect_col_refs(elt, ctx, out);
+                        collect_col_refs(elt, ctx, column_out);
                     }
                 }
                 return;
             }
-            collect_col_refs(arg, ctx, out);
+            collect_col_refs(arg, ctx, column_out);
         }
-        ArgRole::Expression => collect_col_refs(arg, ctx, out),
+        ArgRole::Expression => collect_col_refs(arg, ctx, column_out),
     }
 }

@@ -645,7 +645,7 @@ pub(super) fn analyze_method_call<'a>(
                 }
             }
         }
-        return apply_column_method(method, &receiver, call, ctx.type_ctx());
+        return apply_column_method(method, &receiver, call, ctx, ctx.type_ctx());
     }
     if let Some(kind) = two_df_method(method) {
         return handle_two_df_method(
@@ -1724,7 +1724,7 @@ fn handle_agg<'a>(
             }
             continue;
         }
-        if let Some(name) = select_output_name(arg)
+        if let Some(name) = select_output_name(arg, Some(ctx))
             && !fields.iter().any(|f| f.name == name)
         {
             fields.push(DerivedField {

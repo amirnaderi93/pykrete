@@ -193,6 +193,18 @@ fn drop_accepts_an_attribute_access_column() {
 }
 
 #[test]
+fn drop_column_form_typo_still_fires_d0030() {
+    // F1 scope follow-up: the silent-skip on missing names is a
+    // STRING-FORM convenience to match Spark's `df.drop("missing")`
+    // no-op behavior. Column-form refs are explicit — `df.drop(col("typo"))`
+    // is the user pointing at a column that doesn't exist, and pykrete
+    // surfaces it.
+    let result = check(&with_orders(r#"return raw.drop(col("typo"))"#));
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "typo");
+}
+
+#[test]
 fn d0030_fires_on_typo_inside_dropDuplicates_list_argument() {
     // The list literal is unpacked; each string element is treated as a
     // column name.
