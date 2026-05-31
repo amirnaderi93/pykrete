@@ -499,6 +499,140 @@ def f(s: DataFrame[Sale]) -> DataFrame:
 }
 
 #[test]
+fn schema_declares_float_alias_for_double() {
+    // `float` is Python's float, which PySpark maps to Spark's
+    // DoubleType (FloatType vs DoubleType is a coercion the runtime
+    // hides). Pykrete accepts `float` everywhere `double` is accepted.
+    let src = "\
+class Sale(Schema):
+    region: string
+    amount: float
+
+def f(s: DataFrame[Sale]) -> DataFrame:
+    return s.select(col(\"amount\"))
+";
+    assert_no_diagnostics(&check(src));
+}
+
+#[test]
+fn array_of_float_resolves() {
+    let src = "\
+class Row(Schema):
+    values: Array[float]
+
+def f(r: DataFrame[Row]) -> DataFrame:
+    return r.select(col(\"values\"))
+";
+    assert_no_diagnostics(&check(src));
+}
+
+#[test]
+fn float_is_interchangeable_with_double_under_strict_mode() {
+    // A column declared `float` flowing into a slot declared `double`
+    // (and vice-versa) is one type — strict mode must NOT flag it.
+    let src = "\
+class In(Schema):
+    a: float
+
+class Out(Schema):
+    a: double
+
+def f(d: DataFrame[In]) -> DataFrame[Out]:
+    return d
+";
+    let result = common::check_strict(src);
+    assert_does_not_have_code(&result, "D0080");
+}
+
+#[test]
+fn schema_declares_bare_struct_as_opaque_struct() {
+    // `field: Struct` is the opaque-struct sentinel — the user is
+    // declaring a nested struct they haven't fully modeled. Pykrete
+    // accepts it without firing D0010 and treats the column as a
+    // composite whose inner navigation degrades silently.
+    let src = "\
+class Row(Schema):
+    id: int
+    payload: Struct
+
+def f(r: DataFrame[Row]) -> DataFrame:
+    return r.select(col(\"id\"), col(\"payload\"))
+";
+    assert_no_diagnostics(&check(src));
+}
+
+#[test]
+fn opaque_struct_field_inside_array_is_clean() {
+    let src = "\
+class Row(Schema):
+    events: Array[Struct]
+
+def f(r: DataFrame[Row]) -> DataFrame:
+    return r.select(col(\"events\"))
+";
+    assert_no_diagnostics(&check(src));
+}
+
+#[test]
+fn opaque_struct_dotted_access_degrades_silently() {
+    // Without inner-field info, pykrete can't verify the nested
+    // access — but it must not false-flag (same posture as
+    // `Array(None)` / `Map(..)`).
+    let src = "\
+class Row(Schema):
+    payload: Struct
+
+def f(r: DataFrame[Row]) -> DataFrame:
+    return r.select(col(\"payload.something\"))
+";
+    assert_does_not_have_code(&check(src), "D0030");
+}
+
+#[test]
+fn opaque_struct_flowing_into_typed_return_is_not_a_d0080() {
+    // The pass-through-with-refinement pattern: a function accepts a
+    // schema whose nested struct is opaque (`Struct`) and refines it
+    // on output by declaring a typed nested schema. The body produces
+    // an opaque-Struct value for `addr`; the declared return type has
+    // a typed `Addr` struct for `addr`. Pykrete must NOT fire D0080
+    // — an opaque struct flowing into a typed one is permissive, the
+    // same posture as opaque-array elements and unknown column types.
+    let src = "\
+class Addr(Schema):
+    city: string
+    zip: string
+
+class In(Schema):
+    id: int
+    addr: Struct
+
+class Out(Schema):
+    id: int
+    addr: Addr
+
+def f(d: DataFrame[In]) -> DataFrame[Out]:
+    return d
+";
+    assert_does_not_have_code(&check(src), "D0080");
+}
+
+#[test]
+fn get_field_on_opaque_struct_does_not_fire_d0030() {
+    // `col(\"payload\").getField(\"anything\")` against an opaque
+    // `Struct` — pykrete can't know the inner shape, so any field
+    // access is permissive.
+    let src = "\
+class Row(Schema):
+    id: int
+    payload: Struct
+
+def f(r: DataFrame[Row]) -> DataFrame:
+    return r.select(col(\"payload\").getField(\"anything\"))
+";
+    assert_does_not_have_code(&check(src), "D0030");
+}
+
+#[test]
 fn round4_cast_to_compound_interval_with_precision_does_not_fire_d0011() {
     // Round-4 fix: `INTERVAL DAY(3) TO SECOND(6)` is real Spark SQL —
     // a compound interval with per-unit precision args. The matcher

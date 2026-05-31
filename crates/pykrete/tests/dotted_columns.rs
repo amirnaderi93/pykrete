@@ -331,3 +331,96 @@ mod resolve_path_unit {
         assert!(matches!(result, FieldPathResult::Resolved));
     }
 }
+
+// ===========================================================================
+// Spark-style backtick-quoted column refs — `col("`info`")` is `info`,
+// `col("`a.b`")` is a column literally named `a.b`, and
+// `col("`info`.`name`")` is nested-struct access.
+// ===========================================================================
+
+#[test]
+fn backtick_wrapped_simple_name_resolves() {
+    let result = check(&format!(
+        r#"{NESTED_SCHEMAS}
+def f(u: DataFrame[User]) -> DataFrame:
+    return u.select(col("`name`"))
+"#
+    ));
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn backtick_wrapped_typo_still_fires_d0030() {
+    let result = check(&format!(
+        r#"{NESTED_SCHEMAS}
+def f(u: DataFrame[User]) -> DataFrame:
+    return u.select(col("`naem`"))
+"#
+    ));
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "naem");
+}
+
+#[test]
+fn backtick_wrapped_nested_struct_access_resolves() {
+    let result = check(&format!(
+        r#"{NESTED_SCHEMAS}
+def f(u: DataFrame[User]) -> DataFrame:
+    return u.select(col("`address`.`street`"))
+"#
+    ));
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn backtick_wrapping_literal_dot_treated_as_one_segment() {
+    // ``col("`a.b`")`` is Spark's canonical way to address a column
+    // whose ACTUAL name contains a dot — it's NOT struct walk
+    // `a → b`. Pykrete's split_backtick_aware unit tests pin the
+    // segmentation; this end-to-end check confirms that against a
+    // schema with no `a.b` column, the diagnostic names the literal
+    // `a.b`, not the bogus `a` segment. The split is what matters; this
+    // test just guards the wiring through resolve_path / report_column_refs.
+    let result = check(&format!(
+        r#"{NESTED_SCHEMAS}
+def f(u: DataFrame[User]) -> DataFrame:
+    return u.select(col("`a.b`"))
+"#
+    ));
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "a.b");
+}
+
+mod split_backtick_aware_unit {
+    use pykrete::schema::split_backtick_aware;
+
+    #[test]
+    fn plain_path_splits_on_dots() {
+        assert_eq!(split_backtick_aware("a.b.c"), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn no_dot_returns_single_segment() {
+        assert_eq!(split_backtick_aware("info"), vec!["info"]);
+    }
+
+    #[test]
+    fn backticks_around_simple_name_are_stripped() {
+        assert_eq!(split_backtick_aware("`info`"), vec!["info"]);
+    }
+
+    #[test]
+    fn backticks_around_dotted_name_are_kept_as_single_segment() {
+        assert_eq!(split_backtick_aware("`a.b`"), vec!["a.b"]);
+    }
+
+    #[test]
+    fn dotted_backtick_segments_split_correctly() {
+        assert_eq!(split_backtick_aware("`info`.`name`"), vec!["info", "name"]);
+    }
+
+    #[test]
+    fn unmatched_backtick_degrades_to_plain_split() {
+        assert_eq!(split_backtick_aware("`oops.field"), vec!["`oops", "field"]);
+    }
+}

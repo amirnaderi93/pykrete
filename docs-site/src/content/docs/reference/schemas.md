@@ -35,11 +35,13 @@ class Sale(Schema):
 
 `numeric` and `dec` are accepted as Spark SQL aliases for `decimal`; the parameterized form (`numeric(18, 2)`, `dec(p, s)`) and the bare form (`numeric`, `dec`) resolve identically. Use whichever your team writes in Spark DDL — pykrete treats them as one type.
 
+`float` is accepted as an alias for `double`. Python's `float` is what PySpark hands to Spark's runtime, which coerces it to `DoubleType` — declaring `amount: float` and `amount: double` produces the same column type, and either is interchangeable with the other under strict mode.
+
 ### Case sensitivity
 
 Atomic names are **case-sensitive lowercase** in `.pyk` source: `int`, `string`, `decimal`. `Int`, `STRING`, `Decimal` are rejected (`D0010`). This matches Spark interop — column names already are case-sensitive (see [Why case-sensitive?](#why-case-sensitive)), and pykrete keeps the rule uniform across the type vocabulary.
 
-Two complex-type keywords have legacy spelling carve-outs: both `Array[…]` and `array[…]` are accepted, and both `Map[…, …]` and `map[…, …]` are accepted — exactly those two casings each, not arbitrary case. `ARRAY` / `aRrAy` are rejected. There is no `Struct[…]` subscript form: struct columns are declared by typing the nested `Schema` class name as the field type (see [Struct columns](#struct-columns) below). The element types inside `Array[…]` / `Map[…, …]` still follow the strict rule: `Array[Int]` is rejected because `Int` is not the atomic name; write `Array[int]`.
+Two complex-type keywords have legacy spelling carve-outs: both `Array[…]` and `array[…]` are accepted, and both `Map[…, …]` and `map[…, …]` are accepted — exactly those two casings each, not arbitrary case. `ARRAY` / `aRrAy` are rejected. There is no `Struct[…]` subscript form: typed struct columns are declared by typing the nested `Schema` class name as the field type (see [Struct columns](#struct-columns) below), and untyped/opaque structs use bare `Struct` (see [Opaque struct columns](#opaque-struct-columns--struct)). The element types inside `Array[…]` / `Map[…, …]` still follow the strict rule: `Array[Int]` is rejected because `Int` is not the atomic name; write `Array[int]`.
 
 The wider Spark SQL vocabulary (`integer`, `bigint`, `smallint`, `tinyint`, `float`, `real`, `boolean`) is accepted only inside `.cast("…")` strings and string-form UDF return types, where Spark SQL itself is case-insensitive. Inside a Schema class body, stick to the lowercase pykrete names listed above.
 
@@ -115,6 +117,19 @@ class Telemetry(Schema):
 ```
 
 pykrete doesn't walk into map values — the keys are runtime data, not part of the schema.
+
+### Opaque struct columns — `Struct`
+
+When a column carries a nested struct whose shape isn't worth modeling — third-party telemetry blobs, opaque metadata, anything the rest of the codebase treats as a black box — declare it as bare `Struct`:
+
+```python
+class Event(Schema):
+    id: int
+    payload: Struct
+    tags: Array[Struct]
+```
+
+`Struct` parses as an opaque composite — the column counts as a struct (so `F.col("payload")` resolves), but pykrete won't try to verify inner-field navigation. `F.col("payload.something")` degrades silently rather than fire `D0030`. The same posture as bare `Array` / `Map` with no parameter: pykrete declines to guess. Use `Struct[…]` syntax doesn't exist — model fields you care about with a nested `Schema` class instead (see [Struct columns](#struct-columns)).
 
 ## Type operators
 

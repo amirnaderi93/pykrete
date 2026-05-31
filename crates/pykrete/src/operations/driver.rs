@@ -549,13 +549,19 @@ fn types_compatible(a: &ColumnType, b: &ColumnType) -> bool {
             element_ok(k1, k2) && element_ok(v1, v2)
         }
         // Structs compare structurally — same field names in the same
-        // order, each field type compatible.
+        // order, each field type compatible. The empty-fields shape is
+        // F4's opaque-Struct sentinel ("I'm a struct, shape unknown"),
+        // and pykrete declines to guess: an opaque struct flowing into a
+        // typed one (typical pass-through-with-`cast` refinement) is
+        // permissive, not a D0080.
         (ColumnType::Struct(xs), ColumnType::Struct(ys)) => {
-            xs.len() == ys.len()
-                && xs
-                    .iter()
-                    .zip(ys)
-                    .all(|(x, y)| x.name == y.name && field_ok(&x.ty, &y.ty))
+            xs.is_empty()
+                || ys.is_empty()
+                || (xs.len() == ys.len()
+                    && xs
+                        .iter()
+                        .zip(ys)
+                        .all(|(x, y)| x.name == y.name && field_ok(&x.ty, &y.ty)))
         }
         _ => a == b || (is_numeric(a) && is_numeric(b)),
     }

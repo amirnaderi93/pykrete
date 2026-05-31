@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{assert_has_code, assert_no_diagnostics, check};
+use common::{assert_does_not_have_code, assert_has_code, assert_no_diagnostics, check};
 
 const SCHEMA: &str = "\
 class Raw(Schema):
@@ -67,12 +67,28 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 }
 
 #[test]
-fn with_columns_renamed_checks_the_old_name_exists() {
+fn with_columns_renamed_silently_tolerates_missing_source_name() {
+    // PySpark's `withColumnsRenamed` silently ignores dict keys that
+    // aren't in the receiver schema (same design as `df.drop`). Firing
+    // D0030 would flag working production code as broken.
     let src = format!(
         "{SCHEMA}
 def f(raw: DataFrame[Raw]) -> DataFrame:
     return raw.withColumnsRenamed({{\"nonexistent\": \"price\"}})
 "
     );
-    assert_has_code(&check(&src), "D0030");
+    assert_does_not_have_code(&check(&src), "D0030");
+}
+
+#[test]
+fn with_columns_renamed_silently_tolerates_mix_of_known_and_unknown() {
+    // Both keys present in one dict — known one is renamed, missing
+    // one is ignored; neither fires D0030.
+    let src = format!(
+        "{SCHEMA}
+def f(raw: DataFrame[Raw]) -> DataFrame:
+    return raw.withColumnsRenamed({{\"amount\": \"price\", \"nonexistent\": \"x\"}})
+"
+    );
+    assert_does_not_have_code(&check(&src), "D0030");
 }

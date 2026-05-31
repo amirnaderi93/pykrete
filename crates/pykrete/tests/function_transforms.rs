@@ -106,6 +106,87 @@ def f(d: DataFrame[In]) -> DataFrame[Out]:
 }
 
 #[test]
+fn explode_of_map_with_two_arg_alias_emits_both_columns() {
+    // `F.explode(map_col).alias("k", "v")` is Spark's tuple-alias form
+    // for naming the (key, value) pair an exploded map produces. Both
+    // names contribute to the output schema, typed as the map's K and V.
+    let src = format!(
+        "{IN}
+class Out(Schema):
+    k: string
+    v: int
+
+def f(d: DataFrame[In]) -> DataFrame[Out]:
+    return d.select(F.explode(col(\"meta\")).alias(\"k\", \"v\"))
+"
+    );
+    let result = check(&src);
+    assert_does_not_have_code(&result, "D0080");
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn explode_map_dual_alias_downstream_select_resolves_both() {
+    // The two columns must be visible to downstream operations.
+    let src = format!(
+        "{IN}
+def f(d: DataFrame[In]) -> DataFrame:
+    return d.select(F.explode(col(\"meta\")).alias(\"k\", \"v\")).select(col(\"k\"), col(\"v\"))
+"
+    );
+    assert_does_not_have_code(&check(&src), "D0030");
+}
+
+#[test]
+fn select_explode_alongside_attribute_column_keeps_both_in_schema() {
+    // F7: `df.select(F.explode(arr).alias("a"), df.other)` must
+    // produce a schema with BOTH `a` and `other`. Before the fix the
+    // attribute-access second arg was dropped from the inferred
+    // schema, so a downstream ref to `other` false-fired D0030.
+    let src = format!(
+        "{IN}
+def f(d: DataFrame[In]) -> DataFrame:
+    return d.select(F.explode(col(\"tags\")).alias(\"a\"), d.name).select(col(\"a\"), col(\"name\"))
+"
+    );
+    assert_does_not_have_code(&check(&src), "D0030");
+}
+
+#[test]
+fn select_explode_alongside_subscript_column_keeps_both_in_schema() {
+    let src = format!(
+        "{IN}
+def f(d: DataFrame[In]) -> DataFrame:
+    return d.select(F.explode(col(\"tags\")).alias(\"a\"), d[\"name\"]).select(col(\"a\"), col(\"name\"))
+"
+    );
+    assert_does_not_have_code(&check(&src), "D0030");
+}
+
+#[test]
+fn select_does_not_treat_non_dataframe_attribute_as_column_ref() {
+    // F7 follow-up: not every `obj.X` is a DataFrame column. A
+    // `helper.foo` attribute where `helper` is NOT in the DF-binding
+    // scope must NOT be projected into the output schema as column
+    // `foo`. Before the gate, the inferred schema silently grew a
+    // bogus `foo` field; a downstream `col(\"foo\")` would falsely
+    // type-check.
+    let src = format!(
+        "{IN}
+class Helper:
+    foo: int
+
+def f(d: DataFrame[In], helper: Helper) -> DataFrame:
+    return d.select(helper.foo, col(\"name\")).select(col(\"foo\"))
+"
+    );
+    // `foo` is NOT a column on the receiver schema, so the downstream
+    // `col(\"foo\")` must fire D0030 — proof the bogus name never
+    // made it into the inferred output schema.
+    assert_has_code(&check(&src), "D0030");
+}
+
+#[test]
 fn split_yields_an_array_of_strings() {
     let src = format!(
         "{IN}

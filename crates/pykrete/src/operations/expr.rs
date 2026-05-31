@@ -12,8 +12,9 @@ use super::shapes::{
     column_method_shape, is_spark_opaque_source_call, is_terminal_method, two_df_method,
 };
 use super::strict_operators::{
-    apply_column_method, apply_select_expr, posexplode_fields, report_expr_sql_refs,
-    report_expr_type_errors, report_sql_column_refs, resolve_spark_sql_call, select_output_name,
+    apply_column_method, apply_select_expr, explode_map_aliased_fields, posexplode_fields,
+    report_expr_sql_refs, report_expr_type_errors, report_sql_column_refs, resolve_spark_sql_call,
+    select_output_name,
 };
 use super::two_df::{handle_two_df_method, strip_nullability};
 
@@ -619,6 +620,7 @@ pub(super) fn analyze_method_call<'a>(
             call,
             &receiver,
             &shape,
+            method,
             ctx,
             source,
             line_index,
@@ -643,7 +645,7 @@ pub(super) fn analyze_method_call<'a>(
                 }
             }
         }
-        return apply_column_method(method, &receiver, call, ctx.type_ctx());
+        return apply_column_method(method, &receiver, call, ctx, ctx.type_ctx());
     }
     if let Some(kind) = two_df_method(method) {
         return handle_two_df_method(
@@ -1714,7 +1716,15 @@ fn handle_agg<'a>(
             }
             continue;
         }
-        if let Some(name) = select_output_name(arg)
+        if let Some(pair) = explode_map_aliased_fields(arg, &underlying, ctx.type_ctx()) {
+            for f in pair {
+                if !fields.iter().any(|existing| existing.name == f.name) {
+                    fields.push(f);
+                }
+            }
+            continue;
+        }
+        if let Some(name) = select_output_name(arg, Some(ctx))
             && !fields.iter().any(|f| f.name == name)
         {
             fields.push(DerivedField {
