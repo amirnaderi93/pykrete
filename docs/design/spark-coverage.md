@@ -772,3 +772,60 @@ customization knob that the round-2 docs entry references.
     the JSON shape as a stability contract and a flag whose default is
     today's behaviour is purely additive — adding it later is non-
     breaking. Filed in response to the schema-stability lens M1.
+
+### v0.1.37 PR #67 round-2 review minors (v1.0.1)
+
+Surfaced by the v0.1.37 round-2 multi-lens re-review (PR #67). The
+round-2 BLOCKER (alias-helper hijacking nested-struct accessors) and
+both round-2 IMPORTANTS (D0073 prose entry, sleep-based test flake)
+shipped in round 3. The four MINORS below were filed to v1.0.1 to
+keep the round-3 patch laser-focused on the regression fix.
+
+20. **Comprehension `elt` / `ifs` not walked.** `analyze_expr` descends
+    into a comprehension's `iter` source (round 2 wired this up) but
+    deliberately skips the `elt` and `ifs` expressions because they
+    run inside the comprehension's bound-name scope — without scope
+    tracking, walking them would false-fire D0030 on the comprehension
+    variable. Pattern like `[df.select(f"col_{i}") for i in range(10)]`
+    therefore flows through unchecked. Cost: medium — needs a thin
+    per-comprehension scope that registers `target` as a local, mirror
+    of the lambda-param work item below. Surface as a documented
+    limitation in production-readiness.md.
+
+21. **Lambda body walker descent.** `analyze_expr` doesn't recurse into
+    `Expr::Lambda` bodies for the same scope reason — `lambda x:
+    x.select("typo")` binds `x` per-row to whatever the caller passes,
+    not as a DataFrame the walker can type, so naively descending
+    would false-fire on the lambda param. The common case
+    `df.transform(lambda d: d.select("typo"))` is a real miss; the
+    correct fix is to bind the param to the inferred input type for
+    the duration of the body walk. Cost: medium — overlaps with
+    comprehension-scope work above. Already tracked across CHANGELOG +
+    source comment + spark-coverage.md (this entry consolidates the
+    references). Surface as a documented limitation in
+    production-readiness.md.
+
+22. **Self-join alias collision overwrites the first binding.** When
+    a body declares both `a = raw.alias("X")` and `b = other.alias("X")`,
+    the alias scope's `HashMap` semantics mean the second `alias("X")`
+    silently overwrites the first; any subsequent `col("X.foo")` ref
+    then resolves against `other` only. Exotic in practice
+    (self-joins typically use disjoint alias letters) but a real
+    silent miss. Cost: small — detect the collision at the second
+    `bind_alias` call and either emit a new D-code (`aliasShadowing`)
+    or keep both and disambiguate via receiver-first (we already do
+    receiver-first in `report_column_refs`, so the silent overwrite
+    is mostly cosmetic). Filed as v1.0.1 because the regression
+    requires deliberate misuse.
+
+23. **`split_qualified` doesn't handle backtick-quoted column names
+    with embedded dots.** `col("L.\`col.with.dots\`")` is a valid
+    Spark form for column names that themselves contain dots. The
+    current `split_qualified` does a plain `split_once('.')` and would
+    treat `L.\`col` as the alias prefix and `with.dots\`` as the
+    suffix — wrong on every count. Exotic in PySpark code (most
+    teams avoid dotted column names) but a real escape-hatch that
+    Spark supports. Cost: small — replace `split_once('.')` with a
+    backtick-aware tokenizer that respects quoted segments. Filed as
+    v1.0.1 because the form is rare enough that no real user has
+    complained.

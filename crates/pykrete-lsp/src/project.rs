@@ -1024,6 +1024,24 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// Bump a file's mtime by `secs` seconds without sleeping. The
+    /// rewarn-on-edit path keys off mtime drift; in production that
+    /// drift comes from the user editing the file (which both writes
+    /// new content and updates mtime). In tests we want the same drift
+    /// signal without burning a real second of wall time — a sleep
+    /// long enough to outwait the filesystem's mtime resolution (1 s
+    /// on some FSes) makes the test slow AND flaky in CI when the
+    /// scheduler hands us back control late.
+    fn bump_mtime(path: &std::path::Path, secs: i64) {
+        let meta = std::fs::metadata(path).expect("metadata");
+        let current = filetime::FileTime::from_last_modification_time(&meta);
+        let bumped = filetime::FileTime::from_unix_time(
+            current.unix_seconds() + secs,
+            current.nanoseconds(),
+        );
+        filetime::set_file_mtime(path, bumped).expect("set_file_mtime");
+    }
+
     #[test]
     fn malformed_pykrete_json_rewarns_when_file_is_edited() {
         // The complement to the suppression test: if the user edits
@@ -1043,11 +1061,13 @@ mod tests {
             .take_pending_warning()
             .expect("first cold walk should queue a warning");
 
-        // Mtime resolution on macOS/Linux can be coarse (1 s on some
-        // filesystems). Sleep just past the threshold so the rewrite's
-        // mtime is distinguishable from the original.
-        std::thread::sleep(std::time::Duration::from_millis(1100));
         write(&path, r#"{ broken-v2"#);
+        // Deterministically bump the mtime instead of sleeping past
+        // the filesystem's mtime resolution. A real `sleep(1100ms)`
+        // here would (a) slow the suite by 1 s per run and (b) flake
+        // in CI when the scheduler returns late OR when the FS's
+        // mtime granularity is coarser than 1 s.
+        bump_mtime(&path, 2);
 
         cache.force_cold_walk_on_next_refresh();
         let _config = cache.config(&docs);

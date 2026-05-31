@@ -511,7 +511,16 @@ def f(left: DataFrame[L], right: DataFrame[R]) -> DataFrame:
 }
 
 #[test]
-fn unknown_alias_prefix_fires_d0030_listing_known_aliases() {
+fn unknown_alias_prefix_in_join_on_clause_still_fires_d0030() {
+    // With aliases registered but `BAD` not among them, the alias
+    // helper now defers (so nested-struct accesses with non-alias
+    // prefixes survive at every site). On the join-on path the
+    // fallback `left.has_field || right.has_field` check then misses
+    // and emits the generic "Column does not exist on L or R" D0030.
+    // We've intentionally given up the "alias BAD not in scope" hint
+    // here in exchange for not hijacking legitimate nested-struct refs
+    // — see `nested_struct_accessor_survives_alias_in_scope` in
+    // `alias_across_sites.rs`.
     let result = check(&format!(
         r#"{ALIAS_SCHEMAS}
 
@@ -522,8 +531,7 @@ def f(left: DataFrame[L], right: DataFrame[R]) -> DataFrame:
 "#
     ));
     assert_has_code(&result, "D0030");
-    assert_message_contains(&result, "D0030", "BAD");
-    assert_message_contains(&result, "D0030", "not in scope");
+    assert_message_contains(&result, "D0030", "BAD.region");
 }
 
 #[test]

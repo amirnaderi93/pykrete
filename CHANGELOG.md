@@ -33,10 +33,18 @@ v1.0.0.
   of the v0.1.37 fix only wired the resolver into the join-on path,
   leaving the most common shape — `L = raw.alias("L");
   L.select(col("L.region"))` — still false-firing. Round 2 lifted the
-  resolver into a shared helper so every site honors it uniformly.) A
-  typo on the suffix (`col("L.regoin")`) still fires `D0030`; a typo
-  on the prefix (`col("BAD.region")`) fires `D0030` on the alias part
-  with the in-scope aliases listed.
+  resolver into a shared helper so every site honors it uniformly,
+  but that lift ITSELF shipped a regression of exactly the class the
+  v0.1.37 cycle was meant to eliminate: when ANY alias was in scope,
+  the helper hijacked every alias-shaped name and false-fired on
+  legitimate nested-struct accessors like `col("addr.city")`. Round 3
+  narrows the helper to defer when the prefix doesn't match any
+  registered alias, AND adds receiver-first disambiguation in
+  `report_column_refs` so nested-struct fields whose names collide
+  with a registered alias name still resolve on the receiver schema.)
+  A typo on the suffix (`col("L.regoin")`) still fires `D0030`; a
+  prefix that doesn't match any alias AND doesn't resolve on the
+  receiver fires `D0030` on the full column name.
 - **B2: `unionByName(other, allowMissingColumns=True)` no longer
   false-flags (positional form too).** The kwarg PySpark added for
   schema-evolution merges used to be ignored — `D0040` fired whenever
@@ -146,17 +154,29 @@ deferred to v1.0.1 per the audit recommendation.
 
 ### Verification
 
-`cargo test --workspace` (1,054 passing — round 2 added the
-across-sites alias coverage, positional `unionByName` cases, the
-watermark-survives-invalidate test, and four walker-descent tests),
+`cargo test --workspace` (1,056 passing — round 3 added two new
+regression tests pinning the nested-struct survival fix on top of
+round 2's across-sites alias coverage, positional `unionByName`
+cases, watermark-survives-invalidate test, and walker-descent tests),
 `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D
 warnings`, `cd docs-site && npm run build`,
 `cd editors/vscode && npm run compile` all green. Launch-gate
 snippets verified manually: aliased-DataFrame join (B1) AND
-post-join `L.select(col("L.region"))` (round-2 B1 broadening),
-`unionByName(other, True)` positional (round-2 B2 broadening), `if
-df.select("typo")` compare-form (I1). Two snippets (window-as-local,
-.orderBy column checks) confirmed as documented limitations.
+post-join `L.select(col("L.region"))` (round-2 B1 broadening) AND
+nested-struct `col("addr.city")` survival when an unrelated alias is
+in scope (round-3 regression fix), `unionByName(other, True)`
+positional (round-2 B2 broadening), `if df.select("typo")`
+compare-form (I1). Two snippets (window-as-local, .orderBy column
+checks) confirmed as documented limitations.
+
+Round 3 also replaced the sleep-based
+`malformed_pykrete_json_rewarns_when_file_is_edited` test with a
+deterministic `filetime::set_file_mtime` bump (no more 1.1 s sleep,
+no more CI flake risk on coarse filesystem mtime resolution), and
+added a D0073 prose entry under "Setup and import diagnostics" in
+`docs-site/.../reference/diagnostics.md` so users hitting the new
+code from a CI error get a description without leaving for the
+catalog snapshot.
 
 ## [0.1.34] - 2026-05-31
 
