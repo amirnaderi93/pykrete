@@ -1089,6 +1089,7 @@ here so they're not lost when impl starts.
   should include a pseudocode block in its design doc showing the
   marker → synthesized `.pyk` → checker invocation → diagnostic
   capture → assertion flow.
+- [ ] **PROBE-TYPE-IS numeric-subtype distinguishability** — v1.1 rejects numeric-subtype assertions (int/long/short/byte/double/float/decimal) at parse time because the synthesizer can only fire family-level D-codes (D0080-D0082). v1.2 requires either schema-trace output or new pykrete-core D-codes for numeric-subtype-mismatch.
 
 ## Cost estimate
 
