@@ -584,6 +584,16 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
+        // Surface ambient pollution loudly: find_pykrete_json walks up to /,
+        // so a stray pykrete.json anywhere on the ancestor chain (e.g. a
+        // user-level /tmp/pykrete.json left over from a CLI experiment)
+        // silently muddles every "no pykrete.json" assertion in this module.
+        if let Some(found) = find_pykrete_json(&dir) {
+            panic!(
+                "pykrete-lsp tests cannot run: ambient pykrete.json at {} pollutes the test environment (find_pykrete_json walks up from temp_dir() to /). Delete or relocate it.",
+                found.display()
+            );
+        }
         dir
     }
 
