@@ -104,19 +104,23 @@ overkill.
 
 ### Probe syntax (final shape)
 
-Markers are single-line comments at column 0. **Five kinds total,
-split into three line-anchored markers + two file-scoped markers.**
+Markers are single-line comments at column 0. **Five marker kinds
+total, four active in v1.1 + one (PROBE-TYPE-IS) whose grammar parses
+but whose semantics defer to v1.2.** Active markers split into two
+line-anchored kinds + two file-scoped kinds; PROBE-TYPE-IS is also
+line-anchored but no v1.1 instance fires a meaningful assertion (see
+"Deferred to v1.2" below for the synthesizer scope-binding gap).
 Line-anchored markers always sit on the line *immediately above* the
 target line (see Q10 for the exact "target line" resolution rule);
 file-scoped markers conventionally live at the top of the annotated
 file.
 
-**Line-anchored markers (three kinds):**
+**Line-anchored markers (three kinds; PROBE-TYPE-IS deferred):**
 
 ```
 # PROBE-EXPECTS: <D-code> [id=<handle>] [on "<span-text>"] [match /<regex>/[flags]] [-- <rationale>]
 # PROBE-RESOLVES: [id=<handle>] [-- <rationale>]
-# PROBE-TYPE-IS: <type-expr> on "<column>" [id=<handle>] [-- <rationale>]
+# PROBE-TYPE-IS: <type-expr> on "<column>" [id=<handle>] [-- <rationale>]   # v1.2 — do not author in v1.1
 ```
 
 **File-scoped markers (two kinds):**
@@ -126,9 +130,12 @@ file.
 # PROBE-FILE-COUNT: <D-code> == <N> [id=<handle>] [-- <rationale>]
 ```
 
-Total: **5 markers** (3 line-anchored + 2 file-scoped). This is the
-honest v1.1 count after the synthesizer-translation review (see
-"Deferred to v1.2" below for the two markers we dropped).
+Total grammar: **5 markers** (3 line-anchored + 2 file-scoped). Active
+in v1.1: **4 markers** (PROBE-EXPECTS, PROBE-RESOLVES, PROBE-FILE-
+CLEAN-OF, PROBE-FILE-COUNT). The fifth, PROBE-TYPE-IS, parses
+cleanly but its synthesizer translation does not bind to a typed
+DataFrame in scope (see "Deferred to v1.2" below); authoring TYPE-IS
+markers in a v1.1 corpus is a no-op.
 
 Concrete uses:
 
@@ -141,11 +148,8 @@ def pipeline(orders: DataFrame[Order]) -> DataFrame[Order]:
     # PROBE-RESOLVES: id=quinn-select-region -- region survives narrow select
     df = orders.select("region", "amount")
 
-    # PROBE-TYPE-IS: double on "amount" id=quinn-amount-type
-    df2 = df
-
     # PROBE-EXPECTS: D0030 id=quinn-select-drops-product on "product"
-    return df2.select(col("product"))
+    return df.select(col("product"))
 ```
 
 Rules:
@@ -218,11 +222,29 @@ Explicitly excluded from the grammar (kept narrow on purpose):
 
 ### Deferred to v1.2
 
-Two marker kinds appeared in the round-2 grammar draft but are **dropped
-from v1.1** after the synthesizer-translation review surfaced that
-neither has a clean implementation path within v1.1's "no pykrete-core
-release" cost envelope:
+Three marker situations defer to v1.2: two never made the round-2
+grammar (`PROBE-NULLABLE` and `PROBE-OUTPUT-COLUMNS`), and a third —
+`PROBE-TYPE-IS` — has the v1.1 grammar but no working synthesizer
+in v1.1. All three need coordinated pykrete-core or harness work and
+are filed here so future-us does not relitigate.
 
+- **`PROBE-TYPE-IS: <type-expr> on "<column>"`** — grammar shipped in
+  v1.1, semantics deferred. The v1.1 synthesizer rewrites a TYPE-IS
+  marker into an appended expression of the form `col("x") + lit(1)`
+  (or similar arithmetic-against-a-numeric-lit) and runs the
+  full-file checker, expecting strict-mode `D0081 operatorTypeMismatch`
+  on a string column or no diagnostic on a numeric column. The
+  appended expression lives at module-level outside any
+  `df.select(...)`, so `col("x")` does not bind to a typed
+  DataFrame in scope; pykrete cannot resolve `x` to a schema column
+  and reports the probe inconclusive rather than firing D0081.
+  Result in the v1.1 cross-codebase corpus: zero TYPE-IS probes
+  produce signal. PROBES.md and pykrete-tests v1.1 do not author
+  TYPE-IS markers. Path to v1.2: change the synthesizer to inject
+  the rewritten expression **inside** a `df.select(...)` against
+  the typed DataFrame in scope (typically the function parameter
+  whose annotation is `DataFrame[X]`), so `col()` binds and D0081
+  can fire. Harness-only change; no pykrete-core release required.
 - **`PROBE-NULLABLE: <column> = (true|false)`** — pykrete-core has
   `D0083 nullabilityMismatch` already, but the synthesizer rewrite has
   no clean trigger from a single appended expression: nullability
@@ -425,6 +447,15 @@ If the rewrite proves infeasible for a specific type-checking corner
 case during seeding, the affected `PROBE-TYPE-IS` instances are
 dropped from the v1.1 seeding pass (not the grammar) and re-attempted
 in v1.2 alongside the deferred NULLABLE / OUTPUT-COLUMNS work.
+
+**Update (post-v1.1 seeding).** The synthesizer ships in v1.1 but
+the v1.1 implementation appends its synthesized arithmetic at
+module level, where `col("x")` does not bind to the typed DataFrame
+in scope, so every TYPE-IS probe reports inconclusive. The marker
+grammar stays in v1.1 for forward compatibility; the active set is
+the four other markers (RESOLVES, EXPECTS, FILE-CLEAN-OF, FILE-
+COUNT). See the **"Deferred to v1.2"** section above for the
+synthesizer scope-binding fix that re-activates TYPE-IS.
 
 Failing output (per fixture):
 
