@@ -1010,6 +1010,16 @@ piling up.
   surfaces it on large files; a per-pass HashSet would be O(1) per
   emission.
 
+### PR-C polish additions
+
+- [ ] **withColumn(name, lit(...)) output enum-constraint preservation**:
+  PR-B's sink-bound literal check fires D0084 correctly, but the OUTPUT
+  column on the new DataFrame drops the enum constraint to plain string.
+  This forces downstream functions to widen their return types (see the
+  delta `rewrite_as_deletes` cross-codebase fixture in pykrete-tests).
+  Decide in v1.2: (a) propagate sink's constraint to the output column,
+  or (b) document the limitation and keep current behavior.
+
 ## Related
 
 - `feedback_trust_is_core_value_prop` — the trust-first principle this
