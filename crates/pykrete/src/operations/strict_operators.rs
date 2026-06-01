@@ -46,7 +46,10 @@ fn type_family(t: &ColumnType) -> TypeFamily {
         // arithmetic on it, compare it with strings, etc. Group it with
         // collections (the catch-all for non-combining atomics) so the
         // strict checks treat it as opaque.
-        ColumnType::String => TypeFamily::Textual,
+        // An enum-constrained string is still string-typed for operator
+        // family purposes; the vocabulary is an additional constraint
+        // PR-B will check against.
+        ColumnType::String | ColumnType::Enum(_) => TypeFamily::Textual,
         ColumnType::Binary => TypeFamily::Collection,
         ColumnType::Bool => TypeFamily::Boolean,
         ColumnType::Date | ColumnType::Timestamp => TypeFamily::Temporal,
@@ -107,24 +110,19 @@ pub(super) fn report_expr_type_errors<'a>(
     match expr {
         Expr::BinOp(b) => {
             if is_arithmetic_op(b.op) {
-                // A string / array / map operand can't take part in
+                // A textual / collection operand can't take part in
                 // arithmetic — Spark coerces a string (often to null) and
-                // errors on a collection.
+                // errors on a collection. Routed through `type_family`
+                // so adding a new variant (e.g. another textual-shaped
+                // constraint) only updates `type_family` itself, not
+                // every operator filter.
                 let bad = [
                     infer_expr_type(&b.left, schema, tcx),
                     infer_expr_type(&b.right, schema, tcx),
                 ]
                 .into_iter()
                 .flatten()
-                .find(|t| {
-                    matches!(
-                        t,
-                        ColumnType::String
-                            | ColumnType::Array(_)
-                            | ColumnType::Map(..)
-                            | ColumnType::Struct(_)
-                    )
-                });
+                .find(|t| matches!(type_family(t), TypeFamily::Textual | TypeFamily::Collection));
                 if let Some(bad) = bad {
                     diagnostics.push(
                         Diagnostic::at_range(

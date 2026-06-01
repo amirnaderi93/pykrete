@@ -11,7 +11,9 @@ use std::sync::OnceLock;
 use ruff_python_ast::{Expr, Number};
 use ruff_text_size::{Ranged, TextRange};
 
-use crate::types::{COLUMN_TYPE_NAMES, ColumnType, StructField, validate_decimal_args};
+use crate::types::{
+    COLUMN_TYPE_NAMES, ColumnType, EnumParseError, StructField, validate_decimal_args,
+};
 use crate::walk::DiscoveredClass;
 
 /// Recursion ceiling for resolving a (possibly self-referential) schema
@@ -90,6 +92,11 @@ pub enum FieldResolution<'ast> {
     /// The annotation isn't a bare name at all (subscript, attribute
     /// access, binary op, …).
     NotABareName,
+    /// The annotation IS an `enum[...]` subscript whose vocabulary
+    /// failed parse-time validation — empty or with a duplicate entry.
+    /// Routed through `D0011 invalidColumnType` like other parse
+    /// rejections, but with a message that names the failure mode.
+    InvalidEnum(EnumParseError),
 }
 
 impl<'ast> SchemaField<'ast> {
@@ -117,10 +124,14 @@ impl<'ast> SchemaField<'ast> {
                 }
                 FieldResolution::UnknownType { name: id }
             }
-            // A subscript — `Array[…]` / `Map[…, …]`.
-            Expr::Subscript(_) => match resolve_annotation_type(self.annotation, schemas, 0) {
-                Some(ct) => FieldResolution::Resolved(ct),
-                None => FieldResolution::NotABareName,
+            // A subscript — `Array[…]` / `Map[…, …]` / `enum["a", ...]`.
+            Expr::Subscript(_) => match parse_enum_annotation(self.annotation) {
+                Some(EnumParseOutcome::Valid(ct)) => FieldResolution::Resolved(ct),
+                Some(EnumParseOutcome::Invalid(err)) => FieldResolution::InvalidEnum(err),
+                None => match resolve_annotation_type(self.annotation, schemas, 0) {
+                    Some(ct) => FieldResolution::Resolved(ct),
+                    None => FieldResolution::NotABareName,
+                },
             },
             // `decimal(p, s)` — the one parameterized atomic.
             Expr::Call(_) => match resolve_annotation_type(self.annotation, schemas, 0) {
@@ -289,7 +300,7 @@ fn resolve_annotation_type(
             let precision = int_literal_u8(precision_expr)?;
             validate_decimal_args(precision, scale)
         }
-        // `Array[T]` / `Map[K, V]`.
+        // `Array[T]` / `Map[K, V]` / `enum["a", ...]`.
         Expr::Subscript(sub) => {
             let base = sub.value.as_name_expr()?.id.as_str();
             match base {
@@ -310,10 +321,99 @@ fn resolve_annotation_type(
                         Some(Box::new(resolve_annotation_type(value, schemas, depth)?)),
                     ))
                 }
+                // `enum["a", "b", ...]` — a string column constrained to
+                // a fixed vocabulary. Parse failures (empty, duplicate)
+                // are surfaced separately by `parse_enum_annotation`;
+                // here a malformed shape collapses to `None` like other
+                // non-resolutions.
+                "enum" => match parse_enum_annotation(expr)? {
+                    EnumParseOutcome::Valid(ct) => Some(ct),
+                    EnumParseOutcome::Invalid(_) => None,
+                },
                 _ => None,
             }
         }
         _ => None,
+    }
+}
+
+/// The outcome of trying to parse an `enum[...]` subscript annotation.
+/// `None` from [`parse_enum_annotation`] means the expression isn't an
+/// `enum[...]` subscript at all (caller falls back to other resolvers);
+/// `Some(Invalid(_))` means it IS an enum subscript but the vocabulary
+/// failed parse-time validation.
+enum EnumParseOutcome {
+    Valid(ColumnType),
+    Invalid(EnumParseError),
+}
+
+/// Try to parse `enum["a", "b", ...]` off a type-annotation expression.
+/// Returns `None` if `expr` isn't an `enum[...]` subscript or has a
+/// malformed shape pykrete doesn't recognize (e.g. `enum[some_var]`);
+/// returns `Some(Valid)` for a well-formed non-empty unique vocabulary;
+/// returns `Some(Invalid)` for an empty, duplicate-entry, or
+/// non-string-literal vocabulary so the caller can route through `D0011`
+/// with a specific message.
+///
+/// Transparently peels a single `Optional[enum[...]]` wrapper — the
+/// vocabulary-level diagnostic (empty / duplicate / non-string-literal)
+/// is the same whether or not the column is nullable, and would
+/// otherwise fall through to a generic D0011 once the inner `None` from
+/// the enum arm propagates up through Optional's resolution.
+fn parse_enum_annotation(expr: &Expr) -> Option<EnumParseOutcome> {
+    let sub = expr.as_subscript_expr()?;
+    let base = sub.value.as_name_expr()?.id.as_str();
+    if base == "Optional" {
+        return match parse_enum_annotation(&sub.slice)? {
+            EnumParseOutcome::Valid(ct) => {
+                Some(EnumParseOutcome::Valid(ColumnType::Nullable(Box::new(ct))))
+            }
+            invalid => Some(invalid),
+        };
+    }
+    if base != "enum" {
+        return None;
+    }
+    // `enum["a"]` is a single-element subscript (no tuple); `enum["a",
+    // "b"]` is a tuple of literals.
+    let raw_elts: Vec<&Expr> = match sub.slice.as_ref() {
+        Expr::Tuple(tuple) => tuple.elts.iter().collect(),
+        single => vec![single],
+    };
+    let mut values: Vec<String> = Vec::with_capacity(raw_elts.len());
+    for e in raw_elts {
+        let Some(lit) = e.as_string_literal_expr() else {
+            // Per the spec: enum vocabularies are string literals.
+            // Anything else (a name, a number, a nested expression) gets
+            // a dedicated D0011 message naming the offender rather than
+            // a generic "not a recognized pykrete type".
+            return Some(EnumParseOutcome::Invalid(EnumParseError::NonStringLiteral));
+        };
+        values.push(lit.value.to_str().to_string());
+    }
+    match ColumnType::enum_from_values(values) {
+        Ok(ct) => Some(EnumParseOutcome::Valid(ct)),
+        Err(err) => Some(EnumParseOutcome::Invalid(err)),
+    }
+}
+
+/// Format an `EnumParseError` as the user-facing D0011 message body.
+/// Shared between the SchemaField field-resolution path and the
+/// derived-schema inline-dict path so the wording stays in sync.
+pub(crate) fn enum_parse_error_message(err: &EnumParseError) -> String {
+    match err {
+        EnumParseError::Empty => {
+            "An `enum[...]` vocabulary must have at least one value; `enum[]` is not allowed."
+                .to_string()
+        }
+        EnumParseError::Duplicate(value) => format!(
+            "Duplicate value '{value}' in `enum[...]` vocabulary; each entry must be unique.",
+        ),
+        EnumParseError::NonStringLiteral => {
+            "An `enum[...]` vocabulary must list string literals only; \
+             names, numbers, and nested expressions are not allowed."
+                .to_string()
+        }
     }
 }
 
@@ -941,6 +1041,9 @@ pub fn derived_schema_errors<'a>(
                     ),
                     item.value.range(),
                 )),
+                FieldResolution::InvalidEnum(err) => {
+                    errors.push(("D0011", enum_parse_error_message(&err), item.value.range()))
+                }
             }
         }
         return errors;
@@ -992,9 +1095,104 @@ pub fn derived_schema_errors<'a>(
                     }
                 }
             }
+            collect_merge_enum_conflicts(args, schemas, &mut errors);
         }
     }
     errors
+}
+
+/// Per Q4 of the v1.1 enum-constraints spec: `Merge[A, B, ...]` over
+/// two schemas that both declare a shared column with `enum[...]`
+/// vocabularies that are NOT set-equal fires `D0040` — the same code
+/// `unionByName` already uses for schema conflicts. Includes the
+/// `enum`-vs-plain-`string` conflict (mixed types on the same column
+/// across schemas). The check is silent when both vocabularies are
+/// set-equal, when neither side is enum, or when one side simply
+/// doesn't declare the column (the first schema's enum is preserved).
+fn collect_merge_enum_conflicts<'a>(
+    args: &'a [Expr],
+    schemas: &'a [Schema<'a>],
+    errors: &mut Vec<(&'static str, String, TextRange)>,
+) {
+    let resolved: Vec<(&Expr, &Schema<'a>)> = args
+        .iter()
+        .filter_map(|arg| {
+            let n = arg.as_name_expr()?;
+            let schema = schemas.iter().find(|s| s.name() == n.id.as_str())?;
+            Some((arg, schema))
+        })
+        .collect();
+    if resolved.len() < 2 {
+        return;
+    }
+    let mut reported: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for i in 0..resolved.len() {
+        let (_, schema_a) = resolved[i];
+        for field in schema_a.fields() {
+            if reported.contains(field.name) {
+                continue;
+            }
+            let Some(ty_a) = schema_a.field_type(field.name, schemas) else {
+                continue;
+            };
+            for &(arg_b, schema_b) in &resolved[i + 1..] {
+                if !schema_b.has_field(field.name) {
+                    continue;
+                }
+                let Some(ty_b) = schema_b.field_type(field.name, schemas) else {
+                    continue;
+                };
+                if let Some(message) = enum_merge_conflict_message(
+                    field.name,
+                    &ty_a,
+                    schema_a.name(),
+                    &ty_b,
+                    schema_b.name(),
+                ) {
+                    errors.push(("D0040", message, arg_b.range()));
+                    reported.insert(field.name);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// The user-facing D0040 message for a shared-column conflict between
+/// two Merge arguments. `None` when the column's types on both sides
+/// are compatible per the v1.1 enum-constraint rules; `Some` for an
+/// enum-vs-enum non-set-equal vocabulary clash or an enum-vs-plain
+/// `string` clash. The message names both vocabularies so the user
+/// can reconcile in the source schema.
+fn enum_merge_conflict_message(
+    column: &str,
+    a: &ColumnType,
+    a_name: &str,
+    b: &ColumnType,
+    b_name: &str,
+) -> Option<String> {
+    let base_a = a.base();
+    let base_b = b.base();
+    match (base_a, base_b) {
+        (ColumnType::Enum(_), ColumnType::Enum(_)) => {
+            if ColumnType::enum_vocab_eq(base_a, base_b) {
+                return None;
+            }
+            Some(format!(
+                "Merge between '{a_name}' and '{b_name}': enum vocabularies for column '{column}' \
+                 differ. {a_name} declares {a}; {b_name} declares {b}. Reconcile by widening one \
+                 side's vocabulary to match the other."
+            ))
+        }
+        (ColumnType::Enum(_), ColumnType::String) | (ColumnType::String, ColumnType::Enum(_)) => {
+            Some(format!(
+                "Merge between '{a_name}' and '{b_name}': column '{column}' is declared {a} in \
+                 {a_name} but {b} in {b_name}. Reconcile by declaring the same type (either \
+                 enum-constrained or plain string) on both sides."
+            ))
+        }
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------

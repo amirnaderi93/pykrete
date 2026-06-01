@@ -127,15 +127,31 @@ fn fixture_dir() -> PathBuf {
         .join("diagnostic_catalog")
 }
 
+/// Codes reserved in `DIAGNOSTIC_CATALOG` whose check sites haven't
+/// landed yet — the catalog entry pins the code identity (stability
+/// surface) ahead of the emission PR. Each entry MUST be retired the
+/// same release the emission lands; the coverage guard checks an entry
+/// is still in the catalog so a typo can't silently strand it.
+const RESERVED_CODES_WITHOUT_FIXTURES: &[&str] = &["D0084"];
+
 /// Coverage guard. Adding a new code to `DIAGNOSTIC_CATALOG` requires
 /// adding a `FIXTURES` entry; removing a code requires dropping the
-/// fixture. Either way, the catalog and fixtures stay in sync.
+/// fixture. Either way, the catalog and fixtures stay in sync. Codes
+/// listed in [`RESERVED_CODES_WITHOUT_FIXTURES`] are exempt — they're
+/// the code-identity-reserved slots whose emission PR is staged to
+/// follow.
 #[test]
 fn every_diagnostic_code_has_a_fixture() {
     let known: HashSet<&str> = DIAGNOSTIC_CATALOG.iter().map(|(c, _)| *c).collect();
     let snapshotted: HashSet<&str> = FIXTURES.iter().map(|f| f.code).collect();
-    let missing: Vec<&str> = known.difference(&snapshotted).copied().collect();
+    let reserved: HashSet<&str> = RESERVED_CODES_WITHOUT_FIXTURES.iter().copied().collect();
+    let missing: Vec<&str> = known
+        .difference(&snapshotted)
+        .copied()
+        .filter(|c| !reserved.contains(c))
+        .collect();
     let unexpected: Vec<&str> = snapshotted.difference(&known).copied().collect();
+    let stale_reserved: Vec<&str> = reserved.difference(&known).copied().collect();
     assert!(
         missing.is_empty(),
         "DIAGNOSTIC_CATALOG codes without a catalog fixture: {missing:?}"
@@ -143,6 +159,10 @@ fn every_diagnostic_code_has_a_fixture() {
     assert!(
         unexpected.is_empty(),
         "FIXTURES entries for codes not in DIAGNOSTIC_CATALOG: {unexpected:?}"
+    );
+    assert!(
+        stale_reserved.is_empty(),
+        "RESERVED_CODES_WITHOUT_FIXTURES entries not in DIAGNOSTIC_CATALOG: {stale_reserved:?}"
     );
 }
 

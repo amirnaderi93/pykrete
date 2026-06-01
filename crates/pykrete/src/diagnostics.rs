@@ -196,6 +196,11 @@ pub const DIAGNOSTIC_CATALOG: &[(&str, &str)] = &[
     ("D0081", "nonNumericArithmetic"),
     ("D0082", "crossTypeComparison"),
     ("D0083", "nullabilityMismatch"),
+    // Reserved by the v1.1 enum-constraints spec
+    // (`docs/design/literal-value-vocabulary.md`). The code is part of
+    // the v1.1 stability surface as soon as it lands; the check sites
+    // that emit it are wired up in the follow-up PR-B.
+    ("D0084", "enumValueMismatch"),
 ];
 
 /// The human-readable name for a diagnostic code — what the CLI and

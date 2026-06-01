@@ -39,7 +39,15 @@ use crate::schema::{
     FieldPathResult, FieldResolution, Schema, SchemaView, discover_schemas, resolve_path,
     suggest_field_name,
 };
+use crate::types::ColumnType;
 use crate::walk::{DiscoveredFunction, discover_top_level_classes, discover_top_level_functions};
+
+/// The hover/completion render of a resolved column type — delegates
+/// to [`ColumnType::label`] so the three UX surfaces (hover, completion
+/// detail, document-symbol detail) move together.
+fn render_column_type(ct: &ColumnType) -> String {
+    ct.label()
+}
 
 /// The hover payload returned by [`hover`]. `markdown` is the rendered
 /// content for the editor's hover popup; clients typically render it as
@@ -364,12 +372,14 @@ fn render_local_binding_hover(
             let _ = writeln!(md);
             for field in fields {
                 let label = match field.resolve(schemas) {
-                    FieldResolution::Resolved(ct) => format!("`{}`", ct.as_str()),
+                    FieldResolution::Resolved(ct) => format!("`{}`", render_column_type(&ct)),
                     FieldResolution::ResolvedNested(nested) => {
                         format!("`{}` (nested)", nested.name())
                     }
                     FieldResolution::UnknownType { name } => format!("`{name}` (unresolved)"),
-                    FieldResolution::NotABareName => "_unresolved_".to_string(),
+                    FieldResolution::NotABareName | FieldResolution::InvalidEnum(_) => {
+                        "_unresolved_".to_string()
+                    }
                 };
                 let _ = writeln!(md, "- `{}`: {}", field.name, label);
             }
@@ -388,10 +398,12 @@ fn column_type_label(view: &SchemaView<'_>, name: &str, schemas: &[Schema<'_>]) 
     };
     let field = schema.fields().iter().find(|f| f.name == name)?;
     Some(match field.resolve(schemas) {
-        FieldResolution::Resolved(ct) => format!("`{}`", ct.as_str()),
+        FieldResolution::Resolved(ct) => format!("`{}`", render_column_type(&ct)),
         FieldResolution::ResolvedNested(nested) => format!("`{}` (nested)", nested.name()),
         FieldResolution::UnknownType { name } => format!("`{name}` (unresolved)"),
-        FieldResolution::NotABareName => "_unresolved_".to_string(),
+        FieldResolution::NotABareName | FieldResolution::InvalidEnum(_) => {
+            "_unresolved_".to_string()
+        }
     })
 }
 
@@ -413,10 +425,12 @@ fn render_schema_hover(schema: &Schema<'_>, all_schemas: &[Schema<'_>]) -> Hover
         let max_name_len = fields.iter().map(|f| f.name.len()).max().unwrap_or(0);
         for field in fields {
             let type_text = match field.resolve(all_schemas) {
-                FieldResolution::Resolved(ct) => ct.as_str().to_string(),
+                FieldResolution::Resolved(ct) => render_column_type(&ct),
                 FieldResolution::ResolvedNested(nested) => nested.name().to_string(),
                 FieldResolution::UnknownType { name } => name.to_string(),
-                FieldResolution::NotABareName => "Unknown".to_string(),
+                FieldResolution::NotABareName | FieldResolution::InvalidEnum(_) => {
+                    "Unknown".to_string()
+                }
             };
             let padding = " ".repeat(max_name_len - field.name.len());
             let _ = writeln!(md, "    {}:{} {}", field.name, padding, type_text);

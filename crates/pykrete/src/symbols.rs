@@ -185,10 +185,12 @@ fn function_symbol(
 fn render_field_detail(f: &crate::schema::SchemaField<'_>, schemas: &[Schema<'_>]) -> String {
     use crate::schema::FieldResolution;
     match f.resolve(schemas) {
-        FieldResolution::Resolved(ct) => ct.as_str().to_string(),
+        FieldResolution::Resolved(ct) => ct.label(),
         FieldResolution::ResolvedNested(nested) => format!("{} (nested)", nested.name()),
         FieldResolution::UnknownType { name } => format!("{name} (unresolved)"),
-        FieldResolution::NotABareName => "(unresolved)".to_string(),
+        FieldResolution::NotABareName | FieldResolution::InvalidEnum(_) => {
+            "(unresolved)".to_string()
+        }
     }
 }
 

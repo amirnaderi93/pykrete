@@ -1,5 +1,6 @@
 ---
 source: crates/pykrete/tests/diagnostic_catalog.rs
+assertion_line: 253
 expression: captured
 ---
-d0010_unknown_column_type.pyk:2:13-2:22 error D0010 unknownColumnType: Unknown column type 'weirdtype'. Expected one of: int, long, double, byte, short, decimal, decimal(p, s), string, binary, bool, date, timestamp, Array, Map, Struct.
+d0010_unknown_column_type.pyk:2:13-2:22 error D0010 unknownColumnType: Unknown column type 'weirdtype'. Expected one of: int, long, double, byte, short, decimal, decimal(p, s), string, binary, bool, date, timestamp, enum, Array, Map, Struct.
