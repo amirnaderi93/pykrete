@@ -1097,7 +1097,7 @@ here so they're not lost when impl starts.
   marker → synthesized `.pyk` → checker invocation → diagnostic
   capture → assertion flow.
 - [ ] **PROBE-TYPE-IS numeric-subtype distinguishability** — v1.1 rejects numeric-subtype assertions (int/long/short/byte/double/float/decimal) at parse time because the synthesizer can only fire family-level D-codes (D0080-D0082). v1.2 requires either schema-trace output or new pykrete-core D-codes for numeric-subtype-mismatch.
-- [ ] **golden.sh discovery widening for probes_negative/** — current `golden.sh check` only walks `*/annotated/*`. PR #3c should widen to also walk `*/probes_negative/*` so the release-blocking gate covers the negative tree. Currently the negative tree is exercised only via probes_ci.sh, not golden.sh.
+- [ ] **golden.sh discovery widening for probes_negative/** — current `golden.sh check` only walks `*/annotated/*`. PR #3c should widen to also walk `*/probes_negative/*` so the release-blocking gate covers the negative tree. Currently the negative tree is exercised only via probes_ci.sh, not golden.sh. Note: when widened, the existing normalize step at `golden.sh:36` (which strips a `cross-codebase/` prefix) will need adjustment to match the runtime's donor-anchored relpath format used by `_fixture_relpath`. Either adjust normalize OR re-normalize negative goldens to match the walker output format.
 
 ## Cost estimate
 
