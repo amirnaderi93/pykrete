@@ -107,6 +107,13 @@ Each question below was identified during the design tracker phase.
 Each now has a concrete decision an implementation PR can encode
 without further design discussion.
 
+> See also the [**Spec-level decisions promoted from round-1
+> impl-PR list**](#spec-level-decisions-promoted-from-round-1-impl-pr-list)
+> section near the end of this document — it captures four
+> previously-parked judgment calls (empty enum, duplicate entries,
+> hover rendering, Levenshtein threshold) that decide user-visible
+> behaviour and so are settled here.
+
 ### Q1. Unification on `withColumn("status", lit("c"))` where `"c"` is off-enum.
 
 **Decision: fire `D0084` diagnostic.** Off-enum literal assignment is a
@@ -173,14 +180,26 @@ shapes also fire:
   "non-overlapping enum vocabularies" from the generic cross-type
   case, but the code is `D0082`.
 
-#### Q1c. Precedence when `D0082` and `D0084` could both fire.
+#### Q1c. Precedence when `D0030`, `D0082`, and `D0084` could both fire.
 
 `col("enum_field") == col("int_field")` could in principle fire both
-`D0082` (cross-type) and `D0084` (off-enum literal). **Lock: `D0082`
-wins.** Type mismatch is the more fundamental error; the off-enum
-sub-check only runs once both sides are confirmed string-typed (or
-enum-typed). Same precedence rule applies to `col("enum_field") ==
-True` and similar boolean / numeric coercion collisions: the type
+`D0082` (cross-type) and `D0084` (off-enum literal); add an unknown
+column reference and `D0030` could also fire. **Lock the full
+precedence chain: `D0030` > `D0082` > `D0084`.**
+
+- `D0030 unknownColumn` is the first failure — without a resolved
+  column, the enum constraint is moot (we don't know the column's
+  type at all yet).
+- `D0082 crossTypeComparison` is next — once the column resolves, a
+  cross-type comparison is the more fundamental error; the off-enum
+  sub-check only runs once both sides are confirmed string-typed (or
+  enum-typed).
+- `D0084 enumValueMismatch` only runs once the column resolves and
+  the types are compatible.
+
+The chain reflects which failure mode prevents the next from being
+meaningfully checked. Same precedence applies to `col("enum_field")
+== True` and similar boolean / numeric coercion collisions: the type
 error fires first; the enum sub-check never runs.
 
 ### Q2. String-producing operations drop the constraint.
@@ -188,9 +207,10 @@ error fires first; the enum sub-check never runs.
 **Decision: any string-returning operation outside the explicit
 preserve-list (below) drops the enum constraint; the result type is
 plain `string`.** The source-of-truth list of string-returning
-functions lives in `crates/pykrete/src/operations/column_exprs.rs:278-281`
-(the `match` arm that returns `Some(String)`). At time of writing
-(2026-06-01, commit `4bbb9a1`) the list is:
+functions lives in `crates/pykrete/src/operations/column_exprs.rs`
+(the `match` arm that returns `Some(String)` for the string-producing
+operations). At time of writing (2026-06-01, commit `4bbb9a1`) the
+list is:
 
 > `lower`, `upper`, `initcap`, `trim`, `ltrim`, `rtrim`, `reverse`,
 > `concat_ws`, `substring`, `substring_index`, `regexp_replace`,
@@ -205,12 +225,13 @@ these produce strings that may or may not be in the enum vocabulary;
 the constraint cannot be carried through soundly.
 
 The impl PR does NOT maintain a duplicate spec-side list. The single
-authoritative list is the `match` arm in `column_exprs.rs`; the spec
-references that file:line, and the impl PR is responsible for
-ensuring every entry in that arm participates in the "drop the
-constraint" path. New string-returning ops added to that arm in
-later patches automatically inherit the drop behaviour — no spec
-update required.
+authoritative list is the `match` arm in `column_exprs.rs` (the arm
+that returns `Some(String)` for string-producing operations); the
+spec references that arm by name, not by line number, so it stays
+correct across refactors. The impl PR is responsible for ensuring
+every entry in that arm participates in the "drop the constraint"
+path. New string-returning ops added to that arm in later patches
+automatically inherit the drop behaviour — no spec update required.
 
 **Preserve-side ops (explicit list, NOT in the drop path):**
 
@@ -319,6 +340,11 @@ The "carries" cases are operations that emit a value drawn from the
 input column — by construction, the output value is still in the
 input vocabulary. The "N/A" cases either produce a numeric (count) or
 are already rejected by existing rules on string columns.
+
+`count_distinct` and `countDistinct` are aliases — Spark exposes both
+spellings of the same function. They route through a single code path
+in the impl PR (no double-coverage); both names are listed in the
+table only for completeness against the Spark surface.
 
 `groupBy("status").count()` produces a schema with `status` (still
 enum-constrained, since the group key passes through) plus `count:
@@ -442,7 +468,7 @@ the surrounding enum constraint AND preserve the constraint on the
 output iff every branch preserves it.** This is the load-bearing
 silent-bug catch the framing principle exists to defend. A
 "drop-constraint-on-branch-form" path would let
-`coalesce(col("status"), lit("actiev"))` slip through as plain
+`coalesce(col("status"), lit("shippd"))` slip through as plain
 `string`, defeating the whole feature.
 
 Concrete rule, in two parts:
@@ -454,14 +480,27 @@ Concrete rule, in two parts:
    literal's source span. If the branch-form expression is not in
    a sink-bound position (e.g. assigned to a variable), the check
    defers to the eventual sink-bound site per Q6.
-2. **Output constraint propagation.** The output of a branch-form
-   expression carries the enum constraint iff **every branch's
-   type carries it**. If any branch resolves to plain `string`
-   (e.g. `coalesce(col("enum_col"), col("plain_string_col"))`), the
-   output drops the constraint. The union of all branch enum
-   vocabularies (if all branches are enums with potentially
-   different sets) is the output vocabulary; if the sets differ,
-   apply the Q4 Merge rule (`D0040` on non-set-equal vocabularies).
+2. **Output constraint propagation.** Branch-form output vocabulary
+   follows the same rule as Q4 Merge — no silent union or
+   intersection across branches. Concretely:
+   - If every branch is enum-typed AND every branch's vocabulary is
+     set-equal to every other's, the output carries that vocabulary.
+   - If any branch resolves to plain `string` (e.g.
+     `coalesce(col("enum_col"), col("plain_string_col"))`), the
+     output drops the constraint; the result type is plain `string`.
+   - If branches are enum-typed but their vocabularies are NOT
+     set-equal (one is a subset, partial overlap, or disjoint), fire
+     `D0040 unionSchemaMismatch` — the same code Q4 Merge reuses for
+     vocabulary conflict. Do not silently union or intersect; surface
+     the conflict and let the schema author reconcile explicitly.
+
+   For literal-checking purposes (part 1 above), a string-literal
+   branch in a sink-bound branch-form expression inherits the sink's
+   enum type — the same vocabulary used to decide preservation in
+   part 2 is also the vocabulary the per-branch literal is checked
+   against. A standalone branch-form expression not in a sink-bound
+   position follows the Q6 deferred-check rule (the literal's check
+   fires at the eventual sink site).
 
 Operations covered (the exhaustive list — the impl PR hooks into
 `crates/pykrete/src/operations/column_exprs.rs` for the standalone
@@ -470,11 +509,11 @@ the `.when(...)` / `.otherwise(...)` methods):
 
 | Operation | Literal-arg check | Output preserves constraint? |
 |---|---|---|
-| `F.coalesce(c1, c2, ..., cN)` | yes, per literal arg | iff every branch is enum-typed with same vocabulary |
-| `F.nvl(c1, c2)` | yes (same shape as `coalesce(c1, c2)`) | iff both branches are enum-typed |
-| `F.ifnull(c1, c2)` | yes (alias of `nvl`) | iff both branches are enum-typed |
-| `F.nullif(c1, c2)` | yes — the second arg's literal is checked against the first arg's enum (the comparison can never match if off-enum, but it's still a bug) | preserve the first arg's constraint; output is `Nullable[enum[...]]` (the function can return null) |
-| `F.when(cond, value).when(...).otherwise(value)` chains | yes, per literal arg in every `value` position | iff every `value` is enum-typed with same vocabulary |
+| `F.coalesce(c1, c2, ..., cN)` | yes, per literal arg | iff every branch is enum-typed AND all branches share a set-equal vocabulary (else: drop if any branch is plain `string`; `D0040` if branches are enum-typed with non-set-equal vocabularies, per Q4 Merge) |
+| `F.nvl(c1, c2)` | yes (same shape as `coalesce(c1, c2)`) | same rule as `coalesce` (Q4 Merge applies on non-set-equal branch vocabularies) |
+| `F.ifnull(c1, c2)` | yes (alias of `nvl`) | same rule as `coalesce` |
+| `F.nullif(c1, c2)` | yes — the second arg's literal is checked against the first arg's enum (the comparison can never match if off-enum, but it's still a bug) | preserve the first arg's constraint; output is `Nullable[enum[...]]` (the function can return null). Wrapping is idempotent — if the first arg is already `Nullable[enum[...]]`, no double-wrap occurs |
+| `F.when(cond, value).when(...).otherwise(value)` chains | yes, per literal arg in every `value` position | iff every `value` is enum-typed AND all values share a set-equal vocabulary (else: drop or `D0040` per the `coalesce` rule above) |
 | `.when(...).otherwise(...)` column-method form | same as `F.when` | same as `F.when` |
 | `F.lit(...)` standalone | covered by Q6 (sink-bound check) | n/a |
 | `F.greatest(c1, c2, ...)`, `F.least(...)` | per Q2 preserve-side note: **drop the constraint** | no (lexicographic ordering has no enum meaning) |
@@ -488,24 +527,25 @@ class Order(Schema):
 
 
 def fix_nulls(orders: DataFrame[Order]) -> DataFrame[Order]:
-    # Fires D0084 on 'actiev' — coalesce flows into the 'status' sink
+    # Fires D0084 on 'shippd' — coalesce flows into the 'status' sink
     # via withColumn, so the surrounding enum constraint is applied to
     # every literal branch.
     return orders.withColumn(
-        "status", F.coalesce(col("status"), F.lit("actiev"))
+        "status", F.coalesce(col("status"), F.lit("shippd"))
     )
-    #                                              ^^^^^^^^ D0084: 'actiev'
+    #                                              ^^^^^^^^ D0084: 'shippd'
     #                                                      is not in the enum
     #                                                      vocabulary for
     #                                                      'status'. Did you
-    #                                                      mean 'active'?
+    #                                                      mean 'shipped'?
 ```
 
-If both branches resolve to enum-typed columns with the same
-vocabulary (e.g. both are `enum["pending", "shipped", ...]`), the
+If both branches resolve to enum-typed columns with set-equal
+vocabularies (e.g. both are `enum["pending", "shipped", ...]`), the
 output type is the same enum and downstream uses continue to check
-against the vocabulary. If branches' vocabularies disagree, the
-Q4 Merge rule fires `D0040` — same set-equality semantics.
+against the vocabulary. If branches' vocabularies are non-set-equal,
+`D0040` fires — branch-form output vocabulary follows the same rule
+as Q4 Merge.
 
 ### Q9a. `Nullable[enum[...]]` interactions.
 
@@ -594,17 +634,14 @@ def stale_orders(orders: DataFrame[Order]) -> DataFrame[Order]:
 
     # 7. Off-enum literal inside a `coalesce(...)` branch flowing into
     #    the enum-typed `status` sink (Q9 branch-form rule).
-    g = f.withColumn("status", F.coalesce(col("status"), F.lit("actiev")))
+    g = f.withColumn("status", F.coalesce(col("status"), F.lit("shippd")))
     #                                                          ^^^^^^^^ D0084:
-    #                                                          'actiev' is not
+    #                                                          'shippd' is not
     #                                                          in the enum
     #                                                          vocabulary for
     #                                                          'status'. Did
     #                                                          you mean
-    #                                                          'active'?
-    # (note: 'active' is not declared in the Order.status vocabulary in this
-    # worked example; the suggestion would resolve to the closest declared
-    # value via the Levenshtein search — illustrative.)
+    #                                                          'shipped'?
 
     return g
 ```
@@ -618,7 +655,7 @@ orders.pyk:30:35 - error enumValueMismatch: 'delivered_typo' is not in the enum 
 orders.pyk:36:29 - error enumValueMismatch: 'unkown' is not in the enum vocabulary for 'status'.
 orders.pyk:42:34 - error enumValueMismatch: 'eu-centarl' is not in the enum vocabulary for 'region'. Did you mean 'eu-central'?
 orders.pyk:48:46 - error enumValueMismatch: 'us-wast' is not in the enum vocabulary for 'region'. Did you mean 'us-west'?
-orders.pyk:55:60 - error enumValueMismatch: 'actiev' is not in the enum vocabulary for 'status'. Did you mean 'pending'?
+orders.pyk:55:60 - error enumValueMismatch: 'shippd' is not in the enum vocabulary for 'status'. Did you mean 'shipped'?
 ```
 
 ## Stability surface (v1.1 commitments)
@@ -656,16 +693,21 @@ probes-spec stability section in `schema-tracking-probes.md`.
 - The `suggestion` field is populated with the closest Levenshtein
   match against the enum vocabulary when one exists within the
   shared distance threshold pykrete uses for `D0030`. That threshold
-  is defined once at `crates/pykrete/src/schema.rs:1014`
-  (`std::cmp::max(1, target.len() / 3)`) and reused; the impl PR
-  must not duplicate the constant. If `D0030`'s threshold changes
-  in a later release, `D0084`'s changes with it — they move together
-  by construction.
-- **Tiebreaker on equidistant candidates: lexicographic order.** When
-  two or more vocabulary entries are at the same Levenshtein distance
-  from the off-enum literal, the suggestion is the
-  lexicographically-first entry. Chosen for determinism (independent
-  of vocabulary declaration order, so reformatting the schema cannot
+  is defined once in `crates/pykrete/src/schema.rs` alongside the
+  existing `D0030` unknown-column suggestion logic
+  (`std::cmp::max(1, target.len() / 3)`) and reused by `D0084`; the
+  impl PR must not duplicate the constant. If `D0030`'s threshold
+  changes in a later release, `D0084`'s changes with it — they move
+  together by construction.
+- **Tiebreaker on equidistant candidates: Unicode code-point order
+  (Rust `str::cmp`).** When two or more vocabulary entries are at the
+  same Levenshtein distance from the off-enum literal, the suggestion
+  is the entry that sorts first under Rust's `str::cmp` (Unicode
+  code-point order). This ordering is locale-independent and
+  deterministic across machines — locale-aware collation would make
+  suggestions vary by platform, which is incompatible with the
+  stability contract. Chosen for determinism (independent of
+  vocabulary declaration order, so reformatting the schema cannot
   shift the suggestion).
 - The "Did you mean" pattern in the message text echoes the
   suggestion, when present. Same convention as `D0030`.
@@ -685,6 +727,11 @@ threshold may shift.**
   exact cut-off is not.
 - Same render policy applies to completion item details and to
   schema-export sites where pykrete prints the column type.
+- Snapshot tests that capture the exact hover render are at
+  **message-level** (not stable); they may need refresh when the
+  truncation threshold (5) is retuned. The contract guarantees the
+  vocabulary appears, not the exact byte sequence of the rendered
+  string.
 
 **NOT STABLE (per the v1.0 message-text carve-out):**
 
@@ -708,7 +755,7 @@ Re-estimated now that the call sites are mapped. Lines reference
 |---|---|---|
 | Schema parser extension (`types.rs::from_name`) | 1 | Adds `enum[...]` recognition in the type-expression parser, plus empty-vocabulary and duplicate-entry rejection via `D0011`. |
 | `ColumnType` representation update | 0.5 | One variant change in `types.rs`. Cost depends on whether the impl PR picks the variant or sidecar route (variant is the light recommendation); pattern-match churn flows through fallthrough for sites that don't care about the constraint. |
-| Type-machinery carry-through pattern-match audit | 1.5 | Pattern-match sweep across `operations/`. Most call sites already flow through unchanged (column refs, schema-operators). Targeted edits: the string-producing ops referenced by `column_exprs.rs:278-281` (drop), the aggregations in Q5 (preserve), the branch-form expressions in Q9 (check + propagate). |
+| Type-machinery carry-through pattern-match audit | 1.5 | Pattern-match sweep across `operations/`. Most call sites already flow through unchanged (column refs, schema-operators). Targeted edits: the string-producing ops enumerated in the `column_exprs.rs` string-returning match arm (drop), the aggregations in Q5 (preserve), the branch-form expressions in Q9 (check + propagate). |
 | Check sites: `==` literal RHS + `D0082` precedence | 0.5 | Hook into `operations/strict_operators.rs` (already handles cross-type comparison). The Q1c precedence rule means `D0082` short-circuits the enum sub-check; no new code paths needed for the collision case. |
 | Check sites: `.isin(...)` | 0.5 | Single addition in `operations/column_methods.rs`. |
 | Check sites: `.fillna({...})` dict values | 0.5 | `operations/column_methods.rs` fillna branch. |
@@ -723,28 +770,33 @@ Re-estimated now that the call sites are mapped. Lines reference
 | Trust-surface docs (production-readiness.md, README.md) | 0.25 | Release-blocker per the v1.1 work plan step 6. |
 | Cross-codebase fixtures (donor enums) | 1 | Hudi `_hoodie_operation`, Delta CDC `_change_type`, MLflow run states. |
 
-**Total: ~10 days.** Slightly higher than the round-1 9-day estimate
-because Q9 (branch-form expressions) is now a first-class line item
-rather than a silent fall-through hole, and the trust-surface docs
-are a named release-blocker rather than a sub-bullet.
+**Total: ~11 days.** Higher than the round-1 9-day estimate because
+Q9 (branch-form expressions) is now a first-class line item rather
+than a silent fall-through hole, and the trust-surface docs are a
+named release-blocker rather than a sub-bullet.
 
 ## Multi-lens review plan
 
 Mirroring the pattern set by the probes spec PR (#71). The round-1
 synthesis review (2026-06-01) applied all three lenses and surfaced
-two blockers + eleven important + nine minor items, all addressed
-in this round-2 revision (Q9 added, four impl-PR judgment calls
-promoted, Q1a/Q1b/Q1c/Q9a/Q4 set-equality settled). The plan below
-is preserved for follow-up reviewers checking the round-2 tightening:
+two blockers + eleven important + nine minor items; the round-2
+revision in this PR addressed them (Q9 added, four impl-PR judgment
+calls promoted, Q1a/Q1b/Q1c/Q9a/Q4 set-equality settled). The
+round-2 synthesis review then surfaced one further blocker (Q9
+output-vocabulary contradiction) and five important items (worked
+example #7 internal breakage, Q6/Q9 bridge sentence, D0030
+precedence, Unicode-code-point tiebreaker pin, brittle line-number
+citations), all closed in round 3. The plan below is preserved for
+follow-up reviewers verifying the round-3 tightening:
 
 1. **Correctness lens** — does Form A actually parse cleanly in PEP
    526 annotation position? Does the carry-through table in Q5 match
    Spark's actual aggregation semantics? Is Q2's source-of-truth
-   reference to `column_exprs.rs:278-281` correctly pointing at the
-   string-returning match arm? Does the SQL-parser extension in Q7
-   cover the common shapes without false positives on backtick/quote
-   variants? Does Q9's branch-form table cover every Spark
-   conditional/null-handling op?
+   reference to the string-returning `match` arm in `column_exprs.rs`
+   correctly pointing at every constraint-dropping op? Does the
+   SQL-parser extension in Q7 cover the common shapes without false
+   positives on backtick/quote variants? Does Q9's branch-form table
+   cover every Spark conditional/null-handling op?
 2. **Adversarial lens** — hunt for edge cases the framing principle
    doesn't cover. Round 2 settled: `enum[]` (rejected via `D0011`),
    `enum["a", "a"]` (rejected via `D0011`), Unicode/whitespace/case
@@ -800,6 +852,14 @@ PR:
   parse time** via `D0011` with a message that names the duplicated
   value. Same rationale; a duplicate offers no expressive power and
   most likely signals a copy-paste bug.
+- **Reuse of `D0011` for both empty-enum and duplicate-entries is a
+  deliberate code-reuse choice**, not a stability constraint. Both
+  cases are "the parser refused to construct a valid enum type" — the
+  same conceptual failure mode `D0011 invalidColumnType` already
+  models. A future v1.2 may split these into dedicated codes
+  (`D008X enumEmpty`, `D008Y enumDuplicate`) for finer diagnostic
+  routing; that's an additive change under the v1.0 SemVer policy
+  (new codes are non-breaking), not a v1.1 commitment.
 - **Hover / completion / schema-export rendering**: settled in the
   Stability surface section above. The vocabulary appears in hover
   for every `enum[...]`-typed column; the default truncation
@@ -807,10 +867,12 @@ PR:
   cap, appends a `, ... (N more)` tail above it). The contract is
   STABLE; the exact cut-off is not.
 - **Levenshtein distance threshold for `D0084` suggestions**: shared
-  with `D0030` via the existing constant at
-  `crates/pykrete/src/schema.rs:1014`. Impl PR confirms the constant
-  is referenced, not duplicated. Tiebreaker on equidistant candidates
-  is **lexicographic order**, per the Stability surface section above.
+  with `D0030` via the existing constant in
+  `crates/pykrete/src/schema.rs`, defined alongside the `D0030`
+  unknown-column suggestion logic. Impl PR confirms the constant is
+  referenced, not duplicated. Tiebreaker on equidistant candidates is
+  **Unicode code-point order (Rust `str::cmp`)**, per the Stability
+  surface section above — locale-independent and deterministic.
 
 ## Open questions remaining for the impl PR
 
@@ -851,9 +913,8 @@ genuinely impl-internal:
    (not a follow-up):
    - `docs-site/src/content/docs/about/production-readiness.md` —
      add `D0084` to the stable-D-code enumeration in the "Diagnostic
-     codes" bullet (currently at line 18), and add a "Reliability
-     and trust" paragraph noting enum-value verification as a v1.1
-     capability.
+     codes" bullet, and add a "Reliability and trust" paragraph
+     noting enum-value verification as a v1.1 capability.
    - `README.md` — add enum-value checking to the headline feature
      list with the same rigor language used for v1.0 D-codes.
 
