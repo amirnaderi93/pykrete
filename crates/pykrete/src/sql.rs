@@ -110,21 +110,28 @@ pub fn column_literal_pairs(fragment: &str) -> Vec<ColumnLiteralPair> {
 }
 
 /// Best-effort byte offset of a quoted literal `'value'` (or `"value"`)
-/// within `fragment`. Returns `None` if the exact `'value'` doesn't
-/// appear — the caller falls back to anchoring on the whole fragment
-/// span, the same way `report_sql_column_refs` does today.
+/// within `fragment`, starting the search at byte index `from`. Returns
+/// `None` if the exact `'value'` doesn't appear at or after `from` — the
+/// caller falls back to anchoring on the whole fragment span, the same
+/// way `report_sql_column_refs` does today.
+///
+/// The `from` cursor lets the caller walk past previously-consumed
+/// matches so a fragment like `status = 'X' OR status = 'X'` produces
+/// two diagnostics at two distinct spans instead of attributing both
+/// to the first occurrence.
 ///
 /// Q1a byte-for-byte semantics — no escape unfolding here; sqlparser
 /// already returns the unescaped text, and we look it up against the
 /// raw fragment with the standard single-quote delimiter.
-pub fn find_quoted_literal_offset(fragment: &str, value: &str) -> Option<usize> {
+pub fn find_quoted_literal_offset(fragment: &str, value: &str, from: usize) -> Option<usize> {
+    let tail = fragment.get(from..)?;
     for delim in ['\'', '"'] {
         let mut needle = std::string::String::with_capacity(value.len() + 2);
         needle.push(delim);
         needle.push_str(value);
         needle.push(delim);
-        if let Some(offset) = fragment.find(needle.as_str()) {
-            return Some(offset);
+        if let Some(offset) = tail.find(needle.as_str()) {
+            return Some(from + offset);
         }
     }
     None

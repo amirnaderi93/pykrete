@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 
 use super::col_refs::{col_reference, collect_col_refs};
-use super::column_exprs::{infer_expr_type, report_get_field_typo, select_arg_type};
+use super::column_exprs::{
+    infer_expr_type, report_branch_form_enum_conflicts, report_get_field_typo, select_arg_type,
+};
 use super::context::{BodyContext, TypeCtx};
 use super::enum_checks::{emit_d0084, enum_vocab, peel_string_literal, vocab_contains};
 use super::shapes::ArgRole;
@@ -271,6 +273,12 @@ pub(super) fn report_expr_type_errors<'a>(
                     ));
                 }
             }
+            // Branch-form expressions (`coalesce`/`nvl`/`ifnull` +
+            // `F.when(...).otherwise(...)`) whose enum-typed branches
+            // have non-set-equal vocabularies — spec Q9 mandates D0040
+            // here, the same code the schema-merge surface uses for the
+            // Merge[A, B] shared-column enum mismatch.
+            report_branch_form_enum_conflicts(expr, schema, tcx, source, line_index, diagnostics);
             report_expr_type_errors(&call.func, schema, tcx, source, line_index, diagnostics);
             for arg in &call.arguments.args {
                 report_expr_type_errors(arg, schema, tcx, source, line_index, diagnostics);
@@ -677,6 +685,12 @@ pub(super) fn report_sql_column_refs(
     // column-existence loop above already fires `D0030` on a missing
     // identifier; the type lookup here returns `None` in that case, so
     // the enum check is silently skipped (precedence preserved).
+    //
+    // `cursor` advances past each consumed literal occurrence so a
+    // fragment like `status = 'X' OR status = 'X'` produces two
+    // diagnostics at two distinct spans. sqlparser doesn't surface
+    // source positions, so we walk the fragment in declaration order.
+    let mut cursor: usize = 0;
     for pair in crate::sql::column_literal_pairs(sql) {
         let Some(ty) = schema.field_type(&pair.column, &[]) else {
             continue;
@@ -684,6 +698,10 @@ pub(super) fn report_sql_column_refs(
         let Some(vocab) = enum_vocab(&ty) else {
             continue;
         };
+        let next_offset = crate::sql::find_quoted_literal_offset(sql, &pair.value, cursor);
+        if let Some(off) = next_offset {
+            cursor = off + pair.value.len() + 2; // skip past `'value'`
+        }
         if vocab_contains(vocab, &pair.value) {
             continue;
         }
@@ -692,7 +710,7 @@ pub(super) fn report_sql_column_refs(
         // to the whole SQL string-literal range.
         let lit_range = quoted_offset
             .and_then(|base| {
-                crate::sql::find_quoted_literal_offset(sql, &pair.value).map(|off| {
+                next_offset.map(|off| {
                     let start = base + off + 1; // skip opening quote
                     let len = pair.value.len();
                     TextRange::new(
