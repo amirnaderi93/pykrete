@@ -50,6 +50,7 @@ pub mod column_exprs;
 pub mod column_methods;
 pub mod context;
 pub mod driver;
+mod enum_checks;
 pub mod expr;
 pub mod shapes;
 pub mod strict_operators;

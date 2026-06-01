@@ -1,0 +1,7 @@
+class Order(Schema):
+    id: long
+    status: enum["pending", "shipped", "delivered"]
+
+
+def f(orders: DataFrame[Order]) -> DataFrame[Order]:
+    return orders.filter(col("status") == "pendig")

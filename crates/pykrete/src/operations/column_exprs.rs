@@ -4,7 +4,7 @@ use super::strict_operators::select_output_name;
 
 use ruff_python_ast::{Expr, ExprCall, Number};
 use ruff_source_file::LineIndex;
-use ruff_text_size::Ranged;
+use ruff_text_size::{Ranged, TextRange};
 
 use crate::diagnostics::{Diagnostic, Severity};
 use crate::schema::SchemaView;
@@ -214,6 +214,18 @@ pub(super) fn infer_expr_type<'a>(
             ) {
                 return array_hof_result_type(fname, call, schema, tcx);
             }
+            // Branch-form null-coalescing (`coalesce` / `nvl` /
+            // `ifnull`) — Q9 output preservation. All branches'
+            // inferred types are reconciled: enum-typed branches with
+            // set-equal vocabularies preserve the constraint; any
+            // plain-string branch drops it; non-set-equal enum
+            // vocabularies degrade to None (the firing of D0040 lives
+            // on the schema-merge surface, not here). The downstream
+            // `coalesce_branch_result` returns the carried-through
+            // type or falls back to the first-arg behaviour.
+            if matches!(fname, "coalesce" | "nvl" | "ifnull") {
+                return coalesce_branch_result(call, schema, tcx);
+            }
             // Any other recognized `pyspark.sql.functions` call — look its
             // result type up in the catalog, resolving the first argument
             // (a column name or expression) for the input-dependent ones.
@@ -299,7 +311,16 @@ pub(super) fn function_result_type(
     match name {
         // Null-coalescing — the result is non-null when *any* argument
         // is. Conservatively drop nullability (this only under-reports).
+        // Note: `coalesce`/`nvl`/`ifnull` already short-circuit via
+        // `coalesce_branch_result` in `infer_expr_type`, so this arm is
+        // only reached on schema paths that bypass the call-site dispatch
+        // (kept for symmetry / future call sites).
         "coalesce" | "nvl" | "ifnull" => first_arg.map(|t| t.base().clone()),
+        // `nullif(a, b)` returns NULL when `a == b`, else `a`. Per spec
+        // Q9a it is idempotent over enum constraints: the result type
+        // is `Nullable(typeof a)`, preserving the enum vocabulary so
+        // downstream check sites still see the constraint.
+        "nullif" => first_arg.map(|t| ColumnType::Nullable(Box::new(t.base().clone()))),
         "min" | "max" | "first" | "last" | "first_value" | "last_value" | "any_value"
         | "greatest" | "least" | "nanvl" | "abs" | "round" | "bround" | "negative" | "positive" => {
             first_arg
@@ -560,6 +581,19 @@ fn widen_pair(a: &ColumnType, b: &ColumnType) -> Option<ColumnType> {
     if a == b {
         return Some(a.clone());
     }
+    // Set-equal enum vocabularies (declaration order differs) — Q4 / Q9
+    // reconcile through `enum_vocab_eq`, not derived `PartialEq`.
+    if ColumnType::enum_vocab_eq(a, b) {
+        return Some(a.clone());
+    }
+    // Enum vs plain string in branch position — Q9 drops the
+    // constraint; the reconciled type is plain `string`.
+    if matches!(
+        (a.base(), b.base()),
+        (ColumnType::Enum(_), ColumnType::String) | (ColumnType::String, ColumnType::Enum(_))
+    ) {
+        return Some(ColumnType::String);
+    }
     use ColumnType::{Double, Int, Long};
     match (a, b) {
         (Double, Int | Long) | (Int | Long, Double) => Some(Double),
@@ -754,6 +788,216 @@ fn closest_name(target: &str, candidates: &[&str]) -> Option<String> {
         }
     }
     best.map(|(name, _)| name.to_string())
+}
+
+/// Output type of `coalesce(c1, c2, ...)` / `nvl(c1, c2)` / `ifnull(c1,
+/// c2)` per Q9: every branch's type is inferred and reconciled. If
+/// every branch is enum-typed and the vocabularies are set-equal, the
+/// output preserves the constraint. If any branch is plain `string`,
+/// the constraint drops and the output is plain `string`. Non-set-equal
+/// enum vocabularies degrade to `None`; D0040 is emitted at the call
+/// site by [`report_branch_form_enum_conflicts`] (the
+/// schema-merge surface and the branch surface share the code).
+///
+/// Behavior change vs PR-B round 1: the type seed is the first non-`None`
+/// inferred branch (rather than only the very first arg). This keeps a
+/// reconciled enum constraint flowing through `coalesce(unknown,
+/// col(enum), ...)` instead of dropping it when the leading arg is a
+/// constant or otherwise un-typed.
+pub(super) fn coalesce_branch_result<'a>(
+    call: &ExprCall,
+    schema: &SchemaView<'a>,
+    tcx: TypeCtx<'a>,
+) -> Option<ColumnType> {
+    let branch_types: Vec<Option<ColumnType>> = call
+        .arguments
+        .args
+        .iter()
+        .map(|a| select_arg_type(a, schema, tcx))
+        .collect();
+    let mut iter = branch_types.iter().flatten();
+    let first = iter.next()?.base().clone();
+    let mut all_enum = matches!(first, ColumnType::Enum(_));
+    let mut any_plain_string = matches!(first, ColumnType::String);
+    let mut vocabs_set_equal = true;
+    for ty in iter {
+        let base = ty.base();
+        match base {
+            ColumnType::Enum(_) => {
+                if !ColumnType::enum_vocab_eq(&first, base) {
+                    vocabs_set_equal = false;
+                }
+                if !matches!(first, ColumnType::Enum(_)) {
+                    all_enum = false;
+                }
+            }
+            ColumnType::String => {
+                any_plain_string = true;
+                all_enum = false;
+            }
+            _ => {
+                all_enum = false;
+            }
+        }
+    }
+    if any_plain_string && matches!(first, ColumnType::Enum(_)) {
+        return Some(ColumnType::String);
+    }
+    if all_enum && !vocabs_set_equal {
+        return None;
+    }
+    Some(first)
+}
+
+/// Per spec Q9: when every branch of a `coalesce` / `nvl` / `ifnull` /
+/// `when`-chain expression resolves to an enum-typed column but the
+/// vocabularies are NOT set-equal, fire `D0040`. Symmetric with the
+/// `Merge[A, B]` shared-column enum mismatch on the schema-merge surface
+/// (same diagnostic code, distinct anchor — here the call expression).
+///
+/// Mixed enum-and-plain-`string` branches are silent: the user
+/// explicitly mixed a `string` source in, so the constraint is
+/// intentionally dropped to plain `string` (no D0040). Set-equal vocabs
+/// are also silent; the constraint is preserved.
+pub(super) fn report_branch_form_enum_conflicts<'a>(
+    expr: &Expr,
+    schema: &SchemaView<'a>,
+    tcx: TypeCtx<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(call) = expr.as_call_expr() else {
+        return;
+    };
+    let fname = match call.func.as_ref() {
+        Expr::Name(n) => n.id.as_str(),
+        Expr::Attribute(a) => a.attr.id.as_str(),
+        _ => return,
+    };
+    let branch_types: Vec<Option<ColumnType>> = if matches!(fname, "coalesce" | "nvl" | "ifnull") {
+        call.arguments
+            .args
+            .iter()
+            .map(|a| select_arg_type(a, schema, tcx))
+            .collect()
+    } else if fname == "when" || (fname == "otherwise" && is_when_chain_attr_value(call)) {
+        collect_when_chain_branch_types(expr, schema, tcx)
+    } else {
+        return;
+    };
+    fire_d0040_if_disjoint_enums(&branch_types, expr.range(), source, line_index, diagnostics);
+}
+
+/// True for an `.otherwise(...)` call whose receiver is itself a
+/// `when`-chain — i.e. a real `F.when(...).otherwise(...)` shape rather
+/// than an unrelated `.otherwise` method on some other object.
+fn is_when_chain_attr_value(call: &ExprCall) -> bool {
+    let Some(attr) = call.func.as_attribute_expr() else {
+        return false;
+    };
+    is_when_chain(&attr.value)
+}
+
+/// Collect each value-branch's inferred type from a
+/// `F.when(p, v).when(p2, v2)…[.otherwise(e)]` chain. Walks the chain
+/// from the outermost call down to the root `when`, gathering every
+/// value-position expression's type.
+fn collect_when_chain_branch_types<'a>(
+    chain: &Expr,
+    schema: &SchemaView<'a>,
+    tcx: TypeCtx<'a>,
+) -> Vec<Option<ColumnType>> {
+    let mut out: Vec<Option<ColumnType>> = Vec::new();
+    let mut cursor = chain;
+    loop {
+        let Some(call) = cursor.as_call_expr() else {
+            return out;
+        };
+        let fname = match call.func.as_ref() {
+            Expr::Name(n) => n.id.as_str(),
+            Expr::Attribute(a) => a.attr.id.as_str(),
+            _ => return out,
+        };
+        if fname == "otherwise" {
+            if let Some(arg) = call.arguments.args.first() {
+                out.push(infer_expr_type(arg, schema, tcx));
+            }
+            let Some(attr) = call.func.as_attribute_expr() else {
+                return out;
+            };
+            cursor = &attr.value;
+            continue;
+        }
+        if fname != "when" {
+            return out;
+        }
+        if let Some(v) = call.arguments.args.get(1) {
+            out.push(infer_expr_type(v, schema, tcx));
+        }
+        if let Some(attr) = call.func.as_attribute_expr() {
+            cursor = &attr.value;
+            continue;
+        }
+        return out;
+    }
+}
+
+/// If every branch type is enum-typed and the vocabularies are NOT
+/// set-equal pairwise, push a single `D0040` anchored on `range`. Mixed
+/// enum-vs-plain-string is silent (intentional drop). One diagnostic
+/// per call expression is enough — the user's fix is to reconcile the
+/// branches, not to chase per-pair messages.
+fn fire_d0040_if_disjoint_enums(
+    branch_types: &[Option<ColumnType>],
+    range: TextRange,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let knowns: Vec<&ColumnType> = branch_types.iter().flatten().collect();
+    if knowns.len() < 2 {
+        return;
+    }
+    if !knowns
+        .iter()
+        .all(|t| matches!(t.base(), ColumnType::Enum(_)))
+    {
+        return;
+    }
+    let first = knowns[0].base();
+    if knowns
+        .iter()
+        .all(|t| ColumnType::enum_vocab_eq(first, t.base()))
+    {
+        return;
+    }
+    // Spec Q9: one D0040 per top-level branch form. `report_branch_form_enum_conflicts`
+    // runs at every Expr::Call descent, so a nested chain like
+    // `when(p1, a).when(p2, b).otherwise(c)` would re-match on the inner
+    // `.when(p2, b)` sub-chain after firing on the outer `.otherwise(...)`.
+    // Both share the same start position (chains anchor on their root call),
+    // so dedupe by start line/column.
+    let start = line_index.line_column(range.start(), source);
+    let (start_line, start_col) = (start.line.get(), start.column.get());
+    if diagnostics
+        .iter()
+        .any(|d| d.code == "D0040" && d.line == start_line && d.column == start_col)
+    {
+        return;
+    }
+    let message = "Branch-form expression reconciles enum-typed branches with non-set-equal \
+         vocabularies. Reconcile by widening one side's vocabulary to match the \
+         other, or cast a branch to plain string to drop the constraint."
+        .to_string();
+    diagnostics.push(Diagnostic::at_range(
+        Severity::Error,
+        "D0040",
+        message,
+        range,
+        source,
+        line_index,
+    ));
 }
 
 fn python_literal_type(expr: &Expr) -> Option<ColumnType> {

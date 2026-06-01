@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use super::col_refs::collect_col_refs;
 use super::column_exprs::{common_branch_type, infer_expr_type};
 use super::context::BodyContext;
+use super::enum_checks::{emit_d0084, enum_vocab, peel_string_literal, vocab_contains};
 use super::shapes::{ColumnMethodShape, role_at};
 use super::strict_operators::{
     collect_arg_column_refs_split, report_expr_sql_refs, report_expr_type_errors,
@@ -554,10 +555,88 @@ fn melt_value_column_type(branch_types: &[Option<ColumnType>]) -> Option<ColumnT
     })
 }
 
+/// `df.withColumn("status", value)` — when `status` is already declared
+/// enum-typed on the receiver, every literal in `value` (including
+/// branches inside `coalesce` / `when` / `nvl` / `nullif` / `ifnull`)
+/// is checked against the enum vocabulary. Q1 / Q6 / Q9 sink site.
+pub(super) fn check_with_column_enum_sink<'a>(
+    call: &'a ExprCall,
+    schema: &SchemaView<'a>,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(name_arg) = call.arguments.args.first() else {
+        return;
+    };
+    let Some(name_lit) = name_arg.as_string_literal_expr() else {
+        return;
+    };
+    let column = name_lit.value.to_str();
+    let Some(value_expr) = call.arguments.args.get(1) else {
+        return;
+    };
+    let Some(ty) = schema.field_type(column, ctx.schemas()) else {
+        return;
+    };
+    let Some(vocab) = enum_vocab(&ty) else {
+        return;
+    };
+    let mut cx = EnumCheckCtx {
+        source,
+        line_index,
+        diagnostics,
+    };
+    check_value_against_enum_vocab(column, vocab, value_expr, &mut cx);
+}
+
+/// `df.withColumns({"status": value, ...})` — same Q1 / Q6 / Q9 sink
+/// check as `withColumn`, but iterating every dict entry. Only the
+/// keys that name existing enum-typed columns on the receiver
+/// participate; brand-new columns introduced by this `withColumns`
+/// call have no declared enum constraint to check against.
+pub(super) fn check_with_columns_enum_sinks<'a>(
+    call: &'a ExprCall,
+    schema: &SchemaView<'a>,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(dict) = call.arguments.args.first().and_then(Expr::as_dict_expr) else {
+        return;
+    };
+    for item in &dict.items {
+        let Some(key_lit) = item.key.as_ref().and_then(|k| k.as_string_literal_expr()) else {
+            continue;
+        };
+        let column = key_lit.value.to_str();
+        let Some(ty) = schema.field_type(column, ctx.schemas()) else {
+            continue;
+        };
+        let Some(vocab) = enum_vocab(&ty) else {
+            continue;
+        };
+        let mut cx = EnumCheckCtx {
+            source,
+            line_index,
+            diagnostics,
+        };
+        check_value_against_enum_vocab(column, vocab, &item.value, &mut cx);
+    }
+}
+
 /// Check the dict-literal first positional arg of `fillna` / `na.fill`,
 /// whose keys are column names. Non-dict-literal first args (a bare
 /// value, a variable) fall through silently — only the syntactically
 /// visible dict can be checked here.
+///
+/// Per the v1.1 enum-constraints spec (Q1, Q6), each dict value that
+/// is a string literal (`"X"`) or `lit("X")` is also checked against
+/// the corresponding column's enum vocabulary. Off-vocabulary values
+/// emit `D0084`; the column-existence `D0030` check on the key takes
+/// precedence (Q1c).
 pub(super) fn check_fillna_dict_keys<'a>(
     call: &'a ExprCall,
     schema: &SchemaView<'a>,
@@ -581,8 +660,128 @@ pub(super) fn check_fillna_dict_keys<'a>(
             continue;
         };
         refs.push((s.value.to_str(), s.range()));
+        let column = s.value.to_str();
+        if let Some(ty) = schema.field_type(column, ctx.schemas())
+            && let Some(vocab) = enum_vocab(&ty)
+        {
+            let mut cx = EnumCheckCtx {
+                source,
+                line_index,
+                diagnostics,
+            };
+            check_value_against_enum_vocab(column, vocab, &item.value, &mut cx);
+        }
     }
     report_column_refs(&refs, schema, ctx, source, line_index, diagnostics);
+}
+
+/// Shared diagnostic-emission inputs used by every D0084 check site:
+/// the source text, the line index, and the diagnostics accumulator.
+/// Bundling these into a single struct keeps the per-arg helper count
+/// at a non-clippy-warning level (`too_many_arguments` threshold of
+/// 7).
+pub(super) struct EnumCheckCtx<'b, 's> {
+    pub source: &'s str,
+    pub line_index: &'b LineIndex,
+    pub diagnostics: &'b mut Vec<Diagnostic>,
+}
+
+/// Check `value_expr` against an enum vocabulary for `column`. A
+/// string-literal or `lit("…")` value is checked directly. A
+/// branch-form expression (`coalesce`, `when`/`otherwise`, `nvl`,
+/// `ifnull`, `nullif`) is decomposed and each branch's literal value
+/// is checked against the same vocabulary (Q9 part 1).
+pub(super) fn check_value_against_enum_vocab(
+    column: &str,
+    vocab: &[String],
+    value_expr: &Expr,
+    cx: &mut EnumCheckCtx<'_, '_>,
+) {
+    if let Some((value, range)) = peel_string_literal(value_expr) {
+        if !vocab_contains(vocab, value) {
+            emit_d0084(
+                column,
+                value,
+                vocab,
+                range,
+                cx.source,
+                cx.line_index,
+                cx.diagnostics,
+            );
+        }
+        return;
+    }
+    let Some(call) = value_expr.as_call_expr() else {
+        return;
+    };
+    let fname = match call.func.as_ref() {
+        Expr::Name(n) => Some(n.id.as_str()),
+        Expr::Attribute(a) => Some(a.attr.id.as_str()),
+        _ => None,
+    };
+    match fname {
+        // `coalesce(a, b, ...)` / `nvl(a, b)` / `ifnull(a, b)` /
+        // `nullif(a, b)` — every arg is a branch.
+        Some("coalesce" | "nvl" | "ifnull" | "nullif") => {
+            for arg in &call.arguments.args {
+                check_value_against_enum_vocab(column, vocab, arg, cx);
+            }
+        }
+        // `F.when(p, v).when(p2, v2).otherwise(e)` — walk the chain,
+        // checking every value-position branch.
+        Some("when" | "otherwise") => {
+            check_when_chain_against_vocab(column, vocab, value_expr, cx);
+        }
+        _ => {}
+    }
+}
+
+/// Walk a `F.when(p, v).when(p2, v2)…[.otherwise(e)]` chain and check
+/// each value-position branch's literal against the surrounding enum
+/// vocabulary (Q9). Non-literal branches (a `col("…")` of unknown
+/// type, a computed expression) fall through silently.
+fn check_when_chain_against_vocab(
+    column: &str,
+    vocab: &[String],
+    chain: &Expr,
+    cx: &mut EnumCheckCtx<'_, '_>,
+) {
+    let mut cursor = chain;
+    loop {
+        let Some(call) = cursor.as_call_expr() else {
+            return;
+        };
+        let fname = match call.func.as_ref() {
+            Expr::Name(n) => n.id.as_str(),
+            Expr::Attribute(a) => a.attr.id.as_str(),
+            _ => return,
+        };
+        // `.otherwise(e)` — its single arg is the final branch; then
+        // descend into the receiver chain.
+        if fname == "otherwise" {
+            if let Some(arg) = call.arguments.args.first() {
+                check_value_against_enum_vocab(column, vocab, arg, cx);
+            }
+            let Some(attr) = call.func.as_attribute_expr() else {
+                return;
+            };
+            cursor = &attr.value;
+            continue;
+        }
+        if fname == "when" {
+            if let Some(v) = call.arguments.args.get(1) {
+                check_value_against_enum_vocab(column, vocab, v, cx);
+            }
+            // Chained `.when(...)` on an earlier `.when(...)` — peel one
+            // layer. Bare `when(...)` is the root.
+            if let Some(attr) = call.func.as_attribute_expr() {
+                cursor = &attr.value;
+                continue;
+            }
+            return;
+        }
+        return;
+    }
 }
 
 /// Check the `subset=` keyword argument against the receiver schema.

@@ -1,0 +1,5 @@
+---
+source: crates/pykrete/tests/diagnostic_catalog.rs
+expression: captured
+---
+d0084_enum_value_mismatch.pyk:7:43-7:51 error D0084 enumValueMismatch: 'pendig' is not in the enum vocabulary for 'status'. Did you mean 'pending'?  suggestion: pending

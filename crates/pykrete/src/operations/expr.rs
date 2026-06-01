@@ -4,7 +4,8 @@ use super::col_refs::collect_col_refs;
 use super::column_exprs::select_arg_type;
 use super::column_methods::{
     apply_melt, apply_with_columns, apply_with_columns_renamed, check_column_method_args,
-    check_fillna_dict_keys, check_subset_kwarg, report_column_refs,
+    check_fillna_dict_keys, check_subset_kwarg, check_with_column_enum_sink,
+    check_with_columns_enum_sinks, report_column_refs,
 };
 use super::context::{BodyContext, MAX_INFER_DEPTH};
 use super::driver::check_function_body;
@@ -586,6 +587,7 @@ pub(super) fn analyze_method_call<'a>(
         return None;
     }
     if method == "withColumns" {
+        check_with_columns_enum_sinks(call, &receiver, ctx, source, line_index, diagnostics);
         return Some(apply_with_columns(
             call,
             &receiver,
@@ -644,6 +646,14 @@ pub(super) fn analyze_method_call<'a>(
                     );
                 }
             }
+        }
+        // `df.withColumn("status", lit("X"))` / `df.withColumn("status",
+        // F.coalesce(col("status"), lit("X")))` — when the named sink
+        // column is enum-typed on the receiver, check each literal
+        // value (peeling branch-form expressions) against the
+        // vocabulary. Q1 / Q6 / Q9.
+        if method == "withColumn" {
+            check_with_column_enum_sink(call, &receiver, ctx, source, line_index, diagnostics);
         }
         return apply_column_method(method, &receiver, call, ctx, ctx.type_ctx());
     }
