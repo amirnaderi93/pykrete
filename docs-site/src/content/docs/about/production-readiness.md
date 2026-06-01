@@ -5,7 +5,7 @@ description: Stability commitments, false-positive policy, release cadence, and 
 
 ## TL;DR
 
-pykrete is feature-complete for PySpark as of the [v0.1 release line](https://github.com/amirnaderi93/pykrete/releases). A deliberate "degrade to Unknown rather than fabricate" policy keeps the checker honest: when pykrete can't determine a schema or a type with confidence, it stops checking that subtree rather than guessing. A real-codebase integration loop ([pykrete-tests](/pykrete/about/pykrete-tests/)) catches regressions before they ship.
+pykrete is feature-complete for PySpark as of the [v0.1 release line](https://github.com/amirnaderi93/pykrete/releases). A deliberate "degrade to Unknown rather than fabricate" policy keeps the checker honest: when pykrete can't determine a schema or a type with confidence, it stops checking that subtree rather than guessing. A real-codebase integration loop ([pykrete-tests](/about/pykrete-tests/)) catches regressions before they ship.
 
 For the trust posture behind the engineering — why pykrete cannot break a production pipeline, and how each release is validated — see the [Reliability and trust](https://github.com/amirnaderi93/pykrete#reliability-and-trust) section of the README.
 
@@ -36,8 +36,8 @@ Bumping `schemaVersion` to `"2"` only happens alongside a SemVer-major pykrete r
 
 What may still change without notice:
 
-- The internal LSP wire protocol with the embedded Python engine (today's multiplexer is interim — see the [roadmap](/pykrete/about/roadmap/#forking-ty)).
-- The wasm API surface (`pykrete-wasm`): shipped in v0.1.16 and consumed by the in-browser [playground](/pykrete/playground/). The current export shape (`check_source`, `hover_at`, `complete_at`, `definition_at`) is stable in spirit until v1.0.0 and becomes part of the SemVer contract from v1.0 onward. The crate is a single-file analyzer wrapper, not a general-purpose embedding library — multi-file / cross-import support stays a CLI / LSP capability.
+- The internal LSP wire protocol with the embedded Python engine (today's multiplexer is interim — see the [roadmap](/about/roadmap/#forking-ty)).
+- The wasm API surface (`pykrete-wasm`): shipped in v0.1.16 and consumed by the in-browser [playground](/playground/). The current export shape (`check_source`, `hover_at`, `complete_at`, `definition_at`) is stable in spirit until v1.0.0 and becomes part of the SemVer contract from v1.0 onward. The crate is a single-file analyzer wrapper, not a general-purpose embedding library — multi-file / cross-import support stays a CLI / LSP capability.
 
 ## False-positive policy
 
@@ -56,7 +56,7 @@ The Spark-coverage closure sprint (v0.1.7 onward, May 2026) ran at multiple rele
 
 ## Real-codebase testing
 
-Every release is regression-tested against **32 annotated fixtures from 10 upstream codebases** — Apache Spark, Delta Lake, Apache Iceberg ([iceberg-python](https://github.com/apache/iceberg-python)), Apache Hudi, MLflow, Feast, Kedro ([kedro-plugins](https://github.com/kedro-org/kedro-plugins)), [quinn](https://github.com/MrPowers/quinn), [dbt-spark](https://github.com/dbt-labs/dbt-spark), and [python-deequ](https://github.com/awslabs/python-deequ). See [Real-codebase tests](/pykrete/about/pykrete-tests/) for the methodology and the [pykrete-tests README](https://github.com/amirnaderi93/pykrete-tests#the-donors) for the per-donor matrix. Every fixture currently emits zero diagnostics against the released binary; each push rebuilds pykrete fresh from `main`, re-runs `pykrete check` against all 32 fixtures, and JSON-diffs the output against the committed golden. Any drift fails the build before it gets released.
+Every release is regression-tested against **32 annotated fixtures from 10 upstream codebases** — Apache Spark, Delta Lake, Apache Iceberg ([iceberg-python](https://github.com/apache/iceberg-python)), Apache Hudi, MLflow, Feast, Kedro ([kedro-plugins](https://github.com/kedro-org/kedro-plugins)), [quinn](https://github.com/MrPowers/quinn), [dbt-spark](https://github.com/dbt-labs/dbt-spark), and [python-deequ](https://github.com/awslabs/python-deequ). See [Real-codebase tests](/about/pykrete-tests/) for the methodology and the [pykrete-tests README](https://github.com/amirnaderi93/pykrete-tests#the-donors) for the per-donor matrix. Every fixture currently emits zero diagnostics against the released binary; each push rebuilds pykrete fresh from `main`, re-runs `pykrete check` against all 32 fixtures, and JSON-diffs the output against the committed golden. Any drift fails the build before it gets released.
 
 Gaps closed in earlier releases (`df["X"]` subscript, GroupedData shortcut aggregates, chained nested-field access, `intersect` / `subtract` / `exceptAll`, lowercase `groupby`) all have regression tests in `crates/pykrete/tests/`. They can't reopen silently.
 
@@ -66,12 +66,12 @@ By design, pykrete does not model:
 
 - **Structured streaming** (`readStream`, `writeStream`, `isStreaming`).
 - **RDD-level operations** (`rdd`, `mapPartitions`, `foreach`).
-- **Pandas-on-Spark and Arrow conversions** (`toPandas`, `toArrow`, `mapInPandas`, `pandas_api`). Pandas support is on the [roadmap](/pykrete/about/roadmap/) as its own typed surface.
+- **Pandas-on-Spark and Arrow conversions** (`toPandas`, `toArrow`, `mapInPandas`, `pandas_api`). Pandas support is on the [roadmap](/about/roadmap/) as its own typed surface.
 
-The full unmodeled list, with the rationale for each, is in [Operations → What's not modeled — by design](/pykrete/reference/operations/#whats-not-modeled--by-design).
+The full unmodeled list, with the rationale for each, is in [Operations → What's not modeled — by design](/reference/operations/#whats-not-modeled--by-design).
 
 ## Production deployments
 
-Pykrete is a development-time checker — it does not ship to production hosts and cannot affect a running pipeline. The public, reproducible cross-testing coverage lives in [pykrete-tests](/pykrete/about/pykrete-tests/), which vendors 32 annotated fixtures across the 10 donors listed above. Each fixture is pinned to a specific upstream commit (see the [per-donor matrix](https://github.com/amirnaderi93/pykrete-tests#the-donors) in the pykrete-tests README) so the coverage is reproducible — anyone can `pip install` the same upstream code pykrete is being tested against. Named external adopter references will be added here as teams give the go-ahead.
+Pykrete is a development-time checker — it does not ship to production hosts and cannot affect a running pipeline. The public, reproducible cross-testing coverage lives in [pykrete-tests](/about/pykrete-tests/), which vendors 32 annotated fixtures across the 10 donors listed above. Each fixture is pinned to a specific upstream commit (see the [per-donor matrix](https://github.com/amirnaderi93/pykrete-tests#the-donors) in the pykrete-tests README) so the coverage is reproducible — anyone can `pip install` the same upstream code pykrete is being tested against. Named external adopter references will be added here as teams give the go-ahead.
 
 See the [Reliability and trust](https://github.com/amirnaderi93/pykrete#reliability-and-trust) section of the README for the full story.

@@ -53,7 +53,7 @@ The server embeds a full Python language server alongside pykrete's own analysis
 ## Why these choices
 
 - **Rust**, for a checker fast enough to run on every keystroke.
-- **Ruff's parser**, so pykrete didn't spend a year on a Python front-end and stays current with the language. It's also the AST that Astral's `ty` type checker is built on — which keeps a long-term door open (see the [roadmap](/pykrete/about/roadmap/)).
+- **Ruff's parser**, so pykrete didn't spend a year on a Python front-end and stays current with the language. It's also the AST that Astral's `ty` type checker is built on — which keeps a long-term door open (see the [roadmap](/about/roadmap/)).
 - **The checker is a library.** The CLI and the language server are both thin shells around the same analysis crate — the editor and the command line can't disagree about what's an error.
 - **TypeScript as the design model** — adapted, not copied, for a language where dataframes flow through long transformation pipelines.
 
