@@ -949,6 +949,36 @@ code continues to check. The schema's downstream consumers are the
 ones who care; that's a consumer-side release-process question, not
 a pykrete one.
 
+## v1.1-polish backlog (post-PR-A follow-ups)
+
+Five non-blocking minor items surfaced during PR-A review rounds. None
+force a PR-B/C/D retrofit; addressing them as a single polish PR (or
+bundled into PR-D's atomic doc migration) keeps the rough edges from
+piling up.
+
+- [ ] **Composite-wrapper error threading**: `Array[enum["a","a"]]`,
+  `Map[..., enum["a","a"]]`, `Array[Optional[enum["a","a"]]]` all
+  collapse to generic D0011 — `resolve_annotation_type`'s recursive
+  `?` swallows the specific `Invalid`. Only top-level + single
+  `Optional` wrapper preserves the duplicate-value cite today.
+- [ ] **`EnumParseError::NonStringLiteral` payload**: variant carries
+  no payload, so D0011 cannot cite the offending entry. Asymmetric
+  with `Duplicate(String)`. Add the offending-token text to the
+  variant + message.
+- [ ] **`Optional[Optional[enum[...]]]` rejection**: `parse_enum_annotation`
+  silently flattens double-wrapped `Optional` into `Nullable(Nullable(Enum))`.
+  Functionally harmless; structurally suspicious. Reject in
+  `resolve_annotation_type` with a clear message.
+- [ ] **Pick/Omit assertions via `enum_vocab_eq`**: round-2 vacuity
+  tests use derived `==` which happens to work because Vec order
+  is preserved by construction. Switch to `enum_vocab_eq` to
+  assert the spec-level set-equality contract instead of the
+  implementation detail.
+- [ ] **Enum-in-aggregates regression test**: behavior is correct
+  (`aggregates_on_non_numeric_input_agree_between_paths` falls into
+  `_ => None` for Enum) but not locked in by a regression test. Add
+  one that explicitly mentions `ColumnType::Enum` in the rejection set.
+
 ## Related
 
 - `feedback_trust_is_core_value_prop` — the trust-first principle this
