@@ -972,6 +972,20 @@ fn fire_d0040_if_disjoint_enums(
     {
         return;
     }
+    // Spec Q9: one D0040 per top-level branch form. `report_branch_form_enum_conflicts`
+    // runs at every Expr::Call descent, so a nested chain like
+    // `when(p1, a).when(p2, b).otherwise(c)` would re-match on the inner
+    // `.when(p2, b)` sub-chain after firing on the outer `.otherwise(...)`.
+    // Both share the same start position (chains anchor on their root call),
+    // so dedupe by start line/column.
+    let start = line_index.line_column(range.start(), source);
+    let (start_line, start_col) = (start.line.get(), start.column.get());
+    if diagnostics
+        .iter()
+        .any(|d| d.code == "D0040" && d.line == start_line && d.column == start_col)
+    {
+        return;
+    }
     let message = "Branch-form expression reconciles enum-typed branches with non-set-equal \
          vocabularies. Reconcile by widening one side's vocabulary to match the \
          other, or cast a branch to plain string to drop the constraint."

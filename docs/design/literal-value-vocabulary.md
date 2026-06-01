@@ -979,6 +979,37 @@ piling up.
   `_ => None` for Enum) but not locked in by a regression test. Add
   one that explicitly mentions `ColumnType::Enum` in the rejection set.
 
+### PR-B round-3 polish additions
+
+- [ ] **Extended `Nullable[enum]` integration coverage**: round-2
+  Nullable peel is covered on `==`, `withColumn(lit)`, `fillna(dict)`,
+  and `F.expr` equality. Add positive tests for the remaining shapes:
+  `.isin(...)`, `.fillna(scalar)`, `withColumns(dict)`, and branch-form
+  reconciliation (`coalesce` / `when().otherwise()`) where one or more
+  branches carry `Nullable(Enum)` wrappers.
+- [ ] **fillna / withColumn unknown-column precedence test**:
+  pin down that `D0030` (unknown column) wins over `D0084` when both
+  could fire on `fillna({"unknown": "lit"})` or `withColumn("unknown",
+  lit("x"))` against an enum-typed schema. Today the precedence is
+  implicit in the walker order; a regression test would lock it in.
+- [ ] **Q1b cross-column compare**: `col(enum_a) == col(enum_b)` with
+  disjoint vocabularies — should fire D0040 (or a paired diagnostic)
+  by symmetry with the branch-form Q9 case. Out of PR-B scope; needs
+  spec decision on whether the same code or a distinct one is right.
+- [ ] **`col_reference` shape coverage**: PR-B only resolves
+  `col("name")` / `column("name")` to an enum-typed column. `df.name`
+  attribute access, `df["name"]` subscript, and SQL-style aliases all
+  bypass the enum lookup today — pre-existing limitation, but a test
+  pinning down "no diagnostic, by design" would prevent silent
+  regressions when those resolution paths grow enum awareness.
+- [ ] **D0040 cross-call dedupe**: round-3 dedupes by start
+  line/column when the same `Expr::Call` chain is visited from outer
+  and inner descents. Approach is correct (chains anchor on their
+  root call, so spans share a start) but the check scans the full
+  diagnostics buffer linearly per emission. Re-evaluate if profiling
+  surfaces it on large files; a per-pass HashSet would be O(1) per
+  emission.
+
 ## Related
 
 - `feedback_trust_is_core_value_prop` — the trust-first principle this

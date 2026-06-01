@@ -9,8 +9,8 @@
 mod common;
 
 use common::{
-    assert_does_not_have_code, assert_has_code, assert_message_contains, assert_no_diagnostics,
-    check, check_strict,
+    assert_count, assert_does_not_have_code, assert_has_code, assert_message_contains,
+    assert_no_diagnostics, check, check_strict,
 };
 
 use pykrete::diagnostics::DIAGNOSTIC_CATALOG;
@@ -297,7 +297,7 @@ def f(d: DataFrame[Merge[A, B]]) -> DataFrame:
     return d
 ";
     let result = check(src);
-    assert_has_code(&result, "D0040");
+    assert_count(&result, "D0040", 1);
     assert_message_contains(&result, "D0040", "status");
 }
 
@@ -314,7 +314,7 @@ def f(d: DataFrame[Merge[A, B]]) -> DataFrame:
     return d
 ";
     let result = check(src);
-    assert_has_code(&result, "D0040");
+    assert_count(&result, "D0040", 1);
     assert_message_contains(&result, "D0040", "status");
 }
 
@@ -991,7 +991,7 @@ def f(orders: DataFrame[Order]) -> DataFrame:
         \"staged\", coalesce(col(\"primary\"), col(\"fallback\"))
     )
 ";
-    assert_has_code(&check(src), "D0040");
+    assert_count(&check(src), "D0040", 1);
 }
 
 #[test]
@@ -1048,7 +1048,7 @@ def f(orders: DataFrame[Order]) -> DataFrame:
         when(col(\"primary\").isNotNull(), col(\"primary\")).otherwise(col(\"fallback\")),
     )
 ";
-    assert_has_code(&check(src), "D0040");
+    assert_count(&check(src), "D0040", 1);
 }
 
 #[test]
@@ -1225,4 +1225,85 @@ def f(orders: DataFrame[Order]) -> DataFrame:
     let result = check(src);
     common::assert_count(&result, "D0084", 1);
     assert_message_contains(&result, "D0084", "shippd");
+}
+
+// ---------------------------------------------------------------------------
+// PR-B round 3 — D0040 duplicate-emission probes for nested call chains
+// ---------------------------------------------------------------------------
+
+#[test]
+fn d0040_fires_once_on_three_branch_when_chain_with_all_disjoint_vocabs() {
+    // Three-branch `when(...).when(...).otherwise(...)` chain where every
+    // value branch is an enum-typed column with a disjoint vocabulary.
+    // `report_branch_form_enum_conflicts` runs at every `Expr::Call`
+    // descent — the inner `.when(...).otherwise(...)` sub-chain matches
+    // (its own when chain) and the outer chain matches too. The contract
+    // is one diagnostic per top-level user-visible branch form, so the
+    // expected count is exactly 1.
+    //
+    // Vacuity: change the expected count to `2` and the test fails on
+    // current code, confirming the assertion is not vacuous.
+    let src = "\
+class Order(Schema):
+    a: enum[\"a1\", \"a2\"]
+    b: enum[\"b1\", \"b2\"]
+    c: enum[\"c1\", \"c2\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.withColumn(
+        \"staged\",
+        when(col(\"a\").isNotNull(), col(\"a\"))
+            .when(col(\"b\").isNotNull(), col(\"b\"))
+            .otherwise(col(\"c\")),
+    )
+";
+    assert_count(&check(src), "D0040", 1);
+}
+
+#[test]
+fn d0040_fires_once_on_nested_coalesce_with_all_disjoint_vocabs() {
+    // `coalesce(coalesce(a, b), c)` with three disjoint enum vocabs.
+    // The inner `coalesce(a, b)` fires D0040 (disjoint) and its
+    // reconciled output degrades to `None` per Q9. The outer
+    // `coalesce(None, c)` then sees only one known enum branch and
+    // stays silent. Net firing: exactly 1 — pins down that the outer
+    // call does not re-fire on a child that already degraded.
+    let src = "\
+class Order(Schema):
+    a: enum[\"a1\", \"a2\"]
+    b: enum[\"b1\", \"b2\"]
+    c: enum[\"c1\", \"c2\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.withColumn(
+        \"staged\", coalesce(coalesce(col(\"a\"), col(\"b\")), col(\"c\"))
+    )
+";
+    assert_count(&check(src), "D0040", 1);
+}
+
+#[test]
+fn d0040_fires_once_on_coalesce_wrapping_a_when_chain_with_disjoint_vocabs() {
+    // `coalesce(when(c1, a).otherwise(b), c)` — the inner when-chain has
+    // disjoint enum branches and fires D0040 once. The when-chain's
+    // reconciled output degrades to `None`, so the outer coalesce sees
+    // one `None` branch + one enum-typed branch and stays silent. Net
+    // firing: exactly 1. Pins down that wrapping a branch form inside
+    // another branch form does not double-count.
+    let src = "\
+class Order(Schema):
+    a: enum[\"a1\", \"a2\"]
+    b: enum[\"b1\", \"b2\"]
+    c: enum[\"c1\", \"c2\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.withColumn(
+        \"staged\",
+        coalesce(
+            when(col(\"a\").isNotNull(), col(\"a\")).otherwise(col(\"b\")),
+            col(\"c\"),
+        ),
+    )
+";
+    assert_count(&check(src), "D0040", 1);
 }
