@@ -1,6 +1,6 @@
 ---
 title: Real-codebase tests
-description: How pykrete is tested against 40 fixtures and 111 schema-tracking probes from 10 upstream codebases — what we cover, what the goldens and probes guarantee, what's deliberately out of scope.
+description: How pykrete is tested against 41 fixtures and 111 schema-tracking probes from 10 upstream codebases — what we cover, what the goldens and probes verify, what's deliberately out of scope.
 ---
 
 [pykrete-tests](https://github.com/amirnaderi93/pykrete-tests) is a separate repo that vendors fixtures from 10 widely-used PySpark codebases, adds pykrete annotations the way a real adopter would, and on every push runs two release-blocking suites against pykrete built fresh from `main`: a golden-diff suite (JSON output of `pykrete check` against a frozen snapshot) and a schema-tracking probe suite (inline `# PROBE-*` assertions that columns survive transforms and that specific diagnostics fire on deliberately-corrupted fixtures). It exists for two reasons:
@@ -10,7 +10,7 @@ description: How pykrete is tested against 40 fixtures and 111 schema-tracking p
 
 ## The donors
 
-40 fixtures (31 annotated + 9 deliberately-corrupted under `probes_negative/`) across 10 donors, all Apache 2.0:
+41 fixtures (32 annotated + 9 deliberately-corrupted under `probes_negative/`) across 10 donors, all Apache 2.0:
 
 | donor | upstream | annotated | probes_negative |
 |---|---|---:|---:|
@@ -31,8 +31,8 @@ Every annotated fixture currently emits zero diagnostics against the released bi
 
 On top of golden-diff, every release runs **111 schema-tracking probes**:
 
-- **97 positive probes** across 31 annotated fixtures assert columns survive `.select` / `.filter` / `.withColumn` and similar narrow transforms. These probes prove that the absence of a diagnostic isn't a silent miss — pykrete genuinely tracked the column through the chain.
-- **14 negative probes** across 9 deliberately-corrupted fixtures assert specific diagnostics fire: D0030 (`unknownColumn`), D0081 (`nonNumericArithmetic`), D0082 (`crossTypeComparison`). Without these, a silently-passing checker would satisfy every annotated probe vacuously.
+- **97 positive probes** across 31 of the 32 annotated fixtures assert columns survive `.select` / `.filter` / `.withColumn` and similar narrow transforms. These probes prove that the absence of a diagnostic isn't a silent miss — pykrete genuinely tracked the column through the chain. The feast `spark_kafka_processor` streaming fixture is annotated but probe-free, since it has no typed-DataFrame slot a probe can anchor to.
+- **14 negative probes** across all 9 deliberately-corrupted fixtures assert specific diagnostics fire: D0030 (`unknownColumn`), D0081 (`nonNumericArithmetic`), D0082 (`crossTypeComparison`). Without these, a silently-passing checker would satisfy every annotated probe vacuously.
 
 Probes are inline `# PROBE-*` comment markers in `.pyk` fixtures, parsed by `scripts/probes.py` and verified against `pykrete check --format json` output. The marker grammar, placement convention, and `catalog-drift-watch` workflow that keeps `PROBE-EXPECTS` D-codes in sync with upstream are documented in [`scripts/PROBES.md`](https://github.com/amirnaderi93/pykrete-tests/blob/main/scripts/PROBES.md). CI fails if any probe asserts the wrong outcome.
 
