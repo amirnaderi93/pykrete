@@ -214,6 +214,18 @@ pub(super) fn infer_expr_type<'a>(
             ) {
                 return array_hof_result_type(fname, call, schema, tcx);
             }
+            // Branch-form null-coalescing (`coalesce` / `nvl` /
+            // `ifnull`) — Q9 output preservation. All branches'
+            // inferred types are reconciled: enum-typed branches with
+            // set-equal vocabularies preserve the constraint; any
+            // plain-string branch drops it; non-set-equal enum
+            // vocabularies degrade to None (the firing of D0040 lives
+            // on the schema-merge surface, not here). The downstream
+            // `coalesce_branch_result` returns the carried-through
+            // type or falls back to the first-arg behaviour.
+            if matches!(fname, "coalesce" | "nvl" | "ifnull") {
+                return coalesce_branch_result(call, schema, tcx);
+            }
             // Any other recognized `pyspark.sql.functions` call — look its
             // result type up in the catalog, resolving the first argument
             // (a column name or expression) for the input-dependent ones.
@@ -560,6 +572,19 @@ fn widen_pair(a: &ColumnType, b: &ColumnType) -> Option<ColumnType> {
     if a == b {
         return Some(a.clone());
     }
+    // Set-equal enum vocabularies (declaration order differs) — Q4 / Q9
+    // reconcile through `enum_vocab_eq`, not derived `PartialEq`.
+    if ColumnType::enum_vocab_eq(a, b) {
+        return Some(a.clone());
+    }
+    // Enum vs plain string in branch position — Q9 drops the
+    // constraint; the reconciled type is plain `string`.
+    if matches!(
+        (a.base(), b.base()),
+        (ColumnType::Enum(_), ColumnType::String) | (ColumnType::String, ColumnType::Enum(_))
+    ) {
+        return Some(ColumnType::String);
+    }
     use ColumnType::{Double, Int, Long};
     match (a, b) {
         (Double, Int | Long) | (Int | Long, Double) => Some(Double),
@@ -754,6 +779,59 @@ fn closest_name(target: &str, candidates: &[&str]) -> Option<String> {
         }
     }
     best.map(|(name, _)| name.to_string())
+}
+
+/// Output type of `coalesce(c1, c2, ...)` / `nvl(c1, c2)` / `ifnull(c1,
+/// c2)` per Q9: every branch's type is inferred and reconciled. If
+/// every branch is enum-typed and the vocabularies are set-equal, the
+/// output preserves the constraint. If any branch is plain `string`,
+/// the constraint drops and the output is plain `string`. Non-set-equal
+/// enum vocabularies degrade to `None` (the schema-merge D0040 surface
+/// covers branch-vs-branch vocab conflict separately; here we stay
+/// permissive to avoid double-firing).
+pub(super) fn coalesce_branch_result<'a>(
+    call: &ExprCall,
+    schema: &SchemaView<'a>,
+    tcx: TypeCtx<'a>,
+) -> Option<ColumnType> {
+    let branch_types: Vec<Option<ColumnType>> = call
+        .arguments
+        .args
+        .iter()
+        .map(|a| select_arg_type(a, schema, tcx))
+        .collect();
+    let mut iter = branch_types.iter().flatten();
+    let first = iter.next()?.base().clone();
+    let mut all_enum = matches!(first, ColumnType::Enum(_));
+    let mut any_plain_string = matches!(first, ColumnType::String);
+    let mut vocabs_set_equal = true;
+    for ty in iter {
+        let base = ty.base();
+        match base {
+            ColumnType::Enum(_) => {
+                if !ColumnType::enum_vocab_eq(&first, base) {
+                    vocabs_set_equal = false;
+                }
+                if !matches!(first, ColumnType::Enum(_)) {
+                    all_enum = false;
+                }
+            }
+            ColumnType::String => {
+                any_plain_string = true;
+                all_enum = false;
+            }
+            _ => {
+                all_enum = false;
+            }
+        }
+    }
+    if any_plain_string && matches!(first, ColumnType::Enum(_)) {
+        return Some(ColumnType::String);
+    }
+    if all_enum && !vocabs_set_equal {
+        return None;
+    }
+    Some(first)
 }
 
 fn python_literal_type(expr: &Expr) -> Option<ColumnType> {

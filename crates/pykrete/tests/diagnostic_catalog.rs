@@ -118,6 +118,11 @@ const FIXTURES: &[Fixture] = &[
         files: &["d0083_nullability_mismatch.pyk"],
         mode: CheckMode::Strict,
     },
+    Fixture {
+        code: "D0084",
+        files: &["d0084_enum_value_mismatch.pyk"],
+        mode: CheckMode::Standard,
+    },
 ];
 
 fn fixture_dir() -> PathBuf {
@@ -132,7 +137,7 @@ fn fixture_dir() -> PathBuf {
 /// surface) ahead of the emission PR. Each entry MUST be retired the
 /// same release the emission lands; the coverage guard checks an entry
 /// is still in the catalog so a typo can't silently strand it.
-const RESERVED_CODES_WITHOUT_FIXTURES: &[&str] = &["D0084"];
+const RESERVED_CODES_WITHOUT_FIXTURES: &[&str] = &[];
 
 /// Coverage guard. Adding a new code to `DIAGNOSTIC_CATALOG` requires
 /// adding a `FIXTURES` entry; removing a code requires dropping the
@@ -267,3 +272,4 @@ snapshot_case!(d0080, "D0080");
 snapshot_case!(d0081, "D0081");
 snapshot_case!(d0082, "D0082");
 snapshot_case!(d0083, "D0083");
+snapshot_case!(d0084, "D0084");

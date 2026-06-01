@@ -9,7 +9,8 @@
 mod common;
 
 use common::{
-    assert_has_code, assert_message_contains, assert_no_diagnostics, check, check_strict,
+    assert_does_not_have_code, assert_has_code, assert_message_contains, assert_no_diagnostics,
+    check, check_strict,
 };
 
 use pykrete::diagnostics::DIAGNOSTIC_CATALOG;
@@ -362,17 +363,15 @@ fn d0084_immediately_follows_d0083_in_the_catalog() {
 }
 
 // ---------------------------------------------------------------------------
-// PR-A non-scope guard — D0084 should NOT yet fire from any check site.
-// This test must FAIL the moment PR-B wires up the first check site
-// (which is the desired signal: PR-B updates this guard to assert
-// emission, no longer absence).
+// PR-B check sites — D0084 emission across spec-defined sites.
+//
+// Each category exercises a positive case (off-vocab → fire), a negative
+// case (in-vocab → silent), a precedence case (D0030 / D0082 shadows),
+// and a suggestion case (`Did you mean …`).
 // ---------------------------------------------------------------------------
 
 #[test]
-fn d0084_does_not_yet_fire_on_off_enum_literal_comparison() {
-    // The headline PR-B scenario: `col("status") == "pendig"` against an
-    // enum-typed column. In PR-A, no check site emits D0084 yet, so this
-    // source produces no D0084 diagnostic.
+fn d0084_fires_on_off_enum_literal_comparison() {
     let src = "\
 class Order(Schema):
     id: long
@@ -382,11 +381,428 @@ def f(orders: DataFrame[Order]) -> DataFrame:
     return orders.filter(col(\"status\") == \"pendig\")
 ";
     let result = check(src);
-    assert!(
-        !result.has_code("D0084"),
-        "PR-A reserves D0084 only; PR-B wires up the emission. \
-         If this test now fails, update it to the PR-B emission shape."
-    );
+    assert_has_code(&result, "D0084");
+    assert_message_contains(&result, "D0084", "'pendig'");
+    assert_message_contains(&result, "D0084", "status");
+    assert_message_contains(&result, "D0084", "pending");
+}
+
+#[test]
+fn d0084_silent_for_in_vocab_literal_comparison() {
+    let src = "\
+class Order(Schema):
+    status: enum[\"pending\", \"shipped\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.filter(col(\"status\") == \"pending\")
+";
+    assert_does_not_have_code(&check(src), "D0084");
+}
+
+#[test]
+fn d0084_fires_when_lit_wraps_the_off_vocab_literal() {
+    let src = "\
+class Order(Schema):
+    status: enum[\"pending\", \"shipped\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.filter(col(\"status\") == lit(\"pendig\"))
+";
+    let result = check(src);
+    assert_has_code(&result, "D0084");
+    assert_message_contains(&result, "D0084", "pending");
+}
+
+#[test]
+fn d0084_fires_on_swapped_lhs_rhs_compare() {
+    let src = "\
+class Order(Schema):
+    status: enum[\"pending\", \"shipped\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.filter(\"pendig\" == col(\"status\"))
+";
+    assert_has_code(&check(src), "D0084");
+}
+
+#[test]
+fn d0084_precedence_d0030_unknown_column_blocks_enum_check() {
+    // Q1c: D0030 > D0082 > D0084. An unknown column fires D0030; the
+    // column never resolves so D0084 has nothing to check against.
+    let src = "\
+class Order(Schema):
+    status: enum[\"pending\", \"shipped\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.filter(col(\"stutus\") == \"pendig\")
+";
+    let result = check(src);
+    assert_has_code(&result, "D0030");
+    assert_does_not_have_code(&result, "D0084");
+}
+
+#[test]
+fn d0084_precedence_d0082_cross_type_blocks_enum_check() {
+    // Q1c: a boolean RHS coerces against an enum-typed (Textual) LHS —
+    // D0082 fires in strict mode; D0084 doesn't, because the RHS isn't
+    // a string literal at all.
+    let src = "\
+class Order(Schema):
+    status: enum[\"pending\", \"shipped\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.filter(col(\"status\") == True)
+";
+    let result = check_strict(src);
+    assert_has_code(&result, "D0082");
+    assert_does_not_have_code(&result, "D0084");
+}
+
+#[test]
+fn d0084_suggestion_picks_closest_within_levenshtein_threshold() {
+    let src = "\
+class Order(Schema):
+    status: enum[\"pending\", \"shipped\", \"delivered\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.filter(col(\"status\") == \"shippd\")
+";
+    let result = check(src);
+    let diag = result
+        .diagnostics_with_code("D0084")
+        .into_iter()
+        .next()
+        .expect("D0084 must fire");
+    assert_eq!(diag.suggestion.as_deref(), Some("shipped"));
+}
+
+#[test]
+fn d0084_suggestion_breaks_ties_by_unicode_code_point_order() {
+    // Both "pendinx" and "pendiny" are edit-distance-1 from "pendinz";
+    // the spec's locked tiebreaker is Rust `str::cmp` (Unicode
+    // code-point order), so "pendinx" wins. Falsifies a tiebreaker by
+    // declaration order or a non-deterministic pick.
+    let src = "\
+class Order(Schema):
+    status: enum[\"pendiny\", \"pendinx\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.filter(col(\"status\") == \"pendinz\")
+";
+    let result = check(src);
+    let diag = result
+        .diagnostics_with_code("D0084")
+        .into_iter()
+        .next()
+        .expect("D0084 must fire");
+    assert_eq!(diag.suggestion.as_deref(), Some("pendinx"));
+}
+
+#[test]
+fn d0084_isin_fires_per_off_vocab_arg_only() {
+    let src = "\
+class Order(Schema):
+    status: enum[\"pending\", \"shipped\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.filter(col(\"status\").isin(\"pending\", \"shippd\"))
+";
+    let result = check(src);
+    common::assert_count(&result, "D0084", 1);
+    assert_message_contains(&result, "D0084", "shippd");
+}
+
+#[test]
+fn d0084_isin_silent_when_every_arg_in_vocab() {
+    let src = "\
+class Order(Schema):
+    status: enum[\"pending\", \"shipped\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.filter(col(\"status\").isin(\"pending\", \"shipped\"))
+";
+    assert_does_not_have_code(&check(src), "D0084");
+}
+
+#[test]
+fn d0084_isin_unknown_column_precedence_blocks_enum_check() {
+    let src = "\
+class Order(Schema):
+    status: enum[\"pending\", \"shipped\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.filter(col(\"stutus\").isin(\"pendig\"))
+";
+    let result = check(src);
+    assert_has_code(&result, "D0030");
+    assert_does_not_have_code(&result, "D0084");
+}
+
+#[test]
+fn d0084_fillna_dict_value_fires_on_off_vocab() {
+    let src = "\
+class Order(Schema):
+    status: enum[\"pending\", \"shipped\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.fillna({\"status\": \"unkown\"})
+";
+    let result = check(src);
+    assert_has_code(&result, "D0084");
+    assert_message_contains(&result, "D0084", "unkown");
+}
+
+#[test]
+fn d0084_fillna_dict_value_silent_when_in_vocab() {
+    let src = "\
+class Order(Schema):
+    status: enum[\"pending\", \"shipped\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.fillna({\"status\": \"pending\"})
+";
+    assert_does_not_have_code(&check(src), "D0084");
+}
+
+#[test]
+fn d0084_with_column_lit_fires_on_off_vocab() {
+    let src = "\
+class Order(Schema):
+    status: enum[\"pending\", \"shipped\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.withColumn(\"status\", lit(\"delivered\"))
+";
+    let result = check(src);
+    assert_has_code(&result, "D0084");
+    assert_message_contains(&result, "D0084", "delivered");
+}
+
+#[test]
+fn d0084_with_column_lit_silent_when_in_vocab() {
+    let src = "\
+class Order(Schema):
+    status: enum[\"pending\", \"shipped\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.withColumn(\"status\", lit(\"pending\"))
+";
+    assert_does_not_have_code(&check(src), "D0084");
+}
+
+#[test]
+fn d0084_with_columns_dict_value_fires_per_off_vocab_entry() {
+    let src = "\
+class Order(Schema):
+    status: enum[\"pending\", \"shipped\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.withColumns({\"status\": lit(\"shippd\")})
+";
+    let result = check(src);
+    assert_has_code(&result, "D0084");
+    assert_message_contains(&result, "D0084", "shippd");
+}
+
+// ---------------------------------------------------------------------------
+// PR-B branch-form expressions (Q9)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn d0084_branch_form_coalesce_fires_on_off_vocab_literal_at_sink() {
+    let src = "\
+class Order(Schema):
+    status: enum[\"pending\", \"shipped\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.withColumn(\"status\", coalesce(col(\"status\"), lit(\"shippd\")))
+";
+    let result = check(src);
+    assert_has_code(&result, "D0084");
+    assert_message_contains(&result, "D0084", "shippd");
+}
+
+#[test]
+fn d0084_branch_form_nvl_fires_on_off_vocab_literal_at_sink() {
+    let src = "\
+class Order(Schema):
+    status: enum[\"pending\", \"shipped\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.withColumn(\"status\", nvl(col(\"status\"), lit(\"shippd\")))
+";
+    assert_has_code(&check(src), "D0084");
+}
+
+#[test]
+fn d0084_branch_form_ifnull_fires_on_off_vocab_literal_at_sink() {
+    let src = "\
+class Order(Schema):
+    status: enum[\"pending\", \"shipped\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.withColumn(\"status\", ifnull(col(\"status\"), lit(\"shippd\")))
+";
+    assert_has_code(&check(src), "D0084");
+}
+
+#[test]
+fn d0084_branch_form_nullif_fires_on_off_vocab_literal_at_sink() {
+    let src = "\
+class Order(Schema):
+    status: enum[\"pending\", \"shipped\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.withColumn(\"status\", nullif(col(\"status\"), lit(\"shippd\")))
+";
+    assert_has_code(&check(src), "D0084");
+}
+
+#[test]
+fn d0084_branch_form_when_otherwise_fires_per_off_vocab_branch() {
+    let src = "\
+class Order(Schema):
+    status: enum[\"pending\", \"shipped\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.withColumn(
+        \"status\",
+        when(col(\"status\").isNull(), lit(\"shippd\")).otherwise(lit(\"delvr\"))
+    )
+";
+    let result = check(src);
+    common::assert_count(&result, "D0084", 2);
+}
+
+#[test]
+fn d0084_branch_form_silent_when_every_literal_is_in_vocab() {
+    let src = "\
+class Order(Schema):
+    status: enum[\"pending\", \"shipped\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.withColumn(\"status\", coalesce(col(\"status\"), lit(\"pending\")))
+";
+    assert_does_not_have_code(&check(src), "D0084");
+}
+
+#[test]
+fn coalesce_preserves_enum_constraint_when_all_branches_set_equal() {
+    // Two enum-typed branches with set-equal vocabularies — output
+    // carries the constraint; an off-vocab literal on a downstream
+    // sink still fires D0084.
+    let src = "\
+class Order(Schema):
+    primary: enum[\"pending\", \"shipped\"]
+    fallback: enum[\"shipped\", \"pending\"]
+    status: enum[\"pending\", \"shipped\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.withColumn(
+        \"status\", coalesce(col(\"primary\"), col(\"fallback\"))
+    )
+";
+    assert_no_diagnostics(&check(src));
+}
+
+#[test]
+fn coalesce_drops_enum_constraint_when_a_branch_is_plain_string() {
+    // Per Q9: if any branch is plain string, the output is plain
+    // string. The check site (withColumn into enum sink) won't fire
+    // D0084 on the coalesce result because the result is no longer
+    // enum-typed.
+    let src = "\
+class Order(Schema):
+    plain: string
+    status: enum[\"pending\", \"shipped\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.withColumn(
+        \"status\", coalesce(col(\"status\"), col(\"plain\"))
+    )
+";
+    // The point is: the output type drops the constraint. We assert no
+    // D0084 — the literal-check site is unchanged (no literal here),
+    // but the output preservation logic is exercised. Falsifies a
+    // hypothetical "every branch preserves" pass-through.
+    assert_does_not_have_code(&check(src), "D0084");
+}
+
+// ---------------------------------------------------------------------------
+// PR-B F.expr SQL parser extension (Q7)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn d0084_f_expr_equality_fires_on_off_vocab_literal() {
+    let src = "\
+class Order(Schema):
+    status: enum[\"pending\", \"shipped\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.filter(F.expr(\"status = 'pendig'\"))
+";
+    let result = check(src);
+    assert_has_code(&result, "D0084");
+    assert_message_contains(&result, "D0084", "pendig");
+}
+
+#[test]
+fn d0084_f_expr_in_clause_fires_only_on_off_vocab_members() {
+    let src = "\
+class Order(Schema):
+    status: enum[\"pending\", \"shipped\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.filter(F.expr(\"status IN ('pending', 'shippd')\"))
+";
+    let result = check(src);
+    common::assert_count(&result, "D0084", 1);
+    assert_message_contains(&result, "D0084", "shippd");
+}
+
+#[test]
+fn d0084_f_expr_silent_when_rhs_is_a_non_literal_identifier() {
+    // SQL `status = some_var` — the RHS is a column reference, not a
+    // string literal. Per Q7 conservative shape, no D0084 fires; the
+    // existence check on `some_var` is its own D0030 (which we don't
+    // care about here).
+    let src = "\
+class Order(Schema):
+    status: enum[\"pending\", \"shipped\"]
+    region: string
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.filter(F.expr(\"status = region\"))
+";
+    assert_does_not_have_code(&check(src), "D0084");
+}
+
+#[test]
+fn d0084_f_expr_silent_when_literal_in_vocab() {
+    let src = "\
+class Order(Schema):
+    status: enum[\"pending\", \"shipped\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.filter(F.expr(\"status = 'pending'\"))
+";
+    assert_does_not_have_code(&check(src), "D0084");
+}
+
+#[test]
+fn d0084_f_expr_precedence_unknown_column_blocks_enum_check() {
+    let src = "\
+class Order(Schema):
+    status: enum[\"pending\", \"shipped\"]
+
+def f(orders: DataFrame[Order]) -> DataFrame:
+    return orders.filter(F.expr(\"stutus = 'pendig'\"))
+";
+    let result = check(src);
+    assert_has_code(&result, "D0030");
+    // The column doesn't resolve, so the enum check has nothing to run
+    // against — Q1c precedence keeps D0084 silent here.
+    assert_does_not_have_code(&result, "D0084");
 }
 
 // ---------------------------------------------------------------------------

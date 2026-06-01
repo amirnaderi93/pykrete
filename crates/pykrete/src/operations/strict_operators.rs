@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use super::col_refs::{col_reference, collect_col_refs};
 use super::column_exprs::{infer_expr_type, report_get_field_typo, select_arg_type};
 use super::context::{BodyContext, TypeCtx};
+use super::enum_checks::{emit_d0084, enum_vocab, peel_string_literal, vocab_contains};
 use super::shapes::ArgRole;
 use super::two_df::strip_nullability;
 
@@ -146,27 +147,30 @@ pub(super) fn report_expr_type_errors<'a>(
         Expr::Compare(c) => {
             let mut left = c.left.as_ref();
             for (op, right) in c.ops.iter().zip(&c.comparators) {
-                if is_value_comparison(*op)
-                    && let (Some(lt), Some(rt)) = (
-                        infer_expr_type(left, schema, tcx),
-                        infer_expr_type(right, schema, tcx),
-                    )
-                    && !comparable(&lt, &rt)
-                {
-                    diagnostics.push(
-                        Diagnostic::at_range(
-                            Severity::Warning,
-                            "D0082",
-                            format!(
-                                "Comparison between unrelated types {lt} and {rt}. \
-                                         Spark coerces them; cast explicitly if intended.",
-                            ),
-                            c.range(),
-                            source,
-                            line_index,
-                        )
-                        .with_min_mode(CheckMode::Strict),
-                    );
+                if is_value_comparison(*op) {
+                    let lt = infer_expr_type(left, schema, tcx);
+                    let rt = infer_expr_type(right, schema, tcx);
+                    if let (Some(lt), Some(rt)) = (lt.as_ref(), rt.as_ref())
+                        && !comparable(lt, rt)
+                    {
+                        diagnostics.push(
+                            Diagnostic::at_range(
+                                Severity::Warning,
+                                "D0082",
+                                format!(
+                                    "Comparison between unrelated types {lt} and {rt}. \
+                                             Spark coerces them; cast explicitly if intended.",
+                                ),
+                                c.range(),
+                                source,
+                                line_index,
+                            )
+                            .with_min_mode(CheckMode::Strict),
+                        );
+                    } else {
+                        check_enum_compare(left, right, &lt, &rt, source, line_index, diagnostics);
+                        check_enum_compare(right, left, &rt, &lt, source, line_index, diagnostics);
+                    }
                 }
                 left = right;
             }
@@ -190,6 +194,31 @@ pub(super) fn report_expr_type_errors<'a>(
                 && let Some(recv_ty) = infer_expr_type(&attr.value, schema, tcx)
             {
                 report_get_field_typo(&recv_ty, lit, source, line_index, diagnostics);
+            }
+            // `col("status").isin("a", "X", ...)` — fire D0084 on each
+            // off-vocabulary string literal arg when the receiver is an
+            // enum-typed column. Bare string literals and `lit("…")`
+            // both qualify; non-literal args (variables, computed exprs)
+            // fall through silently per Q6's deferred-check rule.
+            if let Some(attr) = call.func.as_attribute_expr()
+                && attr.attr.id.as_str() == "isin"
+                && let Some((column, vocab)) = enum_column_ref(&attr.value, schema, tcx)
+            {
+                for arg in &call.arguments.args {
+                    if let Some((value, range)) = peel_string_literal(arg)
+                        && !vocab_contains(&vocab, value)
+                    {
+                        emit_d0084(
+                            column,
+                            value,
+                            &vocab,
+                            range,
+                            source,
+                            line_index,
+                            diagnostics,
+                        );
+                    }
+                }
             }
             // `<struct-col>.dropFields("a", "b", …)` — flag each literal
             // string arg that isn't a field of the receiver struct.
@@ -284,6 +313,57 @@ pub(super) fn report_expr_type_errors<'a>(
         }
         _ => {}
     }
+}
+
+/// `col("name")` / `column("name")` reference resolving to an
+/// enum-typed column on `schema`, returning (column name, vocabulary
+/// clone). Q1c precedence: D0084 only runs once the column has
+/// resolved — a `col("missing")` is `None`, leaving the `D0030` from
+/// the column-existence walker as the sole diagnostic.
+pub(super) fn enum_column_ref<'a>(
+    expr: &'a Expr,
+    schema: &SchemaView<'a>,
+    tcx: TypeCtx<'a>,
+) -> Option<(&'a str, Vec<String>)> {
+    let (name, _) = col_reference(expr)?;
+    let ty = schema.field_type(name, tcx.schemas)?;
+    let values = match ty.base() {
+        ColumnType::Enum(values) => values.clone(),
+        _ => return None,
+    };
+    Some((name, values))
+}
+
+/// `==` / `!=` / `<` / `<=` / `>` / `>=` between an enum-typed column
+/// (`lhs`) and a string-literal RHS — fire `D0084` if the literal is
+/// off-vocabulary. Q1c precedence is enforced by the caller: this only
+/// runs once both sides are confirmed Textual-family compatible.
+fn check_enum_compare(
+    lhs: &Expr,
+    rhs: &Expr,
+    lt: &Option<ColumnType>,
+    rt: &Option<ColumnType>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(lt) = lt else { return };
+    if rt.is_none() {
+        return;
+    }
+    let Some(vocab) = enum_vocab(lt) else {
+        return;
+    };
+    let Some((column, _)) = col_reference(lhs) else {
+        return;
+    };
+    let Some((value, range)) = peel_string_literal(rhs) else {
+        return;
+    };
+    if vocab_contains(vocab, value) {
+        return;
+    }
+    emit_d0084(column, value, vocab, range, source, line_index, diagnostics);
 }
 
 pub(super) fn apply_column_method<'a>(
@@ -556,6 +636,14 @@ pub(super) fn resolve_spark_sql_call<'a>(
 /// Diagnostics anchor on `range` — the whole string literal — rather
 /// than the offset of the offending identifier: the parsed names are
 /// owned `String`s with no span back into the original source.
+///
+/// Per the v1.1 enum-constraints spec (Q7), each `<ident> = '<lit>'` /
+/// `<ident> IN ('a', 'b', ...)` pair captured by
+/// [`crate::sql::column_literal_pairs`] is also checked: if the
+/// identifier resolves to an enum-typed column and the literal is
+/// off-vocabulary, fire `D0084`. The Q1c precedence rule means the
+/// existence check above fires first; the enum check is gated by
+/// `schema.field_type` returning an Enum.
 pub(super) fn report_sql_column_refs(
     sql: &str,
     range: TextRange,
@@ -564,6 +652,10 @@ pub(super) fn report_sql_column_refs(
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    let sql_start = u32::from(range.start()) as usize;
+    let quoted_offset = source
+        .get(sql_start..)
+        .and_then(|tail| tail.find(sql).map(|i| sql_start + i));
     for name in crate::sql::column_refs(sql) {
         if schema.has_field(&name) {
             continue;
@@ -579,6 +671,45 @@ pub(super) fn report_sql_column_refs(
         diagnostics.push(
             Diagnostic::at_range(Severity::Error, "D0030", message, range, source, line_index)
                 .with_suggestion(suggestion),
+        );
+    }
+    // Q7: per-(column, string-literal) enum-vocabulary check. The
+    // column-existence loop above already fires `D0030` on a missing
+    // identifier; the type lookup here returns `None` in that case, so
+    // the enum check is silently skipped (precedence preserved).
+    for pair in crate::sql::column_literal_pairs(sql) {
+        let Some(ty) = schema.field_type(&pair.column, &[]) else {
+            continue;
+        };
+        let Some(vocab) = enum_vocab(&ty) else {
+            continue;
+        };
+        if vocab_contains(vocab, &pair.value) {
+            continue;
+        }
+        // Anchor the diagnostic on the literal's substring within the
+        // original source when we can recover it; otherwise fall back
+        // to the whole SQL string-literal range.
+        let lit_range = quoted_offset
+            .and_then(|base| {
+                crate::sql::find_quoted_literal_offset(sql, &pair.value).map(|off| {
+                    let start = base + off + 1; // skip opening quote
+                    let len = pair.value.len();
+                    TextRange::new(
+                        ruff_text_size::TextSize::try_from(start).unwrap(),
+                        ruff_text_size::TextSize::try_from(start + len).unwrap(),
+                    )
+                })
+            })
+            .unwrap_or(range);
+        emit_d0084(
+            &pair.column,
+            &pair.value,
+            vocab,
+            lit_range,
+            source,
+            line_index,
+            diagnostics,
         );
     }
 }

@@ -13,10 +13,22 @@
 use core::ops::ControlFlow;
 
 use sqlparser::ast::{
-    Expr, ObjectNamePart, Query, SetExpr, Statement, TableFactor, visit_expressions,
+    BinaryOperator, Expr, ObjectNamePart, Query, SetExpr, Statement, TableFactor, Value,
+    visit_expressions,
 };
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
+
+/// A `column = 'literal'` / `column IN ('a', 'b', ...)` pair captured
+/// from a SQL fragment. `value` is the literal text (single-quote
+/// content, byte-for-byte); the byte-offset slice is recovered via
+/// `find_literal_offset` against the original fragment because
+/// sqlparser does not preserve source spans.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ColumnLiteralPair {
+    pub column: String,
+    pub value: String,
+}
 
 /// The column identifiers referenced in a SQL expression `fragment`
 /// (`"amount + 1"`, `"city > 0"`, `"amount + 1 as bumped"`, …).
@@ -42,6 +54,107 @@ pub fn column_refs(fragment: &str) -> Vec<String> {
         ControlFlow::<()>::Continue(())
     });
     names
+}
+
+/// Pairs of `(column, string-literal)` extracted from a SQL fragment's
+/// equality (`col = 'X'` / `'X' = col`) and IN (`col IN ('a', 'b')`)
+/// shapes. Used by the v1.1 enum-constraint check at `F.expr("…")`
+/// sites — the same `D0084` that fires on `col("status") == "X"` is
+/// fired here on `F.expr("status = 'X'")` when `status` resolves to
+/// an enum-typed column.
+///
+/// Per the spec's Q7 conservatism, exotic shapes (backticked
+/// identifiers, double-quoted literals, computed RHS, qualified
+/// identifiers) fall through silently. The covered shapes are the
+/// common case: bare identifier on one side, single-quoted literal on
+/// the other.
+pub fn column_literal_pairs(fragment: &str) -> Vec<ColumnLiteralPair> {
+    let wrapped = format!("SELECT {fragment}");
+    let Ok(statements) = Parser::parse_sql(&GenericDialect {}, &wrapped) else {
+        return Vec::new();
+    };
+    let mut pairs: Vec<ColumnLiteralPair> = Vec::new();
+    let _ = visit_expressions(&statements, |expr| {
+        match expr {
+            Expr::BinaryOp {
+                left,
+                op: BinaryOperator::Eq | BinaryOperator::NotEq,
+                right,
+            } => {
+                if let Some((col, lit)) = column_literal(left, right) {
+                    pairs.push(ColumnLiteralPair {
+                        column: col,
+                        value: lit,
+                    });
+                }
+            }
+            Expr::InList {
+                expr: lhs, list, ..
+            } => {
+                if let Expr::Identifier(ident) = lhs.as_ref() {
+                    for item in list {
+                        if let Some(lit) = string_literal_text(item) {
+                            pairs.push(ColumnLiteralPair {
+                                column: ident.value.clone(),
+                                value: lit,
+                            });
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        ControlFlow::<()>::Continue(())
+    });
+    pairs
+}
+
+/// Best-effort byte offset of a quoted literal `'value'` (or `"value"`)
+/// within `fragment`. Returns `None` if the exact `'value'` doesn't
+/// appear — the caller falls back to anchoring on the whole fragment
+/// span, the same way `report_sql_column_refs` does today.
+///
+/// Q1a byte-for-byte semantics — no escape unfolding here; sqlparser
+/// already returns the unescaped text, and we look it up against the
+/// raw fragment with the standard single-quote delimiter.
+pub fn find_quoted_literal_offset(fragment: &str, value: &str) -> Option<usize> {
+    for delim in ['\'', '"'] {
+        let mut needle = std::string::String::with_capacity(value.len() + 2);
+        needle.push(delim);
+        needle.push_str(value);
+        needle.push(delim);
+        if let Some(offset) = fragment.find(needle.as_str()) {
+            return Some(offset);
+        }
+    }
+    None
+}
+
+/// If `left`/`right` form a `<ident> <op> <string-lit>` shape (either
+/// order), the `(column-name, literal-text)` pair. Bare identifiers
+/// only — qualified `t.col` is skipped per Q7 conservatism.
+fn column_literal(left: &Expr, right: &Expr) -> Option<(String, String)> {
+    if let (Expr::Identifier(ident), Some(lit)) = (left, string_literal_text(right)) {
+        return Some((ident.value.clone(), lit));
+    }
+    if let (Some(lit), Expr::Identifier(ident)) = (string_literal_text(left), right) {
+        return Some((ident.value.clone(), lit));
+    }
+    None
+}
+
+/// Unwrap a single-quoted SQL string literal — the only shape covered
+/// by Q7. Double-quoted strings (some dialects, Spark included, allow
+/// them) fall through; sqlparser models them as identifiers via the
+/// GenericDialect, and `column_refs` already handles that flow.
+fn string_literal_text(expr: &Expr) -> Option<String> {
+    let Expr::Value(value_with_span) = expr else {
+        return None;
+    };
+    match &value_with_span.value {
+        Value::SingleQuotedString(s) => Some(s.clone()),
+        _ => None,
+    }
 }
 
 /// The single-table FROM-clause name of a top-level `SELECT … FROM x`
