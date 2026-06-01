@@ -1,31 +1,42 @@
 ---
 title: Real-codebase tests
-description: How pykrete is tested against 32 annotated fixtures from 10 upstream codebases — what we cover, what the goldens guarantee, what's deliberately out of scope.
+description: How pykrete is tested against 40 fixtures and 111 schema-tracking probes from 10 upstream codebases — what we cover, what the goldens and probes guarantee, what's deliberately out of scope.
 ---
 
-[pykrete-tests](https://github.com/amirnaderi93/pykrete-tests) is a separate repo that vendors fixtures from 10 widely-used PySpark codebases, adds pykrete annotations the way a real adopter would, and JSON-compares pykrete's diagnostic output against a frozen golden snapshot on every push and nightly. It exists for two reasons:
+[pykrete-tests](https://github.com/amirnaderi93/pykrete-tests) is a separate repo that vendors fixtures from 10 widely-used PySpark codebases, adds pykrete annotations the way a real adopter would, and on every push runs two release-blocking suites against pykrete built fresh from `main`: a golden-diff suite (JSON output of `pykrete check` against a frozen snapshot) and a schema-tracking probe suite (inline `# PROBE-*` assertions that columns survive transforms and that specific diagnostics fire on deliberately-corrupted fixtures). It exists for two reasons:
 
 1. **Regression coverage** — catch behavior changes in pykrete's checker as new operations are modeled.
-2. **Trust signal** — demonstrate that pykrete keeps real PySpark code diagnostic-free under realistic annotation, against the same upstream commits anyone can `pip install` today.
+2. **Trust signal** — demonstrate that pykrete keeps real PySpark code diagnostic-free under realistic annotation, *and* that the absence of diagnostics actually means the schema tracker is doing its job.
 
 ## The donors
 
-32 annotated fixtures across 10 donors, all Apache 2.0:
+40 fixtures (31 annotated + 9 deliberately-corrupted under `probes_negative/`) across 10 donors, all Apache 2.0:
 
-| donor | upstream | fixtures |
-|---|---|---:|
-| **spark** | [apache/spark](https://github.com/apache/spark) | 8 |
-| **delta** | [delta-io/delta](https://github.com/delta-io/delta) | 3 |
-| **kedro-plugins** | [kedro-org/kedro-plugins](https://github.com/kedro-org/kedro-plugins) | 3 |
-| **iceberg-python** | [apache/iceberg-python](https://github.com/apache/iceberg-python) | 2 |
-| **hudi** | [apache/hudi](https://github.com/apache/hudi) | 2 |
-| **mlflow** | [mlflow/mlflow](https://github.com/mlflow/mlflow) | 4 |
-| **feast** | [feast-dev/feast](https://github.com/feast-dev/feast) | 3 |
-| **quinn** | [MrPowers/quinn](https://github.com/MrPowers/quinn) | 3 |
-| **dbt-spark** | [dbt-labs/dbt-spark](https://github.com/dbt-labs/dbt-spark) | 2 |
-| **python-deequ** | [awslabs/python-deequ](https://github.com/awslabs/python-deequ) | 2 |
+| donor | upstream | annotated | probes_negative |
+|---|---|---:|---:|
+| **spark** | [apache/spark](https://github.com/apache/spark) | 8 | 2 |
+| **delta** | [delta-io/delta](https://github.com/delta-io/delta) | 3 | 1 |
+| **kedro-plugins** | [kedro-org/kedro-plugins](https://github.com/kedro-org/kedro-plugins) | 3 | 1 |
+| **iceberg-python** | [apache/iceberg-python](https://github.com/apache/iceberg-python) | 2 | 0 |
+| **hudi** | [apache/hudi](https://github.com/apache/hudi) | 2 | 0 |
+| **mlflow** | [mlflow/mlflow](https://github.com/mlflow/mlflow) | 4 | 2 |
+| **feast** | [feast-dev/feast](https://github.com/feast-dev/feast) | 3 | 1 |
+| **quinn** | [MrPowers/quinn](https://github.com/MrPowers/quinn) | 3 | 2 |
+| **dbt-spark** | [dbt-labs/dbt-spark](https://github.com/dbt-labs/dbt-spark) | 2 | 0 |
+| **python-deequ** | [awslabs/python-deequ](https://github.com/awslabs/python-deequ) | 2 | 0 |
 
-Every fixture currently emits zero diagnostics against the released binary; the golden snapshots are all empty-diagnostic arrays after the v0.1.39 false-positive sweep cleared the six v0.1.38-baseline fixtures (seven underlying findings total) that the cross-codebase suite had surfaced. The donor table with pinned commits and per-donor coverage rationale — what each codebase exercises, why it earned a slot — lives in the [pykrete-tests README](https://github.com/amirnaderi93/pykrete-tests#the-donors).
+Every annotated fixture currently emits zero diagnostics against the released binary; the golden snapshots for the annotated tree are all empty-diagnostic arrays after the v0.1.39 false-positive sweep cleared the six v0.1.38-baseline fixtures (seven underlying findings total) that the cross-codebase suite had surfaced. The `probes_negative/` fixtures are deliberately broken — each one's `.golden.json` carries the exact diagnostics pykrete must fire, and the golden-diff suite verifies they fire on every release. The donor table with pinned commits and per-donor coverage rationale — what each codebase exercises, why it earned a slot — lives in the [pykrete-tests README](https://github.com/amirnaderi93/pykrete-tests#the-donors).
+
+## Schema-tracking probes
+
+On top of golden-diff, every release runs **111 schema-tracking probes**:
+
+- **97 positive probes** across 31 annotated fixtures assert columns survive `.select` / `.filter` / `.withColumn` and similar narrow transforms. These probes prove that the absence of a diagnostic isn't a silent miss — pykrete genuinely tracked the column through the chain.
+- **14 negative probes** across 9 deliberately-corrupted fixtures assert specific diagnostics fire: D0030 (`unknownColumn`), D0081 (`nonNumericArithmetic`), D0082 (`crossTypeComparison`). Without these, a silently-passing checker would satisfy every annotated probe vacuously.
+
+Probes are inline `# PROBE-*` comment markers in `.pyk` fixtures, parsed by `scripts/probes.py` and verified against `pykrete check --format json` output. The marker grammar, placement convention, and `catalog-drift-watch` workflow that keeps `PROBE-EXPECTS` D-codes in sync with upstream are documented in [`scripts/PROBES.md`](https://github.com/amirnaderi93/pykrete-tests/blob/main/scripts/PROBES.md). CI fails if any probe asserts the wrong outcome.
+
+What the v1.1 probe suite does *not* yet verify: numeric-subtype distinguishability (e.g. `int` vs `long` arithmetic narrowing) and full type-tracking through expressions are tracked for v1.2.
 
 ## How it works
 
@@ -33,16 +44,18 @@ Each donor lives under `cross-codebase/<donor>/`:
 
 ```
 cross-codebase/<donor>/
-├── upstream/<orig-path>/<file>.pyk     # verbatim upstream Python, .py → .pyk renamed
-├── annotated/<orig-path>/<file>.pyk    # same file with Schema + typed helpers added
-├── annotated/<orig-path>/<file>.golden.json  # frozen pykrete check JSON output
+├── upstream/<orig-path>/<file>.pyk           # verbatim upstream Python, .py → .pyk renamed
+├── annotated/<orig-path>/<file>.pyk          # same file with Schema + typed helpers added
+├── annotated/<orig-path>/<file>.golden.json  # frozen pykrete check JSON output (empty diagnostics)
+├── probes_negative/<file>.pyk                # deliberately-corrupted fixture (optional, per-donor)
+├── probes_negative/<file>.golden.json        # frozen JSON with the expected diagnostics
 ├── LICENSE-UPSTREAM
 └── pinned-commit
 ```
 
-The `.py` → `.pyk` rename is zero-behavior-change — pykrete is a strict superset. Annotations live in the `annotated/` companion: `Schema` classes plus typed helper functions extracting dataframe-typed cores of upstream methods (since pykrete only enters body analysis on `DataFrame[X]` signatures).
+The `.py` → `.pyk` rename is zero-behavior-change — pykrete is a strict superset. Annotations live in the `annotated/` companion: `Schema` classes plus typed helper functions extracting dataframe-typed cores of upstream methods (since pykrete only enters body analysis on `DataFrame[X]` signatures). `probes_negative/` fixtures are smaller, single-purpose corruptions of the annotated patterns — they exist to prove pykrete actually catches regressions, not just that it doesn't false-positive.
 
-CI runs `bash scripts/golden.sh check` on every push and nightly. pykrete is built fresh from `main` each run; any drift between the live JSON output and the committed golden fails the build before the regression gets released.
+CI runs `bash scripts/golden.sh check` (both trees) and `bash scripts/probes_ci.sh` on every push. pykrete is built fresh from `main` each run; any golden-diff drift or probe failure fails the build before the regression gets released.
 
 ## What this suite does NOT cover
 
