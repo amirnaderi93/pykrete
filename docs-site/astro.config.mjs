@@ -3,11 +3,11 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import react from '@astrojs/react';
 
-// Deployed to GitHub Pages at amirnaderi93.github.io/pykrete.
-// If/when a custom domain is added, drop `base` and update `site`.
+// Deployed to GitHub Pages with a custom domain at pykrete.dev (CNAME at
+// docs-site/public/CNAME). The github.io URL keeps working as an
+// automatic redirect once the custom domain is set in repo settings.
 export default defineConfig({
-  site: 'https://amirnaderi93.github.io',
-  base: '/pykrete',
+  site: 'https://pykrete.dev',
   // React powers the `/playground` page (Monaco editor + live wasm
   // diagnostics). The rest of the site stays static — React is only
   // ever shipped to the client for components marked with a
