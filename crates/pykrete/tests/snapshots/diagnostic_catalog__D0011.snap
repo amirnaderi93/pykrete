@@ -1,5 +1,6 @@
 ---
 source: crates/pykrete/tests/diagnostic_catalog.rs
+assertion_line: 254
 expression: captured
 ---
-d0011_invalid_column_type.pyk:2:15-2:17 error D0011 invalidColumnType: Column type '42' is not a recognized pykrete type. Use a bare atomic (int, long, double, byte, short, decimal, decimal(p, s), string, binary, bool, date, timestamp, Array, Map, Struct), a declared Schema, or an `Array[…]` / `Map[…, …]` collection.
+d0011_invalid_column_type.pyk:2:15-2:17 error D0011 invalidColumnType: Column type '42' is not a recognized pykrete type. Use a bare atomic (int, long, double, byte, short, decimal, decimal(p, s), string, binary, bool, date, timestamp, enum, Array, Map, Struct), a declared Schema, or an `Array[…]` / `Map[…, …]` collection.

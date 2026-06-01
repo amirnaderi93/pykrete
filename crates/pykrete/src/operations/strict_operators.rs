@@ -46,7 +46,10 @@ fn type_family(t: &ColumnType) -> TypeFamily {
         // arithmetic on it, compare it with strings, etc. Group it with
         // collections (the catch-all for non-combining atomics) so the
         // strict checks treat it as opaque.
-        ColumnType::String => TypeFamily::Textual,
+        // An enum-constrained string is still string-typed for operator
+        // family purposes; the vocabulary is an additional constraint
+        // PR-B will check against.
+        ColumnType::String | ColumnType::Enum(_) => TypeFamily::Textual,
         ColumnType::Binary => TypeFamily::Collection,
         ColumnType::Bool => TypeFamily::Boolean,
         ColumnType::Date | ColumnType::Timestamp => TypeFamily::Temporal,

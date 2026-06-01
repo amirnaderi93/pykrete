@@ -28,6 +28,14 @@ pub enum ColumnType {
         scale: u8,
     },
     String,
+    /// A string column whose value set is constrained to a fixed
+    /// vocabulary — declared as `enum["a", "b", ...]` in a schema
+    /// annotation. The values are stored in declaration order; equality
+    /// against another `Enum` is set-equality (handled at the call
+    /// sites that compare enum vocabularies). For every Spark-side
+    /// purpose an `Enum(_)` behaves as `String`; the vocabulary is the
+    /// extra constraint pykrete checks at edit time.
+    Enum(Vec<String>),
     /// Raw byte array — Spark `BinaryType`.
     Binary,
     Bool,
@@ -59,6 +67,45 @@ pub struct StructField {
     pub ty: Option<ColumnType>,
 }
 
+/// Why an `enum[...]` literal failed parse-time validation. Routed
+/// through the existing `D0011 invalidColumnType` D-code at the schema
+/// parser layer; surfacing the offending value lets the message cite
+/// it concretely.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnumParseError {
+    /// `enum[]` — the vocabulary must have at least one entry.
+    Empty,
+    /// `enum["a", "a"]` — the named value appears more than once.
+    Duplicate(String),
+}
+
+/// How many vocabulary entries an `enum[...]` rendering surfaces inline
+/// before it truncates with a `, ... (N more)` suffix. Per the spec's
+/// stability surface section, the contract is that the vocabulary
+/// appears — this exact cap MAY shift in minor versions.
+pub const ENUM_HOVER_INLINE_LIMIT: usize = 5;
+
+/// Render an enum vocabulary the same way every site does — inline
+/// double-quoted entries, truncated past [`ENUM_HOVER_INLINE_LIMIT`]
+/// with a `, ... (N more)` tail. Shared by `Display`, hover, and
+/// completion so reformatting one site keeps the others aligned.
+pub fn render_enum_vocab(values: &[String]) -> String {
+    let mut out = String::new();
+    let shown = values.len().min(ENUM_HOVER_INLINE_LIMIT);
+    for (i, v) in values.iter().take(shown).enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push('"');
+        out.push_str(v);
+        out.push('"');
+    }
+    if values.len() > shown {
+        out.push_str(&format!(", ... ({} more)", values.len() - shown));
+    }
+    out
+}
+
 impl ColumnType {
     /// Spark's default for the unparameterized `DECIMAL` SQL type. Pykrete
     /// uses this for the bare `decimal` keyword (no `(p, s)` args) and
@@ -70,6 +117,35 @@ impl ColumnType {
 
     /// Spark caps decimal precision at 38 (`Decimal128`'s upper bound).
     pub const MAX_DECIMAL_PRECISION: u8 = 38;
+
+    /// Build an [`ColumnType::Enum`] from a list of string values, after
+    /// the spec's parse-time invariants: the vocabulary must be
+    /// non-empty and must not contain duplicates (byte-exact, no
+    /// normalization). Returns the offending case so the caller can
+    /// route through the existing `D0011 invalidColumnType` diagnostic
+    /// with a specific message.
+    pub fn enum_from_values(values: Vec<String>) -> Result<Self, EnumParseError> {
+        if values.is_empty() {
+            return Err(EnumParseError::Empty);
+        }
+        for (i, v) in values.iter().enumerate() {
+            if values[..i].iter().any(|earlier| earlier == v) {
+                return Err(EnumParseError::Duplicate(v.clone()));
+            }
+        }
+        Ok(Self::Enum(values))
+    }
+
+    /// True if `a` and `b` are enum vocabularies with the same set of
+    /// values (declaration order does not matter), per Q4 set-equality.
+    /// Defined as a free comparison so callers don't have to sort or
+    /// hash one side; both sides peel `Nullable` wrappers.
+    pub fn enum_vocab_eq(a: &Self, b: &Self) -> bool {
+        let (Self::Enum(xs), Self::Enum(ys)) = (a.base(), b.base()) else {
+            return false;
+        };
+        xs.len() == ys.len() && xs.iter().all(|x| ys.contains(x))
+    }
 
     /// Parse a pykrete type annotation — an atomic name, or a nested
     /// `array<…>` / `map<…>`. Atomic names are the strict pykrete
@@ -200,6 +276,7 @@ impl ColumnType {
             Self::Short => "Short",
             Self::Decimal { .. } => "Decimal",
             Self::String => "String",
+            Self::Enum(_) => "Enum",
             Self::Binary => "Binary",
             Self::Bool => "Bool",
             Self::Date => "Date",
@@ -490,6 +567,11 @@ impl fmt::Display for ColumnType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Decimal { precision, scale } => write!(f, "Decimal({precision}, {scale})"),
+            Self::Enum(values) => {
+                f.write_str("enum[")?;
+                f.write_str(&render_enum_vocab(values))?;
+                f.write_str("]")
+            }
             Self::Array(Some(elem)) => write!(f, "array<{elem}>"),
             Self::Array(None) => f.write_str("array"),
             Self::Map(Some(key), Some(value)) => write!(f, "map<{key}, {value}>"),
@@ -517,9 +599,10 @@ impl fmt::Display for ColumnType {
 /// Comma-separated list of the source-form names users can write in a
 /// `.pyk` file. Used inside error messages. `decimal` accepts an optional
 /// `(precision, scale)` — `decimal` alone resolves to Spark's default
-/// `decimal(10, 0)`.
+/// `decimal(10, 0)`. `enum` is the vocabulary-constrained string form
+/// declared as `enum["a", "b", ...]`.
 pub const COLUMN_TYPE_NAMES: &str = "int, long, double, byte, short, decimal, decimal(p, s), \
-    string, binary, bool, date, timestamp, Array, Map, Struct";
+    string, binary, bool, date, timestamp, enum, Array, Map, Struct";
 
 /// Same vocabulary as [`COLUMN_TYPE_NAMES`] but as a slice — fed to the
 /// completion engine when the cursor sits inside a `name: "<cursor>"`
@@ -537,6 +620,7 @@ pub const COLUMN_TYPE_NAMES_LIST: &[&str] = &[
     "bool",
     "date",
     "timestamp",
+    "enum",
     "Array",
     "Map",
     "Struct",
@@ -873,6 +957,62 @@ mod tests {
                 "{name} should be rejected by the strict-case-sensitive surface",
             );
         }
+    }
+
+    #[test]
+    fn enum_from_values_round_trips_a_well_formed_vocabulary() {
+        let ct = ColumnType::enum_from_values(vec!["a".into(), "b".into()]).unwrap();
+        assert_eq!(ct, ColumnType::Enum(vec!["a".into(), "b".into()]));
+    }
+
+    #[test]
+    fn enum_from_values_rejects_empty_with_a_dedicated_error() {
+        assert_eq!(
+            ColumnType::enum_from_values(Vec::new()),
+            Err(EnumParseError::Empty),
+        );
+    }
+
+    #[test]
+    fn enum_from_values_rejects_duplicate_and_names_the_repeat() {
+        // The first repeated value, in declaration order, is the one
+        // surfaced — the message can cite it concretely.
+        assert_eq!(
+            ColumnType::enum_from_values(vec!["x".into(), "y".into(), "x".into()]),
+            Err(EnumParseError::Duplicate("x".into())),
+        );
+    }
+
+    #[test]
+    fn enum_display_format_uses_subscript_notation_and_truncates() {
+        let small = ColumnType::enum_from_values(vec!["a".into(), "b".into()]).unwrap();
+        assert_eq!(format!("{small}"), "enum[\"a\", \"b\"]");
+        let big = ColumnType::enum_from_values((0..7).map(|i| format!("v{i}")).collect()).unwrap();
+        // 7 values → 5 inline, 2 in the tail suffix.
+        assert_eq!(
+            format!("{big}"),
+            "enum[\"v0\", \"v1\", \"v2\", \"v3\", \"v4\", ... (2 more)]",
+        );
+    }
+
+    #[test]
+    fn enum_is_recognised_as_a_textual_kind_via_as_str() {
+        let ct = ColumnType::enum_from_values(vec!["a".into()]).unwrap();
+        assert_eq!(ct.as_str(), "Enum");
+    }
+
+    #[test]
+    fn enum_vocab_eq_is_order_independent() {
+        let a = ColumnType::enum_from_values(vec!["a".into(), "b".into(), "c".into()]).unwrap();
+        let b = ColumnType::enum_from_values(vec!["c".into(), "a".into(), "b".into()]).unwrap();
+        assert!(ColumnType::enum_vocab_eq(&a, &b));
+    }
+
+    #[test]
+    fn enum_vocab_eq_distinguishes_subsets_from_set_equal() {
+        let a = ColumnType::enum_from_values(vec!["a".into(), "b".into()]).unwrap();
+        let b = ColumnType::enum_from_values(vec!["a".into(), "b".into(), "c".into()]).unwrap();
+        assert!(!ColumnType::enum_vocab_eq(&a, &b));
     }
 
     #[test]

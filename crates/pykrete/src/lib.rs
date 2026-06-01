@@ -959,6 +959,17 @@ fn render_schema<'a>(
                     line_index,
                 ));
             }
+            FieldResolution::InvalidEnum(err) => {
+                writeln!(out, "          {}: {}  (unresolved)", field.name, raw_text).unwrap();
+                diagnostics.push(Diagnostic::at_range(
+                    Severity::Error,
+                    "D0011",
+                    crate::schema::enum_parse_error_message(&err),
+                    ann_range,
+                    source,
+                    line_index,
+                ));
+            }
         }
     }
 }
