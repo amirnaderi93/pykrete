@@ -77,6 +77,10 @@ pub enum EnumParseError {
     Empty,
     /// `enum["a", "a"]` — the named value appears more than once.
     Duplicate(String),
+    /// `enum[some_var]`, `enum[1]`, `enum["a", 5]` — at least one entry
+    /// is not a string literal. The spec requires every vocabulary entry
+    /// to be a bare string literal at the source level.
+    NonStringLiteral,
 }
 
 /// How many vocabulary entries an `enum[...]` rendering surfaces inline
@@ -262,6 +266,21 @@ impl ColumnType {
             Self::Nullable(inner) => inner.base(),
             other => other,
         }
+    }
+
+    /// The hover / completion / outline label for this type: the bare
+    /// kind name from [`Self::as_str`] for atomics and composites, but
+    /// `enum[...]` with the vocabulary surfaced inline (truncated per
+    /// [`ENUM_HOVER_INLINE_LIMIT`]) for an `Enum`. One site keeps
+    /// the three UX surfaces — hover, completion-item detail, and
+    /// document-symbol detail — in lockstep when a future variant
+    /// (e.g. parametric `Decimal(p, s)` or `Array<T>`) wants its own
+    /// rendering.
+    pub fn label(&self) -> String {
+        if let Self::Enum(values) = self.base() {
+            return format!("enum[{}]", render_enum_vocab(values));
+        }
+        self.as_str().to_string()
     }
 
     /// The bare kind name — the atomic name, or `array` / `map` without

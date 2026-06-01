@@ -39,18 +39,14 @@ use crate::schema::{
     FieldPathResult, FieldResolution, Schema, SchemaView, discover_schemas, resolve_path,
     suggest_field_name,
 };
-use crate::types::{ColumnType, render_enum_vocab};
+use crate::types::ColumnType;
 use crate::walk::{DiscoveredFunction, discover_top_level_classes, discover_top_level_functions};
 
-/// The hover/completion render of a resolved column type. Atomics and
-/// composites surface their bare kind name (`String`, `Decimal`,
-/// `array`); an `enum["a", "b", ...]` surfaces its vocabulary inline,
-/// truncated past the hover limit per the v1.1 spec.
+/// The hover/completion render of a resolved column type — delegates
+/// to [`ColumnType::label`] so the three UX surfaces (hover, completion
+/// detail, document-symbol detail) move together.
 fn render_column_type(ct: &ColumnType) -> String {
-    if let ColumnType::Enum(values) = ct.base() {
-        return format!("enum[{}]", render_enum_vocab(values));
-    }
-    ct.as_str().to_string()
+    ct.label()
 }
 
 /// The hover payload returned by [`hover`]. `markdown` is the rendered

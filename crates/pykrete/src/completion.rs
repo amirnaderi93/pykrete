@@ -27,7 +27,6 @@ use ruff_text_size::{Ranged, TextSize};
 use crate::dataframe::{DataFrameAnnotation, SlotLabel, typed_slots};
 use crate::registry::Registry;
 use crate::schema::{FieldResolution, Schema, SchemaView, discover_schemas};
-use crate::types::ColumnType;
 use crate::walk::{DiscoveredFunction, discover_top_level_classes, discover_top_level_functions};
 
 /// One completion suggestion. `detail` is a short label shown next to the
@@ -450,21 +449,9 @@ fn fields_of(view: &SchemaView<'_>, schemas: &[Schema<'_>]) -> Vec<CompletionIte
     out
 }
 
-/// The completion-item detail string for a resolved type: the bare
-/// kind name for atomics / composites, but with enum vocabularies
-/// surfaced inline (truncated past the hover limit). Matches the
-/// renderer in `hover.rs::column_type_label` — the two stay in sync via
-/// the shared `render_enum_vocab` constant.
-fn column_type_label(ct: &ColumnType) -> String {
-    if let ColumnType::Enum(values) = ct.base() {
-        return format!("enum[{}]", crate::types::render_enum_vocab(values));
-    }
-    ct.as_str().to_string()
-}
-
 fn field_detail(f: &crate::schema::SchemaField<'_>, schemas: &[Schema<'_>]) -> String {
     match f.resolve(schemas) {
-        FieldResolution::Resolved(ct) => column_type_label(&ct),
+        FieldResolution::Resolved(ct) => ct.label(),
         FieldResolution::ResolvedNested(nested) => format!("{} (nested)", nested.name()),
         FieldResolution::UnknownType { name } => format!("{name} (unresolved)"),
         FieldResolution::NotABareName | FieldResolution::InvalidEnum(_) => {

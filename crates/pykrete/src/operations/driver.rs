@@ -563,6 +563,13 @@ fn types_compatible(a: &ColumnType, b: &ColumnType) -> bool {
                         .zip(ys)
                         .all(|(x, y)| x.name == y.name && field_ok(&x.ty, &y.ty)))
         }
+        // Two enum vocabularies are compatible when set-equal — the spec
+        // contract is order-independent. Derived `PartialEq` on
+        // `ColumnType::Enum(Vec<String>)` is order-sensitive, which would
+        // false-flag `enum["a","b"]` vs `enum["b","a"]` for the same
+        // column. Use the explicit set-equality helper at every
+        // comparison site.
+        (ColumnType::Enum(_), ColumnType::Enum(_)) => ColumnType::enum_vocab_eq(a, b),
         _ => a == b || (is_numeric(a) && is_numeric(b)),
     }
 }

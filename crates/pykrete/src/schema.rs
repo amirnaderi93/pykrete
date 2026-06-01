@@ -351,11 +351,27 @@ enum EnumParseOutcome {
 /// Returns `None` if `expr` isn't an `enum[...]` subscript or has a
 /// malformed shape pykrete doesn't recognize (e.g. `enum[some_var]`);
 /// returns `Some(Valid)` for a well-formed non-empty unique vocabulary;
-/// returns `Some(Invalid)` for an empty or duplicate-entry vocabulary,
-/// so the caller can route through `D0011` with a specific message.
+/// returns `Some(Invalid)` for an empty, duplicate-entry, or
+/// non-string-literal vocabulary so the caller can route through `D0011`
+/// with a specific message.
+///
+/// Transparently peels a single `Optional[enum[...]]` wrapper — the
+/// vocabulary-level diagnostic (empty / duplicate / non-string-literal)
+/// is the same whether or not the column is nullable, and would
+/// otherwise fall through to a generic D0011 once the inner `None` from
+/// the enum arm propagates up through Optional's resolution.
 fn parse_enum_annotation(expr: &Expr) -> Option<EnumParseOutcome> {
     let sub = expr.as_subscript_expr()?;
-    if sub.value.as_name_expr()?.id.as_str() != "enum" {
+    let base = sub.value.as_name_expr()?.id.as_str();
+    if base == "Optional" {
+        return match parse_enum_annotation(&sub.slice)? {
+            EnumParseOutcome::Valid(ct) => {
+                Some(EnumParseOutcome::Valid(ColumnType::Nullable(Box::new(ct))))
+            }
+            invalid => Some(invalid),
+        };
+    }
+    if base != "enum" {
         return None;
     }
     // `enum["a"]` is a single-element subscript (no tuple); `enum["a",
@@ -366,7 +382,13 @@ fn parse_enum_annotation(expr: &Expr) -> Option<EnumParseOutcome> {
     };
     let mut values: Vec<String> = Vec::with_capacity(raw_elts.len());
     for e in raw_elts {
-        let lit = e.as_string_literal_expr()?;
+        let Some(lit) = e.as_string_literal_expr() else {
+            // Per the spec: enum vocabularies are string literals.
+            // Anything else (a name, a number, a nested expression) gets
+            // a dedicated D0011 message naming the offender rather than
+            // a generic "not a recognized pykrete type".
+            return Some(EnumParseOutcome::Invalid(EnumParseError::NonStringLiteral));
+        };
         values.push(lit.value.to_str().to_string());
     }
     match ColumnType::enum_from_values(values) {
@@ -387,6 +409,11 @@ pub(crate) fn enum_parse_error_message(err: &EnumParseError) -> String {
         EnumParseError::Duplicate(value) => format!(
             "Duplicate value '{value}' in `enum[...]` vocabulary; each entry must be unique.",
         ),
+        EnumParseError::NonStringLiteral => {
+            "An `enum[...]` vocabulary must list string literals only; \
+             names, numbers, and nested expressions are not allowed."
+                .to_string()
+        }
     }
 }
 

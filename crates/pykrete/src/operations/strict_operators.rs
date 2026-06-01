@@ -110,24 +110,19 @@ pub(super) fn report_expr_type_errors<'a>(
     match expr {
         Expr::BinOp(b) => {
             if is_arithmetic_op(b.op) {
-                // A string / array / map operand can't take part in
+                // A textual / collection operand can't take part in
                 // arithmetic — Spark coerces a string (often to null) and
-                // errors on a collection.
+                // errors on a collection. Routed through `type_family`
+                // so adding a new variant (e.g. another textual-shaped
+                // constraint) only updates `type_family` itself, not
+                // every operator filter.
                 let bad = [
                     infer_expr_type(&b.left, schema, tcx),
                     infer_expr_type(&b.right, schema, tcx),
                 ]
                 .into_iter()
                 .flatten()
-                .find(|t| {
-                    matches!(
-                        t,
-                        ColumnType::String
-                            | ColumnType::Array(_)
-                            | ColumnType::Map(..)
-                            | ColumnType::Struct(_)
-                    )
-                });
+                .find(|t| matches!(type_family(t), TypeFamily::Textual | TypeFamily::Collection));
                 if let Some(bad) = bad {
                     diagnostics.push(
                         Diagnostic::at_range(
