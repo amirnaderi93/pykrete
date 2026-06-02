@@ -1273,6 +1273,9 @@ and the walk continues to the next parameter. The settled cases:
       # PROBE-TYPE-IS binds df_ident = "df" (the list[...] param is skipped)
   ```
 
+  PEP 604 union syntax (`DataFrame[A] | None`) is treated identically
+  to `Optional[DataFrame[A]]` — wrapped, so skipped per first-wins.
+
 - **String forward references** (`def f(df: "DataFrame[A]")`):
   **not resolved** in v1.2. The annotation is an `ast.Constant(str)`,
   not an `ast.Subscript`; the helper does not parse string
@@ -1468,7 +1471,7 @@ grammar change:
 `probesSchemaVersion` stays `"1"` — none of the above is a breaking
 change to the v1.1 grammar or verifier semantics.
 
-### v1.2 trust-claim migration
+### Behavior change from v1.1 + trust-copy migration
 
 The v1.1 → v1.2 transition is a **behavior change for fixture
 authors**, not a grammar change. Calling it out explicitly so the
@@ -1502,16 +1505,6 @@ v1.2 ship is honest by default:
   spec PR's scope — copy migration lands in lockstep with the
   synthesizer-rewrite impl PR so the trust claim is never ahead of
   the code.
-- **Pre-existing-fixture surprise containment (open).** Does the
-  v1.2 impl proactively scan the 35 v1.1-annotated fixtures for
-  previously-silent-incorrect PROBE-TYPE-IS markers and warn
-  fixture authors at impl time, or rely on the v1.2 cut's CI to
-  surface them naturally? **Recommendation: rely on CI.** The
-  surprise is bounded (we know the corpus, we know the change is
-  scoped to TYPE-IS markers, and the harness already prints a
-  legible `PROBE FAILURE` block on mismatch). A pre-emptive scan
-  adds tooling cost for limited benefit. Final decision deferred
-  to v1.2 impl PR; this spec records the lean.
 
 ### References
 
