@@ -6,6 +6,174 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-06-02
+
+First minor release after the v1.0.0 ship. Two trust-system additions
+land together: **enum constraints** on string-typed columns
+(`status: enum["pending", "shipped", ...]`) and the
+**schema-tracking probe suite** that pins both the new feature and
+the existing v1.0 checks against 47 real-codebase fixtures.
+
+### Added
+
+- **`enum["v1", "v2", ...]` atomic type** (literal-value vocabulary —
+  Form A). Declared in a `Schema` class, the type adds a static
+  vocabulary check on string literals that flow into the column.
+  Order-independent set equality, case- and whitespace-sensitive
+  values, full Unicode. `Nullable[enum[...]]` is the canonical
+  optional shape. The constraint flows through `Pick`, `Omit`,
+  `Merge` (with `D0040` on non-set-equal vocabulary collisions),
+  through aliases and renames, through per-value aggregations
+  (`first`, `last`, `min`, `max`, `collect_set`, `collect_list`),
+  and through branch-form expressions when every branch shares a
+  set-equal vocabulary. String-producing operations (`cast`,
+  `regexp_replace`, `substr`, `lower`, `upper`, `concat`, …) drop
+  the constraint to plain `string`. Documented in
+  [`reference/schemas`](https://pykrete.dev/reference/schemas/#enum-valued-strings--enuma-b-).
+- **`D0084 enumValueMismatch`** — fires when a string literal
+  compared against, or written into, an enum-typed column is not in
+  the column's vocabulary. Error severity in every check mode
+  (`basic`, `standard`, `strict`); downgradable to warning or off
+  per the standard `pykrete.json` rules block. Suggestions reuse
+  D0030's Levenshtein routine; ties break on Unicode code-point
+  order (Rust `str::cmp`) so the same input always yields the same
+  suggestion. Documented in
+  [`reference/diagnostics`](https://pykrete.dev/reference/diagnostics/#enumvaluemismatch--d0084).
+- **Check sites covered.** `D0084` fires across `col(...) ==
+  "lit"` / `col(...) != "lit"`, `col(...).isin("lit", ...)`,
+  `.fillna({"col": "lit"})`, `withColumn("col", lit("lit"))`,
+  `F.expr("col = 'lit'")` and the SQL `IN ('a', 'b')` form, and
+  the branch-form expressions `F.coalesce` /
+  `F.when(...).otherwise(...)` / `F.nvl` / `F.ifnull` / `F.nullif`
+  when their output flows into an enum-typed sink.
+- **Schema-tracking probe suite** vendored in
+  [pykrete-tests](https://github.com/amirnaderi93/pykrete-tests).
+  127 probes (110 positive + 17 negative) across 47 fixtures (35
+  annotated + 12 deliberately-corrupted under `probes_negative/`)
+  from the same 10 donors the v1.0 golden-diff suite uses: Apache
+  Spark, Delta Lake, Apache Iceberg, Apache Hudi, MLflow, Feast,
+  Kedro, quinn, dbt-spark, python-deequ. Probes cover 46 of the 47
+  fixtures (the feast `spark_kafka_processor` streaming fixture is
+  annotated but probe-free — no typed-DataFrame slot to anchor on).
+  Positive probes assert columns resolve cleanly after `.select` /
+  `.filter` / `.withColumn` chains; negative probes assert specific
+  diagnostics fire on broken fixtures. Probe coverage spans D0030 /
+  D0081 / D0082 / D0084; the remaining 15 D-codes in the catalog
+  are covered by unit-test snapshots only. See the
+  [pykrete-tests README](https://github.com/amirnaderi93/pykrete-tests#schema-tracking-probes-v11)
+  and
+  [`scripts/PROBES.md`](https://github.com/amirnaderi93/pykrete-tests/blob/main/scripts/PROBES.md).
+- **Enum value vocabulary verification in 3 of 10 donors.** Delta
+  CDC `_change_type` (`{"insert", "update_preimage",
+  "update_postimage", "delete"}`), Hudi `_hoodie_operation`
+  (`{"I", "-U", "U", "D"}` — per `HoodieOperation.java`, not the
+  `WriteOperationType` values), and MLflow run status (`{"RUNNING",
+  "FINISHED", "FAILED", "KILLED", "SCHEDULED"}`). Positive probes
+  assert in-vocab literals stay clean across `==` / `.isin` /
+  `withColumn` / `F.expr` / `groupBy` chains; negative probes
+  assert `D0084` fires on off-vocab typos.
+
+### Changed
+
+- **README "Reliability and trust" section** now states the v1.1
+  probe coverage alongside the v1.0 golden-diff coverage: 47
+  fixtures total (35 annotated + 12 negative), 127 probes (110
+  positive + 17 negative), enum vocabulary verification in 3 of 10
+  donors. Already shipped in
+  [#77](https://github.com/amirnaderi93/pykrete/pull/77).
+- **`docs-site` reference + splash sweep**: `reference/schemas`
+  documents the new `enum[...]` type and its preservation /
+  drop-side rules; `reference/diagnostics` adds the `D0084` row to
+  the catalog and a prose entry under the type-checking section;
+  the index splash refreshes the trust line from "32 annotated
+  snapshots" to "127 schema-tracking probes across 47 fixtures from
+  10 real PySpark codebases" so every surface agrees with the
+  README and production-readiness pages.
+
+### Known limitations (v1.2 trackers)
+
+- **`withColumn` output drops the enum constraint.** In v1.1
+  `withColumn("status", lit("shipped"))` checks the literal against
+  the sink's vocabulary, but the **output column** drops to plain
+  `string` — downstream code re-using the returned frame's `status`
+  column won't see the constraint preserved. The check at the
+  literal still fires at the write site, where the bug lives.
+  Tracker:
+  [`docs/design/literal-value-vocabulary.md`](https://github.com/amirnaderi93/pykrete/blob/main/docs/design/literal-value-vocabulary.md)
+  v1.1-polish backlog.
+- **Type-tracking probe class deferred.** The
+  `PROBE-TYPE-IS` synthesizer (assert a column's runtime type
+  through transforms) is scoped out of v1.1 — the schema-tracking
+  probe runner can't bind synthesized type assertions to live local
+  scopes yet. Tracker:
+  [`docs/design/schema-tracking-probes.md`](https://github.com/amirnaderi93/pykrete/blob/main/docs/design/schema-tracking-probes.md).
+- **Numeric subtype distinguishability.** Probes don't yet
+  distinguish `int` from `long` from `short` on column reads.
+  v1.2 tracker.
+
+### Coordinated with
+
+- pykrete-tests v1.1.0: vendors the 47 fixtures + 127 probes +
+  refreshed `diagnostic_catalog.json` with the new `D0084` entry.
+
+## [1.0.0] - 2026-05-31
+
+First stable release. Ten months of pre-1.0 hardening converge into a
+SemVer-major commitment on the public-facing surfaces: the JSON output
+contract (`schemaVersion: "1"`), the D-code catalog (18 codes —
+D0001 / D0010 / D0011 / D0020 / D0021 / D0030 / D0040 / D0050 / D0051 /
+D0060 / D0070 / D0071 / D0072 / D0073 / D0080 / D0081 / D0082 /
+D0083), the `pykrete check` CLI surface (`--format text|json`, exit
+codes, `-V` / `-h` / `-v`), the LSP wire protocol, and the wasm
+playground API surface shipped in v0.1.16.
+
+### Added
+
+- **JSON output contract** (`pykrete check --format json`) becomes
+  a stability commitment at v1.0. The wire format carries
+  `schemaVersion: "1"`; any breaking change post-v1.0 requires a
+  SemVer-major bump and a `schemaVersion: "2"`. Consumers pin to
+  `schemaVersion`, not pykrete `version`. Documented end-to-end in
+  [`about/production-readiness`](https://pykrete.dev/about/production-readiness/).
+- **Per-D-code diagnostic catalog snapshot suite** locks in every
+  rendered diagnostic message as a reviewable artifact. Adding a
+  new D-code now forces an accompanying fixture; wording changes
+  fail the snapshot test until explicitly accepted.
+- **No-false-positives policy** as a release gate: a regression on
+  real Spark code blocks the tag before it goes out.
+- **`reference/diagnostics` catalog** in the docs site as the
+  canonical user-facing catalog of every D-code we emit, paired
+  with the rule names accepted in `pykrete.json`.
+- **Reliability and trust** section in the README states what
+  pykrete ships against, what it doesn't, and the cross-codebase
+  testing methodology that keeps it honest.
+
+### Changed
+
+- **Cross-codebase suite** ([pykrete-tests](https://github.com/amirnaderi93/pykrete-tests))
+  vendors 32 annotated fixtures from 10 upstream codebases — Apache
+  Spark, Delta Lake, Apache Iceberg (iceberg-python), Apache Hudi,
+  MLflow, Feast, Kedro (kedro-plugins), quinn, dbt-spark,
+  python-deequ — pinned to specific upstream commits. Every push
+  rebuilds pykrete fresh from `main`, re-runs `pykrete check`
+  against every fixture, and JSON-diffs against the committed
+  goldens. The whole suite emits zero diagnostics against v1.0.0.
+- **VS Code extension** ships as `amirnaderi.pykrete` on the
+  Visual Studio Marketplace and Open VSX, per-platform `.vsix`
+  binaries on macOS arm64/x64, Linux x64, Windows, plus a
+  universal fallback.
+- **Playground** runs the real `pykrete-wasm` checker in the
+  browser with a static PySpark symbol table for hover / completion
+  / go-to-definition on Spark types alongside pykrete's own schema
+  surface.
+
+### Notes
+
+The pre-1.0 cycle's full per-release breakdown lives in the
+[0.1.x history below](#0140---2026-05-31) — every check, every
+hardening fix, every cross-codebase false-positive sweep that fed
+into v1.0.
+
 ## [0.1.40] - 2026-05-31
 
 Final pre-v1.0.0 release. Docs-only: wires the 10-donor cross-codebase
@@ -458,7 +626,7 @@ real adopter surfaces a fork in the design.
 
 **Diagnostic catalog snapshot test.** New
 `crates/pykrete/tests/diagnostic_catalog.rs` builds a minimal `.pyk`
-fixture per D-code (17 codes total), runs the checker, and snapshots
+fixture per D-code (18 codes total), runs the checker, and snapshots
 the rendered diagnostic with `insta`. A coverage assertion at the top
 iterates `pykrete::diagnostics::DIAGNOSTIC_CATALOG` and fails if any
 code lacks a fixture — adding a new D-code now forces an accompanying
@@ -1364,7 +1532,9 @@ full contract.
 - **Multi-file analysis** via imported typed declarations.
 - **`pykrete.json`** project configuration with non-strict / strict modes.
 
-[Unreleased]: https://github.com/amirnaderi93/pykrete/compare/v0.1.40...HEAD
+[Unreleased]: https://github.com/amirnaderi93/pykrete/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/amirnaderi93/pykrete/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/amirnaderi93/pykrete/compare/v0.1.40...v1.0.0
 [0.1.40]: https://github.com/amirnaderi93/pykrete/compare/v0.1.39...v0.1.40
 [0.1.39]: https://github.com/amirnaderi93/pykrete/compare/v0.1.37...v0.1.39
 [0.1.37]: https://github.com/amirnaderi93/pykrete/compare/v0.1.34...v0.1.37

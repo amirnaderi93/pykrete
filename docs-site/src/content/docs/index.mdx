@@ -89,7 +89,7 @@ That's the whole investment. The rest of your repo stays plain Python — pykret
 
 ## Proven on real code
 
-pykrete runs against 32 annotated snapshots from 10 real PySpark codebases — Apache Spark, Delta Lake, Apache Iceberg, Apache Hudi, MLflow, Feast, Kedro, quinn, dbt-spark, and python-deequ — on every change, in CI. It's tested where the dataframes are messy, not just on tidy examples.
+Every release is regression-tested against **127 schema-tracking probes across 47 fixtures from 10 real PySpark codebases** — Apache Spark, Delta Lake, Apache Iceberg, Apache Hudi, MLflow, Feast, Kedro, quinn, dbt-spark, and python-deequ — on every change, in CI. The probes don't just check that pykrete stays quiet on real code; they assert it actually tracks columns through real transforms, and that the diagnostics we promise actually fire on deliberately-broken fixtures.
 
 [See how that works →](/about/pykrete-tests/)
 

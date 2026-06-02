@@ -45,6 +45,109 @@ Two complex-type keywords have legacy spelling carve-outs: both `Array[…]` and
 
 The wider Spark SQL vocabulary (`integer`, `bigint`, `smallint`, `tinyint`, `float`, `real`, `boolean`) is accepted only inside `.cast("…")` strings and string-form UDF return types, where Spark SQL itself is case-insensitive. Inside a Schema class body, stick to the lowercase pykrete names listed above.
 
+## Enum-valued strings — `enum["a", "b", ...]`
+
+A string column whose values are drawn from a fixed vocabulary — order
+status, CDC operation kind, run state — is declared as
+`enum["v1", "v2", ...]`:
+
+```python
+class Order(Schema):
+    id: long
+    status: enum["pending", "shipped", "delivered", "cancelled"]
+```
+
+`status` is still a Spark `string` at runtime; the `enum[...]` annotation
+adds a static vocabulary check on string literals that flow into the
+column. Comparing against an off-vocabulary value, filling with one, or
+writing one in via `withColumn` fires `D0084 enumValueMismatch` at the
+literal — with a *did you mean* suggestion when a close match exists:
+
+```
+orders.pyk:14:38 - error enumValueMismatch: 'shippd' is not in the enum vocabulary for 'status'. Did you mean 'shipped'?
+```
+
+The check fires across every sink-bound site we model: `col("status") ==
+"shippd"`, `col("status").isin("pending", "shippd")`,
+`.fillna({"status": "shippd"})`, `withColumn("status", lit("shippd"))`,
+`F.expr("status = 'shippd'")` (and the SQL `IN (...)` form), and the
+branch-form expressions `F.coalesce` / `F.when(...).otherwise(...)` /
+`F.nvl` / `F.ifnull` / `F.nullif` when their output flows into an
+enum-typed sink.
+
+### Vocabulary semantics
+
+- **Case- and whitespace-sensitive.** `enum["pending"]` rejects
+  `"Pending"` and `"pending "` (trailing space). The vocabulary is the
+  literal set the schema declares.
+- **Full Unicode.** `enum["café", "naïve"]` is fine.
+- **Set equality.** Order doesn't matter: `enum["a", "b"]` and
+  `enum["b", "a"]` are the same type.
+
+### Nullable enums
+
+Wrap with `Nullable[...]` for an optional enum column. `Nullable[enum[...]]`
+is the canonical optional shape:
+
+```python
+class Run(Schema):
+    id: string
+    status: Nullable[enum["RUNNING", "FINISHED", "FAILED", "KILLED", "SCHEDULED"]]
+```
+
+`Optional[...]` is accepted as an alias for `Nullable[...]` (same
+semantics as elsewhere in the type vocabulary). A literal `None` /
+`lit(None)` into a `Nullable[enum[...]]` sink is fine; into a bare
+`enum[...]` sink it fires `D0083 nullabilityMismatch` under strict mode.
+
+### Constraint preservation
+
+The enum constraint flows through schema composition and structural
+transforms:
+
+- **`Pick` / `Omit`** preserve the constraint on every column carried
+  through.
+- **`Merge`** preserves the constraint when both sides agree (set-equal
+  vocabularies); a non-set-equal collision fires `D0040
+  unionSchemaMismatch` rather than silently union or intersect.
+- **Aliases and renames** (`F.col("status").alias("s")`) preserve the
+  constraint.
+- **Per-value aggregations** that emit a value drawn from the input
+  column — `first`, `last`, `min`, `max`, `collect_set`, `collect_list`
+  — preserve the constraint.
+- **Branch-form expressions** (`F.coalesce`, `F.when(...).otherwise(...)`,
+  `F.nvl`, `F.ifnull`) preserve the constraint when every branch is
+  enum-typed and shares a set-equal vocabulary; otherwise the output
+  drops to plain `string` (or fires `D0040` on a non-set-equal
+  enum-vs-enum mismatch).
+
+The constraint is dropped on **string-producing operations** — `cast`,
+`regexp_replace`, `regexp_extract`, `substring`, `substr`, `lower`,
+`upper`, `initcap`, `trim`, `concat`, `concat_ws`, `format_string`, and
+the rest of the string-transform family. The result type is plain
+`string`; downstream literals are no longer vocabulary-checked. This is
+deliberate — the transformed value may or may not still be in the
+vocabulary, and a silent "yes" would be a worse signal than no check.
+
+### v1.1 scope — `withColumn(name, lit(...))` literal check, sink only
+
+In v1.1, `withColumn("status", lit("shipped"))` checks the literal
+against the `status` sink's vocabulary, but the **output column** drops
+the enum constraint to plain `string`. Downstream code that re-uses the
+returned frame's `status` column won't see the vocabulary preserved.
+The vocabulary check at the literal still fires at the write site,
+which is where the bug lives in practice; the preservation of the
+constraint on the output column is tracked for v1.2.
+
+### What you can't do
+
+- **`.cast("enum[...]")`** is rejected (`D0011 invalidColumnType`).
+  Schemas are the only way to introduce an enum-typed column —
+  casting from arbitrary `string` would require runtime validation
+  pykrete deliberately does not perform.
+- **Empty vocabulary** (`enum[]`) is rejected — declare at least one
+  value, or use plain `string`.
+
 ## Optional columns
 
 Wrap a type in `Optional[...]` to mark the column nullable:
