@@ -245,6 +245,8 @@ are filed here so future-us does not relitigate.
   the typed DataFrame in scope (typically the function parameter
   whose annotation is `DataFrame[X]`), so `col()` binds and D0081
   can fire. Harness-only change; no pykrete-core release required.
+  **Settled in v1.2 spec: PROBE-TYPE-IS scope-binding fix** (see the
+  v1.2 spec section below).
 - **`PROBE-NULLABLE: <column> = (true|false)`** — pykrete-core has
   `D0083 nullabilityMismatch` already, but the synthesizer rewrite has
   no clean trigger from a single appended expression: nullability
@@ -455,7 +457,9 @@ in scope, so every TYPE-IS probe reports inconclusive. The marker
 grammar stays in v1.1 for forward compatibility; the active set is
 the four other markers (RESOLVES, EXPECTS, FILE-CLEAN-OF, FILE-
 COUNT). See the **"Deferred to v1.2"** section above for the
-synthesizer scope-binding fix that re-activates TYPE-IS.
+synthesizer scope-binding fix that re-activates TYPE-IS, and the
+**"v1.2 spec: PROBE-TYPE-IS scope-binding fix"** section below for
+the settled v1.2 design.
 
 Failing output (per fixture):
 
@@ -1163,6 +1167,358 @@ NULLABLE / OUTPUT-COLUMNS markers will pull in coordinated pykrete-
 core changes (D0083 emission-site work for NULLABLE; a new D-code for
 OUTPUT-COLUMNS — number TBD since D0080 is already taken) when they
 revive in v1.2; that cost is filed against v1.2, not v1.1.
+
+## v1.2 spec: PROBE-TYPE-IS scope-binding fix
+
+**Status**: spec settled from the v1.2 feasibility spike
+(`spike/v1.2-probe-type-is-scope-binding` in pykrete-tests; report
+at `scripts/spikes/PROBE_TYPE_IS_SCOPE_BIND_REPORT.md`, SHA
+`4f4aaaf103c41fbb5910a57516a8a4ec4406a775`). v1.2 implementation
+follows in a subsequent harness PR. This amendment finalizes the
+spec; impl is unblocked.
+
+### Problem statement (with spike evidence)
+
+In v1.1, every `PROBE-TYPE-IS` marker reports inconclusive. The synth
+appends a bare accessor expression (e.g. `_probe = (col("x") + lit(1))`)
+as a module-level or function-body statement with no typed
+receiver — pykrete has no schema context against which to type-check
+`col("x")`, so D0081 (and by extension D0080 / D0082) never fires
+even when the probe's claim is false. The v1.1 cross-codebase corpus
+authors zero TYPE-IS markers as a direct consequence.
+
+The spike verified this with three test cases, each materialized as
+two fixtures (style A = current v1.1 synth, style B = proposed
+`df.select(...)` wrap) in isolated tmp dirs under strict-mode
+`pykrete.json`:
+
+| case                 | column   | claim under test                | style A (current)        | style B (proposed)             |
+| -------------------- | -------- | ------------------------------- | ------------------------ | ------------------------------ |
+| `string_on_int`      | `label`  | PROBE-TYPE-IS string on int     | no diagnostics (silent)  | **D0081 at line 10** (correct) |
+| `enum_status`        | `status` | PROBE-TYPE-IS int on enum       | no diagnostics (silent)  | **D0081 at line 10** (correct) |
+| `same_family_int`    | `amount` | PROBE-TYPE-IS int on int        | no diagnostics (vacuous) | no diagnostics (correct)       |
+| `module_scope_probe` | `label`  | PROBE-TYPE-IS at module scope   | no diagnostics (silent)  | inconclusive — no `FunctionDef` to walk; recorded under the unsynthesizable fallthrough (correct for v1.2) |
+
+Style B fires D0081 on the two false-claim cases and stays silent on
+the same-family numeric case. Style A is silent across the board —
+including on cases where the probe's claim is provably false. The
+spike's falsifiability check (flipping the schema from `label: string`
+to `label: int`) silenced the style-B D0081, confirming the diagnostic
+tracks the real tracked schema rather than fixture text.
+
+### Proposed fix
+
+Wrap the synthesized accessor expression in
+`{df_ident}.select(<synth>)` where `df_ident` resolves to the typed
+`DataFrame[Schema]` parameter in scope at the probe's target line:
+
+```python
+# v1.1 (silent — col("x") has no typed receiver)
+_probe = (col("x") + lit(1))
+
+# v1.2 (D0081 fires on type mismatch — col("x") binds to df's schema)
+_probe = df.select(col("x") + lit(1))
+```
+
+The wrap binds the accessor to a typed receiver. Pykrete's checker
+walks the `.select(...)` argument with full schema context and emits
+the targeted D-code (D0080 / D0081 / D0082) on a type mismatch, exactly
+as if the user had authored the expression themselves. Single-line
+change at the synth call site in `scripts/probes.py` (search for
+`_synthesize_type_probes`); spec does not embed the diff, but pins
+the pattern.
+
+### Multi-DataFrame-parameter resolution policy (locked: first-wins)
+
+When the enclosing function declares more than one `DataFrame[...]`
+parameter, the synthesizer must pick one to wrap in `.select(...)`.
+v1.2 locks **TypeScript-style first-wins resolution**:
+
+> The synthesizer walks the enclosing `FunctionDef.args` in declaration
+> order — positional-only, then positional-or-keyword, then
+> keyword-only — and binds `df_ident` to the FIRST parameter whose
+> annotation is `DataFrame[Schema]`. If no such parameter exists, the
+> probe is marked unsynthesizable (same fallthrough as v1.1's
+> `<unsynthesizable>` path; the marker remains parseable but produces
+> no assertion).
+
+Rationale:
+
+- **Deterministic.** No type-driven inference, no heuristic — the
+  result is a pure function of source ordering, which fixture authors
+  control.
+- **Familiar.** Mirrors TypeScript's first-generic-parameter
+  inference precedence and Python's positional-parameter ordering.
+  Authors who know either model will not be surprised.
+- **Authorable.** Fixture authors who need a different DataFrame
+  wrapped reorder the function signature — the same intervention
+  TypeScript users make to influence generic inference.
+
+#### Annotation-shape matching
+
+The first-wins walk inspects each parameter's annotation AST and
+binds only if the annotation is a direct `DataFrame[Schema]`
+subscript (bare `DataFrame` name or fully-qualified
+`pykrete.types.DataFrame[Schema]`). Every other shape falls through
+and the walk continues to the next parameter. The settled cases:
+
+- **Generic wrappers** (`list[DataFrame[X]]`, `Optional[DataFrame[X]]`,
+  `Union[DataFrame[X], None]`, `Sequence[DataFrame[X]]`, etc.):
+  **skipped**. The helper matches `DataFrame[Schema]` only as the
+  outer subscript; a wrapped DataFrame parameter has no nameable
+  scalar binding the synthesizer can wrap in `.select(...)`. Example:
+
+  ```python
+  def f(dfs: list[DataFrame[A]], df: DataFrame[B]) -> ...:
+      # PROBE-TYPE-IS binds df_ident = "df" (the list[...] param is skipped)
+  ```
+
+  PEP 604 union syntax (`DataFrame[A] | None`) is treated identically
+  to `Optional[DataFrame[A]]` — wrapped, so skipped per first-wins.
+
+- **String forward references** (`def f(df: "DataFrame[A]")`):
+  **not resolved** in v1.2. The annotation is an `ast.Constant(str)`,
+  not an `ast.Subscript`; the helper does not parse string
+  annotations. The parameter falls through; if no other DataFrame
+  parameter matches, the probe is unsynthesizable. Filed as a v1.3
+  candidate if forward-ref-heavy fixtures emerge as a real
+  authoring blocker.
+- **Type aliases** (`MyDataFrame = DataFrame[A]; def f(df: MyDataFrame)`):
+  **not resolved** at the AST layer. The helper requires the literal
+  `DataFrame[X]` annotation; alias resolution would need a name
+  binder we deliberately do not run. Out of scope for v1.2.
+- **Bare `DataFrame` without a schema parameter**
+  (`def f(df: DataFrame)`): **skipped**. No schema to bind against;
+  D-code synthesis has nothing to type-check `col("x")` against.
+- **Variadic parameters** (`*args: DataFrame[X]`,
+  `**kwargs: DataFrame[X]`): **skipped**. There is no named
+  scalar binding to wrap in `.select(...)`; `args.select(...)` is
+  not a meaningful expansion. The first-wins walk continues past
+  variadics to the next named parameter.
+
+`test_probes.py` exercises one fixture per case (generic wrapper,
+string forward ref, type alias, bare DataFrame, variadic) and
+asserts the unsynthesizable fallthrough fires as expected.
+
+#### Module-scope probes
+
+If a probe's target line is at **module scope** (no enclosing
+`FunctionDef`), PROBE-TYPE-IS is **inconclusive** for v1.2. The
+multi-DataFrame-parameter walk has no `FunctionDef.args` to
+inspect; the probe falls through to the same unsynthesizable path
+as a no-DataFrame-parameter case and records under the harness
+fallthrough. No silent pass.
+
+Future versions may extend by walking module-level
+`DataFrame[...]` assignments (e.g.
+`orders: DataFrame[Order] = spark.read.parquet(...)`) to bind
+`df_ident`, but v1.2 scopes the technique to in-function probes.
+Filed as a v1.3+ open question. Document the carve-out in the
+impl PR; add a `module_scope_probe` case to `test_probes.py`
+asserting the probe is recorded as unsynthesizable.
+
+#### Other settled corners
+
+- **Kwargs-only DataFrame parameters.** The same first-wins rule
+  applies to the merged positional-only + positional-or-keyword +
+  keyword-only ordering as declared in the signature. A
+  `test_probes.py` case must exercise this path.
+- **No DataFrame parameter.** Probe is unsynthesizable; the harness
+  records it under the existing fallthrough path. No silent pass.
+- **DataFrame rebound between function head and probe target line.**
+  Out of spec scope for v1.2. The spec relies on the parameter name
+  staying valid up to the target line; rebinding handling stays a
+  v1.3+ open question. Document the carve-out in the impl PR.
+
+**Lock-in.** First-wins (and the annotation-shape matching policy
+above) is part of the v1.2 stability surface. Any future change
+(type-driven inference, "loop over every DataFrame param", explicit
+`df=` slot on the marker, string-forward-ref resolution, alias
+resolution, module-scope probe support) requires a
+`probesSchemaVersion` semver-minor amendment.
+
+### Falsifiability requirement (per-fixture)
+
+**Falsifiability is per-fixture, not per-suite.** Every PROBE-TYPE-IS
+probe added to the cross-codebase suite must come with a schema-flip
+mutation test that proves the diagnostic tracks the real schema, not
+the fixture text. The mutation must change the schema field's type
+without changing the probe's assertion; the expected diagnostic must
+stop firing under the mutation and resume firing when the mutation
+is reverted.
+
+The spike's `label: string` ↔ `label: int` pattern is the template:
+
+1. Author a `PROBE-TYPE-IS` whose claim is provably **false** under
+   the current schema (e.g. `PROBE-TYPE-IS: string on "label"` when
+   `label: int`).
+2. Assert the expected D-code fires (D0081 in the spike's case).
+3. Mutate the schema to invert the claim (`label: int` →
+   `label: string`) **without touching the probe marker**. Re-run
+   the harness; assert the diagnostic **stops** firing.
+4. Revert the mutation; assert the diagnostic **fires again**.
+
+**Per-D-code coverage.** The cross-codebase suite MUST contain at
+least one falsifiable PROBE-TYPE-IS fixture targeting each of
+**D0080**, **D0081**, and **D0082** — each D-code's firing shape
+may require a different mutation pattern (return-type vs.
+arithmetic vs. cross-type comparison), and a suite that falsifies
+one D-code says nothing about the other two. The impl PR for v1.2
+production-wires this coverage requirement into `test_probes.py`
+(a guard that fails CI if any of D0080/D0081/D0082 lacks at least
+one falsifiable fixture).
+
+Per the project trust contract
+(`feedback_cross_codebase_must_verify_correctness`): the v1.2
+PROBE-TYPE-IS suite must verify correctness positively, not just
+absence of false positives. Without the per-fixture mutation step
+plus per-D-code coverage, a probe is indistinguishable from one
+that always passes vacuously — the failure mode v1.0 trust signals
+are built to detect.
+
+### Out-of-scope carve-outs (non-promises)
+
+The v1.2 scope-binding fix does NOT solve two adjacent problems.
+Calling them out explicitly so future fixture authors do not assume
+otherwise:
+
+- **Numeric-subtype distinguishability (int vs long vs double vs
+  short vs byte vs float vs decimal).** Pykrete-core today fires
+  family-level D-codes only; there is no D-code for
+  numeric-subtype-mismatch. A `PROBE-TYPE-IS: long on "amount"` where
+  `amount: int` will stay silent under v1.2's scope-binding fix
+  because the synth's D0081 never fires inside a numeric family. This
+  is a pykrete-core gap, not a synthesizer gap, and stays deferred —
+  see the v1.1-polish backlog entry **"PROBE-TYPE-IS numeric-subtype
+  distinguishability"** in the
+  "Impl-PR coverage backlog" subsection above for the originating
+  carve-out and v1.2/v1.3 fork (schema-trace output vs new
+  pykrete-core D-codes for numeric-subtype-mismatch). v1.2's fix
+  only re-activates the cross-family cases (string vs int, enum vs
+  int, etc.).
+- **Enum type-expression syntax.** Pykrete's enum syntax is
+  `enum["a", "b"]`, not `typing.Literal["a", "b"]`. The synthesizer
+  only operates on the *column expression* (the `col("x")` half of
+  the synth), never on a type expression, so this asymmetry does not
+  affect the v1.2 design. Noted here because fixture authors writing
+  enum-backed schemas should expect `enum[...]` syntax in the Schema
+  class itself; the marker's `<type-expr>` slot continues to use
+  pykrete's atomic-type spellings as in v1.1. Cross-ref: the
+  spike's `enum_status` case in the worked-examples table above is
+  the canonical example; the v1.1-polish backlog tracks any
+  future syntax-ergonomics work in the same "Impl-PR coverage
+  backlog" subsection.
+
+### Implementation breakdown (productionization)
+
+The spike estimated 1.5 to 2 days end-to-end. Broken down for impl
+review (helper / call-site references resolve by symbol name in
+`scripts/probes.py` per round 2's de-line-numbering pass):
+
+| Phase | Effort | Detail |
+|---|---|---|
+| AST param-resolution helper | 0.5 day | Extend the `_enclosing_function` helper in `scripts/probes.py` to walk `FunctionDef.args` and return the first `DataFrame[Schema]` parameter per the annotation-shape matching policy above. Unit tests cover: single param, multiple params (first-wins), kwargs-only, no DataFrame param (unsynthesizable), positional + keyword-only mixed ordering, generic-wrapper / string-forward-ref / type-alias / bare-DataFrame / variadic fallthrough, module-scope probe. |
+| Synth rewrite | 0.5 day | One-line change at the synth call site in `scripts/probes.py` (inside `_synthesize_type_probes`) wrapping the accessor expression in `{df_ident}.select(...)`. Update `tests/test_probes.py` to assert the new synth shape and to exercise the unsynthesizable fallthrough cases. |
+| Cross-codebase TYPE-IS golden refresh | 0.5 day | Probes that were silent under v1.1 now fire real D-codes. Walk the corpus, refresh affected goldens, confirm each refreshed golden is accompanied by at least one falsifiability mutation case (per the previous subsection). Verify per-D-code coverage: at least one falsifiable fixture for each of D0080 / D0081 / D0082. |
+| Spec PR + bookkeeping | 0.25 day | This amendment + a retrospective note tying the spike, spec, and impl PRs together. |
+
+**Total: 1.75 days nominal (1.5-2 day band including review)** —
+one focused engineer-day-or-two. The estimate is anchored to the
+spike's verified symbol references and does not assume parallel
+work across the four phases.
+
+### Stability surface
+
+The v1.2 fix is a synthesizer implementation change, not a marker
+grammar change:
+
+- **`PROBE-TYPE-IS` marker syntax — unchanged.** The v1.1 grammar
+  (`# PROBE-TYPE-IS: <type-expr> on "<column>" [id=...] [-- ...]`)
+  is the v1.2 grammar. Fixtures authored against v1.1 (and held back
+  from authoring TYPE-IS pending this fix) parse identically in v1.2.
+- **Synthesis D-code targets — unchanged.** D0080 / D0081 / D0082
+  remain the synthesis destinations. No new D-code is added; no
+  pykrete-core release is required.
+- **Multi-DataFrame-parameter resolution — new in v1.2 stability
+  surface.** First-wins resolution (plus the annotation-shape
+  matching policy and module-scope inconclusiveness rule above) is
+  locked as of v1.2.0; changes to the resolution policy after
+  v1.2.0 require a `probesSchemaVersion` semver-minor amendment.
+- **Falsifiability mutation pattern — new in v1.2 authoring
+  contract.** Cross-codebase TYPE-IS fixtures must include at least
+  one schema-flip mutation per fixture, and the suite must contain
+  at least one falsifiable fixture per D-code (D0080 / D0081 /
+  D0082). The harness enforces both in `tests/test_probes.py`.
+- **Unsynthesizable observable — clarified.** When a probe falls
+  into the unsynthesizable path (no DataFrame parameter, generic
+  wrapper, string forward ref, type alias, bare `DataFrame`,
+  variadic, module-scope target, no enclosing `FunctionDef`), the
+  harness records the probe under the existing fallthrough path
+  with the kind tagged `unsynthesizable` in its manifest entry —
+  not a silent no-op. "No silent pass" means: the probe is
+  observable in `--report` mode and in failure output as
+  unsynthesizable, distinct from a probe that passed because its
+  synthesized D-code did not fire.
+- **Driver-style functions** (no `DataFrame[X]` parameter, but a
+  local `df = spark.read.parquet(...)` binding inside the body):
+  fall into the no-DataFrame-parameter unsynthesizable bucket per
+  the current policy. The synthesizer does not inspect function
+  bodies for locally-bound DataFrames in v1.2. This is a v1.2
+  restriction; fixture authors who need TYPE-IS coverage on a
+  driver-style function refactor the body's local DataFrame into
+  a parameter, or wait for v1.3+ to extend the walk.
+
+`probesSchemaVersion` stays `"1"` — none of the above is a breaking
+change to the v1.1 grammar or verifier semantics.
+
+### Behavior change from v1.1 + trust-copy migration
+
+The v1.1 → v1.2 transition is a **behavior change for fixture
+authors**, not a grammar change. Calling it out explicitly so the
+v1.2 ship is honest by default:
+
+- **Silent-inconclusive → D-code fires.** PROBE-TYPE-IS probes that
+  were silent-inconclusive in v1.1 will now FIRE D0080 / D0081 /
+  D0082 if their type claim is wrong. This is intentional: v1.1
+  deferred type-tracking; v1.2 starts being honest. A v1.1-authored
+  TYPE-IS marker whose claim was provably FALSE under the schema
+  produced no diagnostic in v1.1 (silent-incorrect); the same marker
+  produces a D-code in v1.2. `probesSchemaVersion` stays `"1"` —
+  the marker grammar and JSON contract are unchanged — but the
+  semantic surface widens.
+- **CI metric direction.** The corpus-wide `probes-found` /
+  satisfied-vs-unsatisfied counts will shift on the v1.2 cut. The
+  expected direction is "more probes carry real signal", not "more
+  unrelated diagnostics". The v1.2 ship coordinates a one-time
+  refresh of affected goldens; the seeded TYPE-IS probes that were
+  recorded as inconclusive against v1.1 either pass (claim was
+  correct), fire and refresh their golden (claim was wrong but
+  intentional, e.g. negative-probes), or get rewritten (claim was
+  wrong unintentionally — the rarest and the most trust-valuable
+  surface for this migration).
+- **Trust-copy migration.** The v1.2 release coordinates a copy
+  update across the pykrete README, the docs-site Production
+  Readiness page, and the pykrete-tests README so the trust claim
+  reads "we now verify type-tracking" alongside the existing
+  "column resolution + diagnostic firing" language. Drafting and
+  landing this copy update is a v1.2 impl-PR follow-up, NOT this
+  spec PR's scope — copy migration lands in lockstep with the
+  synthesizer-rewrite impl PR so the trust claim is never ahead of
+  the code.
+
+### References
+
+- Spike branch: `spike/v1.2-probe-type-is-scope-binding` in
+  `pykrete-tests` (SHA `4f4aaaf103c41fbb5910a57516a8a4ec4406a775`).
+- Spike runner: `scripts/spikes/probe_type_is_scope_bind.py`.
+- Spike report: `scripts/spikes/PROBE_TYPE_IS_SCOPE_BIND_REPORT.md`.
+- Synth call site (current v1.1, target for the v1.2 one-line
+  change): the `_synthesize_type_probes` function in
+  `scripts/probes.py`.
+- AST helper extension point: the `_enclosing_function` helper in
+  `scripts/probes.py`.
+- Numeric-subtype carve-out (still in force): the `_NUMERIC_FAMILY`
+  constant in `scripts/probes.py`.
 
 ## Related
 
