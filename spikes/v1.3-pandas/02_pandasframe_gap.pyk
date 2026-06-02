@@ -1,0 +1,27 @@
+# Spike file 2 — PandasFrame[X] target form (THE GAP).
+#
+# Purpose: write the v1.3 syntax against today's pykrete and document
+# what the checker currently does. Expectation: pykrete v1.2 doesn't
+# recognize `PandasFrame` as a frame-typed annotation, so the typed-slot
+# walker silently skips it. No diagnostics, no checking — silent miss.
+#
+# This is the spec gap v1.3 closes: extend `dataframe.rs::recognize`
+# to match both `SparkFrame` and `PandasFrame` (and the legacy alias
+# `DataFrame = SparkFrame`), and tag the resulting `TypedSlot` with
+# which dialect so per-call-site checks can dispatch.
+
+from pyspark.sql.functions import col
+
+
+class Order(Schema):
+    id: long
+    status: string
+    amount: decimal(18, 2)
+
+
+def stale_pandas(orders: PandasFrame[Order]) -> PandasFrame[Order]:
+    # If pykrete recognized PandasFrame, the typo below would fire
+    # D0030. As of v1.2.0 it does not — the function annotation is
+    # treated as untyped, the column-existence walker has no schema
+    # bound to `orders`, and no diagnostic is emitted.
+    return orders[orders["statuss"] == "pending"]

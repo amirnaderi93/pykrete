@@ -1,0 +1,28 @@
+# Spike file 1 — Spark baseline (v1.2 form).
+#
+# Purpose: show what v1.2 already handles. This is the shape we want
+# pandas support to MIRROR in v1.3, not replace.
+#
+# Today's form: `DataFrame[X]` means SparkFrame[X]. The v1.3 spec PR
+# will introduce `SparkFrame[X]` (synonym, locked alias `DataFrame =
+# SparkFrame` for one major) and `PandasFrame[X]` as the parallel.
+
+from pyspark.sql import DataFrame
+from pyspark.sql.functions import col
+
+
+class Order(Schema):
+    id: long
+    status: string
+    amount: decimal(18, 2)
+
+
+def stale(orders: DataFrame[Order]) -> DataFrame[Order]:
+    return orders.filter(col("status") == "pending")
+
+
+def typo_should_fire(orders: DataFrame[Order]) -> DataFrame[Order]:
+    # The column reference below is wrong on purpose — pykrete should
+    # emit D0030 with a "did you mean 'status'" hint. This is the
+    # baseline behavior we want pandas annotations to reach in v1.3.
+    return orders.filter(col("statuss") == "pending")

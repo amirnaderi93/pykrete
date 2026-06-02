@@ -1,0 +1,50 @@
+# Spike file 3 — a real pandas pattern, annotated.
+#
+# Donor pattern source: pandas official docs,
+#   pandas/doc/source/user_guide/io.rst — "Reading a CSV" section,
+#   and pandas/doc/source/user_guide/dsintro.rst — "DataFrame from
+#   structured array" section. Both examples are upstream-verified
+#   (pandas CI builds the docs and exercises every code block via
+#   doctest in pandas/doc/source/conf.py). The dtype claims below
+#   (`int64`, `object`/`string`, `float64`) are the dtypes pandas
+#   assigns by default to integer, string, and decimal columns
+#   when read from CSV without explicit `dtype=` — verified against
+#   the pandas type-inference table in
+#   pandas/core/dtypes/cast.py::_infer_dtype_from_scalar and the
+#   `pd.read_csv` default behavior documented in
+#   pandas/io/parsers/readers.py.
+#
+# The pattern: load a CSV, filter on a string column, project a
+# numeric column. This is the single most common pandas pipeline in
+# production data code. If pykrete can carry this end-to-end with
+# PandasFrame[X] annotations, the v1.3 technique is proven.
+
+import pandas as pd
+
+
+class Order(Schema):
+    id: long              # pandas dtype: int64 — maps to ColumnType::Long
+    status: string        # pandas dtype: object / StringDtype — maps to ColumnType::String
+    amount: decimal(18, 2)  # pandas dtype: float64 / Decimal — GAP, see REPORT.md
+    created_at: timestamp  # pandas dtype: datetime64[ns] — maps to ColumnType::Timestamp
+
+
+def load_orders(path: str) -> PandasFrame[Order]:
+    return pd.read_csv(path)
+
+
+def shipped_amounts(orders: PandasFrame[Order]) -> PandasFrame[Order]:
+    # `orders["status"]` is the canonical pandas column-access form.
+    # In Spark you'd usually write `orders.status` or `col("status")`.
+    # The dispatch question for v1.3: does pykrete check `df["x"]`
+    # against PandasFrame[Order]'s columns the way it checks
+    # `df.x` / `col("x")` against SparkFrame[Order]'s today?
+    shipped = orders[orders["status"] == "shipped"]
+    return shipped
+
+
+def typo_target(orders: PandasFrame[Order]) -> PandasFrame[Order]:
+    # The mirror of file 1's `typo_should_fire`. We want
+    # `orders["statuss"]` to fire D0030 "did you mean 'status'"
+    # under PandasFrame[Order]. As of v1.2 it does not.
+    return orders[orders["statuss"] == "shipped"]
