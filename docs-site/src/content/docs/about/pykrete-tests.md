@@ -1,6 +1,6 @@
 ---
 title: Real-codebase tests
-description: How pykrete is tested against 41 fixtures and 111 schema-tracking probes from 10 upstream codebases — what we cover, what the goldens and probes verify, what's deliberately out of scope.
+description: How pykrete is tested against 47 fixtures and 127 schema-tracking probes from 10 upstream codebases — what we cover, what the goldens and probes verify, what's deliberately out of scope.
 ---
 
 [pykrete-tests](https://github.com/amirnaderi93/pykrete-tests) is a separate repo that vendors fixtures from 10 widely-used PySpark codebases, adds pykrete annotations the way a real adopter would, and on every push runs two release-blocking suites against pykrete built fresh from `main`: a golden-diff suite (JSON output of `pykrete check` against a frozen snapshot) and a schema-tracking probe suite (inline `# PROBE-*` assertions that columns survive transforms and that specific diagnostics fire on deliberately-corrupted fixtures). It exists for two reasons:
@@ -10,33 +10,40 @@ description: How pykrete is tested against 41 fixtures and 111 schema-tracking p
 
 ## The donors
 
-41 fixtures (32 annotated + 9 deliberately-corrupted under `probes_negative/`) across 10 donors, all Apache 2.0:
+47 fixtures (35 annotated + 12 deliberately-corrupted under `probes_negative/`) across 10 donors, all Apache 2.0:
 
 | donor | upstream | annotated | probes_negative |
 |---|---|---:|---:|
 | **spark** | [apache/spark](https://github.com/apache/spark) | 8 | 2 |
-| **delta** | [delta-io/delta](https://github.com/delta-io/delta) | 3 | 1 |
+| **delta** | [delta-io/delta](https://github.com/delta-io/delta) | 4 | 2 |
 | **kedro-plugins** | [kedro-org/kedro-plugins](https://github.com/kedro-org/kedro-plugins) | 3 | 1 |
 | **iceberg-python** | [apache/iceberg-python](https://github.com/apache/iceberg-python) | 2 | 0 |
-| **hudi** | [apache/hudi](https://github.com/apache/hudi) | 2 | 0 |
-| **mlflow** | [mlflow/mlflow](https://github.com/mlflow/mlflow) | 4 | 2 |
+| **hudi** | [apache/hudi](https://github.com/apache/hudi) | 3 | 1 |
+| **mlflow** | [mlflow/mlflow](https://github.com/mlflow/mlflow) | 5 | 3 |
 | **feast** | [feast-dev/feast](https://github.com/feast-dev/feast) | 3 | 1 |
 | **quinn** | [MrPowers/quinn](https://github.com/MrPowers/quinn) | 3 | 2 |
 | **dbt-spark** | [dbt-labs/dbt-spark](https://github.com/dbt-labs/dbt-spark) | 2 | 0 |
 | **python-deequ** | [awslabs/python-deequ](https://github.com/awslabs/python-deequ) | 2 | 0 |
 
+Three donors — delta, hudi, and mlflow — carry **v1.1 enum value vocabulary** fixtures: Delta CDC `_change_type` (`{"insert", "update_preimage", "update_postimage", "delete"}`), Hudi `_hoodie_operation` (`{"I", "-U", "U", "D"}`), and MLflow run status (`{"RUNNING", "FINISHED", "FAILED", "KILLED", "SCHEDULED"}`). Each ships an annotated fixture demonstrating in-vocab usage and a `probes_negative/` counterpart asserting D0084 `enumValueMismatch` fires on off-vocab typos.
+
 Every annotated fixture currently emits zero diagnostics against the released binary; the golden snapshots for the annotated tree are all empty-diagnostic arrays after the v0.1.39 false-positive sweep cleared the six v0.1.38-baseline fixtures (seven underlying findings total) that the cross-codebase suite had surfaced. The `probes_negative/` fixtures are deliberately broken — each one's `.golden.json` carries the exact diagnostics pykrete must fire, and the golden-diff suite verifies they fire on every release. The donor table with pinned commits and per-donor coverage rationale — what each codebase exercises, why it earned a slot — lives in the [pykrete-tests README](https://github.com/amirnaderi93/pykrete-tests#the-donors).
 
 ## Schema-tracking probes
 
-On top of golden-diff, every release runs **111 schema-tracking probes**:
+On top of golden-diff, every release runs **127 schema-tracking probes**:
 
-- **97 positive probes** across 31 of the 32 annotated fixtures assert columns survive `.select` / `.filter` / `.withColumn` and similar narrow transforms. These probes prove that the absence of a diagnostic isn't a silent miss — pykrete genuinely tracked the column through the chain. The feast `spark_kafka_processor` streaming fixture is annotated but probe-free, since it has no typed-DataFrame slot a probe can anchor to.
-- **14 negative probes** across all 9 deliberately-corrupted fixtures assert specific diagnostics fire: D0030 (`unknownColumn`), D0081 (`nonNumericArithmetic`), D0082 (`crossTypeComparison`). Without these, a silently-passing checker would satisfy every annotated probe vacuously.
+- **110 positive probes** across 34 of the 35 annotated fixtures assert columns survive `.select` / `.filter` / `.withColumn` and similar narrow transforms. These probes prove that the absence of a diagnostic isn't a silent miss — pykrete genuinely tracked the column through the chain. The feast `spark_kafka_processor` streaming fixture is annotated but probe-free, since it has no typed-DataFrame slot a probe can anchor to.
+- **17 negative probes** across all 12 deliberately-corrupted fixtures assert specific diagnostics fire: D0030 (`unknownColumn`), D0081 (`nonNumericArithmetic`), D0082 (`crossTypeComparison`), and **D0084 (`enumValueMismatch`)** (new in v1.1). Without these, a silently-passing checker would satisfy every annotated probe vacuously.
+- **Enum value vocabulary verification** in 3 of the 10 donors — Delta CDC `_change_type`, Hudi `_hoodie_operation`, and MLflow run status. Positive probes assert in-vocab literals stay clean across `==` / `.isin` / `withColumn` / `F.expr` / `groupBy` chains; negative probes assert D0084 fires when an off-vocab typo is used in a comparison or fill operation.
 
 Probes are inline `# PROBE-*` comment markers in `.pyk` fixtures, parsed by `scripts/probes.py` and verified against `pykrete check --format json` output. The marker grammar, placement convention, and `catalog-drift-watch` workflow that keeps `PROBE-EXPECTS` D-codes in sync with upstream are documented in [`scripts/PROBES.md`](https://github.com/amirnaderi93/pykrete-tests/blob/main/scripts/PROBES.md). CI fails if any probe asserts the wrong outcome.
 
-What the v1.1 probe suite does *not* yet verify: numeric-subtype distinguishability (e.g. `int` vs `long` arithmetic narrowing) and full type-tracking through expressions are tracked for v1.2.
+What the v1.1 probe suite does *not* yet verify, all tracked for v1.2:
+
+- Type-tracking through transformations (the `PROBE-TYPE-IS` marker kind is reserved but the scope-binding work lands in v1.2).
+- Numeric-subtype distinguishability (`int` vs `long` vs `double` arithmetic narrowing).
+- **withColumn output enum-constraint preservation.** v1.1 checks the literal against the sink's enum vocabulary, but the constraint drops on the output column — so a downstream `==` against an off-vocab literal on the rewritten column will not fire D0084. Tracker in `docs/design/literal-value-vocabulary.md` polish backlog.
 
 ## How it works
 
