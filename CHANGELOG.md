@@ -112,7 +112,7 @@ The trust suite now verifies, on every release:
 
 - **`PROBE-TYPE-IS` synth-shape coverage scoped to D0081.** The
   current synth shape (`{df}.select(col("x") + 1)`) falsifies on
-  non-numeric. D0080 (`unknownAttribute`) and D0082
+  non-numeric. D0080 (`returnTypeMismatch`) and D0082
   (`crossTypeComparison`) need their own synth shapes — tracked
   in
   [`docs/design/schema-tracking-probes.md`](https://github.com/amirnaderi93/pykrete/blob/main/docs/design/schema-tracking-probes.md)
