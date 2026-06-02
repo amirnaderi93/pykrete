@@ -160,25 +160,32 @@ against the user's declared schema, not a normalized form).
   Users who want trim-then-compare wrap with `.trim()`, which drops
   the constraint per Q2.
 
-#### Q1b. Column-to-column assignments and equality.
+#### Q1b. Literal-RHS assignment and equality (v1.1 scope).
 
-The literal RHS case in Q1 is the headline shape; column-to-column
-shapes also fire:
+**Scope clarification (2026-06-02 architecture audit, pre-tag).** Q1b
+covers **literal-RHS shapes only** in v1.1. The column-to-column shapes
+originally listed here surface real bugs but require additional carry-
+through plumbing the v1.1 impl did not land; they are deferred to v1.2
+and tracked in the v1.1-polish backlog below. The v1.1 contract this
+section pins down:
 
-- `df.withColumn("status", col("other"))` where `other` is plain
-  `string` (no enum constraint): **fire `D0084`** with message
-  "assigning unconstrained string into enum-typed sink 'status'."
-  Same code, slightly different message body.
-- `df.withColumn("status", col("other_enum"))` where both columns are
-  enum-typed: same rules as Q4 Merge — identical value sets pass
-  silently, **non-identical sets fire `D0040`** (do not silently
-  union or intersect; the user signed up for neither interpretation).
-- `df.filter(col("a") == col("b"))` where `a` and `b` are enum-typed
-  with **disjoint** vocabularies: the comparison is provably false at
-  edit time. Fire by extending the existing `D0082 crossTypeComparison`
-  logic — no new D-code. The message body distinguishes
-  "non-overlapping enum vocabularies" from the generic cross-type
-  case, but the code is `D0082`.
+- `df.withColumn("status", lit("delivered"))` with an off-enum literal
+  RHS: **fire `D0084`** — this is the Q1 headline shape, restated here
+  for completeness. Already covered.
+- `df.filter(col("status") == "pendig")` with an off-enum literal RHS:
+  **fire `D0084`** on the literal. Already covered.
+- `df.filter(col("status").isin("a", "b", "off"))` with one or more
+  off-enum literal entries: **fire `D0084`** on each off-enum literal.
+  Already covered.
+
+The literal-RHS shapes are the load-bearing silent-bug catch (an empty
+DataFrame from `col("status") == "actiev"` is exactly the class of
+production failure pykrete sells). The col-RHS shapes are a structural
+extension of the same idea but require the carry-through machinery to
+preserve sink context across the additional resolution step; the v1.1
+ship trades that for the cleaner literal-only scope. See the v1.1-polish
+backlog for the deferred col-RHS, disjoint-`==`, and types-compatible
+asymmetry items, each explicitly committed to v1.2.
 
 #### Q1c. Precedence when `D0030`, `D0082`, and `D0084` could both fire.
 
@@ -1019,6 +1026,33 @@ piling up.
   delta `rewrite_as_deletes` cross-codebase fixture in pykrete-tests).
   Decide in v1.2: (a) propagate sink's constraint to the output column,
   or (b) document the limitation and keep current behavior.
+
+### v1.2 deferrals from Q1b scope-narrow (2026-06-02 pre-tag audit)
+
+The pre-v1.1.0 architecture audit flagged three Q1b shapes the spec
+originally claimed but the v1.1 impl does not deliver. Rather than
+implement them under pre-tag pressure, the spec scope was narrowed
+to literal-RHS (above) and these are explicitly committed to v1.2:
+
+- [ ] **v1.2: col-RHS into enum sink fires `D0084`**:
+  `df.withColumn("status", col("plain_string"))` should fire `D0084`
+  with the "assigning unconstrained string into enum-typed sink"
+  message. Silent today. Needs sink-context carry-through across the
+  col-reference resolution step.
+- [ ] **v1.2: disjoint enum `==` extends `D0082`**:
+  `df.filter(col("enum_a") == col("enum_b"))` with disjoint
+  vocabularies should fire `D0082 crossTypeComparison` with a
+  "non-overlapping enum vocabularies" message body. Silent today.
+  Needs the strict-operator path to compare vocabularies when both
+  operands are enum-typed.
+- [ ] **v1.2: `types_compatible` body-enum -> declared-string return
+  asymmetry**: returning a body-typed `enum[...]` from a function
+  whose declared return type uses plain `string` for that column
+  should fire a return-type mismatch. Silent today by way of the
+  asymmetric subtype check (`enum` widens to `string` on assignment
+  but the return-shape check does not surface the widening as a
+  documented narrowing the user opted out of). Needs an explicit
+  rule in the return-type compatibility check.
 
 ## Related
 
