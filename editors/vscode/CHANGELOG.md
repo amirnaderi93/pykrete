@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.39
+
+Tracks the v1.2.0 pykrete release — trust-system extension, no
+checker behavior change. The pykrete-tests cross-codebase suite
+grows to 130 schema-tracking probes (113 positive + 17 negative)
+across 47 fixtures from 10 donors, with new `PROBE-TYPE-IS`
+type-tracking coverage in 3 donors (quinn, mlflow, python-deequ)
+scoped to D0081 via a fixed scope-binding synth shape. The
+bundled `pykrete-lsp` binary is **byte-identical to 0.2.38**; this
+extension bump exists to track the upstream v1.2.0 release per the
+version-guard contract that keeps the marketplace version aligned
+with the pykrete-core release line. See the
+[main CHANGELOG](../../CHANGELOG.md#120---2026-06-02) for details.
+
 ## 0.2.38
 
 Tracks the v1.1.0 pykrete release — enum-constraint check sites land.

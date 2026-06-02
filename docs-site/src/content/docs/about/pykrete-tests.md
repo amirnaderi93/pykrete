@@ -1,9 +1,9 @@
 ---
 title: Real-codebase tests
-description: How pykrete is tested against 47 fixtures and 127 schema-tracking probes from 10 upstream codebases — what we cover, what the goldens and probes verify, what's deliberately out of scope.
+description: How pykrete is tested against 47 fixtures and 130 schema-tracking probes from 10 upstream codebases — what we cover, what the goldens and probes verify, what's deliberately out of scope.
 ---
 
-[pykrete-tests](https://github.com/amirnaderi93/pykrete-tests) is a separate repo that vendors fixtures from 10 widely-used PySpark codebases, adds pykrete annotations the way a real adopter would, and on every push runs two release-blocking suites against pykrete built fresh from `main`: a golden-diff suite (JSON output of `pykrete check` against a frozen snapshot) and a schema-tracking probe suite (inline `# PROBE-*` assertions that columns survive transforms and that specific diagnostics fire on deliberately-corrupted fixtures). It exists for two reasons:
+[pykrete-tests](https://github.com/amirnaderi93/pykrete-tests) is a separate repo that vendors fixtures from 10 widely-used PySpark codebases, adds pykrete annotations the way a real adopter would, and on every push runs two release-blocking suites against pykrete built fresh from `main`: a golden-diff suite (JSON output of `pykrete check` against a frozen snapshot) and a 130-probe schema-tracking suite (inline `# PROBE-*` assertions that columns survive transforms, that specific diagnostics fire on deliberately-corrupted fixtures, and — new in v1.2 — that pykrete tracks types through transformations on a scoped 3-donor subset). It exists for two reasons:
 
 1. **Regression coverage** — catch behavior changes in pykrete's checker as new operations are modeled.
 2. **Trust signal** — demonstrate that pykrete keeps real PySpark code diagnostic-free under realistic annotation, *and* that the absence of diagnostics actually means the schema tracker is doing its job.
@@ -31,19 +31,22 @@ Every annotated fixture currently emits zero diagnostics against the released bi
 
 ## Schema-tracking probes
 
-On top of golden-diff, every release runs **127 schema-tracking probes**:
+On top of golden-diff, every release runs **130 schema-tracking probes**:
 
-- **110 positive probes** across 34 of the 35 annotated fixtures assert columns survive `.select` / `.filter` / `.withColumn` and similar narrow transforms. These probes prove that the absence of a diagnostic isn't a silent miss — pykrete genuinely tracked the column through the chain. The feast `spark_kafka_processor` streaming fixture is annotated but probe-free, since it has no typed-DataFrame slot a probe can anchor to.
-- **17 negative probes** across all 12 deliberately-corrupted fixtures assert specific diagnostics fire: D0030 (`unknownColumn`), D0081 (`nonNumericArithmetic`), D0082 (`crossTypeComparison`), and **D0084 (`enumValueMismatch`)** (new in v1.1). Without these, a silently-passing checker would satisfy every annotated probe vacuously.
+- **113 positive probes** across 34 of the 35 annotated fixtures assert columns survive `.select` / `.filter` / `.withColumn` and similar narrow transforms. These probes prove that the absence of a diagnostic isn't a silent miss — pykrete genuinely tracked the column through the chain. The feast `spark_kafka_processor` streaming fixture is annotated but probe-free, since it has no typed-DataFrame slot a probe can anchor to.
+- **17 negative probes** across all 12 deliberately-corrupted fixtures assert specific diagnostics fire: D0030 (`unknownColumn`), D0081 (`nonNumericArithmetic`), D0082 (`crossTypeComparison`), and D0084 (`enumValueMismatch`). Without these, a silently-passing checker would satisfy every annotated probe vacuously.
 - **Enum value vocabulary verification** in 3 of the 10 donors — Delta CDC `_change_type`, Hudi `_hoodie_operation`, and MLflow run status. Positive probes assert in-vocab literals stay clean across `==` / `.isin` / `withColumn` / `F.expr` / `groupBy` chains; negative probes assert D0084 fires when an off-vocab typo is used in a comparison or fill operation.
+- **`PROBE-TYPE-IS` type-tracking coverage** in 3 of the 10 donors — quinn, MLflow, and python-deequ — new in v1.2. Each donor ships at least one type-tracking assertion through `.select` / `.withColumn` / `.filter` chains. The synth wraps the assertion in `{df}.select(...)`, binding `col(...)` against the typed DataFrame in scope so off-claim markers fire D0081. The synth shape is scoped to D0081 in v1.2; D0080 (`returnTypeMismatch`) and D0082 (`crossTypeComparison`) are covered by raw-mutation fixtures (`V12CrossCodebaseMarkerMutationTests`) until v1.3 brings them under the synth gate. A CI gate, `V12FalsifiabilityCoverageGuard`, mutates the claimed type on every `PROBE-TYPE-IS` marker and verifies D0081 fires.
+
+Together, the suite verifies three properties on every release: **column resolution + diagnostic firing + type tracking (scoped to D0081 via `PROBE-TYPE-IS` synth in v1.2)**.
 
 Probes are inline `# PROBE-*` comment markers in `.pyk` fixtures, parsed by `scripts/probes.py` and verified against `pykrete check --format json` output. The marker grammar, placement convention, and `catalog-drift-watch` workflow that keeps `PROBE-EXPECTS` D-codes in sync with upstream are documented in [`scripts/PROBES.md`](https://github.com/amirnaderi93/pykrete-tests/blob/main/scripts/PROBES.md). CI fails if any probe asserts the wrong outcome.
 
-What the v1.1 probe suite does *not* yet verify, all tracked for v1.2:
+What the v1.2 probe suite does *not* yet verify, all tracked for v1.3:
 
-- Type-tracking through transformations (the `PROBE-TYPE-IS` marker kind is reserved but the scope-binding work lands in v1.2).
-- Numeric-subtype distinguishability (`int` vs `long` vs `double` arithmetic narrowing).
-- **withColumn output enum-constraint preservation.** v1.1 checks the literal against the sink's enum vocabulary, but the constraint drops on the output column — so a downstream `==` against an off-vocab literal on the rewritten column will not fire D0084. Tracker in `docs/design/literal-value-vocabulary.md` polish backlog.
+- **`PROBE-TYPE-IS` synth-shape coverage beyond D0081.** The v1.2 synth shape (`{df}.select(col("x") + 1)`) falsifies on non-numeric. D0080 (`returnTypeMismatch`) and D0082 (`crossTypeComparison`) need their own synth shapes; the raw-mutation suite covers them until then.
+- Numeric-subtype distinguishability (`int` vs `long` vs `short` arithmetic narrowing). Carried forward from v1.1.
+- **withColumn output enum-constraint preservation.** Carried forward from v1.1: the literal is checked against the sink's enum vocabulary, but the constraint drops on the output column — so a downstream `==` against an off-vocab literal on the rewritten column will not fire D0084. Tracker in `docs/design/literal-value-vocabulary.md` polish backlog.
 
 ## How it works
 
