@@ -39,6 +39,7 @@ The **rule name** (`unknownColumn`) is what the CLI prints and what the editor s
 | `D0081` | `nonNumericArithmetic` | Arithmetic on a non-numeric column. Strict mode only. |
 | `D0082` | `crossTypeComparison` | A comparison between unrelated types. Strict mode only. |
 | `D0083` | `nullabilityMismatch` | A nullable column flows into a slot the return schema declares non-null. Strict mode only. |
+| `D0084` | `enumValueMismatch` | A string literal compared against, or written into, a column declared `enum[...]` is not in the column's vocabulary. |
 
 ## The ones you'll see most
 
@@ -117,6 +118,45 @@ pykrete checks column **types**, not just existence. How much it checks depends 
 - **`nullabilityMismatch` — D0083.** A nullable column (or an explicit `lit(None)`) flowing into a slot the return schema declares non-null.
 
 These three are advisory — they catch things that *work* but are usually mistakes. They stay quiet outside strict mode.
+
+### `enumValueMismatch` — D0084
+
+A string literal compared against, or written into, a column declared
+`enum["v1", "v2", ...]` (see [Enum-valued
+strings](/reference/schemas/#enum-valued-strings--enuma-b-)) is not in
+the column's vocabulary.
+
+```pyk
+class Order(Schema):
+    id: long
+    status: enum["pending", "shipped", "delivered", "cancelled"]
+
+def stale(orders: DataFrame[Order]) -> DataFrame[Order]:
+    return orders.filter(col("status") == "shippd")
+    #                                       ^^^^^^^ D0084
+```
+
+```
+orders.pyk:6:39 - error enumValueMismatch: 'shippd' is not in the enum vocabulary for 'status'. Did you mean 'shipped'?
+```
+
+Fires at every sink-bound site we check: `==` / `!=` against a string
+literal, `.isin(...)`, `.fillna({...})`, `withColumn(name, lit(...))`,
+`F.expr("col = 'lit'")` (and the SQL `IN (...)` form), and the
+branch-form expressions `F.coalesce` / `F.when(...).otherwise(...)` /
+`F.nvl` / `F.ifnull` / `F.nullif` when their output flows into an
+enum-typed sink.
+
+**Severity.** Error in every check mode — `basic`, `standard`, and
+`strict`. Unlike D0081 / D0082 / D0083, this isn't an advisory; an
+off-vocabulary literal is an unambiguous bug. Downgradable to warning
+or off in `pykrete.json` like any other rule.
+
+**Suggestion behavior.** When a close match exists in the vocabulary
+the message carries a *did you mean*. The suggestion uses Levenshtein
+distance — the same routine D0030 uses for column-name typos —
+and ties are broken by Unicode code-point order (Rust `str::cmp`) so
+the same input always yields the same suggestion.
 
 ## Setup and import diagnostics
 

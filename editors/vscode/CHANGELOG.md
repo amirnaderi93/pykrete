@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.2.38
+
+Tracks the v1.1.0 pykrete release — enum-constraint check sites land.
+The bundled `pykrete-lsp` now emits `D0084 enumValueMismatch` on
+off-vocabulary string literals at every site we check: `==` / `!=`
+against an enum-typed column, `.isin(...)`, `.fillna({...})`,
+`withColumn("col", lit(...))`, `F.expr("col = 'lit'")` (and the SQL
+`IN (...)` form), plus the branch-form expressions
+`F.coalesce` / `F.when(...).otherwise(...)` / `F.nvl` / `F.ifnull` /
+`F.nullif` when their output flows into an enum-typed sink. Quick-fix
+suggestions follow the same Levenshtein routine D0030 already uses for
+column-name typos. See the
+[main CHANGELOG](../../CHANGELOG.md#110---2026-06-02) for details.
+
+## 0.2.37
+
+Tracks the v1.1.0 pykrete release — enum-constraint parser and type
+plumbing. The bundled `pykrete-lsp` recognizes the new
+`enum["v1", "v2", ...]` atomic type in `Schema` class bodies and
+threads the vocabulary through hover, completion, and the
+`DataFrame[X]` schema surface so editors show enum-typed columns
+alongside the rest of the type vocabulary. No `D0084` emission in this
+build — the check sites land in 0.2.38. See the
+[main CHANGELOG](../../CHANGELOG.md#110---2026-06-02) for details.
+
+## 0.2.36
+
+Internal test hardening for the bundled `pykrete-lsp` — the integration
+test suite now panics loudly when a `pykrete.json` from outside the
+test's temp dir would be picked up by accident, so test runs against
+real projects can't silently load the wrong config. No editor-visible
+behaviour change; the LSP binary is unchanged from 0.2.35.
+
 ## 0.2.35
 
 Tracks the v0.1.40 pykrete release — final pre-v1.0.0 docs-only
