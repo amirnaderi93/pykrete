@@ -1132,6 +1132,7 @@ here so they're not lost when impl starts.
   marker → synthesized `.pyk` → checker invocation → diagnostic
   capture → assertion flow.
 - [ ] **PROBE-TYPE-IS numeric-subtype distinguishability** — v1.1 rejects numeric-subtype assertions (int/long/short/byte/double/float/decimal) at parse time because the synthesizer can only fire family-level D-codes (D0080-D0082). v1.2 requires either schema-trace output or new pykrete-core D-codes for numeric-subtype-mismatch.
+- [ ] **PROBE-TYPE-IS synth shapes for D0080 / D0082** — v1.2's PROBE-TYPE-IS synth is arithmetic-shaped by construction (`{df}.select(col("x") + lit(1))`) and routes exclusively to **D0081 (non-numeric arithmetic)**. v1.3 should add additional synth shapes that route to **D0080 (return-type-mismatch — likely a synth that wraps the function-under-probe in a typed return position whose declared schema disagrees with the synth body)** and **D0082 (cross-type-comparison — likely a synth that emits `col("x") == col("y")` between two columns of different declared types)**. Each new synth shape needs a spec section, an impl extension to `_synthesize_type_probes` in `scripts/probes.py`, and a per-D-code falsifiability fixture (PROBE-TYPE-IS-driven, paired with a schema-flip mutation). Until v1.3 lands, D0080 / D0082 per-D-code falsifiability is satisfied via raw schema-flip mutation tests on hand-built fixtures (`V12PerDCodeFalsifiabilityTests.test_d0080_*` / `.test_d0082_*` in `scripts/test_probes.py`).
 - [ ] **golden.sh discovery widening for probes_negative/** — current `golden.sh check` only walks `*/annotated/*`. PR #3c should widen to also walk `*/probes_negative/*` so the release-blocking gate covers the negative tree. Currently the negative tree is exercised only via probes_ci.sh, not golden.sh. Note: when widened, the existing normalize step at `golden.sh:36` (which strips a `cross-codebase/` prefix) will need adjustment to match the runtime's donor-anchored relpath format used by `_fixture_relpath`. Either adjust normalize OR re-normalize negative goldens to match the walker output format.
 - [ ] **`pykrete.json` config discovery bypassed on absolute paths** — surfaced during the v1.2 PROBE-TYPE-IS feasibility spike. `pykrete check` honors `pykrete.json` only when invoked from inside the config directory or passed a directory path; absolute file paths bypass config discovery. Orthogonal to PROBE-TYPE-IS but a latent bug if probes.py is ever refactored to pass absolute paths. Fix: probes.py should either cd into the staged dir before invoking pykrete or pass a relative path; alternatively, pykrete check could probe upward from the file's parent for a `pykrete.json`. Pick one and document.
 
@@ -1359,14 +1360,36 @@ The spike's `label: string` ↔ `label: int` pattern is the template:
 4. Revert the mutation; assert the diagnostic **fires again**.
 
 **Per-D-code coverage.** The cross-codebase suite MUST contain at
-least one falsifiable PROBE-TYPE-IS fixture targeting each of
-**D0080**, **D0081**, and **D0082** — each D-code's firing shape
-may require a different mutation pattern (return-type vs.
-arithmetic vs. cross-type comparison), and a suite that falsifies
-one D-code says nothing about the other two. The impl PR for v1.2
-production-wires this coverage requirement into `test_probes.py`
-(a guard that fails CI if any of D0080/D0081/D0082 lacks at least
-one falsifiable fixture).
+least one falsifiable fixture targeting each of **D0080**, **D0081**,
+and **D0082** — each D-code's firing shape may require a different
+mutation pattern (return-type vs. arithmetic vs. cross-type
+comparison), and a suite that falsifies one D-code says nothing
+about the other two.
+
+The v1.2 synth shape is arithmetic-shaped by construction:
+`{df_ident}.select({accessor} + lit(1))`. That shape routes
+**specifically to D0081 (non-numeric arithmetic)** when the claimed
+type is non-numeric, and to no firing at all when the claimed type
+is numeric. It cannot, by construction, route to D0080
+(return-type-mismatch — needs a typed return-schema disagreement)
+or to D0082 (cross-type-comparison — needs a `==` between columns
+of different types). Per-D-code falsifiability therefore splits:
+
+- **D0081** is falsified via the PROBE-TYPE-IS synth path itself —
+  a PROBE-TYPE-IS marker whose claim is provably false under the
+  schema, snapped through `probes.verify()`, then schema-mutated
+  to invert the claim and re-snapped.
+- **D0080** and **D0082** are falsified via raw schema-flip
+  mutation tests on hand-built fixtures that directly exercise
+  those D-codes' firing shapes (return-type disagreement;
+  cross-type comparison). These are not PROBE-TYPE-IS-driven in
+  v1.2; v1.3 adds PROBE-TYPE-IS synth shapes that route to D0080
+  and D0082 (see v1.1-polish backlog entry **"PROBE-TYPE-IS synth
+  shapes for D0080 / D0082"**).
+
+The impl PR for v1.2 production-wires this coverage requirement
+into `test_probes.py` (a reflective guard that fails CI if any of
+D0080/D0081/D0082 lacks at least one falsifiable test).
 
 Per the project trust contract
 (`feedback_cross_codebase_must_verify_correctness`): the v1.2
@@ -1447,8 +1470,12 @@ grammar change:
 - **Falsifiability mutation pattern — new in v1.2 authoring
   contract.** Cross-codebase TYPE-IS fixtures must include at least
   one schema-flip mutation per fixture, and the suite must contain
-  at least one falsifiable fixture per D-code (D0080 / D0081 /
-  D0082). The harness enforces both in `tests/test_probes.py`.
+  at least one falsifiable test per D-code (D0080 / D0081 / D0082).
+  Per "Per-D-code coverage" above: D0081 falsifiability rides the
+  PROBE-TYPE-IS synth path; D0080 / D0082 falsifiability rides raw
+  hand-built mutation fixtures in v1.2 (v1.3 extends the synth to
+  cover those D-codes too). The harness enforces both in
+  `scripts/test_probes.py` via a reflective coverage guard.
 - **Unsynthesizable observable — clarified.** When a probe falls
   into the unsynthesizable path (no DataFrame parameter, generic
   wrapper, string forward ref, type alias, bare `DataFrame`,
