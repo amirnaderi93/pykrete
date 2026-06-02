@@ -6,6 +6,155 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-06-02
+
+Second minor release on the v1.0 line. The headline change is a
+trust-system extension, not a checker behavior change: the
+**`PROBE-TYPE-IS` synthesizer** now binds to live local scopes, which
+turns the v1.1-reserved-but-silent type-tracking marker class into a
+working release-blocking gate. Three donor fixtures pick up
+`PROBE-TYPE-IS` coverage in this release (quinn, mlflow,
+python-deequ), the cross-codebase suite grows to **130 probes (113
+positive + 17 negative)**, and a new CI gate plus two test classes
+pin the new coverage so it can't silently regress. The pykrete-core
+Rust workspace is bit-identical to v1.1.0 — every change in this
+release lives in pykrete-tests and the docs surface.
+
+### Added
+
+- **`PROBE-TYPE-IS` scope-binding fix.** The v1.1 reservation
+  declared the marker syntax but the runner couldn't anchor the
+  synthesized type assertion to the live local scope where the
+  probed DataFrame lived — so off-claim markers stayed silent
+  instead of failing. v1.2 fixes the synthesizer to wrap the
+  assertion in `{df}.select(...)`, which binds `col(...)` against
+  the typed DataFrame in scope. Off-claim markers now fire D0081
+  `nonNumericArithmetic` (the scoped failure mode the synth shape
+  surfaces) — the marker is finally falsifiable. The grammar and
+  the synth shape are documented in
+  [`docs/design/schema-tracking-probes.md`](https://github.com/amirnaderi93/pykrete/blob/main/docs/design/schema-tracking-probes.md).
+- **3 new `PROBE-TYPE-IS` markers across donor fixtures.** quinn
+  (`column_helpers.pyk`), mlflow
+  (`spark_autologging_intro.pyk`), and python-deequ
+  (`basic_example.pyk`) each pick up at least one type-tracking
+  assertion through `.select` / `.withColumn` / `.filter` chains.
+  All three were silent under v1.1 (the runner couldn't bind the
+  assertion); under v1.2 they're release-blocking — falsify any
+  one and CI fails.
+- **`V12FalsifiabilityCoverageGuard` CI gate** in pykrete-tests.
+  The gate scans every `PROBE-TYPE-IS` marker in the suite, runs
+  the synthesized assertion against a mutated `Schema` (the
+  claimed type swapped for a non-matching one), and verifies
+  D0081 fires. Any marker that stays silent under mutation fails
+  the gate before the release tag.
+- **`V12PerDCodeFalsifiabilityTests`** in pykrete-tests, asserting
+  per-D-code that the synth shape actually surfaces the diagnostic
+  the marker claims it does. Scoped to D0081 in v1.2 (the synth
+  shape `{df}.select(col("x") + 1)` falsifies on non-numeric);
+  D0080 / D0082 falsifiability lives in the raw-mutation
+  `V12CrossCodebaseMarkerMutationTests` instead until v1.3's
+  synth-shape expansion lands.
+- **`V12CrossCodebaseMarkerMutationTests`** in pykrete-tests. For
+  the D-codes that don't have a dedicated synth-shape gate yet
+  (D0080, D0082), the test class mutates the upstream fixture
+  directly — swaps an `int` for a `string`, an arithmetic operator
+  for a comparison — and verifies the corresponding diagnostic
+  fires. Closes the falsifiability gap on D0080 / D0082 until
+  v1.3 brings them under the synth gate.
+
+### Changed
+
+- **Probe count: 127 → 130 (positive 110 → 113; negative
+  unchanged at 17).** The three new `PROBE-TYPE-IS` markers each
+  ship a positive assertion. Fixture count, donor count, negative
+  count, and D-code coverage by the negative probes are unchanged
+  from v1.1: 47 fixtures (35 annotated + 12 negative), 10 donors,
+  46-of-47 covered (the feast `spark_kafka_processor` streaming
+  fixture is annotated but probe-free), D0030 / D0081 / D0082 /
+  D0084 firing on negative probes.
+- **Behavior change for `PROBE-TYPE-IS` markers.** Any marker
+  authored under v1.1 was silent — the runner couldn't anchor it.
+  Under v1.2, the same markers fire D0081 if the claimed type is
+  wrong. Authors who landed `PROBE-TYPE-IS` lines on v1.1
+  assuming "no diagnostic means correct" should re-verify against
+  the v1.2 runner. None of the in-tree v1.1 markers were wrong;
+  the three new v1.2 markers verify clean.
+- **Trust-claim surfaces.** README "Reliability and trust",
+  docs-site `about/production-readiness`, `about/pykrete-tests`,
+  and the index splash all refresh to the v1.2 reality: 130
+  probes across 47 fixtures, 10 donors, 3-of-10 with enum
+  vocabulary verification, **3-of-10 with `PROBE-TYPE-IS`
+  type-tracking coverage** scoped to D0081 via the synth-shape
+  path. Honest scoping noted on all four surfaces: numeric
+  subtype distinguishability and withColumn output enum
+  preservation remain in the v1.1 polish backlog; D0080 / D0082
+  type-tracking lives in the raw-mutation suite until v1.3's
+  synth-shape expansion.
+
+### Verified properties (cumulative)
+
+The trust suite now verifies, on every release:
+
+- **Column resolution** through `.select` / `.filter` /
+  `.withColumn` / `.drop` / `.join` / `.groupBy` and the rest of
+  the v1.0 surface — 113 positive probes across 34 annotated
+  fixtures.
+- **Diagnostic firing** on broken fixtures — 17 negative probes
+  across all 12 `probes_negative/` fixtures pinning D0030
+  `unknownColumn`, D0081 `nonNumericArithmetic`, D0082
+  `crossTypeComparison`, and D0084 `enumValueMismatch`.
+- **Type tracking** through transformations, scoped to D0081 in
+  v1.2 via the `PROBE-TYPE-IS` synth-shape path, with raw-mutation
+  coverage on D0080 / D0082 until v1.3 brings those D-codes under
+  the synth gate.
+
+### Known limitations (v1.3 trackers)
+
+- **`PROBE-TYPE-IS` synth-shape coverage scoped to D0081.** The
+  current synth shape (`{df}.select(col("x") + 1)`) falsifies on
+  non-numeric. D0080 (`unknownAttribute`) and D0082
+  (`crossTypeComparison`) need their own synth shapes — tracked
+  in
+  [`docs/design/schema-tracking-probes.md`](https://github.com/amirnaderi93/pykrete/blob/main/docs/design/schema-tracking-probes.md)
+  for v1.3.
+- **Path drift between marker source and synth host.** The synth
+  writes its assertion into a temp file adjacent to the fixture;
+  if the fixture path changes between probe parsing and synth
+  execution (rare, but possible under symlinked working trees),
+  the assertion misses. v1.3 tracker.
+- **Two latent golden mismatches** surfaced by the pre-tag
+  docs-sync audit (one in `delta`, one in `mlflow`) where the
+  committed golden disagrees with the current binary's output on
+  a non-blocking detail. Quarantined for v1.3 — they don't affect
+  the release-blocking probe suite, but the goldens should
+  converge before the next tag.
+- **withColumn output enum-preservation.** Carried forward from
+  v1.1: `withColumn("status", lit("shipped"))` checks the literal
+  against the sink's enum vocabulary but drops the constraint on
+  the output column. Tracker in
+  [`docs/design/literal-value-vocabulary.md`](https://github.com/amirnaderi93/pykrete/blob/main/docs/design/literal-value-vocabulary.md)
+  polish backlog.
+- **Numeric-subtype distinguishability.** Carried forward from
+  v1.1: probes still don't distinguish `int` / `long` / `short`
+  on column reads.
+
+### Coordinated with
+
+- pykrete-tests last tag: v1.1.0. A v1.2.0 tag of pykrete-tests
+  follows separately if the new probes + gates + test classes
+  warrant the bump; the existing v1.1.0 vendor still works
+  against this pykrete release because the pykrete-core binary
+  is bit-identical to v1.1.0.
+
+### Compatibility
+
+- **No pykrete-core binary change.** The Rust workspace
+  (`pykrete` + `pykrete-lsp` + `pykrete-wasm`) is bit-identical
+  to v1.1.0. The version bump exists to align the public
+  pykrete-tests trust posture, the docs surface, and the VS Code
+  extension's bundled-binary version pointer with the upstream
+  pykrete release line.
+
 ## [1.1.0] - 2026-06-02
 
 First minor release after the v1.0.0 ship. Two trust-system additions
