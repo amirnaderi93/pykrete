@@ -120,7 +120,7 @@ the existing v1.0 checks against 47 real-codebase fixtures.
 
 First stable release. Ten months of pre-1.0 hardening converge into a
 SemVer-major commitment on the public-facing surfaces: the JSON output
-contract (`schemaVersion: "1"`), the D-code catalog (17 codes —
+contract (`schemaVersion: "1"`), the D-code catalog (18 codes —
 D0001 / D0010 / D0011 / D0020 / D0021 / D0030 / D0040 / D0050 / D0051 /
 D0060 / D0070 / D0071 / D0072 / D0073 / D0080 / D0081 / D0082 /
 D0083), the `pykrete check` CLI surface (`--format text|json`, exit
@@ -626,7 +626,7 @@ real adopter surfaces a fork in the design.
 
 **Diagnostic catalog snapshot test.** New
 `crates/pykrete/tests/diagnostic_catalog.rs` builds a minimal `.pyk`
-fixture per D-code (17 codes total), runs the checker, and snapshots
+fixture per D-code (18 codes total), runs the checker, and snapshots
 the rendered diagnostic with `insta`. A coverage assertion at the top
 iterates `pykrete::diagnostics::DIAGNOSTIC_CATALOG` and fails if any
 code lacks a fixture — adding a new D-code now forces an accompanying
