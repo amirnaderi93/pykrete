@@ -39,14 +39,16 @@ absence of red is the presence of correctness.
 
 **v1.1 scope is honestly narrow**: probes verify **name resolution +
 type tracking**. Nullability tracking and exact-output-column-set
-verification do not ship in v1.1 — they are filed as v1.2 work below
-("Deferred to v1.2") because both demand pykrete-core D-codes that do
-not exist today, and synthesizing them would either break the
+verification do not ship in v1.1 — they are tracked in the "Deferral
+history" section below because both demand pykrete-core D-codes that
+do not exist today, and synthesizing them would either break the
 "no pykrete-core release" headline cost claim or force awkward
-encodings that the synthesizer review flagged as hand-wavy. v1.1 ships
-the load-bearing pieces (does pykrete still know about column `region`
-after a `.select()`? does it know `region` is a `string`?); v1.2
-extends to nullability and exact-set output verification.
+encodings that the synthesizer review flagged as hand-wavy. v1.1
+ships the load-bearing name-resolution piece (does pykrete still know
+about column `region` after a `.select()`?); v1.2.0 added type
+tracking via the PROBE-TYPE-IS scope-binding fix specced below;
+NULLABLE and exact-output-column-set verification remain further-
+deferred to the polish backlog.
 
 **Scope bright line, same as `literal-value-vocabulary.md`**: probes
 verify *static* schema tracking — what pykrete knows at edit time
@@ -106,10 +108,11 @@ overkill.
 
 Markers are single-line comments at column 0. **Five marker kinds
 total, four active in v1.1 + one (PROBE-TYPE-IS) whose grammar parses
-but whose semantics defer to v1.2.** Active markers split into two
-line-anchored kinds + two file-scoped kinds; PROBE-TYPE-IS is also
-line-anchored but no v1.1 instance fires a meaningful assertion (see
-"Deferred to v1.2" below for the synthesizer scope-binding gap).
+but whose semantics deferred until the v1.2.0 scope-binding fix.**
+Active markers split into two line-anchored kinds + two file-scoped
+kinds; PROBE-TYPE-IS is also line-anchored but no v1.1 instance fires
+a meaningful assertion (see "Deferral history" below for the
+synthesizer scope-binding gap that v1.2.0 closed).
 Line-anchored markers always sit on the line *immediately above* the
 target line (see Q10 for the exact "target line" resolution rule);
 file-scoped markers conventionally live at the top of the annotated
@@ -133,9 +136,10 @@ file.
 Total grammar: **5 markers** (3 line-anchored + 2 file-scoped). Active
 in v1.1: **4 markers** (PROBE-EXPECTS, PROBE-RESOLVES, PROBE-FILE-
 CLEAN-OF, PROBE-FILE-COUNT). The fifth, PROBE-TYPE-IS, parses
-cleanly but its synthesizer translation does not bind to a typed
-DataFrame in scope (see "Deferred to v1.2" below); authoring TYPE-IS
-markers in a v1.1 corpus is a no-op.
+cleanly but its v1.1 synthesizer translation does not bind to a typed
+DataFrame in scope (see "Deferral history" below); authoring TYPE-IS
+markers in a v1.1 corpus is a no-op. The v1.2.0 scope-binding fix
+re-activates PROBE-TYPE-IS for cross-family cases.
 
 Concrete uses:
 
@@ -207,7 +211,7 @@ Rules:
   matching**: `decimal` (unparameterized) matches Spark's default
   `decimal(10, 0)`; `decimal(p, s)` requires an exact precision/scale
   match. Other composites (maps, struct fields beyond the dotted
-  accessor case) are deferred to v1.2.
+  accessor case) are deferred indefinitely to the polish backlog.
 
 Explicitly excluded from the grammar (kept narrow on purpose):
 
@@ -220,59 +224,62 @@ Explicitly excluded from the grammar (kept narrow on purpose):
 - No trailing inline markers (`x = df.col("foo")  # PROBE-EXPECTS:...`).
   Formatters strip them; the target-line rule becomes ambiguous.
 
-### Deferred to v1.2
+### Deferral history (PROBE-TYPE-IS shipped in v1.2.0; NULLABLE / OUTPUT-COLUMNS under polish backlog)
 
-Three marker situations defer to v1.2: two never made the round-2
-grammar (`PROBE-NULLABLE` and `PROBE-OUTPUT-COLUMNS`), and a third —
-`PROBE-TYPE-IS` — has the v1.1 grammar but no working synthesizer
-in v1.1. All three need coordinated pykrete-core or harness work and
-are filed here so future-us does not relitigate.
+Three marker situations were deferred past v1.1: two never made the
+round-2 grammar (`PROBE-NULLABLE` and `PROBE-OUTPUT-COLUMNS`), and a
+third — `PROBE-TYPE-IS` — had the v1.1 grammar but no working
+synthesizer in v1.1. PROBE-TYPE-IS shipped in **v1.2.0** via the
+scope-binding fix specced below; NULLABLE and OUTPUT-COLUMNS are
+**further-deferred indefinitely** to the polish backlog. All three
+are tracked here so future-us does not relitigate.
 
-- **`PROBE-TYPE-IS: <type-expr> on "<column>"`** — grammar shipped in
-  v1.1, semantics deferred. The v1.1 synthesizer rewrites a TYPE-IS
-  marker into an appended expression of the form `col("x") + lit(1)`
-  (or similar arithmetic-against-a-numeric-lit) and runs the
-  full-file checker, expecting strict-mode `D0081 operatorTypeMismatch`
-  on a string column or no diagnostic on a numeric column. The
-  appended expression lives at module-level outside any
-  `df.select(...)`, so `col("x")` does not bind to a typed
-  DataFrame in scope; pykrete cannot resolve `x` to a schema column
-  and reports the probe inconclusive rather than firing D0081.
-  Result in the v1.1 cross-codebase corpus: zero TYPE-IS probes
-  produce signal. PROBES.md and pykrete-tests v1.1 do not author
-  TYPE-IS markers. Path to v1.2: change the synthesizer to inject
-  the rewritten expression **inside** a `df.select(...)` against
-  the typed DataFrame in scope (typically the function parameter
-  whose annotation is `DataFrame[X]`), so `col()` binds and D0081
-  can fire. Harness-only change; no pykrete-core release required.
-  **Settled in v1.2 spec: PROBE-TYPE-IS scope-binding fix** (see the
-  v1.2 spec section below).
-- **`PROBE-NULLABLE: <column> = (true|false)`** — pykrete-core has
-  `D0083 nullabilityMismatch` already, but the synthesizer rewrite has
-  no clean trigger from a single appended expression: nullability
+- **`PROBE-TYPE-IS: <type-expr> on "<column>"`** — **shipped in
+  v1.2.0.** The v1.1 synthesizer rewrote a TYPE-IS marker into an
+  appended expression of the form `col("x") + lit(1)` (or similar
+  arithmetic-against-a-numeric-lit) and ran the full-file checker,
+  expecting strict-mode `D0081 operatorTypeMismatch` on a string
+  column or no diagnostic on a numeric column. That appended
+  expression lived at module-level outside any `df.select(...)`, so
+  `col("x")` did not bind to a typed DataFrame in scope; pykrete
+  could not resolve `x` to a schema column and reported the probe
+  inconclusive rather than firing D0081. The v1.2.0 fix injects the
+  rewritten expression **inside** a `df.select(...)` against the
+  typed DataFrame in scope (typically the function parameter whose
+  annotation is `DataFrame[X]`), so `col()` binds and D0081 can fire.
+  Harness-only change; no pykrete-core release required.
+  **Implemented per the v1.2 spec: PROBE-TYPE-IS scope-binding fix**
+  (see the v1.2 spec section below).
+- **`PROBE-NULLABLE: <column> = (true|false)`** — **deferred
+  indefinitely; tracked on the polish backlog.** Pykrete-core has
+  `D0083 nullabilityMismatch` already, but the synthesizer rewrite
+  has no clean trigger from a single appended expression: nullability
   misuse usually surfaces across multiple operations (a null literal
   assigned to a non-nullable column, a `.dropna()` interaction, etc.)
   and a single-line synthesizer rewrite can't reliably reproduce it
-  without false positives or negatives. Path to v1.2: either extend
+  without false positives or negatives. Revival path: either extend
   D0083's emission sites to cover a direct nullability-assertion
   pattern the synthesizer can target, or land first-class
   schema-trace output (option (b) above). Both are coordinated
-  pykrete-core changes that trigger a vendored-catalog refresh.
-- **`PROBE-OUTPUT-COLUMNS: [<col>, ...]`** — exact-set match against
-  the tracked schema's full column list is awkward to encode via
+  pykrete-core changes that trigger a vendored-catalog refresh; both
+  remain unscheduled.
+- **`PROBE-OUTPUT-COLUMNS: [<col>, ...]`** — **deferred indefinitely;
+  tracked on the polish backlog.** Exact-set match against the
+  tracked schema's full column list is awkward to encode via
   existing D-codes (`D0050 returnColumnsMismatch` checks against a
   declared schema, not an inline list literal; no single misuse
   triggers "your declared output set ≠ tracked output set" from
-  arbitrary call-sites). Path to v1.2: pykrete-core adds a dedicated
+  arbitrary call-sites). Revival path: pykrete-core adds a dedicated
   D-code (number TBD, since D0080 is already taken by
   `returnTypeMismatch`) — e.g. `D0090 outputColumnsAssertion`; the
   synthesizer rewrites `PROBE-OUTPUT-COLUMNS [a, b]` into a synthetic
   assertion that compares the tracked schema against the declared
-  list and fires the new code on mismatch.
+  list and fires the new code on mismatch. Remains unscheduled.
 
-Both are tracked here so future-us does not relitigate; both require
-coordinated pykrete-core releases. Filing them as v1.2 keeps the v1.1
-cost claim ("no pykrete-core release needed") honest.
+PROBE-TYPE-IS landed in v1.2.0 without a pykrete-core release. The
+remaining two markers (NULLABLE / OUTPUT-COLUMNS) stay polish-backlog
+because both still require coordinated pykrete-core work and the v1.2
+ship deliberately kept its scope to the harness-only fix.
 
 ### Diagnostic catalog source (resolves B3)
 
@@ -447,8 +454,10 @@ expansions using existing stable D-codes (D0080-D0082 cover the
 expressible cases). The "no pykrete-core release" claim stays honest.
 If the rewrite proves infeasible for a specific type-checking corner
 case during seeding, the affected `PROBE-TYPE-IS` instances are
-dropped from the v1.1 seeding pass (not the grammar) and re-attempted
-in v1.2 alongside the deferred NULLABLE / OUTPUT-COLUMNS work.
+dropped from the v1.1 seeding pass (not the grammar). The scope-
+binding fix specced below shipped in v1.2.0 and re-activates the
+cross-family cases; NULLABLE and OUTPUT-COLUMNS stay deferred to the
+polish backlog.
 
 **Update (post-v1.1 seeding).** The synthesizer ships in v1.1 but
 the v1.1 implementation appends its synthesized arithmetic at
@@ -456,10 +465,10 @@ module level, where `col("x")` does not bind to the typed DataFrame
 in scope, so every TYPE-IS probe reports inconclusive. The marker
 grammar stays in v1.1 for forward compatibility; the active set is
 the four other markers (RESOLVES, EXPECTS, FILE-CLEAN-OF, FILE-
-COUNT). See the **"Deferred to v1.2"** section above for the
+COUNT). See the **"Deferral history"** section above for the
 synthesizer scope-binding fix that re-activates TYPE-IS, and the
 **"v1.2 spec: PROBE-TYPE-IS scope-binding fix"** section below for
-the settled v1.2 design.
+the v1.2.0 design.
 
 Failing output (per fixture):
 
@@ -554,7 +563,7 @@ untouched for v1.1 probes.
      without verifying) so authoring errors fail the regen step.
    - New mode `golden.sh probes-report` emits per-donor `PROBES.md`.
 
-5. **New: `tests/test_probes.py`** (~250-400 LOC, pytest). Realistic
+5. **New: `scripts/test_probes.py`** (~250-400 LOC, pytest). Realistic
    budget for: grammar parsing (all 5 marker kinds, all error paths
    including in-docstring suppression, the silent-skip rule for far-
    distance unknown `PROBE-*` prefixes, and the Levenshtein-≤-2 "did
@@ -624,7 +633,7 @@ are commitments:
 
 - **Marker kind names — STABLE.** Renaming `PROBE-EXPECTS` →
   `PROBE-FIRES` (or similar) requires a `probesSchemaVersion` bump and
-  a corpus-wide migration. Codified in `tests/test_probes.py`.
+  a corpus-wide migration. Codified in `scripts/test_probes.py`.
 - **Argument syntax for existing kinds — STABLE.** Changing
   `on "text"` to `on:text` is breaking.
 - **Optional-argument order — STABLE as order-insensitive.** The
@@ -633,8 +642,9 @@ are commitments:
   positional-only or fixed-order is breaking. Tests in
   `test_probes.py` exercise every permutation of present slots.
 - **Adding a new marker kind — NON-BREAKING.** New `PROBE-*` kinds
-  (e.g. `PROBE-NULLABLE` or `PROBE-OUTPUT-COLUMNS` when they land in
-  v1.2) are additive; `probesSchemaVersion` stays `"1"`.
+  (e.g. `PROBE-NULLABLE` or `PROBE-OUTPUT-COLUMNS` if they ever revive
+  off the polish backlog) are additive; `probesSchemaVersion` stays
+  `"1"`.
 - **Adding a new optional argument to an existing kind — NON-BREAKING.**
   As long as existing fixtures parse unchanged.
 - **Removing a marker kind — BREAKING.** Requires a
@@ -716,7 +726,7 @@ class ProbeFailure:
 ```
 
 These types are importable from `scripts.probes`. Fixture-author
-tooling and `tests/test_probes.py` consume them. Adding fields to
+tooling and `scripts/test_probes.py` consume them. Adding fields to
 either dataclass is non-breaking if `@dataclass(frozen=True)` and the
 new field has a default; renaming or removing a field is breaking
 (bumps `probesSchemaVersion`).
@@ -996,11 +1006,14 @@ capabilities pykrete has decided not to ship:
   transpiled `.py` does at runtime. Runtime correctness is donor-test
   territory, not probe territory.
 - **Nullability tracking and exact-output-column-set verification.**
-  Deferred to v1.2 — see "Deferred to v1.2" above. v1.1 ships name
-  resolution + type tracking only.
+  Further-deferred indefinitely to the polish backlog — see the
+  "Deferral history" section above. v1.1 shipped name resolution;
+  v1.2.0 added type tracking via the PROBE-TYPE-IS scope-binding fix;
+  NULLABLE and OUTPUT-COLUMNS remain unscheduled.
 - **Generic Python assertion DSL.** Probes are the five markers above
   and nothing else. The grammar is closed for v1.1. New marker kinds
-  (including the v1.2 NULLABLE / OUTPUT-COLUMNS revival) require a
+  (including any future NULLABLE / OUTPUT-COLUMNS revival off the
+  polish backlog) require a
   spec PR.
 
 ## v1.1 work plan
@@ -1056,9 +1069,10 @@ No pykrete-core PR is required for any v1.1 marker
 (EXPECTS / RESOLVES / TYPE-IS / FILE-*). TYPE-IS lands via the
 synthesizer-rewrite approach (option (a) under "Golden format") using
 existing D-codes (D0080-D0082) with no pykrete-core change. NULLABLE
-and OUTPUT-COLUMNS are deferred to v1.2 along with their coordinated
-pykrete-core extensions (D0083 emission-site work for NULLABLE; a new
-D-code for OUTPUT-COLUMNS); see "Deferred to v1.2" above.
+and OUTPUT-COLUMNS are further-deferred indefinitely to the polish
+backlog along with their coordinated pykrete-core extensions (D0083
+emission-site work for NULLABLE; a new D-code for OUTPUT-COLUMNS); see
+"Deferral history" above.
 
 ### Cross-codebase fixture migration (the 32 backfill)
 
@@ -1082,7 +1096,7 @@ spec we shipped" into "a capability we use." Plan:
   select that references one of the kept columns. This is the exact
   pattern the user named in the framing quote — proves a kept column
   survives the narrow, without requiring exact-output-set verification
-  (deferred with OUTPUT-COLUMNS to v1.2).
+  (OUTPUT-COLUMNS is on the polish backlog, deferred indefinitely).
 - **Type pass** (~half day). Add `PROBE-TYPE-IS` on selected bindings
   using the synthesizer rewrite (D0080-D0082 target). Focused on bindings
   where the column type is non-obvious — e.g. after a `cast()`, after
@@ -1135,7 +1149,7 @@ here so they're not lost when impl starts.
 - [ ] **golden.sh discovery widening for probes_negative/** — current `golden.sh check` only walks `*/annotated/*`. PR #3c should widen to also walk `*/probes_negative/*` so the release-blocking gate covers the negative tree. Currently the negative tree is exercised only via probes_ci.sh, not golden.sh. Note: when widened, the existing normalize step at `golden.sh:36` (which strips a `cross-codebase/` prefix) will need adjustment to match the runtime's donor-anchored relpath format used by `_fixture_relpath`. Either adjust normalize OR re-normalize negative goldens to match the walker output format.
 - [ ] **`pykrete.json` config discovery bypassed on absolute paths** — surfaced during the v1.2 PROBE-TYPE-IS feasibility spike. `pykrete check` honors `pykrete.json` only when invoked from inside the config directory or passed a directory path; absolute file paths bypass config discovery. Orthogonal to PROBE-TYPE-IS but a latent bug if probes.py is ever refactored to pass absolute paths. Fix: probes.py should either cd into the staged dir before invoking pykrete or pass a relative path; alternatively, pykrete check could probe upward from the file's parent for a `pykrete.json`. Pick one and document.
 - [ ] **V12FalsifiabilityCoverageGuard rigor** — current guard uses substring matching on test method names (`test_{dcode}_falsifiable_*`). A contributor could rename or body-stub a test and evade detection. v1.3 should replace with a decorator/registry pattern (e.g., `@falsifies("D0081")` markers + introspection at guard time). Bundle with PROBE-TYPE-IS synth-shapes-for-D0080/D0082 work if/when that effort revives.
-- [ ] **Spec/reality path drift on `tests/test_probes.py` vs `scripts/test_probes.py`** — surfaced by the v1.2 PROBE-TYPE-IS impl-PR review. The spec references `tests/test_probes.py` in ~5 places but the impl lives at `scripts/test_probes.py`. Round-3 of the v1.2 work did not introduce this; it predates v1.2. Pure documentation cleanup; sweep the spec and update.
+- [x] **Spec/reality path drift on `tests/test_probes.py` vs `scripts/test_probes.py`** — resolved in the v1.2.0 prep sweep. The spec now references `scripts/test_probes.py` throughout, matching the impl location. Originally surfaced by the v1.2 PROBE-TYPE-IS impl-PR review; predates v1.2 itself.
 - [ ] **2 pre-existing probes_negative golden mismatches (mlflow / spark)** — `mlflow/probes_negative/withColumn_arith_on_string.golden.json` expects D0081 but the v1.1.0 binary emits none on the fixture; `spark/probes_negative/cross_type_comparison.golden.json` expects D0082 but the binary emits none. Confirmed reproducible against main; surfaced during v1.2 PROBE-TYPE-IS impl. Likely **downstream of** the `pykrete.json` config-discovery tracker above — probes_ci.sh invokes pykrete with absolute paths, so the sibling `pykrete.json` (which sets `typeCheckingMode: "strict"` for these fixtures) isn't applied, and D0081/D0082 only fire in strict mode. Fix the config-discovery tracker → these goldens become accurate. Until then they're latent (probes_ci passes because golden.sh doesn't walk `probes_negative/` yet — see widening tracker).
 
 ## Cost estimate
@@ -1152,11 +1166,11 @@ here so they're not lost when impl starts.
 
 **Total: 5-7 days** (one focused engineer-week including review
 iteration). Reverts to the original v1.1 estimate after the TM scope-
-narrowing decision to drop NULLABLE and OUTPUT-COLUMNS to v1.2: with
-fewer marker kinds, no coordinated pykrete-core release, and a
-synthesizer rewrite that targets only D-codes already in v1.0 stable
-catalog (D0080-D0082), the budget tightens back to the original
-headline.
+narrowing decision to further-defer NULLABLE and OUTPUT-COLUMNS to the
+polish backlog: with fewer marker kinds, no coordinated pykrete-core
+release, and a synthesizer rewrite that targets only D-codes already
+in v1.0 stable catalog (D0080-D0082), the budget tightens back to the
+original headline.
 
 **Release delta**: ships as **pykrete-tests v1.1.0**. Pykrete-core
 does NOT need a release for any v1.1 marker
@@ -1165,11 +1179,11 @@ pykrete-tests; the synthesizer rewrite targets only D-codes that
 already exist in the v1.0 stability commitment (D0080-D0082). When
 pykrete cuts its next release for unrelated work (e.g. the literal-
 value-vocabulary work), the cross-codebase repo bumps `PYKRETE_REF`
-and regenerates `diagnostic_catalog.json` as usual. The deferred
-NULLABLE / OUTPUT-COLUMNS markers will pull in coordinated pykrete-
-core changes (D0083 emission-site work for NULLABLE; a new D-code for
-OUTPUT-COLUMNS — number TBD since D0080 is already taken) when they
-revive in v1.2; that cost is filed against v1.2, not v1.1.
+and regenerates `diagnostic_catalog.json` as usual. The further-
+deferred NULLABLE / OUTPUT-COLUMNS markers would pull in coordinated
+pykrete-core changes (D0083 emission-site work for NULLABLE; a new
+D-code for OUTPUT-COLUMNS — number TBD since D0080 is already taken)
+if they ever revive off the polish backlog; that cost is unscheduled.
 
 ## v1.2 spec: PROBE-TYPE-IS scope-binding fix
 
@@ -1421,7 +1435,7 @@ review (helper / call-site references resolve by symbol name in
 | Phase | Effort | Detail |
 |---|---|---|
 | AST param-resolution helper | 0.5 day | Extend the `_enclosing_function` helper in `scripts/probes.py` to walk `FunctionDef.args` and return the first `DataFrame[Schema]` parameter per the annotation-shape matching policy above. Unit tests cover: single param, multiple params (first-wins), kwargs-only, no DataFrame param (unsynthesizable), positional + keyword-only mixed ordering, generic-wrapper / string-forward-ref / type-alias / bare-DataFrame / variadic fallthrough, module-scope probe. |
-| Synth rewrite | 0.5 day | One-line change at the synth call site in `scripts/probes.py` (inside `_synthesize_type_probes`) wrapping the accessor expression in `{df_ident}.select(...)`. Update `tests/test_probes.py` to assert the new synth shape and to exercise the unsynthesizable fallthrough cases. |
+| Synth rewrite | 0.5 day | One-line change at the synth call site in `scripts/probes.py` (inside `_synthesize_type_probes`) wrapping the accessor expression in `{df_ident}.select(...)`. Update `scripts/test_probes.py` to assert the new synth shape and to exercise the unsynthesizable fallthrough cases. |
 | Cross-codebase TYPE-IS golden refresh | 0.5 day | Probes that were silent under v1.1 now fire real D-codes. Walk the corpus, refresh affected goldens, confirm each refreshed golden is accompanied by at least one falsifiability mutation case (per the previous subsection). Verify per-D-code coverage: at least one falsifiability test for each of D0080 / D0081 / D0082. |
 | Spec PR + bookkeeping | 0.25 day | This amendment + a retrospective note tying the spike, spec, and impl PRs together. |
 
@@ -1451,7 +1465,7 @@ grammar change:
   contract.** Cross-codebase TYPE-IS fixtures must include at least
   one schema-flip mutation per fixture, and the suite must contain
   at least one falsifiability test per D-code (D0080 / D0081 /
-  D0082). The harness enforces both in `tests/test_probes.py`.
+  D0082). The harness enforces both in `scripts/test_probes.py`.
 - **Unsynthesizable observable — clarified.** When a probe falls
   into the unsynthesizable path (no DataFrame parameter, generic
   wrapper, string forward ref, type alias, bare `DataFrame`,
