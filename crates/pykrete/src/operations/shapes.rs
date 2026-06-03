@@ -61,7 +61,10 @@ pub(super) fn two_df_method(method: &str) -> Option<TwoDfMethod> {
         "union" | "unionAll" => Some(TwoDfMethod::Union),
         "unionByName" => Some(TwoDfMethod::UnionByName),
         "intersect" | "intersectAll" | "subtract" | "exceptAll" => Some(TwoDfMethod::SetOp),
-        "join" => Some(TwoDfMethod::Join),
+        // v1.3 pandas spec §5: `.merge` is pandas' join shape. Same
+        // dispatch — `on=` / `how=` mirror Spark `.join` argument
+        // names. The on-key col-ref check uses the existing Join path.
+        "join" | "merge" => Some(TwoDfMethod::Join),
         "crossJoin" => Some(TwoDfMethod::CrossJoin),
         _ => None,
     }
