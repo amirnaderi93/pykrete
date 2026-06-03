@@ -136,6 +136,17 @@ self-assert.
 `ColumnType::Float` is the only net-new `ColumnType` variant
 required by the v1.3 spec.
 
+**Future evolution shape.** If a future pandas release surfaces
+`float16` (or any other narrower float) as a first-class dtype,
+the spec's preferred extension is to add a sibling variant
+(`ColumnType::Half` or similar) rather than parameterizing `Float`
+as `Float(width)`. The variant-per-width shape preserves the
+v1.1 PR-A enum-exhaustiveness discipline (each width is a
+distinct `match` arm); a parameterized `Float(width)` would
+collapse the exhaustiveness check. Either path is SemVer-minor
+(adding new variants is a minor extension), but the variant-per-
+width path is the one the v1.3 spec endorses.
+
 ### Strings
 
 | Pandas dtype | Mapping | Notes |
@@ -195,7 +206,7 @@ bound `TypedSlot` and branching internally (see §9 piece (a)).
 
 | Operation | Spark form | Pandas form | Dispatch needed? |
 |---|---|---|---|
-| Column projection | `df.select(col("x"), col("y"))` | `df[["x", "y"]]` | Yes |
+| Column projection | `df.select(col("x"), col("y"))` | `df[["x", "y"]]` | Yes — also an `Expr::Subscript` shape; the col-ref check is owned by piece (b)'s List-of-literal extension (§9), the dispatch row owns the result-type assignment |
 | Boolean filter | `df.filter(col("x") == "y")` | `df[df["x"] == "y"]` | Yes — **net-new Subscript shape**, see below |
 | Column add / replace | `df.withColumn("new", expr)` | `df["new"] = expr` or `df.assign(new=expr)` | Yes |
 | Drop column | `df.drop("x")` | `df.drop(columns=["x"])` (`df.drop("x")` is row-by-index in pandas) | Yes |
@@ -217,13 +228,13 @@ production code. v1.3 takes an explicit per-form position:
 | Slice shape | Example | v1.3 behavior |
 |---|---|---|
 | String literal | `df["col"]` | Piece (b) fires col-ref check → D0030 on unknown column |
-| List of string literals | `df[["a", "b"]]` | Dispatched as `select(["a", "b"])`; col-ref check fires on EACH literal |
+| List of string literals | `df[["a", "b"]]` | Also dispatched as `select(["a", "b"])` for result-type assignment, but the col-ref check itself is handled by piece (b)'s List-of-literal extension (see §9) — `report_column_refs` fires on EACH literal in the list, sharing the same entry point as the scalar string-literal case |
 | `Bool`-typed expression | `df[df["x"] == "y"]` | Boolean-mask filter (pandas dispatch); piece (b) descends the inner subscript naturally |
-| Name variable | `df[some_var]` | Opaque slice; no check. Constant-folding attempts deferred to v1.4 |
+| Name variable | `df[some_var]` | Opaque slice; no check. Constant-folding attempts deferred to v1.4. Note: the common pandas idiom `mask = df["x"] == "y"; result = df[mask]` falls under this row — the `mask` binding is a `Name` and its bool-typed origin is not threaded through. The inner `df["x"]` still fires piece (b); only the outer `df[mask]` is unchecked until v1.4 |
 | Integer literal | `df[0]` | Pandas iloc-style row positional; v1.3 does not support row-positional access; quiet ignore |
 | Slice object | `df[:5]` | Row slicing; v1.3 ignores |
 | String `BinOp` | `df["a" + "b"]` | Constant-foldable but v1.3 does not fold; quiet ignore |
-| Chained Subscript | `df["a"]["b"]` | Outer Subscript fires col-ref check on `"a"`; result type is non-frame, so inner `["b"]` does not fire |
+| Chained Subscript | `df["a"]["b"]` | Outer Subscript fires col-ref check on `"a"` (piece (b), Name receiver). Inner `["b"]` skips because its receiver is the outer `Expr::Subscript`, not an `Expr::Name` — the §9 piece (b) Name-receiver-only bound is what skips it (not a result-type-driven gate) |
 
 "Quiet ignore" means no diagnostic and no result-type assignment;
 the existing analyzer state is preserved unchanged. Forms not listed
@@ -289,6 +300,23 @@ choose to silence the signal still face the v2.0 hard break.
 
 (Per existing rules-config semantics, all D-codes are subject to
 user override. D0090 is no exception.)
+
+### Transition path for off-by-config users
+
+Users who suppress D0090 via rules-config in v1.3 should be aware
+that v2.0 removes `DataFrame[X]` syntax entirely. The v1.4 and v1.5
+release notes will explicitly warn off-by-config users in the
+upgrade-path documentation. v1.5 will additionally introduce a
+release-note bullet recommending all consumers move to
+`SparkFrame[X]` before the v2.0 upgrade window. Pykrete's
+rules-config cannot override a hard syntax break — by-design.
+
+This is the only escape-valve channel we can reach off-by-config
+users through: release notes. Users who set `"D0090": "off"` in
+v1.3 do not see D0090 messages at edit time, so the in-editor
+deprecation signal is silent for them. The release-note recommendation
+in v1.4 and the stronger reminder in v1.5 are the spec's commitment
+to giving these users a non-silent path into v2.0.
 
 ### Hover and completion surface
 
@@ -421,15 +449,25 @@ In `crates/pykrete/src/operations/expr.rs::analyze_expr`, add an
 arm for the `Expr::Subscript` case that:
 
 1. Resolves `subscript.value` via `ctx.lookup`.
-2. If the resolved slot is frame-typed (Spark or Pandas) and
-   `subscript.slice` is a string literal, invoke the existing
-   `report_column_refs` machinery on `(slot, literal)`.
+2. If the resolved slot is frame-typed (Spark or Pandas), inspect
+   `subscript.slice`:
+   - **(i) Scalar string literal** (`Expr::Constant[str]`): invoke
+     the existing `report_column_refs` machinery on `(slot, literal)`.
+   - **(ii) List of string literals** (`Expr::List` whose elements are
+     all `Expr::Constant[str]`): iterate the list and invoke
+     `report_column_refs` on `(slot, element)` for each. This is the
+     entry point that owns the col-ref check for `df[["a", "b"]]`;
+     the column-projection dispatch row in §5 still owns the
+     result-type assignment for the surrounding Subscript expression.
+   - **Any other slice shape**: skip — handled by other dispatch
+     paths or quiet-ignored per §5's Subscript-slice taxonomy.
 
 No new types, no new traits, no new D-codes. The existing column-ref
 machinery — including the "did you mean" suggestion path — is
-reused unchanged.
+reused unchanged across both (i) and (ii).
 
-Net change: ~11 LOC.
+Net change: ~14 LOC (~11 LOC for the scalar arm + ~3 LOC for the
+List-element iteration).
 
 #### Receiver-shape bound
 
@@ -475,9 +513,10 @@ the other.
 
 ### Net cost
 
-~0.25 dev-days for the technique itself (vs. the implied 0 days
-in round 1's "falls out for free" claim). The corrected cost
-folds into the overall §12 estimate.
+~0.35 dev-days for the technique itself (vs. the implied 0 days
+in round 1's "falls out for free" claim, and 0.25 dev-days in
+round 2 before the round-3 List-of-literal extension). The
+corrected cost folds into the overall §12 estimate.
 
 ## 10. Bonus: Spark-side coverage widening
 
@@ -581,7 +620,7 @@ defer-list for everything outside that boundary.
 | Piece | Estimate | Notes |
 |---|---|---|
 | Piece (a): `dataframe.rs::recognize` extension + `Dialect` tag on `TypedSlot` | 0.5 day | per round-2 validation |
-| Piece (b): bare-Subscript col-ref entry point in `analyze_expr` | 0.25 day | per round-2 validation; reuses `report_column_refs` |
+| Piece (b): bare-Subscript col-ref entry point in `analyze_expr` (scalar string-literal + List-of-string-literal arms) | 0.35 day | per round-2 validation; reuses `report_column_refs`. Round-3 extended to handle `df[["a","b"]]` List-of-literal slices (+0.1d for the list iteration arm; see §9) |
 | Dtype mapping additions (unsigned widening + `ColumnType::Float`) | 1 day | bounded by §4 |
 | `df[["x", "y"]]` column-projection dispatch | 0.5 day | mirror of `.select` |
 | `df[boolean_mask]` filter dispatch (net-new shape) | 1 day | reuses column-ref + comparison machinery |
@@ -592,10 +631,12 @@ defer-list for everything outside that boundary.
 | D0090 deprecation diagnostic (rule + tests + diagnostics.md entry) | 0.5 day | the only new D-code in v1.3 |
 | Hover / completion surface (`PandasFrame[X]` rendering, dialect-aware hover) | 0.5 day | label-only |
 | Cross-codebase pandas fixture (≤200 LOC, upstream-cited dtype claims) | 1 day | per the v1.0 fixture pattern + the rule that dtype claims must cite pandas docs |
-| **Total** | **~8.25 days** | well under a typical minor cycle |
+| **Total** | **~8.35 days** | well under a typical minor cycle |
 
 Round-1's "0 days" estimate for column-ref checking was wrong by
-the cost of piece (b) (0.25 day). The corrected total is 8.25 days.
+the cost of piece (b) (0.25 day in round 2, revised to 0.35 day in
+round 3 after the List-of-literal extension landed). The corrected
+total is 8.35 days.
 
 ## 13. v1.3 work plan
 
@@ -651,7 +692,9 @@ the cost of piece (b) (0.25 day). The corrected total is 8.25 days.
   calls, so bare `Subscript` shapes are never walked.
 - Round-2 throwaway: probed the redesigned two-piece technique
   (`dataframe.rs::recognize` extension + `analyze_expr` Subscript
-  arm). Validated. 1174 workspace tests stay green; the target
+  arm). Validated. Full workspace test suite at the spike commit
+  (1174 tests then; see the spike branch for the exact SHA — this
+  count will drift as the workspace grows) stayed green; the target
   D0030 fires on the pandas boolean-mask fixture.
 - Sibling specs: `spark-coverage.md`, `literal-value-vocabulary.md`,
   `schema-tracking-probes.md`.
