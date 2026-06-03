@@ -9,7 +9,7 @@ use std::sync::{Mutex, OnceLock};
 use ruff_python_ast::{Expr, StmtFunctionDef};
 use ruff_text_size::TextRange;
 
-use crate::dataframe::{DataFrameAnnotation, SlotLabel, TypedSlot};
+use crate::dataframe::{DataFrameAnnotation, Dialect, SlotLabel, TypedSlot};
 use crate::registry::Registry;
 use crate::schema::{Schema, SchemaView};
 use crate::temp_views::TempViewRegistry;
@@ -75,6 +75,13 @@ pub fn synthetic_pool_len() -> usize {
 /// impossible: each helper's borrow lifetime ends before it returns.
 pub(crate) struct BodyContext<'a> {
     df_bindings: HashMap<&'a str, SchemaView<'a>>,
+    /// Per-name dialect tag for frame-typed bindings. Populated in
+    /// lockstep with `df_bindings` from the typed-slot dialect (PR-A)
+    /// when a binding originates from a parameter or a `DataFrame[X]`
+    /// annotated assignment; absent otherwise (downstream bindings off
+    /// chain results carry no dialect — `lookup_dialect` returns None
+    /// and the v1.3 piece (b) Name-receiver bound naturally skips).
+    df_dialects: HashMap<&'a str, Dialect>,
     /// SQL-style aliases registered via `df.alias("L")`. Maps the alias
     /// string (the argument to `.alias`, NOT the local-variable name on
     /// the LHS of the assignment) to the schema of the aliased
@@ -176,6 +183,7 @@ impl<'a> BodyContext<'a> {
     pub(crate) fn new(schemas: &'a [Schema<'a>], registry: &'a Registry<'a>) -> Self {
         Self {
             df_bindings: HashMap::new(),
+            df_dialects: HashMap::new(),
             df_aliases: RefCell::new(HashMap::new()),
             instance_bindings: HashMap::new(),
             local_names: RefCell::new(HashSet::new()),
@@ -301,7 +309,7 @@ impl<'a> BodyContext<'a> {
                 DataFrameAnnotation::Untyped | DataFrameAnnotation::NonBareName => None,
             };
             if let Some(view) = view {
-                ctx.bind_df(name, view);
+                ctx.bind_df_with_dialect(name, view, slot.dialect);
             }
         }
 
@@ -343,6 +351,23 @@ impl<'a> BodyContext<'a> {
 
     pub(crate) fn bind_df(&mut self, name: &'a str, view: SchemaView<'a>) {
         self.df_bindings.insert(name, view);
+        self.df_dialects.remove(name);
+        self.mark_local(name);
+    }
+
+    /// Same as [`Self::bind_df`] but also records the dialect tag (PR-A)
+    /// for the binding. Used at signature-bound and `DataFrame[X]`
+    /// annotated-assign sites where the v1.3 dialect is known; chain-
+    /// result bindings (`x = df.select(...)`) go through [`Self::bind_df`]
+    /// and have no dialect attached.
+    pub(crate) fn bind_df_with_dialect(
+        &mut self,
+        name: &'a str,
+        view: SchemaView<'a>,
+        dialect: Dialect,
+    ) {
+        self.df_bindings.insert(name, view);
+        self.df_dialects.insert(name, dialect);
         self.mark_local(name);
     }
 
@@ -457,6 +482,14 @@ impl<'a> BodyContext<'a> {
             return Some(SchemaView::Declared(schema));
         }
         None
+    }
+
+    /// The v1.3 dialect tag for a Name-bound frame slot, if any.
+    /// Returns `None` for non-frame names, for frame bindings produced
+    /// off a chain result (no dialect threading from chain returns),
+    /// and for module-scope constants (`DataSources.RAW_ORDERS`).
+    pub(crate) fn lookup_dialect(&self, name: &str) -> Option<Dialect> {
+        self.df_dialects.get(name).copied()
     }
 
     /// Resolve a name as a *class instance* (not a DataFrame). Used to

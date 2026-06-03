@@ -360,6 +360,29 @@ pub(super) fn apply_with_columns_renamed<'a>(
     let Some(dict) = call.arguments.args.first().and_then(Expr::as_dict_expr) else {
         return recv.clone();
     };
+    apply_rename_dict_inner(dict, recv, ctx)
+}
+
+/// v1.3 pandas dispatch (spec §5) — `df.rename(columns={...})`. Same
+/// shape as `withColumnsRenamed`'s positional-dict form; routed here
+/// so the kwarg surface doesn't have to be re-derived inside the
+/// Spark helper.
+pub(super) fn apply_rename_dict<'a>(
+    dict: &'a ruff_python_ast::ExprDict,
+    recv: &SchemaView<'a>,
+    ctx: &BodyContext<'a>,
+    _source: &str,
+    _line_index: &LineIndex,
+    _diagnostics: &mut Vec<Diagnostic>,
+) -> SchemaView<'a> {
+    apply_rename_dict_inner(dict, recv, ctx)
+}
+
+fn apply_rename_dict_inner<'a>(
+    dict: &'a ruff_python_ast::ExprDict,
+    recv: &SchemaView<'a>,
+    ctx: &BodyContext<'a>,
+) -> SchemaView<'a> {
     let mut renames: Vec<(&'a str, &'a str)> = Vec::new();
     let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
     for item in &dict.items {
@@ -371,7 +394,8 @@ pub(super) fn apply_with_columns_renamed<'a>(
         };
         // Record for LSP. PySpark's `withColumnsRenamed` silently
         // ignores keys that aren't in the schema (same design as
-        // `df.drop`), so missing names must not fire D0030.
+        // `df.drop`), so missing names must not fire D0030. Pandas
+        // `.rename` shares the same tolerant behavior.
         refs.push((key.value.to_str(), key.range()));
         renames.push((key.value.to_str(), val.value.to_str()));
     }
@@ -387,6 +411,75 @@ pub(super) fn apply_with_columns_renamed<'a>(
         })
         .collect();
     SchemaView::Derived(fields)
+}
+
+/// v1.3 pandas dispatch (spec §5) — `df.assign(new=expr, …)`. Pandas
+/// passes the new columns as keyword arguments; each kwarg's name is
+/// a new (or replacement) column, and the value is an expression
+/// whose embedded col-refs are checked against the receiver.
+pub(super) fn apply_pandas_assign<'a>(
+    call: &'a ExprCall,
+    recv: &SchemaView<'a>,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> SchemaView<'a> {
+    let mut fields: Vec<DerivedField<'a>> = recv.typed_fields(ctx.schemas());
+    let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
+    for kw in &call.arguments.keywords {
+        let Some(name_node) = kw.arg.as_ref() else {
+            continue;
+        };
+        let name = name_node.id.as_str();
+        let ty = infer_expr_type(&kw.value, recv, ctx.type_ctx());
+        if let Some(existing) = fields.iter_mut().find(|f| f.name == name) {
+            existing.ty = ty;
+        } else {
+            fields.push(DerivedField { name, ty });
+        }
+        collect_col_refs(&kw.value, ctx, &mut refs);
+        report_expr_sql_refs(&kw.value, recv, source, line_index, diagnostics);
+        report_expr_type_errors(
+            &kw.value,
+            recv,
+            ctx.type_ctx(),
+            source,
+            line_index,
+            diagnostics,
+        );
+    }
+    report_column_refs(&refs, recv, ctx, source, line_index, diagnostics);
+    SchemaView::Derived(fields)
+}
+
+/// v1.3 pandas dispatch (spec §5) — `df.drop(columns=[...])`. Each
+/// list element is a column on the receiver; the result schema is
+/// the receiver minus those names. Missing names fire D0030 (same
+/// as Spark `.drop`).
+pub(super) fn apply_pandas_drop_columns<'a>(
+    list: &'a ruff_python_ast::ExprList,
+    recv: &SchemaView<'a>,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> SchemaView<'a> {
+    let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
+    let mut drop_set: HashSet<&str> = HashSet::new();
+    for elt in &list.elts {
+        if let Some(lit) = elt.as_string_literal_expr() {
+            refs.push((lit.value.to_str(), lit.range()));
+            drop_set.insert(lit.value.to_str());
+        }
+    }
+    report_column_refs(&refs, recv, ctx, source, line_index, diagnostics);
+    let remaining: Vec<DerivedField<'a>> = recv
+        .typed_fields(ctx.schemas())
+        .into_iter()
+        .filter(|f| !drop_set.contains(f.name))
+        .collect();
+    SchemaView::Derived(remaining)
 }
 
 /// Model `df.melt(ids, values, variableColumnName, valueColumnName)` and
@@ -577,6 +670,36 @@ pub(super) fn check_with_column_enum_sink<'a>(
     let Some(value_expr) = call.arguments.args.get(1) else {
         return;
     };
+    let Some(ty) = schema.field_type(column, ctx.schemas()) else {
+        return;
+    };
+    let Some(vocab) = enum_vocab(&ty) else {
+        return;
+    };
+    let mut cx = EnumCheckCtx {
+        source,
+        line_index,
+        diagnostics,
+    };
+    check_value_against_enum_vocab(column, vocab, value_expr, &mut cx);
+}
+
+/// v1.3 pandas dispatch (spec §5) — `df["status"] = value`. When
+/// `status` is enum-typed on the receiver, route through the same
+/// vocabulary check as `withColumn` / `withColumns`. Slice name is
+/// always a literal here; the col-ref check on the slice has
+/// already fired via piece (b)'s descent.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn check_pandas_subscript_assign_enum_sink<'a>(
+    column: &str,
+    _slice_range: TextRange,
+    value_expr: &'a Expr,
+    schema: &SchemaView<'a>,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     let Some(ty) = schema.field_type(column, ctx.schemas()) else {
         return;
     };

@@ -3,7 +3,8 @@ use std::collections::{HashMap, HashSet};
 use super::col_refs::collect_col_refs;
 use super::column_exprs::select_arg_type;
 use super::column_methods::{
-    apply_melt, apply_with_columns, apply_with_columns_renamed, check_column_method_args,
+    apply_melt, apply_pandas_assign, apply_pandas_drop_columns, apply_rename_dict,
+    apply_with_columns, apply_with_columns_renamed, check_column_method_args,
     check_fillna_dict_keys, check_subset_kwarg, check_with_column_enum_sink,
     check_with_columns_enum_sinks, report_column_refs,
 };
@@ -23,7 +24,7 @@ use ruff_python_ast::{Expr, ExprAttribute, ExprCall, StmtFunctionDef};
 use ruff_source_file::LineIndex;
 use ruff_text_size::{Ranged, TextRange};
 
-use crate::dataframe::{self, DataFrameAnnotation};
+use crate::dataframe::{self, DataFrameAnnotation, Dialect};
 use crate::diagnostics::{Diagnostic, Severity};
 use crate::registry::{MethodParam, ParamKind};
 use crate::schema::{
@@ -161,6 +162,18 @@ pub(super) fn analyze_expr<'a>(
             None
         }
         Expr::Subscript(s) => {
+            // v1.3 piece (b) — bare `df["col"]` / `df[["a", "b"]]` col-ref
+            // check (pandas-support.md §9). Only fires when the receiver
+            // is an `Expr::Name` directly bound to a frame slot; other
+            // receiver shapes (Attribute, Call, IfExp) are quiet-ignored
+            // per spec §9 receiver-shape bound. Spark + Pandas share the
+            // same D0030 path — see spec §10 for the bonus Spark
+            // coverage widening this lands.
+            if let Some(name) = s.value.as_name_expr()
+                && let Some(view) = ctx.lookup(name.id.as_str())
+            {
+                report_subscript_col_refs(&s.slice, &view, ctx, source, line_index, diagnostics);
+            }
             // `(df, df2)[1]` — neither half is a DataFrame on its own,
             // but a method call buried in either side still needs its
             // diagnostics collected.
@@ -205,6 +218,52 @@ pub(super) fn analyze_expr<'a>(
     }
 }
 
+/// v1.3 piece (b) col-ref entry point — given a frame-typed receiver
+/// view and the *slice* of a bare `Expr::Subscript`, fire `D0030` for
+/// any string-literal column name that doesn't resolve. Handles the
+/// two literal shapes the spec calls out in §5 / §9:
+///
+/// - scalar string literal: `df["status"]`
+/// - list of string literals: `df[["a", "b"]]`
+///
+/// Every other slice shape (boolean-mask `df[mask]`, `df[var]`, `df[0]`,
+/// `df[:5]`, `df["a" + "b"]`, chained `df["a"]["b"]`) is quiet-ignored
+/// per the §5 Subscript-slice taxonomy — the surrounding analyzer
+/// already descends into the slice expression separately, so any
+/// embedded col-ref still surfaces through the normal pipeline.
+fn report_subscript_col_refs<'a>(
+    slice: &'a Expr,
+    view: &SchemaView<'a>,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
+    match slice {
+        Expr::StringLiteral(lit) => {
+            refs.push((lit.value.to_str(), lit.range()));
+        }
+        Expr::List(list) => {
+            for elt in &list.elts {
+                if let Expr::StringLiteral(lit) = elt {
+                    refs.push((lit.value.to_str(), lit.range()));
+                } else {
+                    // Mixed shapes (`df[["a", some_var]]`) — drop the
+                    // entire list. v1.3 only checks all-literal lists;
+                    // partial firing would be confusing.
+                    return;
+                }
+            }
+        }
+        _ => return,
+    }
+    if refs.is_empty() {
+        return;
+    }
+    report_column_refs(&refs, view, ctx, source, line_index, diagnostics);
+}
+
 /// Walk each comprehension generator's `iter` (the iteration source)
 /// for embedded method calls. The `elt` / `ifs` parts run inside a new
 /// scope where the comprehension's bound name is in effect; analyzing
@@ -223,6 +282,28 @@ fn descend_comprehension_iters<'a>(
     for comp in generators {
         let _ = analyze_expr(&comp.iter, ctx, source, line_index, diagnostics);
     }
+}
+
+/// Lookup a `name=` kwarg on `call` and require its value be a dict
+/// literal. Used by the v1.3 pandas dispatch (`df.rename(columns=...)`).
+fn pandas_dict_kwarg<'a>(call: &'a ExprCall, name: &str) -> Option<&'a ruff_python_ast::ExprDict> {
+    let kw = call
+        .arguments
+        .keywords
+        .iter()
+        .find(|k| k.arg.as_ref().is_some_and(|n| n.id.as_str() == name))?;
+    kw.value.as_dict_expr()
+}
+
+/// Lookup a `name=` kwarg on `call` and require its value be a list
+/// literal. Used by the v1.3 pandas dispatch (`df.drop(columns=[...])`).
+fn pandas_list_kwarg<'a>(call: &'a ExprCall, name: &str) -> Option<&'a ruff_python_ast::ExprList> {
+    let kw = call
+        .arguments
+        .keywords
+        .iter()
+        .find(|k| k.arg.as_ref().is_some_and(|n| n.id.as_str() == name))?;
+    kw.value.as_list_expr()
 }
 
 pub(super) fn analyze_method_call<'a>(
@@ -389,6 +470,20 @@ pub(super) fn analyze_method_call<'a>(
     }
 
     let receiver = analyze_expr(&attr.value, ctx, source, line_index, diagnostics)?;
+
+    // v1.3 — when the immediate receiver is a Name bound to a frame
+    // slot, surface its dialect tag (PR-A). Used by the pandas-only
+    // method dispatches (`merge`, `assign`, …) to skip a Spark
+    // receiver — a misnamed Spark call doesn't silently get pandas
+    // treatment. A chain receiver (call result, no dialect threaded)
+    // falls through to the pandas dispatch by design: chains lose
+    // dialect, and a real pandas chain (`pdf.merge(x).assign(...)`)
+    // still needs its terminal method checked.
+    let receiver_is_spark_named = attr
+        .value
+        .as_name_expr()
+        .and_then(|n| ctx.lookup_dialect(n.id.as_str()))
+        == Some(Dialect::Spark);
 
     // `df.createOrReplaceTempView("name")` — register `df`'s schema
     // against `name` in the file's tempView registry, so a later
@@ -607,6 +702,68 @@ pub(super) fn analyze_method_call<'a>(
             diagnostics,
         ));
     }
+    // v1.3 pandas dispatch (spec §5). Internal branching — same
+    // analyzer module, no sibling-module split (spec §3 Q9). The
+    // pandas-side method names route through the same Spark check-
+    // site impls because the col-ref check + result-schema
+    // computation are dialect-agnostic; only the surface method
+    // name + argument shape differ. A Spark-tagged receiver is
+    // skipped here so a misnamed call doesn't silently get pandas
+    // treatment; chain receivers (no dialect threaded) fall through
+    // so real pandas chains (`pdf.merge(x).assign(...)`) still get
+    // their terminal method checked.
+    //
+    // `df.rename(columns={"old": "new"})` → mirror of
+    // `withColumnsRenamed`. The `columns=` kwarg carries the rename
+    // dict; legacy positional `mapper=` + `axis=1` forms are not
+    // statically inspected (deferred to v1.4).
+    if !receiver_is_spark_named
+        && method == "rename"
+        && let Some(dict) = pandas_dict_kwarg(call, "columns")
+    {
+        return Some(apply_rename_dict(
+            dict,
+            &receiver,
+            ctx,
+            source,
+            line_index,
+            diagnostics,
+        ));
+    }
+    // `df.assign(new=expr, …)` → mirror of `withColumns`. Pandas
+    // passes the new columns as kwargs (not a dict positional);
+    // route them through the shared adder. Enum-sink checks (D0084)
+    // fire on string-literal kwarg values written into an enum-typed
+    // sink column.
+    if !receiver_is_spark_named && method == "assign" {
+        return Some(apply_pandas_assign(
+            call,
+            &receiver,
+            ctx,
+            source,
+            line_index,
+            diagnostics,
+        ));
+    }
+    // `df.drop(columns=[...])` — pandas drop's column-only shape.
+    // (Spark `.drop(...)` takes positional column names; pandas's
+    // unkwarg'd `.drop("x")` is *row-by-index*, not column drop, so
+    // we deliberately ONLY recognize the explicit `columns=` form
+    // here.) The check reuses Spark's `.drop` logic — col-refs +
+    // schema minus the dropped names.
+    if !receiver_is_spark_named
+        && method == "drop"
+        && let Some(list) = pandas_list_kwarg(call, "columns")
+    {
+        return Some(apply_pandas_drop_columns(
+            list,
+            &receiver,
+            ctx,
+            source,
+            line_index,
+            diagnostics,
+        ));
+    }
     if matches!(method, "melt" | "unpivot") {
         return Some(apply_melt(
             call,
@@ -658,6 +815,13 @@ pub(super) fn analyze_method_call<'a>(
         return apply_column_method(method, &receiver, call, ctx, ctx.type_ctx());
     }
     if let Some(kind) = two_df_method(method) {
+        // `merge` is the pandas spelling of join (spec §5). Skip the
+        // Join dispatch when the receiver is a Spark-tagged Name —
+        // a misspelled `.merge` on a SparkFrame is wrong code, not a
+        // join. Chain receivers fall through (no dialect threaded).
+        if method == "merge" && receiver_is_spark_named {
+            return None;
+        }
         return handle_two_df_method(
             kind,
             method,

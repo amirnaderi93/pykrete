@@ -113,6 +113,32 @@ fn walk_stmt<'a>(
     match stmt {
         Stmt::Assign(a) => {
             let schema = analyze_expr(&a.value, ctx, source, line_index, diagnostics);
+            // v1.3 pandas dispatch (spec §5) — `df["new"] = expr`. The
+            // target is a Subscript whose value is a frame-bound Name;
+            // the slice (string literal) names a column to add or
+            // replace. The enum-sink check (D0084) rides along when
+            // the slice names an enum-typed column. The col-ref check
+            // on the RHS is the responsibility of the existing
+            // analyze_expr descent above.
+            for target in &a.targets {
+                if let Expr::Subscript(sub) = target
+                    && let Some(name_expr) = sub.value.as_name_expr()
+                    && let Some(recv) = ctx.lookup(name_expr.id.as_str())
+                    && let Some(slice_lit) = sub.slice.as_string_literal_expr()
+                {
+                    let col_name = slice_lit.value.to_str();
+                    super::column_methods::check_pandas_subscript_assign_enum_sink(
+                        col_name,
+                        slice_lit.range(),
+                        &a.value,
+                        &recv,
+                        ctx,
+                        source,
+                        line_index,
+                        diagnostics,
+                    );
+                }
+            }
             // Always walk every target to mark its names as locally
             // bound — covers plain names, tuple/list unpack, and
             // starred targets. Schema/instance binding below is the
@@ -442,11 +468,16 @@ fn handle_ann_assign<'a>(
         );
     }
 
+    let recognized_dialect = recognized.map(|r| r.dialect);
     match recognized.map(|r| r.kind) {
         Some(DataFrameAnnotation::Typed(schema_name)) => {
             if let Some(schema) = ctx.find_schema(schema_name) {
                 let view = SchemaView::Declared(schema);
-                ctx.bind_df(target_name, view.clone());
+                if let Some(dialect) = recognized_dialect {
+                    ctx.bind_df_with_dialect(target_name, view.clone(), dialect);
+                } else {
+                    ctx.bind_df(target_name, view.clone());
+                }
                 ctx.record_local_binding(target_name, target_range, view);
             } else {
                 diagnostics.push(Diagnostic::at_range(
@@ -479,7 +510,11 @@ fn handle_ann_assign<'a>(
                 ));
             }
             if let Some(view) = crate::schema::resolve_derived_schema(expr, ctx.schemas()) {
-                ctx.bind_df(target_name, view.clone());
+                if let Some(dialect) = recognized_dialect {
+                    ctx.bind_df_with_dialect(target_name, view.clone(), dialect);
+                } else {
+                    ctx.bind_df(target_name, view.clone());
+                }
                 ctx.record_local_binding(target_name, target_range, view);
             }
         }
