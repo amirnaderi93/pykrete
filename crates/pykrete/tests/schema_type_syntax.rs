@@ -92,7 +92,7 @@ class Orders(Schema):
     place_code: int
     price: double
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.select(col("priec"))
 "#;
     assert!(check(src).has_code("D0030"));

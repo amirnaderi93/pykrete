@@ -18,7 +18,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.select(col("BadName"))
 "#;
     let result = check(src);
@@ -43,11 +43,11 @@ def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
 
 #[test]
 fn unknown_schema_error_range_is_a_non_trivial_span() {
-    // D0020 anchors on the whole `DataFrame[X]` annotation expression —
+    // D0020 anchors on the whole `SparkFrame[X]` annotation expression —
     // we don't bother narrowing to just the bad schema name. That's fine
     // for the LSP: any non-zero range produces a real squiggle.
     let src = r#"
-def f(raw: DataFrame[Missing]) -> DataFrame[Missing]:
+def f(raw: SparkFrame[Missing]) -> SparkFrame[Missing]:
     return raw
 "#;
     let result = check(src);
@@ -74,7 +74,7 @@ class A(Schema):
 class B(Schema):
     b: int
 
-def f(left: DataFrame[A], right: DataFrame[B]) -> DataFrame[A]:
+def f(left: SparkFrame[A], right: SparkFrame[B]) -> SparkFrame[A]:
     return left.join(right, on="missing")
 "#;
     let result = check(src);

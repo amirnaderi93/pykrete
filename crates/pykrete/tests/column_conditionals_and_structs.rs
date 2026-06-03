@@ -45,7 +45,7 @@ class Out(Schema):
     name: string
     label: string
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn("label", F.when(col("x") > 0, F.lit("yes")).otherwise(F.lit("no")))
 "#
     );
@@ -68,7 +68,7 @@ class Out(Schema):
     name: string
     result: double
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn("result", F.when(col("x") > 0, col("int_col")).otherwise(col("double_col")))
 "#
     );
@@ -90,7 +90,7 @@ class Out(Schema):
     name: string
     bucket: string
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn(
         "bucket",
         F.when(col("x") > 100, F.lit("hi"))
@@ -119,7 +119,7 @@ class Out(Schema):
     name: string
     flag: Optional[int]
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn("flag", F.when(col("x") > 0, F.lit(1)))
 "#
     );
@@ -138,7 +138,7 @@ class Out(Schema):
     name: string
     flag: int
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn("flag", F.when(col("x") > 0, F.lit(1)))
 "#
     );
@@ -152,7 +152,7 @@ fn when_typo_in_otherwise_branch_fires_D0030() {
     // fire D0030 — the generic walker reaches the args.
     let src = format!(
         r#"{SCHEMAS}
-def f(d: DataFrame[In]) -> DataFrame:
+def f(d: SparkFrame[In]) -> SparkFrame:
     return d.withColumn(
         "label",
         F.when(col("x") > 0, F.lit("yes")).otherwise(col("nope")),
@@ -181,7 +181,7 @@ class Out(Schema):
     name: string
     result: string
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn(
         "result",
         F.when(col("x") > 0, col("name")).otherwise(col("int_col")),
@@ -214,7 +214,7 @@ class Out(Schema):
     name: string
     result: int
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn(
         "result",
         F.when(col("x") > 100, F.lit("a"))
@@ -237,7 +237,7 @@ class Out(Schema):
     name: string
     result: string
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn(
         "result",
         F.when(col("x") > 100, F.lit("a"))
@@ -273,7 +273,7 @@ class Out(Schema):
     name: string
     result: double
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn(
         "result",
         F.when(col("x") > 100, col("int_col"))
@@ -297,7 +297,7 @@ class Out(Schema):
     name: string
     result: string
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn(
         "result",
         F.when(col("x") > 100, col("int_col"))
@@ -332,7 +332,7 @@ class Out(Schema):
     nullable_str: Optional[string]
     result: string
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn(
         "result",
         F.when(col("x") > 100, col("nullable_str"))
@@ -378,7 +378,7 @@ class Out(Schema):
     b: string
     bag: Bag
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn("bag", F.struct(col("a"), col("b")))
 "#
     );
@@ -397,7 +397,7 @@ class Out(Schema):
     b: string
     bag: BagRenamed
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn("bag", F.struct(col("a"), col("b").alias("renamed")))
 "#
     );
@@ -417,7 +417,7 @@ class Out(Schema):
     b: string
     bag: NamedBag
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn("bag", F.named_struct("k1", col("a"), "k2", col("b")))
 "#
     );
@@ -438,7 +438,7 @@ class Out(Schema):
     b: string
     first: int
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn("first", F.struct(col("a"), col("b")).getField("a"))
 "#
     );
@@ -458,7 +458,7 @@ fn f_struct_with_unnamed_args_uses_col_index_convention() {
 class In(Schema):
     a: int
 
-def f(d: DataFrame[In]) -> DataFrame:
+def f(d: SparkFrame[In]) -> SparkFrame:
     return d.withColumn("first", F.struct(F.lit(1), F.lit("y")).getField("col1"))
 "#;
     let result_ok = check_strict(src_ok);
@@ -472,7 +472,7 @@ def f(d: DataFrame[In]) -> DataFrame:
 class In(Schema):
     a: int
 
-def f(d: DataFrame[In]) -> DataFrame:
+def f(d: SparkFrame[In]) -> SparkFrame:
     return d.withColumn("first", F.struct(F.lit(1), F.lit("y")).getField(""))
 "#;
     let result_bad = check_strict(src_bad);
@@ -485,7 +485,7 @@ fn f_struct_typo_in_arg_fires_D0030() {
     // — the generic walker reaches into the call.
     let src = format!(
         r#"{STRUCT_SCHEMAS}
-def f(d: DataFrame[In]) -> DataFrame:
+def f(d: SparkFrame[In]) -> SparkFrame:
     return d.withColumn("bag", F.struct(col("a"), col("nope")))
 "#
     );

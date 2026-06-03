@@ -1,6 +1,6 @@
 //! Multi-file project analysis. Cross-file `Schema` visibility — when one
 //! file declares `class Orders(Schema)` and another file's function uses
-//! `DataFrame[Orders]`, the second file must `from .schemas import Orders`
+//! `SparkFrame[Orders]`, the second file must `from .schemas import Orders`
 //! to make the reference resolve.
 //!
 //! Iteration 31 moved from a pooled-everything model to strict per-file
@@ -37,7 +37,7 @@ fn single_file_project_behaves_like_a_single_file_check() {
 class Orders(Schema):
     place_code: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.select(col("place_code"))
 "#,
     )]);
@@ -54,7 +54,7 @@ def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
 #[test]
 fn function_in_file_b_can_reference_a_schema_declared_in_file_a() {
     // schemas.pyk declares Orders. pipeline.pyk imports it and uses
-    // DataFrame[Orders] in a function signature. The cross-file
+    // SparkFrame[Orders] in a function signature. The cross-file
     // reference resolves cleanly — no D0020.
     let results = check_project_pairs(&[
         (
@@ -70,7 +70,7 @@ class Orders(Schema):
             r#"
 from .schemas import Orders
 
-def prepare(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def prepare(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.select(col("place_code"), col("price"))
 "#,
         ),
@@ -112,7 +112,7 @@ class Orders(Schema):
             r#"
 from .schemas import Orders
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.select(col("priec"))
 "#,
         ),
@@ -131,7 +131,7 @@ def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
 fn d0020_still_fires_when_a_schema_is_not_declared_in_any_file() {
     // No file declares MysterySchema; the cross-file lookup also fails;
     // pykrete emits the existing D0020 ("Unknown schema 'X' referenced in
-    // DataFrame[…]").
+    // SparkFrame[…]").
     let results = check_project_pairs(&[
         (
             "schemas.pyk",
@@ -143,7 +143,7 @@ class Orders(Schema):
         (
             "pipeline.pyk",
             r#"
-def f(raw: DataFrame[MysterySchema]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[MysterySchema]) -> SparkFrame[Orders]:
     return raw
 "#,
         ),
@@ -153,7 +153,7 @@ def f(raw: DataFrame[MysterySchema]) -> DataFrame[Orders]:
 
 #[test]
 fn d0050_return_type_check_works_across_files() {
-    // Function in pipeline.pyk declares `-> DataFrame[Orders]` but returns
+    // Function in pipeline.pyk declares `-> SparkFrame[Orders]` but returns
     // a Derived schema with only 'place_code'. The mismatch against Orders
     // (declared in schemas.pyk) fires D0050 — proving the cross-file
     // resolution carries all the way through.
@@ -171,7 +171,7 @@ class Orders(Schema):
             r#"
 from .schemas import Orders
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.select(col("place_code"))
 "#,
         ),
@@ -212,7 +212,7 @@ class User(Schema):
     name: string
     address: Address
 
-def f(u: DataFrame[User]) -> DataFrame:
+def f(u: SparkFrame[User]) -> SparkFrame:
     return u.select(col("address.street"))
 "#,
         ),
@@ -244,7 +244,7 @@ fn parse_error_in_one_file_does_not_block_analysis_of_other_files() {
 class Orders(Schema):
     x: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.select(col("x"))
 "#,
         ),
@@ -377,7 +377,7 @@ fn duplicate_function_name_does_NOT_fire_D0072_in_this_PR() {
 class A(Schema):
     x: int
 
-def shared(df: DataFrame[A]) -> DataFrame[A]:
+def shared(df: SparkFrame[A]) -> SparkFrame[A]:
     return df.select(col("x"))
 "#,
         ),
@@ -387,7 +387,7 @@ def shared(df: DataFrame[A]) -> DataFrame[A]:
 class B(Schema):
     y: int
 
-def shared(df: DataFrame[B]) -> DataFrame[B]:
+def shared(df: SparkFrame[B]) -> SparkFrame[B]:
     return df.select(col("y"))
 "#,
         ),

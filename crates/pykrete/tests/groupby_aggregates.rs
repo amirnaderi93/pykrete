@@ -32,7 +32,7 @@ class Sale(Schema):
 fn groupBy_count_then_filter_against_count_column_is_clean() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").count().filter(col(\"count\") > 10)
 "
     );
@@ -44,7 +44,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn groupBy_count_then_select_against_keys_and_count_is_clean() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").count().select(col(\"region\"), col(\"count\"))
 "
     );
@@ -56,7 +56,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn groupBy_count_then_select_unknown_column_fires_D0030() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").count().select(col(\"nope\"))
 "
     );
@@ -73,7 +73,7 @@ fn df_count_remains_terminal() {
     // count non-terminal in every case.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> None:
+def f(raw: SparkFrame[Sale]) -> None:
     raw.count().select(col(\"nofield\"))
 "
     );
@@ -89,7 +89,7 @@ def f(raw: DataFrame[Sale]) -> None:
 fn groupBy_sum_then_filter_against_sum_column_is_clean() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").sum(\"amount\").filter(col(\"sum(amount)\") > 100)
 "
     );
@@ -101,7 +101,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn groupBy_sum_multi_then_select_against_each_synthetic_is_clean() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").sum(\"amount\", \"price\").select(
         col(\"region\"), col(\"sum(amount)\"), col(\"sum(price)\")
     )
@@ -115,7 +115,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn groupBy_sum_with_unknown_input_column_fires_D0030() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").sum(\"nope\")
 "
     );
@@ -129,7 +129,7 @@ fn groupBy_sum_then_select_unknown_synthetic_fires_D0030() {
     // `sum(amount)` exists; `sum(nope)` does not (it was never produced).
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").sum(\"amount\").select(col(\"sum(nope)\"))
 "
     );
@@ -142,7 +142,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn groupBy_max_then_filter_against_max_column_is_clean() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").max(\"amount\").filter(col(\"max(amount)\") > 50)
 "
     );
@@ -154,7 +154,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn groupBy_max_with_unknown_input_column_fires_D0030() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").max(\"nope\")
 "
     );
@@ -167,7 +167,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn groupBy_min_then_select_synthetic_is_clean() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").min(\"amount\").select(col(\"min(amount)\"))
 "
     );
@@ -179,7 +179,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn groupBy_min_with_unknown_input_column_fires_D0030() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").min(\"nope\")
 "
     );
@@ -194,7 +194,7 @@ fn groupBy_mean_then_filter_against_avg_synthetic_is_clean() {
     // We use the method name the user wrote (`mean`) for the synthetic.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").mean(\"amount\").filter(col(\"mean(amount)\") > 5)
 "
     );
@@ -206,7 +206,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn groupBy_mean_with_unknown_input_column_fires_D0030() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").mean(\"nope\")
 "
     );
@@ -218,7 +218,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn groupBy_avg_then_select_synthetic_is_clean() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").avg(\"amount\").select(col(\"avg(amount)\"))
 "
     );
@@ -230,7 +230,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn groupBy_avg_with_unknown_input_column_fires_D0030() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").avg(\"nope\")
 "
     );
@@ -246,7 +246,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn groupBy_multi_keys_count_preserves_all_keys() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\", \"amount\").count().select(
         col(\"region\"), col(\"amount\"), col(\"count\")
     )
@@ -270,7 +270,7 @@ class Hits(Schema):
     page: string
     count: string
 
-def f(raw: DataFrame[Hits]) -> DataFrame:
+def f(raw: SparkFrame[Hits]) -> SparkFrame:
     return raw.groupBy("page").count().select(col("page"), col("count"))
 "#;
     let result = check(src);
@@ -292,7 +292,7 @@ class Hits(Schema):
     count: string
     page: string
 
-def f(raw: DataFrame[Hits]) -> DataFrame:
+def f(raw: SparkFrame[Hits]) -> SparkFrame:
     return raw.groupBy("count").count().select(col("count"))
 "#;
     let result = check(src);
@@ -309,7 +309,7 @@ class Hits(Schema):
     count: string
     page: string
 
-def f(raw: DataFrame[Hits]) -> DataFrame:
+def f(raw: SparkFrame[Hits]) -> SparkFrame:
     return raw.groupBy("count").count().select(col("page"))
 "#;
     let result = check(src);
@@ -320,7 +320,7 @@ def f(raw: DataFrame[Hits]) -> DataFrame:
 fn groupBy_sum_chained_into_withColumn_is_clean() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").sum(\"amount\").withColumn(
         \"doubled\", col(\"sum(amount)\") * 2
     )
@@ -347,7 +347,7 @@ fn synthetic_name_pool_is_bounded_under_repeated_analysis() {
     // another test in the suite already populated the pool.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").sum(\"amount\", \"price\").select(
         col(\"region\"), col(\"sum(amount)\"), col(\"sum(price)\")
     )

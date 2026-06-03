@@ -22,7 +22,7 @@ class Orders(Schema):
     amount: int
     city: string
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     a = raw.select(col(\"amount\"), \"city\")
     return a.filter(col(\"amount\") > 0)
 ";

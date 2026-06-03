@@ -34,7 +34,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.groupBy("place_code").agg(F.sum(col("price")).alias("total"))
 "#,
     );
@@ -51,7 +51,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.groupBy("place_code").agg(F.sum("price").alias("total"))
 "#,
     );
@@ -67,7 +67,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.groupBy("place_code").agg(F.sum("priec").alias("total"))
 "#,
     );
@@ -84,7 +84,7 @@ fn d0030_fires_when_group_key_references_an_unknown_column() {
 class Orders(Schema):
     place_code: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.groupBy("not_a_column").agg(F.count("place_code").alias("n"))
 "#,
     );
@@ -107,7 +107,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     grouped = raw.groupBy("place_code").agg(
         F.sum("price").alias("sum_price"),
         F.avg("price").alias("avg_price"),
@@ -126,7 +126,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     grouped = raw.groupBy("place_code").agg(F.sum("price").alias("total"))
     return grouped.select(col("price"))
 "#,
@@ -146,7 +146,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.groupBy("city", "place_code").agg(
         F.sum("price").alias("total")
     ).select(col("city"), col("place_code"), col("total"))
@@ -165,7 +165,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.agg(F.sum("price").alias("total")).select(col("total"))
 "#,
     );
@@ -188,7 +188,7 @@ class Summary(Schema):
     place_code: int
     total: int
 
-def summarize(raw: DataFrame[Orders]) -> DataFrame[Summary]:
+def summarize(raw: SparkFrame[Orders]) -> SparkFrame[Summary]:
     return raw.groupBy("place_code").agg(F.sum("price").alias("total"))
 "#,
     );
@@ -209,7 +209,7 @@ class Summary(Schema):
     place_code: int
     total: int
 
-def summarize(raw: DataFrame[Orders]) -> DataFrame[Summary]:
+def summarize(raw: SparkFrame[Orders]) -> SparkFrame[Summary]:
     return raw.groupBy("place_code").agg(F.sum("price").alias("wrong_name"))
 "#,
     );
@@ -231,7 +231,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.groupBy("place_code").agg(
         F.sum("price").alias("total")
     ).filter(col("total") > 100)
@@ -248,7 +248,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.groupBy("place_code").agg(
         F.sum("price").alias("total")
     ).filter(col("missing") > 100)
@@ -277,7 +277,7 @@ class Sales(Schema):
     year: int
     amount: int
 
-def f(df: DataFrame[Sales]) -> None:
+def f(df: SparkFrame[Sales]) -> None:
     df.groupby("typo").agg(F.sum("amount").alias("total"))
 "#,
     );
@@ -296,7 +296,7 @@ class Sales(Schema):
     year: int
     amount: int
 
-def f(df: DataFrame[Sales]) -> None:
+def f(df: SparkFrame[Sales]) -> None:
     df.groupby("year").pivot("typo").sum("amount")
 "#,
     );
@@ -315,7 +315,7 @@ class Sales(Schema):
     year: int
     amount: int
 
-def f(df: DataFrame[Sales]) -> None:
+def f(df: SparkFrame[Sales]) -> None:
     df.groupby("year").max("typo")
 "#,
     );
@@ -332,7 +332,7 @@ class Sales(Schema):
     year: int
     amount: int
 
-def f(df: DataFrame[Sales]) -> None:
+def f(df: SparkFrame[Sales]) -> None:
     df.groupby("region", "year").agg(F.sum("amount").alias("total"))
 "#,
     );
@@ -356,7 +356,7 @@ class KV(Schema):
     key: int
     value: int
 
-def f(df: DataFrame[KV]) -> None:
+def f(df: SparkFrame[KV]) -> None:
     df.groupBy("key").max("value")
 "#,
     );
@@ -371,7 +371,7 @@ class KV(Schema):
     key: int
     value: int
 
-def f(df: DataFrame[KV]) -> None:
+def f(df: SparkFrame[KV]) -> None:
     df.groupBy("key").max("vlaue")
 "#,
     );
@@ -392,7 +392,7 @@ class KV(Schema):
     key: int
     value: int
 
-def f(df: DataFrame[KV]) -> None:
+def f(df: SparkFrame[KV]) -> None:
     df.groupBy("key").{method}("vlaue")
 "#
         );
@@ -414,7 +414,7 @@ class AB(Schema):
     a: string
     b: C
 
-def f(df: DataFrame[AB]) -> None:
+def f(df: SparkFrame[AB]) -> None:
     df.groupBy("a").max("b.c")
 "#,
     );
@@ -434,7 +434,7 @@ class AB(Schema):
     a: string
     b: C
 
-def f(df: DataFrame[AB]) -> None:
+def f(df: SparkFrame[AB]) -> None:
     df.groupBy("a").max("b.cc")
 "#,
     );
@@ -455,7 +455,7 @@ class KV(Schema):
     key: int
     value: int
 
-def f(df: DataFrame[KV]) -> None:
+def f(df: SparkFrame[KV]) -> None:
     df.max("vlaue")
 "#,
     );
@@ -483,7 +483,7 @@ class Out(Schema):
     segment_id: int
     total: long
 
-def f(left: DataFrame[Left], seg: DataFrame[Seg]) -> DataFrame[Out]:
+def f(left: SparkFrame[Left], seg: SparkFrame[Seg]) -> SparkFrame[Out]:
     return left.join(seg, "city", how="inner").groupBy(seg.segment_id).agg(
         F.sum("amount").alias("total")
     )

@@ -15,7 +15,7 @@
 //!   literal, and binds T from the element schemas.
 //!
 //! Tests give the driver function `f` a typed parameter
-//! (`x: DataFrame[Anchor]`) — pykrete only walks the body of functions
+//! (`x: SparkFrame[Anchor]`) — pykrete only walks the body of functions
 //! with at least one DataFrame-typed slot, so the parameter exists only
 //! to keep `f` in the analysis pass. The body never references `x`.
 
@@ -53,13 +53,13 @@ class DataSource[T]:
 ORDERS_SRC: DataSource[Orders] = DataSource("/o")
 REFUNDS_SRC: DataSource[Refunds] = DataSource("/r")
 
-def join_pair[A, B](x: DataSource[A], y: DataSource[B]) -> DataFrame[Merge[A, B]]:
+def join_pair[A, B](x: DataSource[A], y: DataSource[B]) -> SparkFrame[Merge[A, B]]:
     pass
 "#;
     // Happy path — one column from each side. No D0030.
     let happy = check(&format!(
         r#"{preamble}
-def f(x: DataFrame[Anchor]):
+def f(x: SparkFrame[Anchor]):
     result = join_pair(ORDERS_SRC, REFUNDS_SRC)
     result.select(col("order_id"), col("refund_id"))
 "#
@@ -70,7 +70,7 @@ def f(x: DataFrame[Anchor]):
     // in either, and exactly one D0030 fires.
     let bad = check(&format!(
         r#"{preamble}
-def f(x: DataFrame[Anchor]):
+def f(x: SparkFrame[Anchor]):
     join_pair(ORDERS_SRC, REFUNDS_SRC).select(col("nope"))
 "#
     ));
@@ -96,10 +96,10 @@ class DataSource[T]:
 
 ORDERS_SRC: DataSource[Orders] = DataSource("/o")
 
-def pair[A, B](x: DataSource[A], y: DataSource[B]) -> DataFrame[Merge[A, B]]:
+def pair[A, B](x: DataSource[A], y: DataSource[B]) -> SparkFrame[Merge[A, B]]:
     pass
 
-def f(x: DataFrame[Anchor]):
+def f(x: SparkFrame[Anchor]):
     pair(ORDERS_SRC, ORDERS_SRC).select(col("order_id"), col("price"))
 "#,
     );
@@ -128,10 +128,10 @@ class DataSource[T]:
 ORDERS_SRC: DataSource[Orders] = DataSource("/o")
 REFUNDS_SRC: DataSource[Refunds] = DataSource("/r")
 
-def pair[A, B](x: DataSource[A], y: DataSource[B]) -> DataFrame[Merge[A, B]]:
+def pair[A, B](x: DataSource[A], y: DataSource[B]) -> SparkFrame[Merge[A, B]]:
     pass
 
-def f(x: DataFrame[Anchor]):
+def f(x: SparkFrame[Anchor]):
     pair(ORDERS_SRC, REFUNDS_SRC).select(
         col("order_id"),
         col("refund_id"),
@@ -164,10 +164,10 @@ class DataSource[T]:
 
 REFUNDS_SRC: DataSource[Refunds] = DataSource("/r")
 
-def pair[A, B](x: DataSource[A], y: DataSource[B]) -> DataFrame[Merge[A, B]]:
+def pair[A, B](x: DataSource[A], y: DataSource[B]) -> SparkFrame[Merge[A, B]]:
     pass
 
-def f(x: DataFrame[Anchor], opaque):
+def f(x: SparkFrame[Anchor], opaque):
     pair(opaque, REFUNDS_SRC).select(col("refund_id"))
 "#,
     );
@@ -186,10 +186,10 @@ class DataSource[T]:
 
 REFUNDS_SRC: DataSource[Refunds] = DataSource("/r")
 
-def pair[A, B](x: DataSource[A], y: DataSource[B]) -> DataFrame[Merge[A, B]]:
+def pair[A, B](x: DataSource[A], y: DataSource[B]) -> SparkFrame[Merge[A, B]]:
     pass
 
-def f(x: DataFrame[Anchor], opaque):
+def f(x: SparkFrame[Anchor], opaque):
     pair(opaque, REFUNDS_SRC).select(col("refund_nope"))
 "#,
     );
@@ -223,10 +223,10 @@ class DataSource[T]:
 ORDERS_SRC: DataSource[Orders] = DataSource("/o")
 REFUNDS_SRC: DataSource[Refunds] = DataSource("/r")
 
-def pair[A, B](x: DataSource[A], y: DataSource[B]) -> DataFrame[Merge[A, B]]:
+def pair[A, B](x: DataSource[A], y: DataSource[B]) -> SparkFrame[Merge[A, B]]:
     pass
 
-def f(x: DataFrame[Anchor]):
+def f(x: SparkFrame[Anchor]):
     pair(ORDERS_SRC, REFUNDS_SRC).select(
         col("order_id"),
         col("price"),
@@ -243,7 +243,7 @@ def f(x: DataFrame[Anchor]):
 // Nested generics — multiple subscript levels
 // ---------------------------------------------------------------------------
 
-/// `def f[T](src: List[DataSource[T]]) -> DataFrame[T]` — the matcher
+/// `def f[T](src: List[DataSource[T]]) -> SparkFrame[T]` — the matcher
 /// strips the outer `List` and binds T from each element's
 /// `DataSource[T]`. A single-element list of a typed constant works;
 /// downstream column references resolve against the bound schema.
@@ -262,10 +262,10 @@ class DataSource[T]:
 
 ORDERS_SRC: DataSource[Orders] = DataSource("/o")
 
-def merge_sources[T](sources: List[DataSource[T]]) -> DataFrame[T]:
+def merge_sources[T](sources: List[DataSource[T]]) -> SparkFrame[T]:
     pass
 
-def f(x: DataFrame[Anchor]):
+def f(x: SparkFrame[Anchor]):
     merge_sources([ORDERS_SRC]).select(col("order_id"))
 "#,
     );
@@ -284,10 +284,10 @@ class DataSource[T]:
 
 ORDERS_SRC: DataSource[Orders] = DataSource("/o")
 
-def merge_sources[T](sources: List[DataSource[T]]) -> DataFrame[T]:
+def merge_sources[T](sources: List[DataSource[T]]) -> SparkFrame[T]:
     pass
 
-def f(x: DataFrame[Anchor]):
+def f(x: SparkFrame[Anchor]):
     merge_sources([ORDERS_SRC]).select(col("order_nope"))
 "#,
     );
@@ -313,10 +313,10 @@ class DataSource[T]:
 
 ORDERS_SRC: DataSource[Orders] = DataSource("/o")
 
-def maybe_load[T](src: Optional[DataSource[T]]) -> DataFrame[T]:
+def maybe_load[T](src: Optional[DataSource[T]]) -> SparkFrame[T]:
     pass
 
-def f(x: DataFrame[Anchor]):
+def f(x: SparkFrame[Anchor]):
     maybe_load(ORDERS_SRC).select(col("order_id"))
 "#,
     );
@@ -341,10 +341,10 @@ class DataSource[T]:
 
 ORDERS_SRC: DataSource[Orders] = DataSource("/o")
 
-def from_named[T](sources: Dict[str, DataSource[T]]) -> DataFrame[T]:
+def from_named[T](sources: Dict[str, DataSource[T]]) -> SparkFrame[T]:
     pass
 
-def f(x: DataFrame[Anchor]):
+def f(x: SparkFrame[Anchor]):
     from_named({"a": ORDERS_SRC, "b": ORDERS_SRC}).select(
         col("order_id"),
         col("price"),
@@ -371,10 +371,10 @@ class DataSource[T]:
 
 ORDERS_SRC: DataSource[Orders] = DataSource("/o")
 
-def deep[T](sources: List[List[DataSource[T]]]) -> DataFrame[T]:
+def deep[T](sources: List[List[DataSource[T]]]) -> SparkFrame[T]:
     pass
 
-def f(x: DataFrame[Anchor]):
+def f(x: SparkFrame[Anchor]):
     deep([[ORDERS_SRC]]).select(col("order_id"))
 "#,
     );
@@ -404,10 +404,10 @@ class DataSource[T]:
 ORDERS_SRC: DataSource[Orders] = DataSource("/o")
 REFUNDS_SRC: DataSource[Refunds] = DataSource("/r")
 
-def merge_sources[T](sources: List[DataSource[T]]) -> DataFrame[T]:
+def merge_sources[T](sources: List[DataSource[T]]) -> SparkFrame[T]:
     pass
 
-def f(x: DataFrame[Anchor]):
+def f(x: SparkFrame[Anchor]):
     # ORDERS_SRC binds T=Orders; REFUNDS_SRC tries to bind T=Refunds —
     # conflict. T degrades to Unknown.
     merge_sources([ORDERS_SRC, REFUNDS_SRC]).select(col("made_up"))
@@ -440,10 +440,10 @@ class DataSource[T]:
 ORDERS_SRC: DataSource[Orders] = DataSource("/o")
 REFUNDS_SRC: DataSource[Refunds] = DataSource("/r")
 
-def merge_sources[T](srcs: List[DataSource[T]]) -> DataFrame[T]:
+def merge_sources[T](srcs: List[DataSource[T]]) -> SparkFrame[T]:
     pass
 
-def f(x: DataFrame[Anchor]):
+def f(x: SparkFrame[Anchor]):
     # Element 1 binds T=Orders. Element 2 conflicts and poisons T.
     # Element 3 must NOT revive T=Orders — sticky poisoning required.
     result = merge_sources([ORDERS_SRC, REFUNDS_SRC, ORDERS_SRC])
@@ -477,10 +477,10 @@ class DataSource[T]:
 ORDERS_SRC: DataSource[Orders] = DataSource("/o")
 REFUNDS_SRC: DataSource[Refunds] = DataSource("/r")
 
-def merge_three[T](x: DataSource[T], y: DataSource[T], z: DataSource[T]) -> DataFrame[T]:
+def merge_three[T](x: DataSource[T], y: DataSource[T], z: DataSource[T]) -> SparkFrame[T]:
     pass
 
-def f(x: DataFrame[Anchor]):
+def f(x: SparkFrame[Anchor]):
     result = merge_three(ORDERS_SRC, REFUNDS_SRC, ORDERS_SRC)
     result.select(col("any_name"))
 "#,

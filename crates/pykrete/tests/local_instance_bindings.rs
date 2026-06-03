@@ -33,12 +33,12 @@ class DataAccessLayer:
     def __init__(self, spark):
         ...
 
-    def read[T](self, source: DataSource[T]) -> DataFrame[T]:
+    def read[T](self, source: DataSource[T]) -> SparkFrame[T]:
         ...
 
 RAW_ORDERS: DataSource[RawOrders] = DataSource("/path")
 
-def f(spark) -> DataFrame[RawOrders]:
+def f(spark) -> SparkFrame[RawOrders]:
     dal = DataAccessLayer(spark)
     return dal.read(RAW_ORDERS).select(col("place_code"), col("price"))
 "#;
@@ -72,12 +72,12 @@ class DataAccessLayer:
     def __init__(self, spark):
         ...
 
-    def read[T](self, source: DataSource[T]) -> DataFrame[T]:
+    def read[T](self, source: DataSource[T]) -> SparkFrame[T]:
         ...
 
 RAW_ORDERS: DataSource[RawOrders] = DataSource("/path")
 
-def f(spark) -> DataFrame[RawOrders]:
+def f(spark) -> SparkFrame[RawOrders]:
     dal = DataAccessLayer(spark)
     return dal.read(RAW_ORDERS).select(col("priec"))
 "#;
@@ -110,12 +110,12 @@ class DataAccessLayer:
     def __init__(self, spark):
         ...
 
-    def read[T](self, source: DataSource[T]) -> DataFrame[T]:
+    def read[T](self, source: DataSource[T]) -> SparkFrame[T]:
         ...
 
 RAW: DataSource[RawOrders] = DataSource("/path")
 
-def f(spark) -> DataFrame[RawOrders]:
+def f(spark) -> SparkFrame[RawOrders]:
     dal: DataAccessLayer = DataAccessLayer(spark)
     return dal.read(RAW)
 "#;

@@ -33,7 +33,7 @@ class In(Schema):
 fn is_null_returns_boolean_and_preserves_chain() {
     let result = check(&format!(
         r#"{SIMPLE}
-def f(d: DataFrame[In]) -> DataFrame[In]:
+def f(d: SparkFrame[In]) -> SparkFrame[In]:
     return d.filter(col("x").isNull())
 "#
     ));
@@ -44,7 +44,7 @@ def f(d: DataFrame[In]) -> DataFrame[In]:
 fn is_not_null_returns_boolean_and_preserves_chain() {
     let result = check(&format!(
         r#"{SIMPLE}
-def f(d: DataFrame[In]) -> DataFrame[In]:
+def f(d: SparkFrame[In]) -> SparkFrame[In]:
     return d.filter(col("x").isNotNull())
 "#
     ));
@@ -56,7 +56,7 @@ fn is_in_validates_value_arguments() {
     // `y` and `z` exist — clean.
     let ok = check(&format!(
         r#"{SIMPLE}
-def f(d: DataFrame[In]) -> DataFrame[In]:
+def f(d: SparkFrame[In]) -> SparkFrame[In]:
     return d.filter(col("x").isin(col("y"), col("z")))
 "#
     ));
@@ -66,7 +66,7 @@ def f(d: DataFrame[In]) -> DataFrame[In]:
     // descent into the call's args.
     let bad = check(&format!(
         r#"{SIMPLE}
-def f(d: DataFrame[In]) -> DataFrame[In]:
+def f(d: SparkFrame[In]) -> SparkFrame[In]:
     return d.filter(col("x").isin(col("y"), col("nope")))
 "#
     ));
@@ -78,7 +78,7 @@ def f(d: DataFrame[In]) -> DataFrame[In]:
 fn between_recognized() {
     let result = check(&format!(
         r#"{SIMPLE}
-def f(d: DataFrame[In]) -> DataFrame[In]:
+def f(d: SparkFrame[In]) -> SparkFrame[In]:
     return d.filter(col("x").between(1, 10))
 "#
     ));
@@ -89,7 +89,7 @@ def f(d: DataFrame[In]) -> DataFrame[In]:
 fn like_rlike_ilike_recognized() {
     let result = check(&format!(
         r#"{SIMPLE}
-def f(d: DataFrame[In]) -> DataFrame[In]:
+def f(d: SparkFrame[In]) -> SparkFrame[In]:
     return d.filter(col("name").like("A%")).filter(col("name").rlike("^A")).filter(col("name").ilike("a%"))
 "#
     ));
@@ -100,7 +100,7 @@ def f(d: DataFrame[In]) -> DataFrame[In]:
 fn contains_startswith_endswith_recognized() {
     let result = check(&format!(
         r#"{SIMPLE}
-def f(d: DataFrame[In]) -> DataFrame[In]:
+def f(d: SparkFrame[In]) -> SparkFrame[In]:
     return d.filter(col("name").contains("foo")).filter(col("name").startswith("bar")).filter(col("name").endswith("baz"))
 "#
     ));
@@ -122,7 +122,7 @@ class Out(Schema):
     name: string
     flag: bool
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn("flag", col("x").isNull())
 "#
     );
@@ -149,7 +149,7 @@ class User(Schema):
 fn getField_navigates_nested_struct() {
     let result = check(&format!(
         r#"{NESTED}
-def f(u: DataFrame[User]) -> DataFrame:
+def f(u: SparkFrame[User]) -> SparkFrame:
     return u.select(col("address").getField("city"))
 "#
     ));
@@ -160,7 +160,7 @@ def f(u: DataFrame[User]) -> DataFrame:
 fn getField_on_typo_fires_diagnostic() {
     let result = check(&format!(
         r#"{NESTED}
-def f(u: DataFrame[User]) -> DataFrame:
+def f(u: SparkFrame[User]) -> SparkFrame:
     return u.select(col("address").getField("citi"))
 "#
     ));
@@ -180,7 +180,7 @@ fn getField_on_non_literal_name_does_not_false_flag() {
     // not false-flag; the chain just runs unchecked through getField.
     let result = check(&format!(
         r#"{NESTED}
-def f(u: DataFrame[User]) -> DataFrame:
+def f(u: SparkFrame[User]) -> SparkFrame:
     return u.select(col("address").getField(col("name")))
 "#
     ));
@@ -209,7 +209,7 @@ class Out(Schema):
     by_id: Map[string, Order]
     first: Order
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn("first", col("orders").getItem(0))
 "#
     );
@@ -227,7 +227,7 @@ class Out(Schema):
     by_id: Map[string, Order]
     one: Order
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn("one", col("by_id").getItem("123"))
 "#
     );
@@ -258,7 +258,7 @@ fn withField_adds_or_replaces_struct_field() {
     // that exact shape, so no D0080.
     let src = format!(
         r#"{NESTED_FOR_WITH_FIELD}
-def f(d: DataFrame[User]) -> DataFrame[UserZ]:
+def f(d: SparkFrame[User]) -> SparkFrame[UserZ]:
     return d.withColumn("address", col("address").withField("zipcode", lit("00000")))
 "#
     );
@@ -273,7 +273,7 @@ fn dropFields_removes_struct_fields() {
     // zipcode, we get back to Address (just city).
     let src = format!(
         r#"{NESTED_FOR_WITH_FIELD}
-def f(d: DataFrame[UserZ]) -> DataFrame[User]:
+def f(d: SparkFrame[UserZ]) -> SparkFrame[User]:
     return d.withColumn("address", col("address").dropFields("zipcode"))
 "#
     );
@@ -290,7 +290,7 @@ fn dropFields_on_typo_fires_diagnostic() {
     // `.getField` typo handling and surfaces a "Did you mean?" hint.
     let result = check(&format!(
         r#"{NESTED_FOR_WITH_FIELD}
-def f(d: DataFrame[UserZ]) -> DataFrame[UserZ]:
+def f(d: SparkFrame[UserZ]) -> SparkFrame[UserZ]:
     return d.withColumn("address", col("address").dropFields("zipcod"))
 "#
     ));
@@ -306,7 +306,7 @@ fn dropFields_with_multiple_typos_fires_per_name() {
     // gets its own diagnostic, not one aggregate message.
     let result = check(&format!(
         r#"{NESTED_FOR_WITH_FIELD}
-def f(d: DataFrame[UserZ]) -> DataFrame[UserZ]:
+def f(d: SparkFrame[UserZ]) -> SparkFrame[UserZ]:
     return d.withColumn("address", col("address").dropFields("zipcod", "cty"))
 "#
     ));
@@ -327,7 +327,7 @@ fn getField_on_non_struct_receiver_is_silent() {
 class In(Schema):
     amount: double
 
-def f(d: DataFrame[In]) -> DataFrame[In]:
+def f(d: SparkFrame[In]) -> SparkFrame[In]:
     return d.filter(col("amount").getField("a").isNotNull())
 "#,
     );
@@ -343,7 +343,7 @@ fn getItem_on_non_collection_receiver_is_silent() {
 class In(Schema):
     amount: double
 
-def f(d: DataFrame[In]) -> DataFrame[In]:
+def f(d: SparkFrame[In]) -> SparkFrame[In]:
     return d.filter(col("amount").getItem(0).isNotNull())
 "#,
     );

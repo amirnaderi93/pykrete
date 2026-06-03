@@ -16,7 +16,7 @@ class Raw(Schema):
 fn na_fill_keeps_the_chain_alive() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.na.fill(0).select(col(\"nonexistent\"))
 "
     );
@@ -29,7 +29,7 @@ fn na_drop_does_not_flag_its_how_argument() {
     // it must not be mistaken for a `df.drop("col")` reference.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.na.drop(\"all\").select(col(\"amount\"))
 "
     );
@@ -40,7 +40,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn na_drop_keeps_the_chain_alive() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.na.drop().select(col(\"nonexistent\"))
 "
     );
@@ -51,7 +51,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn na_replace_preserves_the_schema() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.na.replace(0, 1).select(col(\"city\"))
 "
     );
@@ -66,7 +66,7 @@ fn plain_drop_tolerates_missing_names_per_spark() {
     // `raw.drop("nonexistent")` produces no D0030.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.drop(\"nonexistent\")
 "
     );
@@ -77,7 +77,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn return_type_survives_an_na_call() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame[Raw]:
+def f(raw: SparkFrame[Raw]) -> SparkFrame[Raw]:
     return raw.na.fill(0)
 "
     );

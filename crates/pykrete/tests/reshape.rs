@@ -34,7 +34,7 @@ class Out(Schema):
     quarter: string
     sales: int
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.melt(
         ids=["id"],
         values=["q1_sales", "q2_sales", "q3_sales"],
@@ -59,7 +59,7 @@ class Out(Schema):
     quarter: string
     sales: int
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.melt(["id"], ["q1_sales", "q2_sales", "q3_sales"], "quarter", "sales")
 "#
     );
@@ -78,7 +78,7 @@ fn melt_default_variable_and_value_names() {
     // the downstream `.select`, so we pin via select.
     let src = format!(
         r#"{WIDE_SCHEMA}
-def f(d: DataFrame[In]) -> DataFrame:
+def f(d: SparkFrame[In]) -> SparkFrame:
     return d.melt(ids=["id"], values=["q1_sales", "q2_sales", "q3_sales"]).select(
         col("id"), col("variable"), col("value")
     )
@@ -91,7 +91,7 @@ def f(d: DataFrame[In]) -> DataFrame:
     // names) against the default-named melt output should fire D0030.
     let src_bad = format!(
         r#"{WIDE_SCHEMA}
-def f(d: DataFrame[In]) -> DataFrame:
+def f(d: SparkFrame[In]) -> SparkFrame:
     return d.melt(ids=["id"], values=["q1_sales", "q2_sales", "q3_sales"]).select(col("quarter"))
 "#
     );
@@ -112,7 +112,7 @@ class Out(Schema):
     quarter: string
     sales: int
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.melt(ids=["id"], values=None, variableColumnName="quarter", valueColumnName="sales")
 "#
     );
@@ -130,7 +130,7 @@ class Out(Schema):
     quarter: string
     sales: int
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.melt(ids=["id"], variableColumnName="quarter", valueColumnName="sales")
 "#
     );
@@ -145,7 +145,7 @@ def f(d: DataFrame[In]) -> DataFrame[Out]:
 fn melt_typo_in_ids_fires_D0030() {
     let src = format!(
         r#"{WIDE_SCHEMA}
-def f(d: DataFrame[In]) -> DataFrame:
+def f(d: SparkFrame[In]) -> SparkFrame:
     return d.melt(ids=["i_d"], values=["q1_sales", "q2_sales", "q3_sales"])
 "#
     );
@@ -158,7 +158,7 @@ def f(d: DataFrame[In]) -> DataFrame:
 fn melt_typo_in_values_fires_D0030() {
     let src = format!(
         r#"{WIDE_SCHEMA}
-def f(d: DataFrame[In]) -> DataFrame:
+def f(d: SparkFrame[In]) -> SparkFrame:
     return d.melt(ids=["id"], values=["q1_sales", "q2_zales", "q3_sales"])
 "#
     );
@@ -183,7 +183,7 @@ class Out(Schema):
     quarter: string
     sales: string
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.melt(ids=["id"], values=["s", "n"], variableColumnName="quarter", valueColumnName="sales")
 "#;
     let result = check_strict(src);
@@ -208,7 +208,7 @@ class Out(Schema):
     quarter: string
     sales: double
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.melt(ids=["id"], values=["a", "b", "c"], variableColumnName="quarter", valueColumnName="sales")
 "#;
     let result_ok = check_strict(src_ok);
@@ -228,7 +228,7 @@ class Out(Schema):
     quarter: string
     sales: string
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.melt(ids=["id"], values=["a", "b", "c"], variableColumnName="quarter", valueColumnName="sales")
 "#;
     let result_bad = check_strict(src_bad);
@@ -251,7 +251,7 @@ class Out(Schema):
     quarter: string
     sales: int
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.melt(ids=["id"], values=["a", "b"], variableColumnName="quarter", valueColumnName="sales")
 "#;
     let result_strict = check_strict(src_strict);
@@ -268,7 +268,7 @@ class Out(Schema):
     quarter: string
     sales: Optional[int]
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.melt(ids=["id"], values=["a", "b"], variableColumnName="quarter", valueColumnName="sales")
 "#;
     let result_ok = check_strict(src_ok);
@@ -286,7 +286,7 @@ class Out(Schema):
     quarter: string
     sales: int
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.unpivot(
         ids=["id"],
         values=["q1_sales", "q2_sales", "q3_sales"],
@@ -304,7 +304,7 @@ def f(d: DataFrame[In]) -> DataFrame[Out]:
     // Typo in unpivot's ids should still fire D0030.
     let src_bad = format!(
         r#"{WIDE_SCHEMA}
-def f(d: DataFrame[In]) -> DataFrame:
+def f(d: SparkFrame[In]) -> SparkFrame:
     return d.unpivot(ids=["i_d"], values=["q1_sales", "q2_sales", "q3_sales"])
 "#
     );

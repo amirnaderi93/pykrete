@@ -21,7 +21,7 @@ class Raw(Schema):
 fn select_expr_bad_column_ref_in_sql_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.selectExpr(\"city\", \"nonexistent + 1 as bumped\")
 "
     );
@@ -32,7 +32,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn select_expr_valid_column_refs_in_sql_pass() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.selectExpr(\"city\", \"amount + 1 as bumped\")
 "
     );
@@ -43,7 +43,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn filter_string_predicate_bad_ref_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.filter(\"madeup > 21\")
 "
     );
@@ -54,7 +54,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn filter_string_predicate_valid_ref_passes() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.filter(\"amount > 21 and city = 'x'\")
 "
     );
@@ -65,7 +65,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn where_string_predicate_bad_ref_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.where(\"missing = 1\")
 "
     );
@@ -76,7 +76,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn f_expr_bad_ref_inside_select_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.select(F.expr(\"nonexistent * 2\"))
 "
     );
@@ -87,7 +87,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn f_expr_valid_ref_inside_select_passes() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.select(F.expr(\"amount * 2\"))
 "
     );
@@ -98,7 +98,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn f_expr_bad_ref_inside_filter_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.filter(F.expr(\"madeup > 0\"))
 "
     );
@@ -111,7 +111,7 @@ fn unparseable_sql_fragment_yields_no_diagnostic() {
     // fragment must not produce a spurious column error.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.selectExpr(\"!! not sql @@\")
 "
     );
@@ -123,7 +123,7 @@ fn sql_string_function_call_does_not_flag_the_function_name() {
     // `length` is a SQL function, not a column — it must not be reported.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.selectExpr(\"length(city) as n\")
 "
     );

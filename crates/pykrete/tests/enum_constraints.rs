@@ -27,7 +27,7 @@ class Order(Schema):
     id: long
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.select(col(\"status\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -39,7 +39,7 @@ fn schema_declares_enum_with_a_single_value() {
 class Order(Schema):
     status: enum[\"only\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.select(col(\"status\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -199,7 +199,7 @@ class Order(Schema):
     id: long
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Pick[Order, \"status\"]]) -> DataFrame:
+def f(orders: SparkFrame[Pick[Order, \"status\"]]) -> SparkFrame:
     return orders.select(col(\"status\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -207,7 +207,7 @@ def f(orders: DataFrame[Pick[Order, \"status\"]]) -> DataFrame:
     // typed as the same enum vocabulary, not silently downgraded to
     // plain String. Without this, the operator could strip the
     // constraint and the no-diagnostics check above would still pass.
-    let pick_status_type = resolve_derived_status_type(src, "DataFrame[Pick[Order, \"status\"]]");
+    let pick_status_type = resolve_derived_status_type(src, "SparkFrame[Pick[Order, \"status\"]]");
     assert_eq!(
         pick_status_type,
         Some(ColumnType::enum_from_values(vec!["pending".into(), "shipped".into()]).unwrap()),
@@ -221,11 +221,11 @@ class Order(Schema):
     id: long
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Omit[Order, \"id\"]]) -> DataFrame:
+def f(orders: SparkFrame[Omit[Order, \"id\"]]) -> SparkFrame:
     return orders.select(col(\"status\"))
 ";
     assert_no_diagnostics(&check(src));
-    let omit_status_type = resolve_derived_status_type(src, "DataFrame[Omit[Order, \"id\"]]");
+    let omit_status_type = resolve_derived_status_type(src, "SparkFrame[Omit[Order, \"id\"]]");
     assert_eq!(
         omit_status_type,
         Some(ColumnType::enum_from_values(vec!["pending".into(), "shipped".into()]).unwrap()),
@@ -278,7 +278,7 @@ class A(Schema):
 class B(Schema):
     status: enum[\"shipped\", \"pending\"]
 
-def f(d: DataFrame[Merge[A, B]]) -> DataFrame:
+def f(d: SparkFrame[Merge[A, B]]) -> SparkFrame:
     return d.select(col(\"status\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -293,7 +293,7 @@ class A(Schema):
 class B(Schema):
     status: enum[\"pending\", \"delivered\"]
 
-def f(d: DataFrame[Merge[A, B]]) -> DataFrame:
+def f(d: SparkFrame[Merge[A, B]]) -> SparkFrame:
     return d
 ";
     let result = check(src);
@@ -310,7 +310,7 @@ class A(Schema):
 class B(Schema):
     status: string
 
-def f(d: DataFrame[Merge[A, B]]) -> DataFrame:
+def f(d: SparkFrame[Merge[A, B]]) -> SparkFrame:
     return d
 ";
     let result = check(src);
@@ -328,7 +328,7 @@ class A(Schema):
 class B(Schema):
     rating: int
 
-def f(d: DataFrame[Merge[A, B]]) -> DataFrame:
+def f(d: SparkFrame[Merge[A, B]]) -> SparkFrame:
     return d.select(col(\"status\"), col(\"amount\"), col(\"rating\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -377,7 +377,7 @@ class Order(Schema):
     id: long
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.filter(col(\"status\") == \"pendig\")
 ";
     let result = check(src);
@@ -393,7 +393,7 @@ fn d0084_silent_for_in_vocab_literal_comparison() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.filter(col(\"status\") == \"pending\")
 ";
     assert_does_not_have_code(&check(src), "D0084");
@@ -405,7 +405,7 @@ fn d0084_fires_when_lit_wraps_the_off_vocab_literal() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.filter(col(\"status\") == lit(\"pendig\"))
 ";
     let result = check(src);
@@ -419,7 +419,7 @@ fn d0084_fires_on_swapped_lhs_rhs_compare() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.filter(\"pendig\" == col(\"status\"))
 ";
     assert_has_code(&check(src), "D0084");
@@ -433,7 +433,7 @@ fn d0084_precedence_d0030_unknown_column_blocks_enum_check() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.filter(col(\"stutus\") == \"pendig\")
 ";
     let result = check(src);
@@ -450,7 +450,7 @@ fn d0084_precedence_d0082_cross_type_blocks_enum_check() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.filter(col(\"status\") == True)
 ";
     let result = check_strict(src);
@@ -464,7 +464,7 @@ fn d0084_suggestion_picks_closest_within_levenshtein_threshold() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\", \"delivered\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.filter(col(\"status\") == \"shippd\")
 ";
     let result = check(src);
@@ -486,7 +486,7 @@ fn d0084_suggestion_breaks_ties_by_unicode_code_point_order() {
 class Order(Schema):
     status: enum[\"pendiny\", \"pendinx\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.filter(col(\"status\") == \"pendinz\")
 ";
     let result = check(src);
@@ -504,7 +504,7 @@ fn d0084_isin_fires_per_off_vocab_arg_only() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.filter(col(\"status\").isin(\"pending\", \"shippd\"))
 ";
     let result = check(src);
@@ -518,7 +518,7 @@ fn d0084_isin_silent_when_every_arg_in_vocab() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.filter(col(\"status\").isin(\"pending\", \"shipped\"))
 ";
     assert_does_not_have_code(&check(src), "D0084");
@@ -530,7 +530,7 @@ fn d0084_isin_unknown_column_precedence_blocks_enum_check() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.filter(col(\"stutus\").isin(\"pendig\"))
 ";
     let result = check(src);
@@ -544,7 +544,7 @@ fn d0084_fillna_dict_value_fires_on_off_vocab() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.fillna({\"status\": \"unkown\"})
 ";
     let result = check(src);
@@ -558,7 +558,7 @@ fn d0084_fillna_dict_value_silent_when_in_vocab() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.fillna({\"status\": \"pending\"})
 ";
     assert_does_not_have_code(&check(src), "D0084");
@@ -570,7 +570,7 @@ fn d0084_with_column_lit_fires_on_off_vocab() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.withColumn(\"status\", lit(\"delivered\"))
 ";
     let result = check(src);
@@ -584,7 +584,7 @@ fn d0084_with_column_lit_silent_when_in_vocab() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.withColumn(\"status\", lit(\"pending\"))
 ";
     assert_does_not_have_code(&check(src), "D0084");
@@ -596,7 +596,7 @@ fn d0084_with_columns_dict_value_fires_per_off_vocab_entry() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.withColumns({\"status\": lit(\"shippd\")})
 ";
     let result = check(src);
@@ -614,7 +614,7 @@ fn d0084_branch_form_coalesce_fires_on_off_vocab_literal_at_sink() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.withColumn(\"status\", coalesce(col(\"status\"), lit(\"shippd\")))
 ";
     let result = check(src);
@@ -628,7 +628,7 @@ fn d0084_branch_form_nvl_fires_on_off_vocab_literal_at_sink() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.withColumn(\"status\", nvl(col(\"status\"), lit(\"shippd\")))
 ";
     assert_has_code(&check(src), "D0084");
@@ -640,7 +640,7 @@ fn d0084_branch_form_ifnull_fires_on_off_vocab_literal_at_sink() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.withColumn(\"status\", ifnull(col(\"status\"), lit(\"shippd\")))
 ";
     assert_has_code(&check(src), "D0084");
@@ -652,7 +652,7 @@ fn d0084_branch_form_nullif_fires_on_off_vocab_literal_at_sink() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.withColumn(\"status\", nullif(col(\"status\"), lit(\"shippd\")))
 ";
     assert_has_code(&check(src), "D0084");
@@ -664,7 +664,7 @@ fn d0084_branch_form_when_otherwise_fires_per_off_vocab_branch() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.withColumn(
         \"status\",
         when(col(\"status\").isNull(), lit(\"shippd\")).otherwise(lit(\"delvr\"))
@@ -680,7 +680,7 @@ fn d0084_branch_form_silent_when_every_literal_is_in_vocab() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.withColumn(\"status\", coalesce(col(\"status\"), lit(\"pending\")))
 ";
     assert_does_not_have_code(&check(src), "D0084");
@@ -698,7 +698,7 @@ class Order(Schema):
     primary: enum[\"pending\", \"shipped\"]
     fallback: enum[\"shipped\", \"pending\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.withColumn(
         \"staged\", coalesce(col(\"primary\"), col(\"fallback\"))
     ).filter(col(\"staged\") == \"delivered\")
@@ -721,7 +721,7 @@ class Order(Schema):
     primary: enum[\"pending\", \"shipped\"]
     plain: string
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.withColumn(
         \"staged\", coalesce(col(\"primary\"), col(\"plain\"))
     ).filter(col(\"staged\") == \"delivered\")
@@ -739,7 +739,7 @@ fn d0084_f_expr_equality_fires_on_off_vocab_literal() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.filter(F.expr(\"status = 'pendig'\"))
 ";
     let result = check(src);
@@ -753,7 +753,7 @@ fn d0084_f_expr_in_clause_fires_only_on_off_vocab_members() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.filter(F.expr(\"status IN ('pending', 'shippd')\"))
 ";
     let result = check(src);
@@ -772,7 +772,7 @@ class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
     region: string
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.filter(F.expr(\"status = region\"))
 ";
     assert_does_not_have_code(&check(src), "D0084");
@@ -784,7 +784,7 @@ fn d0084_f_expr_silent_when_literal_in_vocab() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.filter(F.expr(\"status = 'pending'\"))
 ";
     assert_does_not_have_code(&check(src), "D0084");
@@ -796,7 +796,7 @@ fn d0084_f_expr_precedence_unknown_column_blocks_enum_check() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.filter(F.expr(\"stutus = 'pendig'\"))
 ";
     let result = check(src);
@@ -824,7 +824,7 @@ class In(Schema):
 class Out(Schema):
     status: enum[\"shipped\", \"pending\"]
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.select(col(\"status\"))
 ";
     let result = check(src);
@@ -849,7 +849,7 @@ class In(Schema):
 class Out(Schema):
     status: enum[\"pending\", \"delivered\"]
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.select(col(\"status\"))
 ";
     assert_has_code(&check(src), "D0080");
@@ -866,7 +866,7 @@ fn arithmetic_on_enum_typed_column_fires_d0081_in_strict_mode() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.withColumn(\"x\", col(\"status\") + 1)
 ";
     let result = check_strict(src);
@@ -986,7 +986,7 @@ class Order(Schema):
     primary: enum[\"pending\", \"shipped\"]
     fallback: enum[\"refunded\", \"cancelled\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.withColumn(
         \"staged\", coalesce(col(\"primary\"), col(\"fallback\"))
     )
@@ -1004,7 +1004,7 @@ class Order(Schema):
     primary: enum[\"pending\", \"shipped\"]
     fallback: enum[\"shipped\", \"pending\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.withColumn(
         \"staged\", coalesce(col(\"primary\"), col(\"fallback\"))
     )
@@ -1023,7 +1023,7 @@ class Order(Schema):
     primary: enum[\"pending\", \"shipped\"]
     fallback: string
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.withColumn(
         \"staged\", coalesce(col(\"primary\"), col(\"fallback\"))
     )
@@ -1042,7 +1042,7 @@ class Order(Schema):
     primary: enum[\"pending\", \"shipped\"]
     fallback: enum[\"refunded\", \"cancelled\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.withColumn(
         \"staged\",
         when(col(\"primary\").isNotNull(), col(\"primary\")).otherwise(col(\"fallback\")),
@@ -1058,7 +1058,7 @@ class Order(Schema):
     primary: enum[\"pending\", \"shipped\"]
     fallback: enum[\"shipped\", \"pending\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.withColumn(
         \"staged\",
         when(col(\"primary\").isNotNull(), col(\"primary\")).otherwise(col(\"fallback\")),
@@ -1081,7 +1081,7 @@ fn d0084_nullable_enum_fires_on_compare_equality() {
 class Order(Schema):
     status: Optional[enum[\"pending\", \"shipped\"]]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.filter(col(\"status\") == \"delivered\")
 ";
     assert_has_code(&check(src), "D0084");
@@ -1096,7 +1096,7 @@ fn d0084_nullable_enum_silent_when_compared_to_null_literal() {
 class Order(Schema):
     status: Optional[enum[\"pending\", \"shipped\"]]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.filter(col(\"status\") == lit(None))
 ";
     assert_does_not_have_code(&check(src), "D0084");
@@ -1108,7 +1108,7 @@ fn d0084_nullable_enum_fires_on_with_column_lit() {
 class Order(Schema):
     status: Optional[enum[\"pending\", \"shipped\"]]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.withColumn(\"status\", lit(\"delivered\"))
 ";
     assert_has_code(&check(src), "D0084");
@@ -1120,7 +1120,7 @@ fn d0084_nullable_enum_fires_on_fillna_dict_value() {
 class Order(Schema):
     status: Optional[enum[\"pending\", \"shipped\"]]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.fillna({\"status\": \"delivered\"})
 ";
     assert_has_code(&check(src), "D0084");
@@ -1132,7 +1132,7 @@ fn d0084_nullable_enum_fires_in_f_expr_equality() {
 class Order(Schema):
     status: Optional[enum[\"pending\", \"shipped\"]]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.filter(F.expr(\"status = 'delivered'\"))
 ";
     assert_has_code(&check(src), "D0084");
@@ -1157,7 +1157,7 @@ fn d0084_f_expr_repeated_off_vocab_literal_anchors_at_distinct_spans() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.filter(F.expr(\"status = 'X' OR status = 'X'\"))
 ";
     let result = check(src);
@@ -1194,7 +1194,7 @@ fn nullif_preserves_first_arg_enum_constraint_downstream() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.withColumn(
         \"staged\", nullif(col(\"status\"), lit(\"pending\"))
     ).filter(col(\"staged\") == \"delivered\")
@@ -1219,7 +1219,7 @@ fn d0084_f_expr_not_in_fires_on_off_vocab_literal() {
 class Order(Schema):
     status: enum[\"pending\", \"shipped\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.filter(F.expr(\"status NOT IN ('pending', 'shippd')\"))
 ";
     let result = check(src);
@@ -1249,7 +1249,7 @@ class Order(Schema):
     b: enum[\"b1\", \"b2\"]
     c: enum[\"c1\", \"c2\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.withColumn(
         \"staged\",
         when(col(\"a\").isNotNull(), col(\"a\"))
@@ -1274,7 +1274,7 @@ class Order(Schema):
     b: enum[\"b1\", \"b2\"]
     c: enum[\"c1\", \"c2\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.withColumn(
         \"staged\", coalesce(coalesce(col(\"a\"), col(\"b\")), col(\"c\"))
     )
@@ -1296,7 +1296,7 @@ class Order(Schema):
     b: enum[\"b1\", \"b2\"]
     c: enum[\"c1\", \"c2\"]
 
-def f(orders: DataFrame[Order]) -> DataFrame:
+def f(orders: SparkFrame[Order]) -> SparkFrame:
     return orders.withColumn(
         \"staged\",
         coalesce(

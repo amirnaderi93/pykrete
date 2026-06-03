@@ -10,7 +10,7 @@ class Orders(Schema):
     price: int
 
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.select(col(\"prce\"))
 ";
 

@@ -35,7 +35,7 @@ fn check_project_pairs(pairs: &[(&str, &str)]) -> Vec<CheckResult> {
 fn createOrReplaceTempView_registers_view_for_within_file_resolution() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     raw.createOrReplaceTempView(\"orders_view\")
     return spark.sql(\"SELECT region, amount FROM orders_view\")
 "
@@ -49,7 +49,7 @@ def f(raw: DataFrame[Orders]) -> DataFrame:
 fn spark_sql_select_columns_validates_against_view_schema() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     raw.createOrReplaceTempView(\"orders_view\")
     result = spark.sql(\"SELECT region, amount FROM orders_view\")
     return result.select(col(\"region\"))
@@ -62,7 +62,7 @@ def f(raw: DataFrame[Orders]) -> DataFrame:
 fn spark_sql_select_typo_fires_D0030_against_view() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     raw.createOrReplaceTempView(\"orders_view\")
     return spark.sql(\"SELECT regoin FROM orders_view\")
 "
@@ -80,7 +80,7 @@ fn spark_sql_where_clause_idents_checked_against_view() {
     // Clean — WHERE refs `amount` which exists on Orders.
     let clean = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     raw.createOrReplaceTempView(\"orders_view\")
     return spark.sql(\"SELECT region FROM orders_view WHERE amount > 0\")
 "
@@ -90,7 +90,7 @@ def f(raw: DataFrame[Orders]) -> DataFrame:
     // Typo in WHERE — `amout` doesn't exist on Orders. D0030 fires.
     let typo = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     raw.createOrReplaceTempView(\"orders_view\")
     return spark.sql(\"SELECT region FROM orders_view WHERE amout > 0\")
 "
@@ -107,7 +107,7 @@ fn spark_sql_unknown_view_falls_back_silently() {
     // schema from the projection, no column-existence checks.
     let src = format!(
         "{SCHEMA}
-def f() -> DataFrame:
+def f() -> SparkFrame:
     return spark.sql(\"SELECT x FROM unregistered_view\")
 "
     );
@@ -121,7 +121,7 @@ fn createOrReplaceTempView_on_opaque_chain_does_not_register() {
     // registration happens. The subsequent `spark.sql(...)` falls
     // back silently (no D0030 even though "x" wouldn't exist).
     let src = "\
-def f(spark) -> DataFrame:
+def f(spark) -> SparkFrame:
     spark.read.parquet(\"/data/orders\").createOrReplaceTempView(\"v\")
     return spark.sql(\"SELECT x FROM v\")
 ";
@@ -143,7 +143,7 @@ class Products(Schema):
     sku: string
     price: int
 
-def f(orders: DataFrame[Orders], products: DataFrame[Products]) -> DataFrame:
+def f(orders: SparkFrame[Orders], products: SparkFrame[Products]) -> SparkFrame:
     orders.createOrReplaceTempView(\"orders_view\")
     products.createOrReplaceTempView(\"products_view\")
     # region exists on Orders, not Products — clean against orders_view.
@@ -167,7 +167,7 @@ fn spark_sql_select_star_returns_view_schema_and_supports_followups() {
     // direct `spark.sql("SELECT region FROM …")` chain would.
     let clean = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     raw.createOrReplaceTempView(\"orders_view\")
     return spark.sql(\"SELECT * FROM orders_view\").select(col(\"region\"))
 "
@@ -176,7 +176,7 @@ def f(raw: DataFrame[Orders]) -> DataFrame:
 
     let typo = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     raw.createOrReplaceTempView(\"orders_view\")
     return spark.sql(\"SELECT * FROM orders_view\").select(col(\"regoin\"))
 "
@@ -195,7 +195,7 @@ fn spark_sql_join_or_subquery_falls_back_silently() {
     // the projection names a column the view doesn't have.
     let with_join = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     raw.createOrReplaceTempView(\"orders_view\")
     return spark.sql(\"SELECT nonexistent FROM orders_view JOIN other ON orders_view.amount = other.amount\")
 "
@@ -207,7 +207,7 @@ def f(raw: DataFrame[Orders]) -> DataFrame:
 
     let with_subquery = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     raw.createOrReplaceTempView(\"orders_view\")
     return spark.sql(\"SELECT nonexistent FROM (SELECT * FROM orders_view) x\")
 "
@@ -219,7 +219,7 @@ def f(raw: DataFrame[Orders]) -> DataFrame:
 
     let qualified = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     raw.createOrReplaceTempView(\"orders_view\")
     return spark.sql(\"SELECT nonexistent FROM db.orders_view\")
 "
@@ -238,11 +238,11 @@ fn tempview_registered_in_one_function_is_visible_to_another_in_the_same_file() 
     // there still fires D0030 against the originally-registered schema.
     let src = format!(
         "{SCHEMA}
-def register(raw: DataFrame[Orders]) -> None:
+def register(raw: SparkFrame[Orders]) -> None:
     raw.createOrReplaceTempView(\"orders_view\")
     return None
 
-def consume() -> DataFrame:
+def consume() -> SparkFrame:
     return spark.sql(\"SELECT regoin FROM orders_view\")
 "
     );
@@ -269,7 +269,7 @@ class Products(Schema):
     sku: string
     price: int
 
-def f(orders: DataFrame[Orders], products: DataFrame[Products]) -> DataFrame:
+def f(orders: SparkFrame[Orders], products: SparkFrame[Products]) -> SparkFrame:
     orders.createOrReplaceTempView(\"v\")
     products.createOrReplaceTempView(\"v\")
     # `sku` exists on Products (the second registration), not Orders.
@@ -286,7 +286,7 @@ class Products(Schema):
     sku: string
     price: int
 
-def f(orders: DataFrame[Orders], products: DataFrame[Products]) -> DataFrame:
+def f(orders: SparkFrame[Orders], products: SparkFrame[Products]) -> SparkFrame:
     orders.createOrReplaceTempView(\"v\")
     products.createOrReplaceTempView(\"v\")
     # `region` only existed on the FIRST schema (Orders); after the
@@ -313,7 +313,7 @@ class Orders(Schema):
     region: string
     amount: int
 
-def register(raw: DataFrame[Orders]) -> None:
+def register(raw: SparkFrame[Orders]) -> None:
     raw.createOrReplaceTempView(\"orders_view\")
     return None
 ",
@@ -321,7 +321,7 @@ def register(raw: DataFrame[Orders]) -> None:
         (
             "b.pyk",
             "\
-def consume() -> DataFrame:
+def consume() -> SparkFrame:
     return spark.sql(\"SELECT nonexistent FROM orders_view\")
 ",
         ),

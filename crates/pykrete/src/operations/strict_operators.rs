@@ -42,6 +42,7 @@ fn type_family(t: &ColumnType) -> TypeFamily {
         ColumnType::Int
         | ColumnType::Long
         | ColumnType::Double
+        | ColumnType::Float
         | ColumnType::Byte
         | ColumnType::Short
         | ColumnType::Decimal { .. } => TypeFamily::Numeric,

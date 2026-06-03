@@ -23,7 +23,7 @@ class Out(Schema):
     name: string
     scores: Array[int]
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.groupBy(\"name\").agg(F.collect_list(\"score\").alias(\"scores\"))
 "
     );
@@ -39,7 +39,7 @@ class Out(Schema):
     name: string
     scores: Array[string]
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.groupBy(\"name\").agg(F.collect_list(\"score\").alias(\"scores\"))
 "
     );
@@ -54,7 +54,7 @@ fn explode_unwraps_the_array_element() {
 class Out(Schema):
     t: int
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.select(F.explode(col(\"tags\")).alias(\"t\"))
 "
     );
@@ -69,7 +69,7 @@ fn explode_element_type_mismatch_is_caught() {
 class Out(Schema):
     t: string
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.select(F.explode(col(\"tags\")).alias(\"t\"))
 "
     );
@@ -83,7 +83,7 @@ fn map_keys_yields_an_array_of_the_key_type() {
 class Out(Schema):
     ks: Array[string]
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.select(F.map_keys(col(\"meta\")).alias(\"ks\"))
 "
     );
@@ -97,7 +97,7 @@ fn map_keys_key_type_mismatch_is_caught() {
 class Out(Schema):
     ks: Array[int]
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.select(F.map_keys(col(\"meta\")).alias(\"ks\"))
 "
     );
@@ -116,7 +116,7 @@ class Out(Schema):
     k: string
     v: int
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.select(F.explode(col(\"meta\")).alias(\"k\", \"v\"))
 "
     );
@@ -130,7 +130,7 @@ fn explode_map_dual_alias_downstream_select_resolves_both() {
     // The two columns must be visible to downstream operations.
     let src = format!(
         "{IN}
-def f(d: DataFrame[In]) -> DataFrame:
+def f(d: SparkFrame[In]) -> SparkFrame:
     return d.select(F.explode(col(\"meta\")).alias(\"k\", \"v\")).select(col(\"k\"), col(\"v\"))
 "
     );
@@ -145,7 +145,7 @@ fn select_explode_alongside_attribute_column_keeps_both_in_schema() {
     // schema, so a downstream ref to `other` false-fired D0030.
     let src = format!(
         "{IN}
-def f(d: DataFrame[In]) -> DataFrame:
+def f(d: SparkFrame[In]) -> SparkFrame:
     return d.select(F.explode(col(\"tags\")).alias(\"a\"), d.name).select(col(\"a\"), col(\"name\"))
 "
     );
@@ -156,7 +156,7 @@ def f(d: DataFrame[In]) -> DataFrame:
 fn select_explode_alongside_subscript_column_keeps_both_in_schema() {
     let src = format!(
         "{IN}
-def f(d: DataFrame[In]) -> DataFrame:
+def f(d: SparkFrame[In]) -> SparkFrame:
     return d.select(F.explode(col(\"tags\")).alias(\"a\"), d[\"name\"]).select(col(\"a\"), col(\"name\"))
 "
     );
@@ -176,7 +176,7 @@ fn select_does_not_treat_non_dataframe_attribute_as_column_ref() {
 class Helper:
     foo: int
 
-def f(d: DataFrame[In], helper: Helper) -> DataFrame:
+def f(d: SparkFrame[In], helper: Helper) -> SparkFrame:
     return d.select(helper.foo, col(\"name\")).select(col(\"foo\"))
 "
     );
@@ -197,7 +197,7 @@ class Out(Schema):
     meta: Map[string, int]
     parts: Array[string]
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn(\"parts\", F.split(col(\"name\"), \",\"))
 "
     );

@@ -27,7 +27,7 @@ class Orders(Schema):
     price: int
     log_date: timestamp
 
-def prepare_orders(raw: DataFrame[RawOrders]) -> DataFrame[Orders]:
+def prepare_orders(raw: SparkFrame[RawOrders]) -> SparkFrame[Orders]:
     return raw.select(
         col("ProductCode").alias("place_code"),
         col("UnitPrice").cast("int").alias("price"),
@@ -51,7 +51,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def prepare(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def prepare(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     filtered = raw.filter(col("price") > 0)
     return filtered.select(col("place_code"), col("priec"))
 "#,
@@ -70,7 +70,7 @@ class Common(Schema):
     id: int
     name: string
 
-def combine(a: DataFrame[Common], b: DataFrame[Common]) -> DataFrame[Common]:
+def combine(a: SparkFrame[Common], b: SparkFrame[Common]) -> SparkFrame[Common]:
     return a.unionByName(b)
 "#,
     );
@@ -92,18 +92,18 @@ class Orders(Schema):
 class RawOrders(Schema):
     ProductCode: int
 
-def has_typo(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def has_typo(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.select(col("place_code"), col("priec"))
 
-def has_unknown_schema(x: DataFrame[NoSuchSchema]) -> DataFrame[Orders]:
+def has_unknown_schema(x: SparkFrame[NoSuchSchema]) -> SparkFrame[Orders]:
     pass
 
-def has_return_mismatch(raw: DataFrame[RawOrders]) -> DataFrame[Orders]:
+def has_return_mismatch(raw: SparkFrame[RawOrders]) -> SparkFrame[Orders]:
     return raw.select(col("ProductCode"))
 "#,
     );
     assert_has_code(&result, "D0010"); // weird: WeirdType
-    assert_has_code(&result, "D0020"); // DataFrame[NoSuchSchema]
+    assert_has_code(&result, "D0020"); // SparkFrame[NoSuchSchema]
     assert_has_code(&result, "D0030"); // priec typo
     assert_has_code(&result, "D0050"); // RawOrders body vs Orders annotation
 }
@@ -119,7 +119,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def pipeline(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def pipeline(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return (
         raw
         .filter(col("price") > 0)
@@ -139,12 +139,12 @@ def pipeline(raw: DataFrame[Orders]) -> DataFrame[Orders]:
 
 #[test]
 fn a_function_with_only_an_untyped_DataFrame_param_is_not_checked() {
-    // No DataFrame[Schema] anywhere — the body isn't checked even when
+    // No SparkFrame[Schema] anywhere — the body isn't checked even when
     // there are obvious col() references that would be wrong if there
     // were a schema. This is the v0.1 "untyped DataFrame escape hatch".
     let result = check(
         r#"
-def f(raw: DataFrame) -> DataFrame:
+def f(raw: DataFrame) -> SparkFrame:
     return raw.select(col("anything"), col("else"))
 "#,
     );

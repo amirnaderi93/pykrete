@@ -27,7 +27,7 @@ class Sale(Schema):
 fn typo_inside_if_body_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale], debug: bool) -> DataFrame[Sale]:
+def f(raw: SparkFrame[Sale], debug: bool) -> SparkFrame[Sale]:
     if debug:
         return raw.select(\"regoin\")
     return raw.select(\"region\")
@@ -42,7 +42,7 @@ def f(raw: DataFrame[Sale], debug: bool) -> DataFrame[Sale]:
 fn typo_inside_elif_body_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale], mode: int) -> DataFrame[Sale]:
+def f(raw: SparkFrame[Sale], mode: int) -> SparkFrame[Sale]:
     if mode == 1:
         return raw.select(\"region\")
     elif mode == 2:
@@ -60,7 +60,7 @@ def f(raw: DataFrame[Sale], mode: int) -> DataFrame[Sale]:
 fn typo_inside_else_body_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale], debug: bool) -> DataFrame[Sale]:
+def f(raw: SparkFrame[Sale], debug: bool) -> SparkFrame[Sale]:
     if debug:
         return raw.select(\"region\")
     else:
@@ -80,7 +80,7 @@ def f(raw: DataFrame[Sale], debug: bool) -> DataFrame[Sale]:
 fn typo_inside_for_body_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> None:
+def f(raw: SparkFrame[Sale]) -> None:
     for i in range(3):
         raw.select(\"regoin\").show()
 "
@@ -92,7 +92,7 @@ def f(raw: DataFrame[Sale]) -> None:
 
 #[test]
 fn for_loop_target_marks_callee_local_for_d0051() {
-    // Top-level `helper` takes a `DataFrame[Sale]`. Inside `f`, the for
+    // Top-level `helper` takes a `SparkFrame[Sale]`. Inside `f`, the for
     // loop binds `helper` as its iteration target (`for helper in [...]`),
     // and then the body calls `helper(other)` — at runtime that's the
     // loop variable, not the top-level function. D0051 should NOT fire:
@@ -102,10 +102,10 @@ fn for_loop_target_marks_callee_local_for_d0051() {
 class Other(Schema):
     code: int
 
-def helper(df: DataFrame[Sale]) -> None:
+def helper(df: SparkFrame[Sale]) -> None:
     pass
 
-def f(other: DataFrame[Other]) -> None:
+def f(other: SparkFrame[Other]) -> None:
     for helper in [1, 2, 3]:
         helper(other)
 "
@@ -118,7 +118,7 @@ def f(other: DataFrame[Other]) -> None:
 fn typo_inside_while_body_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale], n: int) -> None:
+def f(raw: SparkFrame[Sale], n: int) -> None:
     while n > 0:
         raw.select(\"regoin\").show()
         n = n - 1
@@ -137,7 +137,7 @@ def f(raw: DataFrame[Sale], n: int) -> None:
 fn typo_inside_with_body_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> None:
+def f(raw: SparkFrame[Sale]) -> None:
     with open(\"file.txt\") as fh:
         raw.select(\"regoin\").show()
 "
@@ -155,7 +155,7 @@ def f(raw: DataFrame[Sale]) -> None:
 fn typo_inside_try_body_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> None:
+def f(raw: SparkFrame[Sale]) -> None:
     try:
         raw.select(\"regoin\").show()
     except Exception:
@@ -171,7 +171,7 @@ def f(raw: DataFrame[Sale]) -> None:
 fn typo_inside_except_body_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> None:
+def f(raw: SparkFrame[Sale]) -> None:
     try:
         pass
     except Exception as e:
@@ -187,7 +187,7 @@ def f(raw: DataFrame[Sale]) -> None:
 fn typo_inside_finally_body_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> None:
+def f(raw: SparkFrame[Sale]) -> None:
     try:
         pass
     finally:
@@ -207,7 +207,7 @@ def f(raw: DataFrame[Sale]) -> None:
 fn typo_inside_for_inside_if_inside_with_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale], debug: bool) -> None:
+def f(raw: SparkFrame[Sale], debug: bool) -> None:
     with open(\"x\") as fh:
         if debug:
             for i in range(3):
@@ -225,7 +225,7 @@ fn clean_chain_inside_nested_blocks_does_not_fire() {
     // false positive.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale], debug: bool) -> None:
+def f(raw: SparkFrame[Sale], debug: bool) -> None:
     with open(\"x\") as fh:
         if debug:
             for i in range(3):
@@ -253,7 +253,7 @@ fn typo_at_top_of_assert_test_is_caught() {
     // `assert <call>` — the test expression is the call chain itself.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> None:
+def f(raw: SparkFrame[Sale]) -> None:
     assert raw.select(\"regoin\")
 "
     );
@@ -267,7 +267,7 @@ fn typo_at_top_of_assert_message_is_caught() {
     // `assert <test>, <msg>` — the message slot also gets walked.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> None:
+def f(raw: SparkFrame[Sale]) -> None:
     assert raw is not None, raw.select(\"regoin\")
 "
     );
@@ -281,7 +281,7 @@ fn clean_chain_in_assert_does_not_fire() {
     // Positive case: same shape, valid column name → no D0030.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> None:
+def f(raw: SparkFrame[Sale]) -> None:
     assert raw.select(\"region\")
 "
     );
@@ -295,7 +295,7 @@ fn typo_at_top_of_raise_exc_is_caught() {
     // evaluates to). The exc slot's expression IS the call chain.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> None:
+def f(raw: SparkFrame[Sale]) -> None:
     raise raw.select(\"regoin\")
 "
     );
@@ -309,7 +309,7 @@ fn typo_at_top_of_raise_cause_is_caught() {
     // `raise X from <call>` — the `from` slot goes through `cause`.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> None:
+def f(raw: SparkFrame[Sale]) -> None:
     raise Exception(\"x\") from raw.select(\"regoin\")
 "
     );
@@ -326,7 +326,7 @@ def f(raw: DataFrame[Sale]) -> None:
 fn typo_inside_aug_assign_rhs_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> None:
+def f(raw: SparkFrame[Sale]) -> None:
     total = 0
     total += raw.select(\"regoin\").count()
 "
@@ -348,7 +348,7 @@ fn with_cache_alias_bind_carries_schema_into_body() {
     // hooks the alias up to the receiver schema.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> None:
+def f(raw: SparkFrame[Sale]) -> None:
     with raw.cache() as df_cached:
         df_cached.select(\"regoin\").show()
 "
@@ -372,10 +372,10 @@ fn d0051_does_not_fire_when_callee_is_shadowed_inside_nested_block() {
 class Other(Schema):
     code: int
 
-def helper(df: DataFrame[Sale]) -> None:
+def helper(df: SparkFrame[Sale]) -> None:
     pass
 
-def f(raw: DataFrame[Sale], other: DataFrame[Other], debug: bool) -> None:
+def f(raw: SparkFrame[Sale], other: SparkFrame[Other], debug: bool) -> None:
     if debug:
         helper = lambda x: None
         helper(other)
@@ -395,10 +395,10 @@ fn d0051_fires_against_top_level_callee_without_shadow() {
 class Other(Schema):
     code: int
 
-def helper(df: DataFrame[Sale]) -> None:
+def helper(df: SparkFrame[Sale]) -> None:
     pass
 
-def f(other: DataFrame[Other]) -> None:
+def f(other: SparkFrame[Other]) -> None:
     helper(other)
 "
     );
@@ -414,7 +414,7 @@ fn assignment_inside_if_branch_binds_local_schema_for_following_chain() {
     // even inside the conditional.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale], debug: bool) -> None:
+def f(raw: SparkFrame[Sale], debug: bool) -> None:
     if debug:
         out = raw.select(col(\"region\"))
         out.select(\"regoin\").show()
@@ -431,12 +431,12 @@ def f(raw: DataFrame[Sale], debug: bool) -> None:
 
 #[test]
 fn typo_inside_a_nested_funcdef_body_is_caught() {
-    // Nested helper has its own typed param `raw: DataFrame[Sale]`. A
+    // Nested helper has its own typed param `raw: SparkFrame[Sale]`. A
     // typo in the inner body must reach the col-ref checker.
     let src = format!(
         "{SCHEMA}
-def outer(raw: DataFrame[Sale]) -> DataFrame[Sale]:
-    def inner(d: DataFrame[Sale]) -> DataFrame[Sale]:
+def outer(raw: SparkFrame[Sale]) -> SparkFrame[Sale]:
+    def inner(d: SparkFrame[Sale]) -> SparkFrame[Sale]:
         return d.select(col(\"regoin\"))
     return inner(raw)
 "
@@ -456,9 +456,9 @@ fn nested_funcdef_locals_do_not_leak_to_outer_scope() {
 class Other(Schema):
     other_field: int
 
-def outer(raw: DataFrame[Sale]) -> DataFrame[Sale]:
+def outer(raw: SparkFrame[Sale]) -> SparkFrame[Sale]:
     out = raw
-    def inner(d: DataFrame[Other]) -> DataFrame[Other]:
+    def inner(d: SparkFrame[Other]) -> SparkFrame[Other]:
         out = d
         return out.select(col(\"other_field\"))
     return out.select(col(\"region\"))
@@ -475,8 +475,8 @@ fn nested_funcdef_can_be_called_after_definition_without_d0051() {
     // precedence — and calling `helper` doesn't fire D0051 spuriously.
     let src = format!(
         "{SCHEMA}
-def outer(raw: DataFrame[Sale]) -> DataFrame[Sale]:
-    def helper(d: DataFrame[Sale]) -> DataFrame[Sale]:
+def outer(raw: SparkFrame[Sale]) -> SparkFrame[Sale]:
+    def helper(d: SparkFrame[Sale]) -> SparkFrame[Sale]:
         return d.select(col(\"region\"))
     return helper(raw)
 "
@@ -493,9 +493,9 @@ fn typo_inside_a_nested_classdef_method_body_is_caught() {
     // inner method then needs typed params so col refs inside resolve.
     let src = format!(
         "{SCHEMA}
-def outer(raw: DataFrame[Sale]) -> DataFrame[Sale]:
+def outer(raw: SparkFrame[Sale]) -> SparkFrame[Sale]:
     class Inner:
-        def m(self, d: DataFrame[Sale]) -> None:
+        def m(self, d: SparkFrame[Sale]) -> None:
             d.select(col(\"regoin\")).show()
     return raw
 "
@@ -519,7 +519,7 @@ def outer(raw: DataFrame[Sale]) -> DataFrame[Sale]:
 fn typo_inside_compare_left_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(df: DataFrame[Sale]) -> bool:
+def f(df: SparkFrame[Sale]) -> bool:
     if df.select(\"regoin\").count() > 0:
         return True
     return False
@@ -534,7 +534,7 @@ def f(df: DataFrame[Sale]) -> bool:
 fn typo_inside_is_not_none_compare_is_caught() {
     let src = format!(
         "{SCHEMA}
-def g(df: DataFrame[Sale]) -> bool:
+def g(df: SparkFrame[Sale]) -> bool:
     return df.select(\"regoin\") is not None
 "
     );
@@ -548,7 +548,7 @@ fn typo_inside_boolop_value_is_caught() {
     // `or` short-circuit — embedded df.select call must be analyzed.
     let src = format!(
         "{SCHEMA}
-def f(df: DataFrame[Sale]) -> int:
+def f(df: SparkFrame[Sale]) -> int:
     return df.select(\"regoin\").count() or df.select(\"region\").count()
 "
     );
@@ -561,7 +561,7 @@ def f(df: DataFrame[Sale]) -> int:
 fn typo_inside_unary_not_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(df: DataFrame[Sale]) -> bool:
+def f(df: SparkFrame[Sale]) -> bool:
     return not df.select(\"regoin\").isEmpty()
 "
     );
@@ -574,7 +574,7 @@ def f(df: DataFrame[Sale]) -> bool:
 fn typo_inside_binop_arm_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(df: DataFrame[Sale]) -> int:
+def f(df: SparkFrame[Sale]) -> int:
     return df.select(\"regoin\").count() + df.select(\"region\").count()
 "
     );
@@ -587,7 +587,7 @@ def f(df: DataFrame[Sale]) -> int:
 fn typo_inside_tuple_element_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(df: DataFrame[Sale]) -> tuple:
+def f(df: SparkFrame[Sale]) -> tuple:
     return (df.select(\"regoin\"), df.select(\"region\"))
 "
     );
@@ -600,7 +600,7 @@ def f(df: DataFrame[Sale]) -> tuple:
 fn typo_inside_list_element_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(df: DataFrame[Sale]) -> list:
+def f(df: SparkFrame[Sale]) -> list:
     return [df.select(\"regoin\"), df.select(\"region\")]
 "
     );
@@ -613,7 +613,7 @@ def f(df: DataFrame[Sale]) -> list:
 fn typo_inside_dict_value_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(df: DataFrame[Sale]) -> dict:
+def f(df: SparkFrame[Sale]) -> dict:
     return {{\"k\": df.select(\"regoin\")}}
 "
     );
@@ -626,7 +626,7 @@ def f(df: DataFrame[Sale]) -> dict:
 fn typo_inside_ifexp_branch_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(df: DataFrame[Sale], debug: bool) -> int:
+def f(df: SparkFrame[Sale], debug: bool) -> int:
     return df.select(\"regoin\").count() if debug else df.select(\"region\").count()
 "
     );
@@ -641,7 +641,7 @@ fn typo_inside_nested_compound_expression_is_caught() {
     // descent must reach the innermost method call.
     let src = format!(
         "{SCHEMA}
-def f(df: DataFrame[Sale]) -> bool:
+def f(df: SparkFrame[Sale]) -> bool:
     return (not df.select(\"regoin\").isEmpty()) and (df.count() > 0)
 "
     );
@@ -662,7 +662,7 @@ fn typo_inside_subscript_value_is_caught() {
     // half of a Subscript.
     let src = format!(
         "{SCHEMA}
-def f(df: DataFrame[Sale]) -> int:
+def f(df: SparkFrame[Sale]) -> int:
     return (df.select(\"regoin\"), df)[0].count()
 "
     );
@@ -677,7 +677,7 @@ fn typo_inside_f_string_interpolation_is_caught() {
     // an interpolation, not a top-level expression.
     let src = format!(
         "{SCHEMA}
-def f(df: DataFrame[Sale]) -> str:
+def f(df: SparkFrame[Sale]) -> str:
     return f\"count={{df.select('regoin').count()}}\"
 "
     );
@@ -694,7 +694,7 @@ fn typo_inside_list_comprehension_iter_is_caught() {
     // `iter` half evaluates in the outer scope.
     let src = format!(
         "{SCHEMA}
-def f(df: DataFrame[Sale]) -> list:
+def f(df: SparkFrame[Sale]) -> list:
     return [x for x in df.select(\"regoin\").collect()]
 "
     );
@@ -710,7 +710,7 @@ fn typo_inside_generator_expression_iter_is_caught() {
     // call we want walked.
     let src = format!(
         "{SCHEMA}
-def f(df: DataFrame[Sale]):
+def f(df: SparkFrame[Sale]):
     return (x for x in df.select(\"regoin\").collect())
 "
     );

@@ -24,7 +24,7 @@ fn with_schema(schema: &str, body: &str) -> String {
         r#"
 {schema}
 
-def f(raw: DataFrame[In]) -> DataFrame:
+def f(raw: SparkFrame[In]) -> SparkFrame:
 {body}
 "#,
         body = indent(body, 4),
@@ -255,7 +255,7 @@ fn f_transform_returns_array_of_lambda_body_type() {
 class Out(Schema):
     first: int
 
-def f(raw: DataFrame[In]) -> DataFrame[Out]:
+def f(raw: SparkFrame[In]) -> SparkFrame[Out]:
     return raw.select(F.transform(col(\"nums\"), lambda x: F.lit(1)).getItem(0).alias(\"first\"))
 "
     );
@@ -274,7 +274,7 @@ fn f_filter_preserves_element_type() {
 class Out(Schema):
     kept: Array[int]
 
-def f(raw: DataFrame[In]) -> DataFrame[Out]:
+def f(raw: SparkFrame[In]) -> SparkFrame[Out]:
     return raw.select(F.filter(col(\"nums\"), lambda x: F.lit(True)).alias(\"kept\"))
 "
     );
@@ -293,7 +293,7 @@ fn f_aggregate_returns_lambda_body_type() {
 class Out(Schema):
     total: int
 
-def f(raw: DataFrame[In]) -> DataFrame[Out]:
+def f(raw: SparkFrame[In]) -> SparkFrame[Out]:
     return raw.select(F.aggregate(col(\"nums\"), F.lit(0), lambda acc, x: F.lit(0)).alias(\"total\"))
 "
     );
@@ -304,7 +304,7 @@ def f(raw: DataFrame[In]) -> DataFrame[Out]:
     // Column-ref typo in the first arg slot still fires D0030.
     let bad = format!(
         "{ARRAY_SCHEMA}
-def f(raw: DataFrame[In]) -> DataFrame:
+def f(raw: SparkFrame[In]) -> SparkFrame:
     return raw.select(F.aggregate(col(\"nope\"), F.lit(0), lambda acc, x: F.lit(0)).alias(\"total\"))
 "
     );
@@ -320,7 +320,7 @@ fn f_exists_returns_bool() {
 class Out(Schema):
     any_positive: bool
 
-def f(raw: DataFrame[In]) -> DataFrame[Out]:
+def f(raw: SparkFrame[In]) -> SparkFrame[Out]:
     return raw.select(F.exists(col(\"nums\"), lambda x: F.lit(True)).alias(\"any_positive\"))
 "
     );
@@ -336,7 +336,7 @@ fn f_forall_returns_bool() {
 class Out(Schema):
     all_positive: bool
 
-def f(raw: DataFrame[In]) -> DataFrame[Out]:
+def f(raw: SparkFrame[In]) -> SparkFrame[Out]:
     return raw.select(F.forall(col(\"nums\"), lambda x: F.lit(True)).alias(\"all_positive\"))
 "
     );

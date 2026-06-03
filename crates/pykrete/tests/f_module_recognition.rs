@@ -21,7 +21,7 @@ class Bookings(Schema):
     checkin: date
     place_code: int
 
-def f(raw: DataFrame[Bookings]) -> DataFrame[Bookings]:
+def f(raw: SparkFrame[Bookings]) -> SparkFrame[Bookings]:
     return raw.withColumn("checkin", F.add_months("chekin", 1))
 "#;
     let result = check(src);
@@ -42,7 +42,7 @@ fn F_lower_string_arg_is_checked_as_column_name() {
 class Bookings(Schema):
     city: string
 
-def f(raw: DataFrame[Bookings]) -> DataFrame[Bookings]:
+def f(raw: SparkFrame[Bookings]) -> SparkFrame[Bookings]:
     return raw.withColumn("city", F.lower("cityy"))
 "#;
     let result = check(src);
@@ -66,7 +66,7 @@ class Orders(Schema):
     price: double
     place_code: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.withColumn("price", F.round("priec", 2))
 "#;
     let result = check(src);
@@ -88,7 +88,7 @@ class Orders(Schema):
     price: double
     discount_price: double
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.withColumn("price", F.coalesce("price", "discontu_price"))
 "#;
     let result = check(src);
@@ -111,7 +111,7 @@ fn F_col_recognized_alongside_bare_col() {
 class Orders(Schema):
     price: double
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.select(F.col("priec"))
 "#;
     let result = check(src);
@@ -136,7 +136,7 @@ fn F_lit_value_arg_is_NOT_treated_as_column() {
 class Orders(Schema):
     price: double
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.withColumn("price", F.lit("not_a_column"))
 "#;
     let result = check(src);
@@ -160,7 +160,7 @@ fn F_date_format_format_string_NOT_treated_as_column() {
 class Bookings(Schema):
     checkin: date
 
-def f(raw: DataFrame[Bookings]) -> DataFrame[Bookings]:
+def f(raw: SparkFrame[Bookings]) -> SparkFrame[Bookings]:
     return raw.withColumn("checkin_str", F.date_format("checkin", "yyyy-MM-dd"))
 "#;
     let result = check(src);

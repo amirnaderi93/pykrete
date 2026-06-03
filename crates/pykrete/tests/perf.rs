@@ -33,15 +33,15 @@ class Schema{idx}(Schema):
     flag_{idx}: bool
 
 
-def transform_{idx}(df: DataFrame[Schema{idx}]) -> DataFrame[Schema{idx}]:
+def transform_{idx}(df: SparkFrame[Schema{idx}]) -> SparkFrame[Schema{idx}]:
     return df.select(col("id_{idx}"), col("name_{idx}"), col("amount_{idx}"), col("region_{idx}"), col("flag_{idx}"))
 
 
-def filter_{idx}(df: DataFrame[Schema{idx}]) -> DataFrame[Schema{idx}]:
+def filter_{idx}(df: SparkFrame[Schema{idx}]) -> SparkFrame[Schema{idx}]:
     return df.where(col("amount_{idx}") > 100).select(col("id_{idx}"), col("name_{idx}"), col("amount_{idx}"), col("region_{idx}"), col("flag_{idx}"))
 
 
-def agg_{idx}(df: DataFrame[Schema{idx}]) -> DataFrame[Pick[Schema{idx}, "region_{idx}", "amount_{idx}"]]:
+def agg_{idx}(df: SparkFrame[Schema{idx}]) -> SparkFrame[Pick[Schema{idx}, "region_{idx}", "amount_{idx}"]]:
     return df.groupBy(col("region_{idx}")).agg(F.sum(col("amount_{idx}")).alias("amount_{idx}"))
 "#,
         ));

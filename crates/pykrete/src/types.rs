@@ -12,6 +12,16 @@ pub enum ColumnType {
     Int,
     Long,
     Double,
+    /// 32-bit IEEE-754 float — pandas `float32` / `Float32`. Introduced
+    /// by the v1.3 pandas spec (`docs/design/pandas-support.md` §4) as
+    /// a distinct variant rather than `Float(width)`: per the spec, a
+    /// variant-per-width shape preserves enum exhaustiveness if a
+    /// future narrower float (e.g. `float16`) lands. Spark `FloatType`
+    /// keeps mapping to `Double` (see `from_type_constructor`) — the
+    /// Spark API itself collapses FloatType to double in practice and
+    /// `from_name("float")` already returns `Double`. This variant
+    /// only fires through the pandas dtype mapping table.
+    Float,
     /// 8-bit signed integer — Spark `ByteType`.
     Byte,
     /// 16-bit signed integer — Spark `ShortType`.
@@ -291,6 +301,9 @@ impl ColumnType {
             Self::Int => "Int",
             Self::Long => "Long",
             Self::Double => "Double",
+            // v1.3 pandas: `float32` maps to `ColumnType::Float`; the
+            // bare kind name surfaces as "Float" in hover / completion.
+            Self::Float => "Float",
             Self::Byte => "Byte",
             Self::Short => "Short",
             Self::Decimal { .. } => "Decimal",
@@ -784,6 +797,24 @@ mod tests {
                 "COLUMN_TYPE_NAMES_LIST should list '{name}'",
             );
         }
+    }
+
+    #[test]
+    fn float_variant_renders_as_capital_float_in_label_and_as_str() {
+        // v1.3 pandas spec §4: `ColumnType::Float` carries the "Float"
+        // bare kind name distinct from `Double`. Confirms the enum-
+        // exhaustiveness sweep wired the new variant through both label
+        // (used by hover/completion) and as_str (used by Display).
+        assert_eq!(ColumnType::Float.as_str(), "Float");
+        assert_eq!(ColumnType::Float.label(), "Float");
+        assert_eq!(format!("{}", ColumnType::Float), "Float");
+    }
+
+    #[test]
+    fn float_is_not_double() {
+        // The v1.3 spec preserves `float32` distinctly from `float64`
+        // (which maps to Double). Equality must reflect that.
+        assert_ne!(ColumnType::Float, ColumnType::Double);
     }
 
     #[test]

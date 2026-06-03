@@ -18,7 +18,7 @@ fn select_star_is_not_flagged_as_a_missing_column() {
     // column name — it must not trip a D0030.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.select(\"*\")
 "
     );
@@ -29,7 +29,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn select_star_expands_to_the_receiver_columns() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.select(\"*\").select(col(\"amount\"))
 "
     );
@@ -40,7 +40,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn bad_column_after_select_star_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.select(\"*\").select(col(\"nonexistent\"))
 "
     );
@@ -51,7 +51,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn cube_groups_like_group_by() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.cube(\"city\").agg(F.sum(\"amount\").alias(\"total\")).select(col(\"total\"))
 "
     );
@@ -62,7 +62,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn bad_cube_key_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.cube(\"nonexistent\").agg(F.sum(\"amount\").alias(\"total\"))
 "
     );
@@ -73,7 +73,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn rollup_groups_like_group_by() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.rollup(\"city\").agg(F.sum(\"amount\").alias(\"total\")).select(col(\"city\"))
 "
     );
@@ -84,7 +84,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn bad_pivot_column_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.groupBy(\"city\").pivot(\"nonexistent\").sum(\"amount\")
 "
     );
@@ -97,7 +97,7 @@ fn valid_pivot_column_is_accepted() {
     // itself resolves cleanly — no D0030.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.groupBy(\"city\").pivot(\"month\").sum(\"amount\")
 "
     );

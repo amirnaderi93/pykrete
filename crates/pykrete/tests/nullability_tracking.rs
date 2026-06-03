@@ -26,7 +26,7 @@ class Joined(Schema):
 fn left_join(how: &str) -> String {
     format!(
         "{SCHEMAS}
-def f(l: DataFrame[Left], r: DataFrame[Right]) -> DataFrame[Joined]:
+def f(l: SparkFrame[Left], r: SparkFrame[Right]) -> SparkFrame[Joined]:
     return l.join(r, \"id\", how=\"{how}\")
 "
     )
@@ -74,7 +74,7 @@ class Joined(Schema):
     id: int
     b: Optional[int]
 
-def f(l: DataFrame[Left], r: DataFrame[Right]) -> DataFrame[Joined]:
+def f(l: SparkFrame[Left], r: SparkFrame[Right]) -> SparkFrame[Joined]:
     return l.join(r, \"id\", how=\"left\")
 ";
     assert_no_diagnostics(&check_strict(src));
@@ -96,7 +96,7 @@ class Joined(Schema):
     id: int
     b: int
 
-def f(l: DataFrame[Left], r: DataFrame[Right]) -> DataFrame[Joined]:
+def f(l: SparkFrame[Left], r: SparkFrame[Right]) -> SparkFrame[Joined]:
     return l.join(r, \"id\", how=\"left\"){tail}
 "
     )

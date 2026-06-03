@@ -21,7 +21,7 @@ use ruff_python_ast::Expr;
 use ruff_source_file::{LineIndex, OneIndexed};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
-use crate::dataframe::{DataFrameAnnotation, SlotLabel, TypedSlot, typed_slots};
+use crate::dataframe::{SlotLabel, TypedSlot, typed_slots};
 use crate::operations::ColumnRefTrace;
 use crate::registry::Registry;
 use crate::schema::{Schema, SchemaView, discover_schemas};
@@ -198,25 +198,24 @@ fn render_function_signature(name: &str, slots: &[TypedSlot<'_>]) -> String {
     let params: Vec<String> = slots
         .iter()
         .filter_map(|s| match s.label {
-            SlotLabel::Param(p) => Some(format!("{p}: {}", render_annotation(&s.kind))),
+            SlotLabel::Param(p) => Some(format!(
+                "{p}: {}",
+                crate::dataframe::render_annotation(&s.kind, s.dialect, s.is_deprecated_alias),
+            )),
             SlotLabel::Return => None,
         })
         .collect();
     let ret = slots
         .iter()
         .find(|s| matches!(s.label, SlotLabel::Return))
-        .map(|s| format!(" -> {}", render_annotation(&s.kind)))
+        .map(|s| {
+            format!(
+                " -> {}",
+                crate::dataframe::render_annotation(&s.kind, s.dialect, s.is_deprecated_alias)
+            )
+        })
         .unwrap_or_default();
     format!("{name}({}){ret}", params.join(", "))
-}
-
-fn render_annotation(kind: &DataFrameAnnotation<'_>) -> String {
-    match kind {
-        DataFrameAnnotation::Typed(name) => format!("DataFrame[{name}]"),
-        DataFrameAnnotation::Derived(_) => "DataFrame[…]".to_string(),
-        DataFrameAnnotation::Untyped => "DataFrame".to_string(),
-        DataFrameAnnotation::NonBareName => "DataFrame[?]".to_string(),
-    }
 }
 
 // ---------------------------------------------------------------------------

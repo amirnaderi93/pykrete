@@ -418,7 +418,31 @@ fn handle_ann_assign<'a>(
     let target_range = target_expr.range;
     ctx.mark_local(target_name);
 
-    match dataframe::recognize(&ann.annotation) {
+    // v1.3 pandas spec §6: fire D0090 once for the deprecated
+    // `DataFrame[X]` alias on local annotated assignments, mirroring
+    // the signature-renderer's emission. Echo source text per Q7.
+    // `recognize_with_dialect` is called once and reused for the schema
+    // match below; wording is owned by `format_d0090_message`.
+    let recognized = dataframe::recognize_with_dialect(&ann.annotation);
+    if let Some(rec) = recognized
+        && rec.is_deprecated_alias
+    {
+        let raw_text = &source[ann.annotation.range()];
+        let (message, suggestion) = crate::dataframe::format_d0090_message(raw_text);
+        diagnostics.push(
+            Diagnostic::at_range(
+                Severity::Warning,
+                "D0090",
+                message,
+                ann.annotation.range(),
+                source,
+                line_index,
+            )
+            .with_suggestion(Some(suggestion)),
+        );
+    }
+
+    match recognized.map(|r| r.kind) {
         Some(DataFrameAnnotation::Typed(schema_name)) => {
             if let Some(schema) = ctx.find_schema(schema_name) {
                 let view = SchemaView::Declared(schema);
@@ -512,16 +536,28 @@ fn class_instance_from_call<'a>(expr: &'a Expr, ctx: &BodyContext<'a>) -> Option
 /// freely and pykrete infers imprecisely (`lit(5)` could be either int
 /// or long), so a numeric-to-numeric difference is not flagged.
 fn types_compatible(a: &ColumnType, b: &ColumnType) -> bool {
+    // Exhaustive (no `_` arm) so a future `ColumnType` variant is a
+    // compile error here — mirrors `strict_operators::type_family`.
     fn is_numeric(t: &ColumnType) -> bool {
-        matches!(
-            t,
+        match t {
             ColumnType::Int
-                | ColumnType::Long
-                | ColumnType::Double
-                | ColumnType::Byte
-                | ColumnType::Short
-                | ColumnType::Decimal { .. }
-        )
+            | ColumnType::Long
+            | ColumnType::Double
+            | ColumnType::Float
+            | ColumnType::Byte
+            | ColumnType::Short
+            | ColumnType::Decimal { .. } => true,
+            ColumnType::String
+            | ColumnType::Enum(_)
+            | ColumnType::Binary
+            | ColumnType::Bool
+            | ColumnType::Date
+            | ColumnType::Timestamp
+            | ColumnType::Array(_)
+            | ColumnType::Map(..)
+            | ColumnType::Struct(_) => false,
+            ColumnType::Nullable(inner) => is_numeric(inner),
+        }
     }
     // An unknown element/key/value type is permissive — like an unknown
     // column type, it is never itself a mismatch.

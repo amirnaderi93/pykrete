@@ -21,7 +21,7 @@ fn explode_without_alias_produces_a_col_column() {
     // unnested column `col`, which downstream code can then reference.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.select(F.explode(\"tags\")).select(col(\"col\"))
 "
     );
@@ -32,7 +32,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn explode_with_alias_still_uses_the_alias() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.select(F.explode(\"tags\").alias(\"tag\")).select(col(\"tag\"))
 "
     );
@@ -43,7 +43,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn dropna_subset_bad_column_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.dropna(subset=[\"city\", \"nonexistent\"])
 "
     );
@@ -54,7 +54,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn fillna_subset_good_columns_pass() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.fillna(0, subset=[\"amount\"])
 "
     );
@@ -65,7 +65,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn drop_duplicates_subset_bad_column_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.dropDuplicates(subset=[\"madeup\"])
 "
     );
@@ -76,7 +76,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn na_drop_subset_bad_column_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.na.drop(subset=[\"nonexistent\"])
 "
     );
@@ -91,7 +91,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn fillna_dict_with_good_keys_passes() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.fillna({{\"amount\": 0, \"city\": \"unknown\"}})
 "
     );
@@ -102,7 +102,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn fillna_dict_with_bad_key_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.fillna({{\"amunt\": 0}})
 "
     );
@@ -115,7 +115,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn fillna_dict_fires_for_every_bad_key_in_a_mixed_dict() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.fillna({{\"amount\": 0, \"nope1\": 0, \"city\": \"x\", \"nope2\": \"y\"}})
 "
     );
@@ -132,7 +132,7 @@ fn fillna_with_a_non_dict_literal_arg_does_not_false_flag() {
     // is the correct conservative behavior.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     cfg = {{\"amount\": 0}}
     return raw.fillna(cfg)
 "
@@ -145,7 +145,7 @@ fn fillna_empty_dict_does_not_fire() {
     // `fillna({})` — no keys to check, no diagnostic.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.fillna({{}})
 "
     );
@@ -160,7 +160,7 @@ fn fillna_with_variable_holding_bad_keys_does_not_false_flag() {
     // silent-pass is the conservative behavior for non-literal args.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     cfg = {{\"some_var\": 0}}
     return raw.fillna(cfg)
 "
@@ -173,7 +173,7 @@ fn na_fill_dict_with_bad_key_is_caught() {
     // Same form as `fillna`, but on the `df.na.fill` route.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.na.fill({{\"amunt\": 0}})
 "
     );
@@ -188,7 +188,7 @@ fn fillna_dict_does_not_strip_the_chain() {
     // `select("amount")` works and `select("nope")` fires D0030.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.fillna({{\"amount\": 0}}).select(col(\"amount\"))
 "
     );

@@ -23,7 +23,7 @@ fn count_on_a_typed_dataframe_is_recognized() {
     // the call itself is a clean, recognized terminal — no diagnostic.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Orders]) -> int:
+def f(raw: SparkFrame[Orders]) -> int:
     return raw.count()
 "
     );
@@ -47,7 +47,7 @@ fn collect_show_explain_first_take_head_tail_printSchema_all_recognized() {
     ] {
         let src = format!(
             "{SCHEMA}
-def f(raw: DataFrame[Orders]) -> None:
+def f(raw: SparkFrame[Orders]) -> None:
     raw.{method}()
 "
         );
@@ -69,7 +69,7 @@ fn count_result_is_not_a_dataframe() {
     // chained call as a likely bug.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Orders]) -> None:
+def f(raw: SparkFrame[Orders]) -> None:
     raw.count().select(col(\"nofield\"))
 "
     );
@@ -83,7 +83,7 @@ fn terminals_do_not_break_argument_checking_on_the_receiver() {
     // column-name string, so no D0030 false positive should fire.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Orders]) -> None:
+def f(raw: SparkFrame[Orders]) -> None:
     raw.show(20)
     raw.take(5)
     raw.head(3)

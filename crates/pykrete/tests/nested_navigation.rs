@@ -23,7 +23,7 @@ class In(Schema):
 fn valid_nested_field_through_array_of_structs_resolves() {
     let src = format!(
         "{SCHEMAS}
-def f(d: DataFrame[In]) -> DataFrame:
+def f(d: SparkFrame[In]) -> SparkFrame:
     return d.select(col(\"orders.id\"))
 "
     );
@@ -34,7 +34,7 @@ def f(d: DataFrame[In]) -> DataFrame:
 fn typo_in_a_nested_field_is_caught() {
     let src = format!(
         "{SCHEMAS}
-def f(d: DataFrame[In]) -> DataFrame:
+def f(d: SparkFrame[In]) -> SparkFrame:
     return d.select(col(\"orders.nonexistent\"))
 "
     );
@@ -46,7 +46,7 @@ def f(d: DataFrame[In]) -> DataFrame:
 fn deep_nested_path_resolves() {
     let src = format!(
         "{SCHEMAS}
-def f(d: DataFrame[In]) -> DataFrame:
+def f(d: SparkFrame[In]) -> SparkFrame:
     return d.select(col(\"orders.line.sku\"))
 "
     );
@@ -57,7 +57,7 @@ def f(d: DataFrame[In]) -> DataFrame:
 fn typo_in_a_deep_nested_field_is_caught() {
     let src = format!(
         "{SCHEMAS}
-def f(d: DataFrame[In]) -> DataFrame:
+def f(d: SparkFrame[In]) -> SparkFrame:
     return d.select(col(\"orders.line.maddeup\"))
 "
     );
@@ -69,7 +69,7 @@ def f(d: DataFrame[In]) -> DataFrame:
 fn dotted_access_past_an_atomic_nested_field_is_caught() {
     let src = format!(
         "{SCHEMAS}
-def f(d: DataFrame[In]) -> DataFrame:
+def f(d: SparkFrame[In]) -> SparkFrame:
     return d.select(col(\"orders.id.something\"))
 "
     );
@@ -83,7 +83,7 @@ fn map_access_degrades_without_false_flagging() {
     // false-flag an existing map column.
     let src = format!(
         "{SCHEMAS}
-def f(d: DataFrame[In]) -> DataFrame:
+def f(d: SparkFrame[In]) -> SparkFrame:
     return d.select(col(\"meta.whatever\"))
 "
     );

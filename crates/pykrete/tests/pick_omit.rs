@@ -1,6 +1,6 @@
 //! `Pick` / `Omit` derived schemas — TypeScript-style schema operators.
-//! `DataFrame[Pick[Orders, "a", "b"]]` is `Orders` narrowed to those two
-//! columns; `DataFrame[Omit[Orders, "x"]]` is `Orders` without `x`.
+//! `SparkFrame[Pick[Orders, "a", "b"]]` is `Orders` narrowed to those two
+//! columns; `SparkFrame[Omit[Orders, "x"]]` is `Orders` without `x`.
 
 mod common;
 
@@ -14,7 +14,7 @@ class Orders(Schema):
     price: int
     log_date: timestamp
 
-def f(d: DataFrame[Pick[Orders, \"place_code\", \"price\"]]) -> DataFrame:
+def f(d: SparkFrame[Pick[Orders, \"place_code\", \"price\"]]) -> SparkFrame:
     return d.select(col(\"place_code\"), col(\"price\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -29,7 +29,7 @@ class Orders(Schema):
     price: int
     log_date: timestamp
 
-def f(d: DataFrame[Pick[Orders, \"place_code\", \"price\"]]) -> DataFrame:
+def f(d: SparkFrame[Pick[Orders, \"place_code\", \"price\"]]) -> SparkFrame:
     return d.select(col(\"log_date\"))
 ";
     assert_has_code(&check(src), "D0030");
@@ -43,7 +43,7 @@ class Orders(Schema):
     b: int
     c: int
 
-def f(d: DataFrame[Omit[Orders, \"c\"]]) -> DataFrame:
+def f(d: SparkFrame[Omit[Orders, \"c\"]]) -> SparkFrame:
     return d.select(col(\"c\"))
 ";
     assert_has_code(&check(src), "D0030");
@@ -57,7 +57,7 @@ class Orders(Schema):
     b: int
     c: int
 
-def f(d: DataFrame[Omit[Orders, \"c\"]]) -> DataFrame:
+def f(d: SparkFrame[Omit[Orders, \"c\"]]) -> SparkFrame:
     return d.select(col(\"a\"), col(\"b\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -71,7 +71,7 @@ class Orders(Schema):
     b: int
     c: int
 
-def f(d: DataFrame[Orders]) -> DataFrame[Pick[Orders, \"a\", \"b\"]]:
+def f(d: SparkFrame[Orders]) -> SparkFrame[Pick[Orders, \"a\", \"b\"]]:
     return d.select(col(\"a\"), col(\"b\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -86,7 +86,7 @@ class Orders(Schema):
     b: int
     c: int
 
-def f(d: DataFrame[Orders]) -> DataFrame[Pick[Orders, \"a\", \"b\"]]:
+def f(d: SparkFrame[Orders]) -> SparkFrame[Pick[Orders, \"a\", \"b\"]]:
     return d.select(col(\"a\"), col(\"c\"))
 ";
     assert_has_code(&check(src), "D0050");
@@ -100,7 +100,7 @@ class Orders(Schema):
     b: int
     c: int
 
-def f(d: DataFrame[Orders]) -> DataFrame[Omit[Orders, \"c\"]]:
+def f(d: SparkFrame[Orders]) -> SparkFrame[Omit[Orders, \"c\"]]:
     return d.select(col(\"a\"), col(\"b\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -112,7 +112,7 @@ fn a_picked_column_that_is_not_on_the_base_schema_is_flagged() {
 class Orders(Schema):
     price: int
 
-def f(d: DataFrame[Pick[Orders, \"priec\"]]) -> DataFrame:
+def f(d: SparkFrame[Pick[Orders, \"priec\"]]) -> SparkFrame:
     return d
 ";
     assert_has_code(&check(src), "D0030");
@@ -121,7 +121,7 @@ def f(d: DataFrame[Pick[Orders, \"priec\"]]) -> DataFrame:
 #[test]
 fn an_unknown_base_schema_in_pick_is_flagged() {
     let src = "\
-def f(d: DataFrame[Pick[Bogus, \"a\"]]) -> DataFrame:
+def f(d: SparkFrame[Pick[Bogus, \"a\"]]) -> SparkFrame:
     return d
 ";
     assert_has_code(&check(src), "D0020");
@@ -138,7 +138,7 @@ class Base(Schema):
 class Derived(Base):
     c: int
 
-def f(d: DataFrame[Pick[Derived, \"a\", \"c\"]]) -> DataFrame:
+def f(d: SparkFrame[Pick[Derived, \"a\", \"c\"]]) -> SparkFrame:
     return d.select(col(\"a\"), col(\"c\"))
 ";
     assert_no_diagnostics(&check(src));

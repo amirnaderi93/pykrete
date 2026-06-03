@@ -13,7 +13,7 @@ class Orders(Schema):
     place_code: int
     note: Optional[string]
 
-def f(d: DataFrame[Orders]) -> DataFrame:
+def f(d: SparkFrame[Orders]) -> SparkFrame:
     return d.select(col(\"place_code\"), col(\"note\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -22,7 +22,7 @@ def f(d: DataFrame[Orders]) -> DataFrame:
 #[test]
 fn optional_works_in_an_inline_schema() {
     let src = "\
-def f(d: DataFrame[{n: Optional[int]}]) -> DataFrame:
+def f(d: SparkFrame[{n: Optional[int]}]) -> SparkFrame:
     return d.select(col(\"n\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -34,7 +34,7 @@ fn optional_can_wrap_a_collection() {
 class Orders(Schema):
     tags: Optional[Array[string]]
 
-def f(d: DataFrame[Orders]) -> DataFrame:
+def f(d: SparkFrame[Orders]) -> SparkFrame:
     return d.select(col(\"tags\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -50,7 +50,7 @@ class Event(Schema):
 class In(Schema):
     event: Optional[Event]
 
-def f(d: DataFrame[In]) -> DataFrame:
+def f(d: SparkFrame[In]) -> SparkFrame:
     return d.select(col(\"event.id\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -69,7 +69,7 @@ class Out(Schema):
     x: int
     y: int
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.select(col(\"x\"), col(\"y\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -86,7 +86,7 @@ class Out(Schema):
     x: int
     y: int
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.select(col(\"x\"), col(\"y\"))
 ";
     assert_has_code(&check_strict(src), "D0083");
@@ -102,7 +102,7 @@ class In(Schema):
 class Out(Schema):
     x: Optional[int]
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.select(col(\"x\"))
 ";
     assert_no_diagnostics(&check_strict(src));
@@ -117,7 +117,7 @@ class In(Schema):
     a: Optional[int]
     b: Optional[int]
 
-def f(d: DataFrame[In]) -> DataFrame[In]:
+def f(d: SparkFrame[In]) -> SparkFrame[In]:
     return d.select(col(\"a\"))
 ";
     assert_has_code(&check(src), "D0050");

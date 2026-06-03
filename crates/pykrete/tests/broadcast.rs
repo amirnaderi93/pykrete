@@ -19,7 +19,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return F.broadcast(raw).select(col("place_code"))
 "#,
     );
@@ -34,7 +34,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return F.broadcast(raw).select(col("plcae_code"))
 "#,
     );
@@ -56,7 +56,7 @@ class B(Schema):
     k: int
     b: int
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame:
     return a.join(F.broadcast(b), on="k")
 "#,
     );
@@ -75,7 +75,7 @@ class A(Schema):
 class B(Schema):
     b: int
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame:
     return a.join(F.broadcast(b), on="k")
 "#,
     );
@@ -92,7 +92,7 @@ fn bare_broadcast_without_F_module_also_works() {
 class Orders(Schema):
     place_code: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return functions.broadcast(raw).select(col("place_code"))
 "#,
     );

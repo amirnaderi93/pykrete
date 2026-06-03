@@ -19,7 +19,7 @@ class In(Schema):
     events: Array[Event]
     amount: int
 
-def f(d: DataFrame[In]) -> DataFrame[In]:
+def f(d: SparkFrame[In]) -> SparkFrame[In]:
     return d
 ";
     assert_no_diagnostics(&check(src));
@@ -40,7 +40,7 @@ class In(Schema):
 class Out(Schema):
     events: Array[Other]
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.select(col(\"events\"))
 ";
     // `events` is `Array[Event]` (a struct with `id: int`); Out declares
@@ -61,7 +61,7 @@ class In(Schema):
 class Out(Schema):
     events: Array[Event]
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.select(col(\"events\"))
 ";
     assert_does_not_have_code(&check(src), "D0080");
@@ -86,7 +86,7 @@ class In(Schema):
 class Out(Schema):
     rec: RecOut
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.select(col(\"rec\"))
 ";
     assert_has_code(&check(src), "D0080");
@@ -103,7 +103,7 @@ class Event(Schema):
 class In(Schema):
     events: Array[Event]
 
-def f(d: DataFrame[In]) -> DataFrame:
+def f(d: SparkFrame[In]) -> SparkFrame:
     return d.select(col(\"events.id\"))
 ";
     assert_does_not_have_code(&check(src), "D0030");
@@ -115,7 +115,7 @@ fn dotted_access_into_an_atomic_column_is_still_caught() {
 class In(Schema):
     amount: int
 
-def f(d: DataFrame[In]) -> DataFrame:
+def f(d: SparkFrame[In]) -> SparkFrame:
     return d.select(col(\"amount.foo\"))
 ";
     // `amount` is an int — `.foo` on it is a genuine mistake.

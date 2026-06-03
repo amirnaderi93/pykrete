@@ -32,7 +32,7 @@ use ruff_python_ast::Expr;
 use ruff_source_file::{LineIndex, OneIndexed};
 use ruff_text_size::TextSize;
 
-use crate::dataframe::{DataFrameAnnotation, SlotLabel, TypedSlot, typed_slots};
+use crate::dataframe::{SlotLabel, TypedSlot, typed_slots};
 use crate::operations::{ColumnRefTrace, LocalBindingTrace};
 use crate::registry::Registry;
 use crate::schema::{
@@ -455,27 +455,29 @@ fn render_function_hover(
     let params: Vec<String> = slots
         .iter()
         .filter_map(|slot| match slot.label {
-            SlotLabel::Param(name) => Some(format!("{name}: {}", render_annotation(&slot.kind))),
+            SlotLabel::Param(name) => Some(format!(
+                "{name}: {}",
+                crate::dataframe::render_annotation(
+                    &slot.kind,
+                    slot.dialect,
+                    slot.is_deprecated_alias
+                ),
+            )),
             SlotLabel::Return => None,
         })
         .collect();
     let _ = write!(md, "{}", params.join(", "));
     let _ = write!(md, ")");
     if let Some(ret) = slots.iter().find(|s| matches!(s.label, SlotLabel::Return)) {
-        let _ = write!(md, " -> {}", render_annotation(&ret.kind));
+        let _ = write!(
+            md,
+            " -> {}",
+            crate::dataframe::render_annotation(&ret.kind, ret.dialect, ret.is_deprecated_alias)
+        );
     }
     let _ = writeln!(md);
     let _ = writeln!(md, "```");
     HoverInfo { markdown: md }
-}
-
-fn render_annotation(kind: &DataFrameAnnotation<'_>) -> String {
-    match kind {
-        DataFrameAnnotation::Typed(name) => format!("DataFrame[{name}]"),
-        DataFrameAnnotation::Derived(_) => "DataFrame[…]".to_string(),
-        DataFrameAnnotation::Untyped => "DataFrame".to_string(),
-        DataFrameAnnotation::NonBareName => "DataFrame[?]".to_string(),
-    }
 }
 
 // ---------------------------------------------------------------------------

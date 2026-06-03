@@ -3,7 +3,7 @@
 //! v0.1 covers three positions:
 //! 1. Cursor on a Schema class declaration name.
 //! 2. Cursor on a typed function declaration name.
-//! 3. Cursor on a Schema reference (the `X` in `DataFrame[X]` or a
+//! 3. Cursor on a Schema reference (the `X` in `SparkFrame[X]` or a
 //!    nested-struct field's annotation).
 //!
 //! Each integration test embeds a small `.pyk` source as a raw string,
@@ -133,14 +133,14 @@ fn hover_on_typed_function_name_returns_signature() {
 class Orders(Schema):
     place_code: int
 
-def prepare_orders(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def prepare_orders(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw
 "#;
     let (line, col) = cursor_at(src, "prepare_orders(");
     let info = hover(src, line, col).expect("expected hover info");
     assert!(info.markdown.contains("fn"));
     assert!(info.markdown.contains("prepare_orders"));
-    assert!(info.markdown.contains("DataFrame[Orders]"));
+    assert!(info.markdown.contains("SparkFrame[Orders]"));
     assert!(info.markdown.contains("->"));
 }
 
@@ -162,14 +162,14 @@ def regular_helper(x: int) -> int:
 
 #[test]
 fn hover_on_DataFrame_inner_schema_returns_that_schemas_info() {
-    // The `Orders` inside `DataFrame[Orders]` is a Schema reference.
+    // The `Orders` inside `SparkFrame[Orders]` is a Schema reference.
     // Hovering on it should show Orders' field list.
     let src = r#"
 class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw
 "#;
     // The first "Orders" in the file is the class definition; the second
@@ -254,7 +254,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.select(col("price"))
 "#;
     // Cursor inside the string literal `"price"`. cursor_at finds the
@@ -276,7 +276,7 @@ fn hover_on_col_literal_for_a_missing_column_says_so() {
 class Orders(Schema):
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.select(col("priec"))
 "#;
     let (line, col) = cursor_at(src, "\"priec\"");
@@ -294,7 +294,7 @@ class Orders(Schema):
     price: int
     place_code: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.filter(col("price") > 0).select(col("place_code"))
 "#;
     let (line, col) = cursor_at(src, "\"place_code\"");
@@ -317,7 +317,7 @@ class Orders(Schema):
     price: int
     place_code: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     x = raw.select(col("price"), col("place_code"))
     return x
 "#;
@@ -343,7 +343,7 @@ fn hover_on_use_of_local_binding_resolves_through_the_assignment() {
 class Orders(Schema):
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     x = raw.filter(col("price") > 0)
     return x
 "#;
@@ -361,18 +361,18 @@ def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
 
 #[test]
 fn hover_on_local_binding_with_typed_annotation_shows_the_declared_schema() {
-    // `x: DataFrame[Orders] = ...` — the annotation is authoritative;
+    // `x: SparkFrame[Orders] = ...` — the annotation is authoritative;
     // hover should describe Orders' fields regardless of what the RHS
     // evaluates to.
     let src = r#"
 class Orders(Schema):
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
-    x: DataFrame[Orders] = raw.select(col("price"))
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
+    x: SparkFrame[Orders] = raw.select(col("price"))
     return x
 "#;
-    let (line, col) = cursor_at(src, "x: DataFrame");
+    let (line, col) = cursor_at(src, "x: SparkFrame");
     let info = hover(src, line, col).expect("expected hover info");
     assert!(info.markdown.contains("Orders"));
     assert!(info.markdown.contains("price"));

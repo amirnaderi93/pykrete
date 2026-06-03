@@ -23,7 +23,7 @@ fn alias_select_aliased_col_does_not_false_flag() {
     let result = check(&format!(
         r#"{SALE_SCHEMA}
 
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     L = raw.alias("L")
     return L.select(col("L.region"), col("L.amount"))
 "#
@@ -36,7 +36,7 @@ fn alias_filter_aliased_col_does_not_false_flag() {
     let result = check(&format!(
         r#"{SALE_SCHEMA}
 
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     L = raw.alias("L")
     return L.filter(col("L.amount") > 0)
 "#
@@ -49,7 +49,7 @@ fn alias_withColumn_aliased_col_does_not_false_flag() {
     let result = check(&format!(
         r#"{SALE_SCHEMA}
 
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     L = raw.alias("L")
     return L.withColumn("doubled", col("L.amount") * 2)
 "#
@@ -62,7 +62,7 @@ fn alias_groupBy_aliased_col_does_not_false_flag() {
     let result = check(&format!(
         r#"{SALE_SCHEMA}
 
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     L = raw.alias("L")
     return L.groupBy(col("L.region")).count()
 "#
@@ -75,7 +75,7 @@ fn alias_select_typo_in_suffix_still_fires_d0030() {
     let result = check(&format!(
         r#"{SALE_SCHEMA}
 
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     L = raw.alias("L")
     return L.select(col("L.regoin"))
 "#
@@ -97,7 +97,7 @@ fn alias_select_unknown_alias_prefix_falls_through_to_nested_struct_resolver() {
     let result = check(&format!(
         r#"{SALE_SCHEMA}
 
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     L = raw.alias("L")
     return L.select(col("BAD.region"))
 "#
@@ -142,7 +142,7 @@ fn nested_struct_accessor_survives_alias_in_scope() {
     let result = check(&format!(
         r#"{CUSTOMER_NESTED_SCHEMA}
 
-def f(df: DataFrame[Customer], orders: DataFrame[Order]) -> DataFrame:
+def f(df: SparkFrame[Customer], orders: SparkFrame[Order]) -> SparkFrame:
     X = orders.alias("X")
     return df.select(col("addr.city"))
 "#
@@ -165,7 +165,7 @@ class Order(Schema):
 fn nested_struct_field_name_colliding_with_registered_alias_resolves_on_receiver() {
     // Disambiguation case: a nested-struct field is literally named
     // `X`, AND an unrelated alias `X = orders.alias("X")` is in scope.
-    // The receiver is `df: DataFrame[Outer]`, so `col("X.y")` MUST
+    // The receiver is `df: SparkFrame[Outer]`, so `col("X.y")` MUST
     // resolve as the nested-struct accessor on `df` (Outer.X.y), NOT
     // as the aliased `orders` schema (which has no `y` field and
     // would otherwise produce a misleading D0030 about `y`).
@@ -183,7 +183,7 @@ fn nested_struct_field_name_colliding_with_registered_alias_resolves_on_receiver
     let result = check(&format!(
         r#"{COLLISION_SCHEMA}
 
-def f(df: DataFrame[Outer], orders: DataFrame[Order]) -> DataFrame:
+def f(df: SparkFrame[Outer], orders: SparkFrame[Order]) -> SparkFrame:
     X = orders.alias("X")
     return df.select(col("X.y"))
 "#

@@ -19,7 +19,7 @@ fn select_expr_keeps_the_chain_alive_for_downstream_checks() {
     // ref below passed silently. Now the chain survives and it's caught.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     a = raw.selectExpr(\"city\", \"amount + 1 as bumped\")
     return a.select(col(\"nonexistent\"))
 "
@@ -32,7 +32,7 @@ fn select_expr_aliased_output_column_resolves() {
     // `amount + 1 as bumped` produces a column named `bumped`.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     a = raw.selectExpr(\"city\", \"amount + 1 as bumped\")
     return a.select(col(\"bumped\"))
 "
@@ -44,7 +44,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn select_expr_star_expands_to_the_receiver_columns() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     a = raw.selectExpr(\"*\")
     return a.select(col(\"amount\"))
 "

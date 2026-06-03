@@ -36,7 +36,7 @@ fn dotted_path_resolves_through_a_single_level_of_nesting() {
     let result = check(&format!(
         r#"{NESTED_SCHEMAS}
 
-def f(u: DataFrame[User]) -> DataFrame[User]:
+def f(u: SparkFrame[User]) -> SparkFrame[User]:
     return u.select(col("address.street"))
 "#
     ));
@@ -56,7 +56,7 @@ class Middle(Schema):
 class Outer(Schema):
     middle: Middle
 
-def f(o: DataFrame[Outer]) -> DataFrame:
+def f(o: SparkFrame[Outer]) -> SparkFrame:
     return o.select(col("middle.inner.leaf"))
 "#,
     );
@@ -70,7 +70,7 @@ fn top_level_field_access_still_works_when_field_is_a_nested_struct() {
     let result = check(&format!(
         r#"{NESTED_SCHEMAS}
 
-def f(u: DataFrame[User]) -> DataFrame:
+def f(u: SparkFrame[User]) -> SparkFrame:
     return u.select(col("address"))
 "#
     ));
@@ -84,7 +84,7 @@ fn dotted_path_works_inside_filter_and_withColumn_too() {
     let result = check(&format!(
         r#"{NESTED_SCHEMAS}
 
-def f(u: DataFrame[User]) -> DataFrame[User]:
+def f(u: SparkFrame[User]) -> SparkFrame[User]:
     return u.filter(col("address.city") == "Tehran").withColumn("c", col("address.street"))
 "#
     ));
@@ -103,7 +103,7 @@ fn d0030_on_failed_inner_segment_names_the_nested_schema() {
     let result = check(&format!(
         r#"{NESTED_SCHEMAS}
 
-def f(u: DataFrame[User]) -> DataFrame:
+def f(u: SparkFrame[User]) -> SparkFrame:
     return u.select(col("address.streetz"))
 "#
     ));
@@ -118,7 +118,7 @@ fn d0030_on_failed_outer_segment_names_the_outer_schema() {
     let result = check(&format!(
         r#"{NESTED_SCHEMAS}
 
-def f(u: DataFrame[User]) -> DataFrame:
+def f(u: SparkFrame[User]) -> SparkFrame:
     return u.select(col("nope.street"))
 "#
     ));
@@ -134,7 +134,7 @@ fn d0030_when_intermediate_segment_is_not_a_nested_schema() {
     let result = check(&format!(
         r#"{NESTED_SCHEMAS}
 
-def f(u: DataFrame[User]) -> DataFrame:
+def f(u: SparkFrame[User]) -> SparkFrame:
     return u.select(col("name.street"))
 "#
     ));
@@ -158,7 +158,7 @@ class Middle(Schema):
 class Outer(Schema):
     middle: Middle
 
-def f(o: DataFrame[Outer]) -> DataFrame:
+def f(o: SparkFrame[Outer]) -> SparkFrame:
     return o.select(col("middle.inner.wrong"))
 "#,
     );
@@ -189,7 +189,7 @@ class LR(Schema):
 fn chained_attribute_access_into_nested_struct_is_clean_when_valid() {
     let result = check(&format!(
         r#"{NESTED_LR}
-def f(df: DataFrame[LR]) -> DataFrame:
+def f(df: SparkFrame[LR]) -> SparkFrame:
     return df.select(df.r.a)
 "#
     ));
@@ -200,7 +200,7 @@ def f(df: DataFrame[LR]) -> DataFrame:
 fn chained_attribute_access_catches_typo_on_nested_field() {
     let result = check(&format!(
         r#"{NESTED_LR}
-def f(df: DataFrame[LR]) -> DataFrame:
+def f(df: SparkFrame[LR]) -> SparkFrame:
     return df.select(df.r.typo)
 "#
     ));
@@ -215,7 +215,7 @@ fn attribute_then_subscript_into_nested_struct_catches_typo() {
     // df.r["typo"] — attr then subscript with string literal.
     let result = check(&format!(
         r#"{NESTED_LR}
-def f(df: DataFrame[LR]) -> DataFrame:
+def f(df: SparkFrame[LR]) -> SparkFrame:
     return df.select(df.r["typo"])
 "#
     ));
@@ -229,7 +229,7 @@ fn subscript_then_attribute_into_nested_struct_catches_typo() {
     // df["r"].typo — subscript then attr.
     let result = check(&format!(
         r#"{NESTED_LR}
-def f(df: DataFrame[LR]) -> DataFrame:
+def f(df: SparkFrame[LR]) -> SparkFrame:
     return df.select(df["r"].typo)
 "#
     ));
@@ -243,7 +243,7 @@ fn double_subscript_into_nested_struct_catches_typo() {
     // df["r"]["typo"] — subscript chain.
     let result = check(&format!(
         r#"{NESTED_LR}
-def f(df: DataFrame[LR]) -> DataFrame:
+def f(df: SparkFrame[LR]) -> SparkFrame:
     return df.select(df["r"]["typo"])
 "#
     ));
@@ -259,7 +259,7 @@ fn chained_access_through_unknown_top_level_still_flags_outer_typo() {
     // didn't even resolve. (One diagnostic, not two.)
     let result = check(&format!(
         r#"{NESTED_LR}
-def f(df: DataFrame[LR]) -> DataFrame:
+def f(df: SparkFrame[LR]) -> SparkFrame:
     return df.select(df.noexist.field)
 "#
     ));
@@ -273,7 +273,7 @@ fn chained_access_inside_filter_is_caught() {
     // descend into BinOp/Compare branches.
     let result = check(&format!(
         r#"{NESTED_LR}
-def f(df: DataFrame[LR]) -> DataFrame:
+def f(df: SparkFrame[LR]) -> SparkFrame:
     return df.filter(df.r.typo == 0)
 "#
     ));
@@ -290,7 +290,7 @@ fn chained_access_through_non_nested_field_does_not_false_flag() {
     // resolve_path's degrade-rather-than-false-flag stance).
     let result = check(&format!(
         r#"{NESTED_LR}
-def f(df: DataFrame[LR]) -> DataFrame:
+def f(df: SparkFrame[LR]) -> SparkFrame:
     return df.select(df.l.something)
 "#
     ));
@@ -342,7 +342,7 @@ mod resolve_path_unit {
 fn backtick_wrapped_simple_name_resolves() {
     let result = check(&format!(
         r#"{NESTED_SCHEMAS}
-def f(u: DataFrame[User]) -> DataFrame:
+def f(u: SparkFrame[User]) -> SparkFrame:
     return u.select(col("`name`"))
 "#
     ));
@@ -353,7 +353,7 @@ def f(u: DataFrame[User]) -> DataFrame:
 fn backtick_wrapped_typo_still_fires_d0030() {
     let result = check(&format!(
         r#"{NESTED_SCHEMAS}
-def f(u: DataFrame[User]) -> DataFrame:
+def f(u: SparkFrame[User]) -> SparkFrame:
     return u.select(col("`naem`"))
 "#
     ));
@@ -365,7 +365,7 @@ def f(u: DataFrame[User]) -> DataFrame:
 fn backtick_wrapped_nested_struct_access_resolves() {
     let result = check(&format!(
         r#"{NESTED_SCHEMAS}
-def f(u: DataFrame[User]) -> DataFrame:
+def f(u: SparkFrame[User]) -> SparkFrame:
     return u.select(col("`address`.`street`"))
 "#
     ));
@@ -383,7 +383,7 @@ fn backtick_wrapping_literal_dot_treated_as_one_segment() {
     // test just guards the wiring through resolve_path / report_column_refs.
     let result = check(&format!(
         r#"{NESTED_SCHEMAS}
-def f(u: DataFrame[User]) -> DataFrame:
+def f(u: SparkFrame[User]) -> SparkFrame:
     return u.select(col("`a.b`"))
 "#
     ));

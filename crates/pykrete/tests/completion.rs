@@ -22,7 +22,7 @@ fn labels(items: &[pykrete::CompletionItem]) -> Vec<&str> {
 }
 
 // ===========================================================================
-// Surface 1: DataFrame[…] → schema names
+// Surface 1: SparkFrame[…] → schema names
 // ===========================================================================
 
 #[test]
@@ -34,10 +34,10 @@ class Orders(Schema):
 class Returns(Schema):
     y: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw
 "#;
-    // Cursor on the `Orders` inside `DataFrame[Orders]` on the def line —
+    // Cursor on the `Orders` inside `SparkFrame[Orders]` on the def line —
     // we expect completions for the schema slot, which is every declared
     // Schema in this module.
     let first = src.find("Orders").unwrap();
@@ -67,7 +67,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.select(col("place_code"))
 "#;
     let (line, col) = cursor_at(src, "\"place_code\"");
@@ -89,7 +89,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.select(col("place_code"))
 "#;
     let (line, col) = cursor_at(src, "\"place_code\"");
@@ -121,7 +121,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> int:
+def f(raw: SparkFrame[Orders]) -> int:
     return raw.place_code
 "#;
     // Cursor on `place_code` after `raw.` — the attr identifier.
@@ -144,7 +144,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> int:
+def f(raw: SparkFrame[Orders]) -> int:
     x = raw.filter(col("price") > 0)
     return x.place_code
 "#;
@@ -160,15 +160,15 @@ def f(raw: DataFrame[Orders]) -> int:
 
 #[test]
 fn completions_after_annotated_local_binding_use_the_annotation_schema() {
-    // `x: DataFrame[Orders] = ...` — the annotation is authoritative,
+    // `x: SparkFrame[Orders] = ...` — the annotation is authoritative,
     // so completion on `x.` lists Orders' fields with column types.
     let src = r#"
 class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> int:
-    x: DataFrame[Orders] = raw.select(col("price"))
+def f(raw: SparkFrame[Orders]) -> int:
+    x: SparkFrame[Orders] = raw.select(col("price"))
     return x.place_code
 "#;
     let idx = src.find("x.place_code").unwrap() + "x.".len();
@@ -192,7 +192,7 @@ class Orders(Schema):
 ";
 
 fn bare_arg_labels(body: &str, needle: &str) -> Vec<String> {
-    let src = format!("{ORDERS}\ndef f(raw: DataFrame[Orders]) -> DataFrame:\n    {body}\n");
+    let src = format!("{ORDERS}\ndef f(raw: SparkFrame[Orders]) -> SparkFrame:\n    {body}\n");
     let (line, col) = cursor_at(&src, needle);
     let items = completions(&src, line, col + 1);
     let mut names: Vec<String> = items.into_iter().map(|i| i.label).collect();
@@ -239,7 +239,7 @@ fn completions_in_with_column_renamed_bare_string_arg() {
 fn completions_in_join_on_keyword_arg() {
     let src = format!(
         "{ORDERS}
-def f(a: DataFrame[Orders], b: DataFrame[Orders]) -> DataFrame:
+def f(a: SparkFrame[Orders], b: SparkFrame[Orders]) -> SparkFrame:
     return a.join(b, on=\"place_code\")
 "
     );
@@ -260,7 +260,7 @@ fn completions_after_chain_result_dot_resolve_through_the_call() {
     // chain result offers Orders' columns.
     let src = format!(
         "{ORDERS}
-def f(raw: DataFrame[Orders]) -> int:
+def f(raw: SparkFrame[Orders]) -> int:
     return raw.filter(col(\"price\") > 0).place_code
 "
     );
@@ -280,7 +280,7 @@ fn completions_after_chain_result_dot_use_the_derived_schema() {
     // only `price` is offered.
     let src = format!(
         "{ORDERS}
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.select(\"price\").xyz
 "
     );

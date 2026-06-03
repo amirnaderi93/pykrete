@@ -20,7 +20,7 @@ class Out(Schema):
     name: string
     score: string
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn(\"score\", to_score(col(\"name\")))
 ";
     // `to_score` returns int; the `score` column is declared `string`.
@@ -41,7 +41,7 @@ class Out(Schema):
     name: string
     score: int
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn(\"score\", to_score(col(\"name\")))
 ";
     // `to_score` returns int, matching the declared `score` column.
@@ -62,7 +62,7 @@ class Out(Schema):
     name: string
     tag: int
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn(\"tag\", label(col(\"name\")))
 ";
     // A bare `@udf` defaults to a string return; `tag` is declared int.
@@ -84,7 +84,7 @@ class Out(Schema):
     name: string
     score: string
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn(\"score\", score_udf(col(\"name\")))
 ";
     assert_has_code(&check(src), "D0080");
@@ -100,7 +100,7 @@ def to_score(x):
 class In(Schema):
     name: string
 
-def f(d: DataFrame[In]) -> DataFrame:
+def f(d: SparkFrame[In]) -> SparkFrame:
     return d.filter(to_score(col(\"name\")) == col(\"name\"))
 ";
     // int UDF result compared to the string column `name`.

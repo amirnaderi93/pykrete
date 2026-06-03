@@ -974,6 +974,10 @@ fn render_schema<'a>(
     }
 }
 
+// `spark_frame_rewrite` + `format_d0090_message` now live in
+// `dataframe.rs` next to the recognition logic — round-2 M2.
+pub(crate) use crate::dataframe::format_d0090_message;
+
 fn render_function(
     func: &DiscoveredFunction<'_>,
     slots: &[TypedSlot<'_>],
@@ -1020,6 +1024,27 @@ fn render_function(
             SlotLabel::Param(name) => format!("          {name}: "),
             SlotLabel::Return => "          -> ".to_string(),
         };
+
+        // v1.3 pandas spec §6: `DataFrame[X]` is a deprecated alias for
+        // `SparkFrame[X]`. Fire D0090 once per slot; the message echoes
+        // the source text so users see what they wrote (Q7-resolved).
+        // Suggestion fills the SparkFrame[X] canonical form for quick-fix.
+        // Wording is owned by `format_d0090_message` so both this site
+        // and the ann-assign emitter in `operations::driver` stay locked.
+        if slot.is_deprecated_alias {
+            let (message, suggestion) = format_d0090_message(raw_text);
+            diagnostics.push(
+                Diagnostic::at_range(
+                    Severity::Warning,
+                    "D0090",
+                    message,
+                    ann_range,
+                    source,
+                    line_index,
+                )
+                .with_suggestion(Some(suggestion)),
+            );
+        }
 
         match slot.kind {
             DataFrameAnnotation::Typed(name) => {
