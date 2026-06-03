@@ -89,7 +89,7 @@ That's the whole investment. The rest of your repo stays plain Python — pykret
 
 ## Proven on real code
 
-Every release is regression-tested against **130 schema-tracking probes across 47 fixtures from 10 real PySpark codebases** — Apache Spark, Delta Lake, Apache Iceberg, Apache Hudi, MLflow, Feast, Kedro, quinn, dbt-spark, and python-deequ — on every change, in CI. The probes don't just check that pykrete stays quiet on real code; they assert it actually tracks columns through real transforms, that the diagnostics we promise actually fire on deliberately-broken fixtures, and — new in v1.2 — that pykrete tracks types through transformations on a scoped 3-donor subset.
+Every release is regression-tested against **149 schema-tracking probes across 59 fixtures from 10 real PySpark and pandas codebases** — Apache Spark, Delta Lake, Apache Iceberg, Apache Hudi, MLflow, Feast, Kedro, quinn, dbt-spark, and python-deequ — on every change, in CI. The probes don't just check that pykrete stays quiet on real code; they assert it actually tracks columns through real transforms, that the diagnostics we promise actually fire on deliberately-broken fixtures, and — new in v1.3 — that pykrete recognizes pandas column references and dispatches check sites correctly for both `SparkFrame[X]` and `PandasFrame[X]` annotations.
 
 [See how that works →](/about/pykrete-tests/)
 
@@ -97,4 +97,4 @@ Every release is regression-tested against **130 schema-tracking probes across 4
 
 [Installing pykrete](/getting-started/install/) takes a minute. The [quickstart](/getting-started/quickstart/) gets a real function under checking in five.
 
-PySpark is supported today; pandas and polars are next — see the [roadmap](/about/roadmap/).
+PySpark is supported today; pandas check-site coverage shipped in v1.3 with positive type-tracking probes following in v1.4. Polars is next — see the [roadmap](/about/roadmap/).
