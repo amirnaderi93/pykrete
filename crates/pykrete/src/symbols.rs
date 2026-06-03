@@ -21,7 +21,7 @@ use ruff_python_ast::Expr;
 use ruff_source_file::{LineIndex, OneIndexed};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
-use crate::dataframe::{DataFrameAnnotation, SlotLabel, TypedSlot, typed_slots};
+use crate::dataframe::{SlotLabel, TypedSlot, typed_slots};
 use crate::operations::ColumnRefTrace;
 use crate::registry::Registry;
 use crate::schema::{Schema, SchemaView, discover_schemas};
@@ -200,7 +200,7 @@ fn render_function_signature(name: &str, slots: &[TypedSlot<'_>]) -> String {
         .filter_map(|s| match s.label {
             SlotLabel::Param(p) => Some(format!(
                 "{p}: {}",
-                render_annotation(&s.kind, s.dialect, s.is_deprecated_alias),
+                crate::dataframe::render_annotation(&s.kind, s.dialect, s.is_deprecated_alias),
             )),
             SlotLabel::Return => None,
         })
@@ -211,33 +211,15 @@ fn render_function_signature(name: &str, slots: &[TypedSlot<'_>]) -> String {
         .map(|s| {
             format!(
                 " -> {}",
-                render_annotation(&s.kind, s.dialect, s.is_deprecated_alias)
+                crate::dataframe::render_annotation(&s.kind, s.dialect, s.is_deprecated_alias)
             )
         })
         .unwrap_or_default();
     format!("{name}({}){ret}", params.join(", "))
 }
 
-fn render_annotation(
-    kind: &DataFrameAnnotation<'_>,
-    dialect: crate::dataframe::Dialect,
-    is_deprecated_alias: bool,
-) -> String {
-    let frame = if is_deprecated_alias {
-        "DataFrame"
-    } else {
-        match dialect {
-            crate::dataframe::Dialect::Spark => "SparkFrame",
-            crate::dataframe::Dialect::Pandas => "PandasFrame",
-        }
-    };
-    match kind {
-        DataFrameAnnotation::Typed(name) => format!("{frame}[{name}]"),
-        DataFrameAnnotation::Derived(_) => format!("{frame}[…]"),
-        DataFrameAnnotation::Untyped => frame.to_string(),
-        DataFrameAnnotation::NonBareName => format!("{frame}[?]"),
-    }
-}
+// `render_annotation` lives in `dataframe::render_annotation` — shared
+// with `hover` so the two surfaces cannot drift (round-2 M1).
 
 // ---------------------------------------------------------------------------
 // definition

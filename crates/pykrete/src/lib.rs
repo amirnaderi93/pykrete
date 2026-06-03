@@ -974,17 +974,9 @@ fn render_schema<'a>(
     }
 }
 
-/// Rewrite the `DataFrame` prefix of an annotation source text to
-/// `SparkFrame`, leaving everything else (brackets, schema name,
-/// derived-op nesting) byte-identical. Used by D0090's suggestion and
-/// rendered message so users see the exact fix.
-pub(crate) fn spark_frame_rewrite(raw: &str) -> String {
-    if let Some(rest) = raw.strip_prefix("DataFrame") {
-        format!("SparkFrame{rest}")
-    } else {
-        raw.to_string()
-    }
-}
+// `spark_frame_rewrite` + `format_d0090_message` now live in
+// `dataframe.rs` next to the recognition logic — round-2 M2.
+pub(crate) use crate::dataframe::format_d0090_message;
 
 fn render_function(
     func: &DiscoveredFunction<'_>,
@@ -1037,23 +1029,20 @@ fn render_function(
         // `SparkFrame[X]`. Fire D0090 once per slot; the message echoes
         // the source text so users see what they wrote (Q7-resolved).
         // Suggestion fills the SparkFrame[X] canonical form for quick-fix.
+        // Wording is owned by `format_d0090_message` so both this site
+        // and the ann-assign emitter in `operations::driver` stay locked.
         if slot.is_deprecated_alias {
+            let (message, suggestion) = format_d0090_message(raw_text);
             diagnostics.push(
                 Diagnostic::at_range(
                     Severity::Warning,
                     "D0090",
-                    format!(
-                        "'{raw_text}' is a deprecated alias for \
-                         '{}' and will be removed in pykrete v2.0. \
-                         Rewrite as '{}'.",
-                        spark_frame_rewrite(raw_text),
-                        spark_frame_rewrite(raw_text),
-                    ),
+                    message,
                     ann_range,
                     source,
                     line_index,
                 )
-                .with_suggestion(Some(spark_frame_rewrite(raw_text))),
+                .with_suggestion(Some(suggestion)),
             );
         }
 

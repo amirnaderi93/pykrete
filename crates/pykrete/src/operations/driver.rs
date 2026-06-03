@@ -421,29 +421,28 @@ fn handle_ann_assign<'a>(
     // v1.3 pandas spec §6: fire D0090 once for the deprecated
     // `DataFrame[X]` alias on local annotated assignments, mirroring
     // the signature-renderer's emission. Echo source text per Q7.
-    if let Some(rec) = dataframe::recognize_with_dialect(&ann.annotation)
+    // `recognize_with_dialect` is called once and reused for the schema
+    // match below; wording is owned by `format_d0090_message`.
+    let recognized = dataframe::recognize_with_dialect(&ann.annotation);
+    if let Some(rec) = recognized
         && rec.is_deprecated_alias
     {
         let raw_text = &source[ann.annotation.range()];
-        let rewrite = crate::spark_frame_rewrite(raw_text);
+        let (message, suggestion) = crate::format_d0090_message(raw_text);
         diagnostics.push(
             Diagnostic::at_range(
                 Severity::Warning,
                 "D0090",
-                format!(
-                    "'{raw_text}' is a deprecated alias for '{rewrite}' \
-                     and will be removed in pykrete v2.0. \
-                     Rewrite as '{rewrite}'.",
-                ),
+                message,
                 ann.annotation.range(),
                 source,
                 line_index,
             )
-            .with_suggestion(Some(rewrite)),
+            .with_suggestion(Some(suggestion)),
         );
     }
 
-    match dataframe::recognize(&ann.annotation) {
+    match recognized.map(|r| r.kind) {
         Some(DataFrameAnnotation::Typed(schema_name)) => {
             if let Some(schema) = ctx.find_schema(schema_name) {
                 let view = SchemaView::Declared(schema);
@@ -537,16 +536,28 @@ fn class_instance_from_call<'a>(expr: &'a Expr, ctx: &BodyContext<'a>) -> Option
 /// freely and pykrete infers imprecisely (`lit(5)` could be either int
 /// or long), so a numeric-to-numeric difference is not flagged.
 fn types_compatible(a: &ColumnType, b: &ColumnType) -> bool {
+    // Exhaustive (no `_` arm) so a future `ColumnType` variant is a
+    // compile error here — mirrors `strict_operators::type_family`.
     fn is_numeric(t: &ColumnType) -> bool {
-        matches!(
-            t,
+        match t {
             ColumnType::Int
-                | ColumnType::Long
-                | ColumnType::Double
-                | ColumnType::Byte
-                | ColumnType::Short
-                | ColumnType::Decimal { .. }
-        )
+            | ColumnType::Long
+            | ColumnType::Double
+            | ColumnType::Float
+            | ColumnType::Byte
+            | ColumnType::Short
+            | ColumnType::Decimal { .. } => true,
+            ColumnType::String
+            | ColumnType::Enum(_)
+            | ColumnType::Binary
+            | ColumnType::Bool
+            | ColumnType::Date
+            | ColumnType::Timestamp
+            | ColumnType::Array(_)
+            | ColumnType::Map(..)
+            | ColumnType::Struct(_) => false,
+            ColumnType::Nullable(inner) => is_numeric(inner),
+        }
     }
     // An unknown element/key/value type is permissive — like an unknown
     // column type, it is never itself a mismatch.

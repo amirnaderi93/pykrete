@@ -327,23 +327,60 @@ pub(super) fn function_result_type(
         }
         "ceil" | "ceiling" | "floor" => Some(Long),
         // `sum` widens any integral input (byte/short/int/long) to long;
-        // a double stays double; a decimal stays decimal (precision-growth
-        // intentionally collapsed — see `aggregate_output_type`).
+        // double stays double; float widens to double (matching
+        // Spark's float-collapse convention — see `from_type_constructor`);
+        // a decimal stays decimal (precision-growth intentionally
+        // collapsed — see `aggregate_output_type`).
+        //
+        // Exhaustive: every `ColumnType` variant is listed so a future
+        // variant addition is a compile error here rather than a silent
+        // `_ => None` regression (the §9 exhaustiveness gate).
         "sum" | "sumDistinct" | "sum_distinct" => match first_arg.as_ref().map(ColumnType::base) {
             Some(ColumnType::Byte | ColumnType::Short | Int | Long) => Some(Long),
             Some(Double) => Some(Double),
+            Some(ColumnType::Float) => Some(Double),
             Some(ColumnType::Decimal { .. }) => Some(ColumnType::DEFAULT_DECIMAL),
-            _ => None,
+            Some(
+                ColumnType::String
+                | ColumnType::Enum(_)
+                | ColumnType::Binary
+                | ColumnType::Bool
+                | ColumnType::Date
+                | ColumnType::Timestamp
+                | ColumnType::Array(_)
+                | ColumnType::Map(..)
+                | ColumnType::Struct(_),
+            ) => None,
+            // `Nullable` is stripped by `.base()` above, so this branch
+            // is unreachable in practice — listed for compile-time
+            // exhaustiveness only.
+            Some(ColumnType::Nullable(_)) => None,
+            None => None,
         },
         // `mean` / `avg` mirrors the groupBy shortcut path: a decimal
         // stays decimal (precision-growth collapsed); any other numeric
-        // input promotes to double. Non-numeric input (string, bool,
-        // date, binary) yields `None` on both surfaces — Spark rejects
-        // such an average at runtime, so neither path pins a type.
+        // input promotes to double (including float). Non-numeric input
+        // (string, bool, date, binary, …) yields `None` on both surfaces
+        // — Spark rejects such an average at runtime, so neither path
+        // pins a type. Exhaustive arms for §9 gate.
         "avg" | "mean" => match first_arg.as_ref().map(ColumnType::base) {
             Some(ColumnType::Decimal { .. }) => Some(ColumnType::DEFAULT_DECIMAL),
-            Some(ColumnType::Byte | ColumnType::Short | Int | Long | Double) => Some(Double),
-            _ => None,
+            Some(
+                ColumnType::Byte | ColumnType::Short | Int | Long | Double | ColumnType::Float,
+            ) => Some(Double),
+            Some(
+                ColumnType::String
+                | ColumnType::Enum(_)
+                | ColumnType::Binary
+                | ColumnType::Bool
+                | ColumnType::Date
+                | ColumnType::Timestamp
+                | ColumnType::Array(_)
+                | ColumnType::Map(..)
+                | ColumnType::Struct(_),
+            ) => None,
+            Some(ColumnType::Nullable(_)) => None,
+            None => None,
         },
         // Collection constructors — wrap the input as the element type.
         "collect_list" | "collect_set" | "array_agg" | "array" | "array_repeat" | "sequence" => {
@@ -594,11 +631,55 @@ fn widen_pair(a: &ColumnType, b: &ColumnType) -> Option<ColumnType> {
     ) {
         return Some(ColumnType::String);
     }
-    use ColumnType::{Double, Int, Long};
-    match (a, b) {
-        (Double, Int | Long) | (Int | Long, Double) => Some(Double),
-        (Long, Int) | (Int, Long) => Some(Long),
-        _ => None,
+    // Per-variant widening classifier. Exhaustive (no `_` arm) so a
+    // future `ColumnType` variant is a compile error here — the §9 gate.
+    // Returns the ladder slot for the widening cases pykrete models
+    // today; non-modeled variants are explicit `None`.
+    //
+    // Scope is intentionally conservative: only the `(Int|Long, Double)`
+    // ↔ Double and `(Int, Long)` ↔ Long pairs widen, plus Float against
+    // those three (Spark collapses mixed-integral-with-Float to Double,
+    // matching the `sum`/`avg` discipline). Byte/Short/Decimal stay
+    // outside the ladder until a separate widening design lands.
+    enum WideSlot {
+        Int,
+        Long,
+        FloatOrDouble,
+        Outside,
+    }
+    fn widen_slot(t: &ColumnType) -> WideSlot {
+        match t {
+            ColumnType::Int => WideSlot::Int,
+            ColumnType::Long => WideSlot::Long,
+            ColumnType::Float | ColumnType::Double => WideSlot::FloatOrDouble,
+            ColumnType::Byte
+            | ColumnType::Short
+            | ColumnType::Decimal { .. }
+            | ColumnType::String
+            | ColumnType::Enum(_)
+            | ColumnType::Binary
+            | ColumnType::Bool
+            | ColumnType::Date
+            | ColumnType::Timestamp
+            | ColumnType::Array(_)
+            | ColumnType::Map(..)
+            | ColumnType::Struct(_) => WideSlot::Outside,
+            ColumnType::Nullable(inner) => widen_slot(inner),
+        }
+    }
+    match (widen_slot(a), widen_slot(b)) {
+        (WideSlot::FloatOrDouble, WideSlot::Int | WideSlot::Long)
+        | (WideSlot::Int | WideSlot::Long, WideSlot::FloatOrDouble) => Some(ColumnType::Double),
+        (WideSlot::Long, WideSlot::Int) | (WideSlot::Int, WideSlot::Long) => Some(ColumnType::Long),
+        (WideSlot::Int, WideSlot::Int)
+        | (WideSlot::Long, WideSlot::Long)
+        | (WideSlot::FloatOrDouble, WideSlot::FloatOrDouble) => {
+            // Same-slot pairs are handled by the `a == b` short-circuit
+            // above (Int+Int, Long+Long, Double+Double). A Float+Double
+            // pair lands here — collapse to Double rather than guess.
+            Some(ColumnType::Double)
+        }
+        (WideSlot::Outside, _) | (_, WideSlot::Outside) => None,
     }
 }
 

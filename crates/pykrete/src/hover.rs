@@ -32,7 +32,7 @@ use ruff_python_ast::Expr;
 use ruff_source_file::{LineIndex, OneIndexed};
 use ruff_text_size::TextSize;
 
-use crate::dataframe::{DataFrameAnnotation, SlotLabel, TypedSlot, typed_slots};
+use crate::dataframe::{SlotLabel, TypedSlot, typed_slots};
 use crate::operations::{ColumnRefTrace, LocalBindingTrace};
 use crate::registry::Registry;
 use crate::schema::{
@@ -457,7 +457,11 @@ fn render_function_hover(
         .filter_map(|slot| match slot.label {
             SlotLabel::Param(name) => Some(format!(
                 "{name}: {}",
-                render_annotation(&slot.kind, slot.dialect, slot.is_deprecated_alias),
+                crate::dataframe::render_annotation(
+                    &slot.kind,
+                    slot.dialect,
+                    slot.is_deprecated_alias
+                ),
             )),
             SlotLabel::Return => None,
         })
@@ -468,7 +472,7 @@ fn render_function_hover(
         let _ = write!(
             md,
             " -> {}",
-            render_annotation(&ret.kind, ret.dialect, ret.is_deprecated_alias)
+            crate::dataframe::render_annotation(&ret.kind, ret.dialect, ret.is_deprecated_alias)
         );
     }
     let _ = writeln!(md);
@@ -476,30 +480,8 @@ fn render_function_hover(
     HoverInfo { markdown: md }
 }
 
-/// Render the slot's annotation for hover. Per spec §6 (echo-source-text
-/// policy / Q7), the deprecated `DataFrame[X]` alias hovers as the user
-/// wrote it rather than the canonical form; only `SparkFrame` and
-/// `PandasFrame` get their canonical surface.
-fn render_annotation(
-    kind: &DataFrameAnnotation<'_>,
-    dialect: crate::dataframe::Dialect,
-    is_deprecated_alias: bool,
-) -> String {
-    let frame = if is_deprecated_alias {
-        "DataFrame"
-    } else {
-        match dialect {
-            crate::dataframe::Dialect::Spark => "SparkFrame",
-            crate::dataframe::Dialect::Pandas => "PandasFrame",
-        }
-    };
-    match kind {
-        DataFrameAnnotation::Typed(name) => format!("{frame}[{name}]"),
-        DataFrameAnnotation::Derived(_) => format!("{frame}[…]"),
-        DataFrameAnnotation::Untyped => frame.to_string(),
-        DataFrameAnnotation::NonBareName => format!("{frame}[?]"),
-    }
-}
+// `render_annotation` moved to `dataframe::render_annotation` so the
+// hover + symbols surfaces share one definition (round-2 M1).
 
 // ---------------------------------------------------------------------------
 // Position / AST helpers

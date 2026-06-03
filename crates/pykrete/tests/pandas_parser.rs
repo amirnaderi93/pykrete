@@ -242,7 +242,9 @@ def f(df: PandasFrame[Merge[A, B]]) -> PandasFrame[Merge[A, B]]:
 fn dataframe_alias_with_pick_still_fires_d0090() {
     // The frame is the deprecated alias; the inner Pick is dialect-
     // agnostic. D0090 fires once per slot (2 here) on the FRAME, not
-    // on the Pick.
+    // on the Pick. The message echoes the full source text (Q7) and
+    // the SparkFrame rewrite preserves the nested-bracket Pick payload
+    // byte-for-byte — assert both literal forms appear in the message.
     let result = check(
         r#"
 class Order(Schema):
@@ -254,7 +256,8 @@ def f(df: DataFrame[Pick[Order, "id"]]) -> DataFrame[Pick[Order, "id"]]:
 "#,
     );
     assert_count(&result, "D0090", 2);
-    assert_message_contains(&result, "D0090", "DataFrame[Pick[Order");
+    assert_message_contains(&result, "D0090", "'DataFrame[Pick[Order, \"id\"]]'");
+    assert_message_contains(&result, "D0090", "'SparkFrame[Pick[Order, \"id\"]]'");
 }
 
 #[test]
@@ -293,6 +296,82 @@ class Orders(Schema):
     id: int
 
 def f(df: SparkFrame[Orders] | PandasFrame[Orders]) -> SparkFrame[Orders] | PandasFrame[Orders]:
+    return df
+"#,
+    );
+    assert_does_not_have_code(&result, "D0090");
+}
+
+// ===========================================================================
+// I2 (round 2): Optional unwrap + Union skip pinning
+// ===========================================================================
+
+#[test]
+fn optional_dataframe_alias_fires_d0090() {
+    // `Optional[DataFrame[X]]` — the Optional wrapper does not suppress
+    // the alias warning. The parser peels one Optional level and
+    // re-recognizes; the alias flag survives. Two slots (param + return)
+    // → two D0090 emissions.
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+
+def f(df: Optional[DataFrame[Orders]]) -> Optional[DataFrame[Orders]]:
+    return df
+"#,
+    );
+    assert_count(&result, "D0090", 2);
+}
+
+#[test]
+fn union_dataframe_alias_does_not_fire_d0090() {
+    // Union annotations are spec §3 quiet-ignored — even one arm being
+    // the deprecated `DataFrame` alias does not fire D0090. Pinning
+    // test: the alias check does not drill into BinOp arms.
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+
+def f(df: DataFrame[Orders] | PandasFrame[Orders]) -> DataFrame[Orders] | PandasFrame[Orders]:
+    return df
+"#,
+    );
+    assert_does_not_have_code(&result, "D0090");
+}
+
+#[test]
+fn pandas_frame_slot_still_fires_d0030_via_spark_dispatch_today() {
+    // M7 pinning (round 2): PR-A only stamps the dialect tag; the
+    // check-site dispatch is still uniformly Spark-style. A PandasFrame
+    // slot therefore still surfaces D0030 on an unknown column under
+    // today's `.select(col(...))`-form, because the body walker doesn't
+    // gate by dialect yet. Locks the PR-A-vs-PR-B contract: the dialect
+    // is *carried* but not *enforced*. PR-B will replace this expectation
+    // with a pandas-specific check.
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+
+def f(df: PandasFrame[Orders]) -> PandasFrame[Orders]:
+    return df.select(col("ghost"))
+"#,
+    );
+    assert_has_code(&result, "D0030");
+}
+
+#[test]
+fn optional_spark_frame_does_not_fire_d0090() {
+    // Falsifiable companion: `Optional[SparkFrame[X]]` peels the same
+    // way but the inner name is canonical — no D0090.
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+
+def f(df: Optional[SparkFrame[Orders]]) -> Optional[SparkFrame[Orders]]:
     return df
 "#,
     );

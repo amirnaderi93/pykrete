@@ -1886,17 +1886,36 @@ pub(super) fn aggregate_output_type(
         ColumnType::Nullable(inner) => inner.as_ref(),
         other => other,
     });
+    // Exhaustive per-variant arms (no `_`) so a future `ColumnType`
+    // variant addition is a compile error here, mirroring the §9 gate
+    // discipline. The cross-path agreement test in `mod.rs` locks this
+    // function to `column_exprs::aggregate_call_type` — both surfaces
+    // must update together.
     match method {
         "sum" => match unwrapped? {
             ColumnType::Byte | ColumnType::Short | ColumnType::Int | ColumnType::Long => {
                 Some(ColumnType::Long)
             }
             ColumnType::Double => Some(ColumnType::Double),
+            // Float widens to Double — Spark's float-collapse convention
+            // (see `from_type_constructor`); matches `column_exprs::sum`.
+            ColumnType::Float => Some(ColumnType::Double),
             // Spark widens to `decimal(p + 10, s)` (capped at 38); pykrete
             // collapses that to Spark's default `decimal(10, 0)` for v1.0
             // — the audit flagged precision-growth modeling as v1.1 polish.
             ColumnType::Decimal { .. } => Some(ColumnType::DEFAULT_DECIMAL),
-            _ => None,
+            ColumnType::String
+            | ColumnType::Enum(_)
+            | ColumnType::Binary
+            | ColumnType::Bool
+            | ColumnType::Date
+            | ColumnType::Timestamp
+            | ColumnType::Array(_)
+            | ColumnType::Map(..)
+            | ColumnType::Struct(_) => None,
+            // `Nullable` was already stripped by `unwrapped`; this arm
+            // is unreachable in practice — listed for exhaustiveness.
+            ColumnType::Nullable(_) => None,
         },
         "mean" | "avg" => match unwrapped? {
             ColumnType::Byte
@@ -1904,10 +1923,22 @@ pub(super) fn aggregate_output_type(
             | ColumnType::Int
             | ColumnType::Long
             | ColumnType::Double => Some(ColumnType::Double),
+            // Float promotes to Double — matches the `sum` discipline
+            // above and `column_exprs::avg`.
+            ColumnType::Float => Some(ColumnType::Double),
             // Same simplification as `sum`: Spark widens to
             // `decimal(p + 4, s + 4)` (cap 38); pykrete collapses.
             ColumnType::Decimal { .. } => Some(ColumnType::DEFAULT_DECIMAL),
-            _ => None,
+            ColumnType::String
+            | ColumnType::Enum(_)
+            | ColumnType::Binary
+            | ColumnType::Bool
+            | ColumnType::Date
+            | ColumnType::Timestamp
+            | ColumnType::Array(_)
+            | ColumnType::Map(..)
+            | ColumnType::Struct(_) => None,
+            ColumnType::Nullable(_) => None,
         },
         "max" | "min" => unwrapped.cloned(),
         _ => None,

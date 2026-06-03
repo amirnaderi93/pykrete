@@ -22,8 +22,7 @@ use crate::walk::DiscoveredFunction;
 /// dispatch table in v1.3. Spark-style operations (`df.select`,
 /// `df.withColumn`, …) are checked against `Dialect::Spark` slots;
 /// pandas-style operations (`df[["a", "b"]]`, `df["new"] = expr`, …)
-/// are checked against `Dialect::Pandas` slots. The PR-A landing only
-/// stamps the tag; PR-B wires the per-dialect dispatch.
+/// are checked against `Dialect::Pandas` slots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dialect {
     Spark,
@@ -70,19 +69,31 @@ pub fn recognize<'ast>(expr: &'ast Expr) -> Option<DataFrameAnnotation<'ast>> {
 /// Recognize a DataFrame-shaped annotation along with its dialect tag.
 /// `SparkFrame[X]` → `Dialect::Spark`; `PandasFrame[X]` → `Dialect::Pandas`;
 /// `DataFrame[X]` → `Dialect::Spark` with `is_deprecated_alias = true`.
+///
+/// A single `Optional[...]` wrapper is peeled before recognition — an
+/// `Optional[SparkFrame[X]]` slot still binds as `SparkFrame[X]` (matching
+/// the `Nullable` discipline in `schema::resolve_annotation_type`). A
+/// `DataFrame[X] | PandasFrame[X]` union shape is *not* peeled — it stays
+/// `Expr::BinOp` and falls through to `None`, the spec §3 quiet-ignore.
 pub fn recognize_with_dialect<'ast>(expr: &'ast Expr) -> Option<RecognizedFrame<'ast>> {
     match expr {
         Expr::Name(name) => {
-            let (dialect, alias) = base_name_to_dialect(name.id.as_str())?;
+            let r = base_name_to_dialect(name.id.as_str())?;
             Some(RecognizedFrame {
                 kind: DataFrameAnnotation::Untyped,
-                dialect,
-                is_deprecated_alias: alias,
+                dialect: r.dialect,
+                is_deprecated_alias: r.is_deprecated_alias,
             })
         }
         Expr::Subscript(sub) => {
             let base = sub.value.as_name_expr()?;
-            let (dialect, alias) = base_name_to_dialect(base.id.as_str())?;
+            // `Optional[<frame>]` — peel one level and re-recognize. The
+            // alias flag and dialect tag pass through unchanged so the
+            // wrapped `Optional[DataFrame[X]]` still fires D0090.
+            if base.id.as_str() == "Optional" {
+                return recognize_with_dialect(&sub.slice);
+            }
+            let r = base_name_to_dialect(base.id.as_str())?;
             let kind = match sub.slice.as_ref() {
                 Expr::Name(inner) => DataFrameAnnotation::Typed(inner.id.as_str()),
                 // `DataFrame[Pick[…]]` / `Omit[…]` / `Merge[…]` — a
@@ -107,12 +118,22 @@ pub fn recognize_with_dialect<'ast>(expr: &'ast Expr) -> Option<RecognizedFrame<
             };
             Some(RecognizedFrame {
                 kind,
-                dialect,
-                is_deprecated_alias: alias,
+                dialect: r.dialect,
+                is_deprecated_alias: r.is_deprecated_alias,
             })
         }
         _ => None,
     }
+}
+
+/// What [`base_name_to_dialect`] returns when a base name is one of
+/// the canonical frame identifiers. The named `is_deprecated_alias`
+/// field self-documents the boolean (the previous unnamed `(Dialect,
+/// bool)` tuple was ambiguous at call sites).
+#[derive(Debug, Clone, Copy)]
+struct BaseNameRecognition {
+    dialect: Dialect,
+    is_deprecated_alias: bool,
 }
 
 /// Map a recognized base-name identifier to its dialect tag plus a
@@ -125,11 +146,20 @@ pub fn recognize_with_dialect<'ast>(expr: &'ast Expr) -> Option<RecognizedFrame<
 /// shape match (only `Expr::Name` / `Expr::Subscript` enter here). The
 /// union case "quiet-ignores" — no dialect committed, no slot bound,
 /// no piece-(b) check ever fires.
-fn base_name_to_dialect(name: &str) -> Option<(Dialect, bool)> {
+fn base_name_to_dialect(name: &str) -> Option<BaseNameRecognition> {
     match name {
-        "SparkFrame" => Some((Dialect::Spark, false)),
-        "PandasFrame" => Some((Dialect::Pandas, false)),
-        "DataFrame" => Some((Dialect::Spark, true)),
+        "SparkFrame" => Some(BaseNameRecognition {
+            dialect: Dialect::Spark,
+            is_deprecated_alias: false,
+        }),
+        "PandasFrame" => Some(BaseNameRecognition {
+            dialect: Dialect::Pandas,
+            is_deprecated_alias: false,
+        }),
+        "DataFrame" => Some(BaseNameRecognition {
+            dialect: Dialect::Spark,
+            is_deprecated_alias: true,
+        }),
         _ => None,
     }
 }
@@ -138,6 +168,59 @@ fn base_name_to_dialect(name: &str) -> Option<(Dialect, bool)> {
 pub enum SlotLabel<'ast> {
     Param(&'ast str),
     Return,
+}
+
+/// Rewrite the `DataFrame` prefix of an annotation source text to
+/// `SparkFrame`, leaving everything else (brackets, schema name,
+/// derived-op nesting) byte-identical. Used by D0090's suggestion and
+/// rendered message so users see the exact fix.
+pub fn spark_frame_rewrite(raw: &str) -> String {
+    if let Some(rest) = raw.strip_prefix("DataFrame") {
+        format!("SparkFrame{rest}")
+    } else {
+        raw.to_string()
+    }
+}
+
+/// Build the D0090 diagnostic message + quick-fix suggestion for a
+/// `DataFrame[X]` (or bare `DataFrame`) annotation. Centralizes the
+/// wording so the signature renderer and the ann-assign emitter cannot
+/// drift apart. Returns `(message, suggestion)`; both call sites pass
+/// the suggestion to `with_suggestion`.
+pub fn format_d0090_message(raw_text: &str) -> (String, String) {
+    let rewrite = spark_frame_rewrite(raw_text);
+    let message = format!(
+        "'{raw_text}' is a deprecated alias for '{rewrite}' \
+         and will be removed in pykrete v2.0. \
+         Rewrite as '{rewrite}'.",
+    );
+    (message, rewrite)
+}
+
+/// Render a frame annotation for hover / symbol surfaces. Per spec §6
+/// (Q7), the deprecated `DataFrame[X]` alias renders as the user wrote
+/// it; only the canonical `SparkFrame` / `PandasFrame` get their
+/// canonical surface. Shared by `hover::render_annotation` and
+/// `symbols::render_annotation` so the two surfaces cannot drift.
+pub fn render_annotation(
+    kind: &DataFrameAnnotation<'_>,
+    dialect: Dialect,
+    is_deprecated_alias: bool,
+) -> String {
+    let frame = if is_deprecated_alias {
+        "DataFrame"
+    } else {
+        match dialect {
+            Dialect::Spark => "SparkFrame",
+            Dialect::Pandas => "PandasFrame",
+        }
+    };
+    match kind {
+        DataFrameAnnotation::Typed(name) => format!("{frame}[{name}]"),
+        DataFrameAnnotation::Derived(_) => format!("{frame}[…]"),
+        DataFrameAnnotation::Untyped => frame.to_string(),
+        DataFrameAnnotation::NonBareName => format!("{frame}[?]"),
+    }
 }
 
 /// One DataFrame-touching slot from a function signature: a parameter or the
@@ -219,6 +302,10 @@ mod tests {
     }
 
     fn rec(src: &str) -> RecognizedFrame<'_> {
+        // Intentional one-off leak per test invocation — the borrow-
+        // checked `RecognizedFrame<'ast>` carries references into the
+        // parsed module, and `Box::leak` is the smallest way to grant
+        // `'static` lifetime without threading a closure through.
         let owned = Box::leak(Box::new(parse(src)));
         recognize_with_dialect(&owned.body).expect("recognize")
     }
@@ -300,5 +387,45 @@ mod tests {
         assert_eq!(r.dialect, Dialect::Spark);
         assert!(r.is_deprecated_alias);
         assert!(matches!(r.kind, DataFrameAnnotation::Derived(_)));
+    }
+
+    #[test]
+    fn optional_dataframe_alias_unwraps_and_keeps_deprecation_flag() {
+        // I2 (round 2): `Optional[DataFrame[X]]` peels the Optional and
+        // re-recognizes — the alias flag survives so D0090 still fires
+        // on the wrapped form. The dialect stays Spark; the schema
+        // binding is the underlying `Order` (Nullable is reapplied at
+        // the schema-resolution layer).
+        let r = rec("Optional[DataFrame[Order]]");
+        assert_eq!(r.dialect, Dialect::Spark);
+        assert!(r.is_deprecated_alias);
+        assert!(matches!(r.kind, DataFrameAnnotation::Typed("Order")));
+    }
+
+    #[test]
+    fn optional_spark_frame_unwraps_no_deprecation() {
+        // Optional[SparkFrame[X]] — peeled too, no alias warning.
+        let r = rec("Optional[SparkFrame[Order]]");
+        assert_eq!(r.dialect, Dialect::Spark);
+        assert!(!r.is_deprecated_alias);
+        assert!(matches!(r.kind, DataFrameAnnotation::Typed("Order")));
+    }
+
+    #[test]
+    fn union_dataframe_alias_does_not_recognize() {
+        // I2 (round 2) pinning: `DataFrame[X] | PandasFrame[X]` is
+        // `Expr::BinOp`, not `Subscript`/`Name`, so recognition returns
+        // `None`. No dialect commits, no slot binds, and crucially no
+        // D0090 fires — spec §3 quiet-ignore covers alias warnings too.
+        let owned = Box::leak(Box::new(parse("DataFrame[Order] | PandasFrame[Order]")));
+        assert!(recognize_with_dialect(&owned.body).is_none());
+    }
+
+    #[test]
+    fn union_with_dataframe_alias_does_not_recognize_either_arm() {
+        // Either-orientation pinning — the alias on the right arm of a
+        // union still does not commit dialect or fire D0090.
+        let owned = Box::leak(Box::new(parse("SparkFrame[Order] | DataFrame[Order]")));
+        assert!(recognize_with_dialect(&owned.body).is_none());
     }
 }

@@ -362,7 +362,7 @@ mod tests {
     #[test]
     fn check_source_with_clean_pyk_returns_no_diagnostics() {
         // `.pyk` syntax: column types are bare atomic names (no
-        // quotes), Schema / DataFrame / col are pre-imported by the
+        // quotes), Schema / SparkFrame / col are pre-imported by the
         // transpiler — same shape as `examples/orders.pyk`.
         let source = r#"
 class Users(Schema):
