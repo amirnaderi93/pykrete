@@ -342,6 +342,26 @@ def f(df: DataFrame[Orders] | PandasFrame[Orders]) -> DataFrame[Orders] | Pandas
 }
 
 #[test]
+fn optional_spark_frame_does_not_fire_d0090() {
+    // Falsifiable companion: `Optional[SparkFrame[X]]` peels the same
+    // way but the inner name is canonical — no D0090.
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+
+def f(df: Optional[SparkFrame[Orders]]) -> Optional[SparkFrame[Orders]]:
+    return df
+"#,
+    );
+    assert_does_not_have_code(&result, "D0090");
+}
+
+// ===========================================================================
+// M7 (round 2): PR-A / PR-B contract — dialect carried but not enforced
+// ===========================================================================
+
+#[test]
 fn pandas_frame_slot_still_fires_d0030_via_spark_dispatch_today() {
     // M7 pinning (round 2): PR-A only stamps the dialect tag; the
     // check-site dispatch is still uniformly Spark-style. A PandasFrame
@@ -360,20 +380,4 @@ def f(df: PandasFrame[Orders]) -> PandasFrame[Orders]:
 "#,
     );
     assert_has_code(&result, "D0030");
-}
-
-#[test]
-fn optional_spark_frame_does_not_fire_d0090() {
-    // Falsifiable companion: `Optional[SparkFrame[X]]` peels the same
-    // way but the inner name is canonical — no D0090.
-    let result = check(
-        r#"
-class Orders(Schema):
-    id: int
-
-def f(df: Optional[SparkFrame[Orders]]) -> Optional[SparkFrame[Orders]]:
-    return df
-"#,
-    );
-    assert_does_not_have_code(&result, "D0090");
 }

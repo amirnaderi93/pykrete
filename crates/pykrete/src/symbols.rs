@@ -218,9 +218,6 @@ fn render_function_signature(name: &str, slots: &[TypedSlot<'_>]) -> String {
     format!("{name}({}){ret}", params.join(", "))
 }
 
-// `render_annotation` lives in `dataframe::render_annotation` — shared
-// with `hover` so the two surfaces cannot drift (round-2 M1).
-
 // ---------------------------------------------------------------------------
 // definition
 // ---------------------------------------------------------------------------

@@ -480,9 +480,6 @@ fn render_function_hover(
     HoverInfo { markdown: md }
 }
 
-// `render_annotation` moved to `dataframe::render_annotation` so the
-// hover + symbols surfaces share one definition (round-2 M1).
-
 // ---------------------------------------------------------------------------
 // Position / AST helpers
 // ---------------------------------------------------------------------------

@@ -135,6 +135,7 @@ mod tests {
             ColumnType::Long,
             ColumnType::Byte,
             ColumnType::Short,
+            ColumnType::Float,
             ColumnType::Double,
         ] {
             assert_agg_paths_agree("mean", input.clone());

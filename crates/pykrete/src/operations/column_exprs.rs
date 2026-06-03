@@ -265,7 +265,9 @@ pub(super) fn function_result_type(
     name: &str,
     first_arg: Option<ColumnType>,
 ) -> Option<ColumnType> {
-    use ColumnType::{Array, Bool, Date, Double, Int, Long, Map, String, Timestamp};
+    use ColumnType::{
+        Array, Bool, Byte, Date, Double, Float, Int, Long, Map, Short, String, Timestamp,
+    };
     // Functions with a fixed result type, regardless of input.
     match name {
         "count"
@@ -336,19 +338,18 @@ pub(super) fn function_result_type(
         // variant addition is a compile error here rather than a silent
         // `_ => None` regression (the §9 exhaustiveness gate).
         "sum" | "sumDistinct" | "sum_distinct" => match first_arg.as_ref().map(ColumnType::base) {
-            Some(ColumnType::Byte | ColumnType::Short | Int | Long) => Some(Long),
-            Some(Double) => Some(Double),
-            Some(ColumnType::Float) => Some(Double),
+            Some(Byte | Short | Int | Long) => Some(Long),
+            Some(Float | Double) => Some(Double),
             Some(ColumnType::Decimal { .. }) => Some(ColumnType::DEFAULT_DECIMAL),
             Some(
-                ColumnType::String
+                String
                 | ColumnType::Enum(_)
                 | ColumnType::Binary
-                | ColumnType::Bool
-                | ColumnType::Date
-                | ColumnType::Timestamp
-                | ColumnType::Array(_)
-                | ColumnType::Map(..)
+                | Bool
+                | Date
+                | Timestamp
+                | Array(_)
+                | Map(..)
                 | ColumnType::Struct(_),
             ) => None,
             // `Nullable` is stripped by `.base()` above, so this branch
@@ -365,18 +366,16 @@ pub(super) fn function_result_type(
         // pins a type. Exhaustive arms for §9 gate.
         "avg" | "mean" => match first_arg.as_ref().map(ColumnType::base) {
             Some(ColumnType::Decimal { .. }) => Some(ColumnType::DEFAULT_DECIMAL),
+            Some(Byte | Short | Int | Long | Float | Double) => Some(Double),
             Some(
-                ColumnType::Byte | ColumnType::Short | Int | Long | Double | ColumnType::Float,
-            ) => Some(Double),
-            Some(
-                ColumnType::String
+                String
                 | ColumnType::Enum(_)
                 | ColumnType::Binary
-                | ColumnType::Bool
-                | ColumnType::Date
-                | ColumnType::Timestamp
-                | ColumnType::Array(_)
-                | ColumnType::Map(..)
+                | Bool
+                | Date
+                | Timestamp
+                | Array(_)
+                | Map(..)
                 | ColumnType::Struct(_),
             ) => None,
             Some(ColumnType::Nullable(_)) => None,
@@ -671,14 +670,12 @@ fn widen_pair(a: &ColumnType, b: &ColumnType) -> Option<ColumnType> {
         (WideSlot::FloatOrDouble, WideSlot::Int | WideSlot::Long)
         | (WideSlot::Int | WideSlot::Long, WideSlot::FloatOrDouble) => Some(ColumnType::Double),
         (WideSlot::Long, WideSlot::Int) | (WideSlot::Int, WideSlot::Long) => Some(ColumnType::Long),
-        (WideSlot::Int, WideSlot::Int)
-        | (WideSlot::Long, WideSlot::Long)
-        | (WideSlot::FloatOrDouble, WideSlot::FloatOrDouble) => {
-            // Same-slot pairs are handled by the `a == b` short-circuit
-            // above (Int+Int, Long+Long, Double+Double). A Float+Double
-            // pair lands here — collapse to Double rather than guess.
-            Some(ColumnType::Double)
-        }
+        (WideSlot::Int, WideSlot::Int) => Some(ColumnType::Int),
+        (WideSlot::Long, WideSlot::Long) => Some(ColumnType::Long),
+        // Float+Float short-circuits via `a == b` above; this arm covers
+        // Float+Double (and the Nullable-asymmetric cases that classify
+        // into FloatOrDouble on both sides) — collapse to Double.
+        (WideSlot::FloatOrDouble, WideSlot::FloatOrDouble) => Some(ColumnType::Double),
         (WideSlot::Outside, _) | (_, WideSlot::Outside) => None,
     }
 }
@@ -1091,5 +1088,32 @@ fn python_literal_type(expr: &Expr) -> Option<ColumnType> {
             Number::Complex { .. } => None,
         },
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // widen_pair's same-slot arm previously collapsed every matched pair
+    // to Double, hiding behind the `a == b` short-circuit and the live
+    // caller's `.base().clone()` normalization. Calling widen_pair with
+    // a Nullable on one side bypasses both guards and pins the per-slot
+    // disposition directly — Int stays Int, Long stays Long.
+    #[test]
+    fn widen_pair_same_slot_preserves_int_not_double() {
+        let nint = ColumnType::Nullable(Box::new(ColumnType::Int));
+        assert_eq!(widen_pair(&nint, &ColumnType::Int), Some(ColumnType::Int));
+        let nlong = ColumnType::Nullable(Box::new(ColumnType::Long));
+        assert_eq!(
+            widen_pair(&nlong, &ColumnType::Long),
+            Some(ColumnType::Long)
+        );
+        // Float+Double still collapses to Double — the only non-short-
+        // circuit FloatOrDouble pair lands on the explicit arm.
+        assert_eq!(
+            widen_pair(&ColumnType::Float, &ColumnType::Double),
+            Some(ColumnType::Double),
+        );
     }
 }

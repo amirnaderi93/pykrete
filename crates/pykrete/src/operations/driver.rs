@@ -428,7 +428,7 @@ fn handle_ann_assign<'a>(
         && rec.is_deprecated_alias
     {
         let raw_text = &source[ann.annotation.range()];
-        let (message, suggestion) = crate::format_d0090_message(raw_text);
+        let (message, suggestion) = crate::dataframe::format_d0090_message(raw_text);
         diagnostics.push(
             Diagnostic::at_range(
                 Severity::Warning,
