@@ -180,7 +180,7 @@ class Customer(Schema):
 Dotted column references walk into the struct:
 
 ```python
-def f(customers: DataFrame[Customer]) -> DataFrame:
+def f(customers: SparkFrame[Customer]) -> SparkFrame:
     return customers.select(F.col("address.city"))
 ```
 
@@ -293,7 +293,7 @@ class Sale(Schema):
 # sales.pyk
 from schemas import Sale
 
-def revenue_by_region(sales: DataFrame[Sale]) -> DataFrame:
+def revenue_by_region(sales: SparkFrame[Sale]) -> SparkFrame:
     return sales.groupBy("region").agg(F.sum("amount").alias("total"))
 ```
 

@@ -16,7 +16,7 @@ The PySpark static checker is **feature-complete** as of the v0.1 release line (
 - Arbitrarily-nested `array` / `map` / `struct` columns — declared, structurally type-checked, and navigated field-by-field (`col("orders.line.sku")`).
 - Column method chains — `.isNull` / `.isin` / `.between` / `.like` / `.getField` / `.getItem` / `.withField` / `.dropFields` — recognized and tracked through.
 - `F.when` / `F.otherwise` result-type inference and `F.struct` / `F.named_struct` schema construction. Date/time first-arg column checking on ten `F.*` functions. Array higher-order recognizers (`F.transform`, `F.filter`, `F.aggregate`, `F.exists`, `F.forall`).
-- `spark.read.<format>(path)` and `spark.table(name)` recognized as opaque sources — re-anchor with `.cast(DataFrame[Schema])` or a typed variable annotation to resume checking.
+- `spark.read.<format>(path)` and `spark.table(name)` recognized as opaque sources — re-anchor with `.cast(SparkFrame[Schema])` or a typed variable annotation to resume checking. (`DataFrame[Schema]` is the deprecated alias and also works through v1.x.)
 - A `pyspark.sql.functions` result catalog (≈80 functions) and UDF return types.
 - Call-site argument checking (`D0051 argumentColumnsMismatch`) closes the function boundary on the input side.
 - Generic-inference: multi-TypeVar binding, nested generic shapes, chained class-method calls, and `type[T]` argument binding all dispatch correctly.
@@ -29,17 +29,23 @@ The **VS Code extension** wraps it; Neovim, Helix, and Emacs setups are document
 
 The **`.pyk` → `.py` transpiler** is complete.
 
-The **in-browser [playground](/pykrete/playground/)** runs pykrete via WebAssembly and now serves the same pykrete features the VS Code extension does for `.pyk` files: live diagnostics, hover on schema and `DataFrame[X]` references, column-name completion inside `col("…")`, schema completion in `DataFrame[…]` slots, and go-to-definition on schema references. The embedded Python engine isn't reachable from the browser yet (queued for a follow-up release).
+The **in-browser [playground](/pykrete/playground/)** runs pykrete via WebAssembly and now serves the same pykrete features the VS Code extension does for `.pyk` files: live diagnostics, hover on schema and `SparkFrame[X]` references, column-name completion inside `col("…")`, schema completion in `SparkFrame[…]` slots, and go-to-definition on schema references. (`DataFrame[X]` is the deprecated alias and renders the same hover.) The embedded Python engine isn't reachable from the browser yet (queued for a follow-up release).
 
 For the full list of every shipped feature with diagnostics, see the [Operations reference](/pykrete/reference/operations/) and the [GitHub Releases page](https://github.com/amirnaderi93/pykrete/releases).
 
+## Shipped in v1.3 — pandas check-site coverage
+
+`PandasFrame[Schema]` joins `SparkFrame[Schema]` as a **canonical** dataframe-annotation form. `DataFrame[Schema]` is a **deprecated alias** for `SparkFrame[Schema]` — every use fires `D0090 deprecatedDataFrameAlias` (warning) with a quick-fix to the canonical name. The alias stays valid through the v1 line and is **removed in v2.0** so the migration is unhurried.
+
+Six pandas operations dispatch through dialect-specific check sites: column selection (`df[col_list]`), boolean-mask filtering (`df[mask]`), assignment (`df["new"] = expr`), `df.drop`, `df.merge`, and `df.rename`. The §10 widening also fires `D0030` on bare `df["typo"]` subscripts in non-method contexts on both `SparkFrame[X]` and `PandasFrame[X]`. Cross-codebase pandas fixtures land for mlflow, feast, and iceberg-python.
+
+See [Production readiness → Real-codebase testing](/pykrete/about/production-readiness/#real-codebase-testing) for the per-release verification posture.
+
 ## Next up
 
-### pandas support
+### v1.4 — pandas type-tracking via `PROBE-TYPE-IS`
 
-PySpark is v1; pandas is v2. The core type model — `DataFrame[Schema]`, the `Schema` class, column checks, return-type validation — generalizes. The library-specific layer is method dispatch (`raw.select(col("x"))` vs `raw[["x"]]`). This is the main v0.2 work.
-
-The annotation surface under consideration: `SparkFrame[Schema]` and `PandasFrame[Schema]`, with `DataFrame[Schema]` aliased to `SparkFrame[Schema]` for v0.1.x source compatibility.
+v1.3 ships pandas **check-site coverage**; positive **type-tracking** verification on `PandasFrame[X]` via the `PROBE-TYPE-IS` synthesizer lands in v1.4. This parallels the v1.1 → v1.2 cadence on the Spark side, where column tracking arrived first and type tracking followed once the synth shapes were proven. Tracker: [pykrete-tests#14](https://github.com/amirnaderi93/pykrete-tests/issues/14).
 
 ### Window-key type tracking
 

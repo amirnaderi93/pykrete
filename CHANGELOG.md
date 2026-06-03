@@ -53,10 +53,13 @@ mass-refreshed to absorb the new `D0090` warnings on existing
   contexts.** Previously a bare `df["typo"]` subscript outside a
   method-call context was silently accepted on `SparkFrame[X]`
   (also future-`PandasFrame[X]`); v1.3 widens D0030 to fire at the
-  same position. Existing D-code identity, new firing positions —
-  policy: SemVer-minor `tighteningDiagnostics`. Users with brittle
-  CI may see new D0030 fires on previously-silent code; the change
-  is a net win for correctness.
+  same position. Before: `x = df["typo"]` was silent on
+  `SparkFrame[Sale]` even when `typo` was not in `Sale`. After:
+  same line fires `D0030 unknownColumn` on `"typo"` with a *did you
+  mean* against the schema. Existing D-code identity, new firing
+  positions — policy: SemVer-minor `tighteningDiagnostics`. Users
+  with brittle CI may see new D0030 fires on previously-silent
+  code; the change is a net win for correctness.
 - **3 new cross-codebase pandas fixtures.** mlflow, feast, and
   iceberg-python each contribute an annotated `PandasFrame[X]`
   fixture exercising the six dispatched operations, paired with
@@ -64,8 +67,8 @@ mass-refreshed to absorb the new `D0090` warnings on existing
   `df["typo"]` subscripts and D0090 on the deprecated
   `DataFrame[X]` alias.
 - **Probe count: 130 → 149 (+19).** Pandas check-site coverage adds
-  12 positive probes (column resolution across the new operations)
-  and 7 negative probes (D0030 + D0090 on probes_negative shapes)
+  9 positive probes (column resolution across the new operations)
+  and 10 negative probes (D0030 + D0090 on probes_negative shapes)
   across the three new donor fixtures.
 - **Fixture count: 47 → 59 (+12).** 38 annotated (was 35) + 21
   `probes_negative/` (was 12). Donor count stays at 10.

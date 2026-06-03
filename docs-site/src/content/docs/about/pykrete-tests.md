@@ -69,7 +69,7 @@ cross-codebase/<donor>/
 
 The `.py` → `.pyk` rename is zero-behavior-change — pykrete is a strict superset. Annotations live in the `annotated/` companion: `Schema` classes plus typed helper functions extracting dataframe-typed cores of upstream methods (since pykrete only enters body analysis on `DataFrame[X]` signatures). `probes_negative/` fixtures are smaller, single-purpose corruptions of the annotated patterns — they exist to prove pykrete actually catches regressions, not just that it doesn't false-positive.
 
-CI runs `bash scripts/golden.sh check` (both trees) and `bash scripts/probes_ci.sh` on every push. pykrete is built fresh from `main` each run; any golden-diff drift or probe failure fails the build before the regression gets released.
+CI runs `bash scripts/golden.sh check` (both trees) and `bash scripts/probes_ci.sh` on every push. pykrete is built from the catalog-pinned source commit (`scripts/diagnostic_catalog.json`'s `pykreteSourceCommit`) each run; any golden-diff drift or probe failure fails the build before the regression gets released.
 
 ## What this suite does NOT cover
 

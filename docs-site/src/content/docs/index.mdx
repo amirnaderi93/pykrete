@@ -31,7 +31,7 @@ pykrete catches it while you type.
 
 <EditorShowcase />
 
-Tell pykrete the shape of a dataframe — a `Schema` class, a `DataFrame[Sale]` annotation — and it checks every column you touch, the whole way down the chain.
+Tell pykrete the shape of a dataframe — a `Schema` class, a `SparkFrame[Sale]` (or `PandasFrame[Sale]`) annotation — and it checks every column you touch, the whole way down the chain. (`DataFrame[Sale]` is a deprecated alias for `SparkFrame[Sale]`, still accepted through the v1 line.)
 
 ## What you get
 
@@ -48,10 +48,10 @@ Tell pykrete the shape of a dataframe — a `Schema` class, a `DataFrame[Sale]` 
     was dropped, and that's exactly where the error points.
   </Card>
   <Card title="See a dataframe's shape without leaving the file" icon="magnifier">
-    Open code you last touched six months ago. Hover a `DataFrame[…]`
-    parameter and pykrete shows its columns; jump straight to the
-    schema with go-to-definition. No more reading the whole call tree
-    to remember what goes in.
+    Open code you last touched six months ago. Hover a `SparkFrame[…]`
+    or `PandasFrame[…]` parameter and pykrete shows its columns; jump
+    straight to the schema with go-to-definition. No more reading the
+    whole call tree to remember what goes in.
   </Card>
   <Card title="Column-name autocomplete" icon="pencil">
     Start typing a column name and pykrete completes the ones that
@@ -80,8 +80,8 @@ You don't convert a codebase. You convert a file.
 2. **Declare the schema.** A short class naming the columns you already
    know.
 
-3. **Annotate a function.** Add `DataFrame[Sale]` to one parameter.
-   That function is now checked, end to end.
+3. **Annotate a function.** Add `SparkFrame[Sale]` (or `PandasFrame[Sale]`)
+   to one parameter. That function is now checked, end to end.
 
 </Steps>
 

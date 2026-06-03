@@ -10,7 +10,7 @@ The other pages tell you what pykrete does for you. This one is for when you wan
 A `.pyk` file is a Python file. Every valid Python program is a valid pykrete program — pykrete adds meaning, not syntax you'd trip over. The two pieces it reads that plain Python ignores:
 
 - A **`Schema`** class — an ordinary class with type-annotated attributes. Python sees a class; pykrete reads it as the column list of a dataframe.
-- A **`DataFrame[Schema]`** annotation — an ordinary parameterized type, the same shape as `list[int]`. Python sees a subscripted generic; pykrete reads it as "a dataframe with these columns".
+- A **`SparkFrame[Schema]`** or **`PandasFrame[Schema]`** annotation — an ordinary parameterized type, the same shape as `list[int]`. Python sees a subscripted generic; pykrete reads it as "a Spark (or pandas) dataframe with these columns". (`DataFrame[Schema]` is a deprecated alias for `SparkFrame[Schema]`, accepted through the v1 line and removed in v2.0; uses fire the warning `D0090 deprecatedDataFrameAlias`.)
 
 Because both are valid Python, a `.pyk` file runs unchanged. pykrete is a layer that reads those annotations at edit time and checks the code against them. Nothing it adds survives to runtime.
 
@@ -29,13 +29,13 @@ pykrete ships as two binaries that cover three jobs.
 When pykrete checks a file, it:
 
 1. **Parses it.** pykrete uses [Ruff](https://github.com/astral-sh/ruff)'s Python parser — the same fast, PEP-current parser behind Astral's tooling. A `.pyk` file is Python, so it parses as-is.
-2. **Finds the schemas and the typed functions.** Every `Schema` class becomes a known column list. Every function with a `DataFrame[…]` parameter or return type becomes something to check.
+2. **Finds the schemas and the typed functions.** Every `Schema` class becomes a known column list. Every function with a `SparkFrame[…]`, `PandasFrame[…]`, or (deprecated) `DataFrame[…]` parameter or return type becomes something to check.
 3. **Walks each typed function's body.** This is the core. pykrete follows the dataframe through the function — `select`, `filter`, `withColumn`, `drop`, `groupBy` + `agg`, `join`, `union`, `pivot`, and the rest. Each operation transforms the schema: `drop` removes a column, `withColumnRenamed` renames one, an aggregation collapses many into one. pykrete carries the resulting schema into the next step.
 4. **Checks every column reference against the schema in scope at that point.** A name that isn't on the schema is a diagnostic — pointed at the exact reference, with a *did you mean* when something close exists. Because the schema is tracked step by step, a reference to a column that was dropped two transforms earlier is caught where you use it, not where you dropped it.
 
 Column references are checked wherever they appear: `col("x")`, attribute access `df.x`, subscript `df["x"]`, dotted paths into nested structs, the string arguments to functions like `F.sum("x")`, and the identifiers inside embedded SQL — `filter("x > 0")`, `selectExpr(...)`, `spark.sql("SELECT …")`.
 
-Function boundaries are checked too: a `DataFrame[Schema]` parameter is the schema the function body is checked against, and what the function declares it returns is verified against what its body actually produces.
+Function boundaries are checked too: a `SparkFrame[Schema]` (or `PandasFrame[Schema]`) parameter is the schema the function body is checked against, and what the function declares it returns is verified against what its body actually produces.
 
 ## One server, two kinds of help
 
