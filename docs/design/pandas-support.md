@@ -79,8 +79,25 @@ canonical forms — same parser path, same `Pick[…]` / `Omit[…]` /
 difference is a parser-level *dialect tag* on the resulting
 `TypedSlot`, which drives check-site dispatch.
 
+### Union annotations (Q5 resolved by deferral; cross-referenced from §11)
+
 `SparkFrame[X] | PandasFrame[X]` union annotations are out of scope
-for v1.3.
+for v1.3. The settled v1.3 behavior on such an annotation is
+**quiet ignore**:
+
+- Piece (a) does not commit a dialect tag when the annotation is a
+  union including multiple frame dialects.
+- Piece (b)'s `ctx.lookup` returns no frame-typed slot for that
+  binding, so no column-ref check fires.
+
+Rationale: pykrete v1.3 is per-annotation single-dialect. Cross-
+dialect union annotations are a real production shape but require
+additional design (which dispatch table applies? both? error on
+incompatibilities?). Deferring is honest; silently picking one
+dialect would be misleading. v1.4 is the candidate release for
+explicit cross-dialect union handling. Adding support in v1.4 is a
+SemVer-minor extension (no v1.3 behavior changes meaning, the union
+case simply starts being checked).
 
 ## 4. Dtype mapping (settled)
 
@@ -99,10 +116,10 @@ The full mapping table below incorporates the resolutions of Q1–Q4.
 
 | Pandas dtype | Mapping | Notes |
 |---|---|---|
-| `uint8`  / `UInt8`  | `ColumnType::Short` | widens; lossy-cast warning emitted at schema parse |
-| `uint16` / `UInt16` | `ColumnType::Int`   | widens; lossy-cast warning |
-| `uint32` / `UInt32` | `ColumnType::Long`  | widens; lossy-cast warning |
-| `uint64` / `UInt64` | `ColumnType::Long`  | widens; lossy-cast warning. `uint64`'s top bit cannot fit in `Long`; user must accept truncation risk or change the schema |
+| `uint8`  / `UInt8`  | `ColumnType::Short` | widens; lossy-cast warning emitted at schema parse (reuses existing widening diagnostic; no new D-code) |
+| `uint16` / `UInt16` | `ColumnType::Int`   | widens; lossy-cast warning (reuses existing widening diagnostic) |
+| `uint32` / `UInt32` | `ColumnType::Long`  | widens; lossy-cast warning (reuses existing widening diagnostic) |
+| `uint64` / `UInt64` | `ColumnType::Long`  | widens; lossy-cast warning (reuses existing widening diagnostic). `uint64`'s top bit cannot fit in `Long`; user must accept truncation risk or change the schema |
 
 Rationale: TypeScript's `number` type carries no signedness; pykrete
 follows the same precedent and widens. Users who want tightness can
@@ -126,7 +143,7 @@ required by the v1.3 spec.
 | `object` (string-typed column) | `ColumnType::String` | legacy default; pykrete trusts the declared schema |
 | `string` / `StringDtype` | `ColumnType::String` | modern explicit string (pandas 1.0+) |
 | `string[pyarrow]` | `ColumnType::String` | Arrow-backed string; storage detail, not type detail |
-| `category` / `CategoricalDtype([...])` | `ColumnType::Enum(vocab)` | resolved via reuse of v1.1 `enum["a", "b", ...]` vocabulary; unordered set-equality. Ordered categoricals deferred to v1.4 |
+| `category` / `CategoricalDtype([...])` | `ColumnType::Enum(vocab)` | (Q6 resolved) reuse of v1.1 `enum["a", "b", ...]` vocabulary; unordered set-equality. `ordered=True` categoricals deferred to v1.4 |
 | `category` with no categories declared | `ColumnType::String` | open-vocabulary categoricals degrade to plain string |
 
 ### Booleans
@@ -155,6 +172,21 @@ required by the v1.3 spec.
 | `Sparse[T]` | mapping of `T` | sparseness is a storage detail; pykrete sees through it |
 | MultiIndex columns | (unsupported) | explicit anti-scope |
 
+### §4 SemVer extension policy
+
+The mapping table is part of the stable surface (§7). Future
+changes follow:
+
+- **Adding a new dtype mapping** post-v1.3.0 (e.g., adding
+  `uint128 → Long` or `datetime64[ns, tz] → Timestamp`) is
+  **SemVer-minor**. New mappings can land in any minor release.
+- **Remapping an existing dtype** to a different `ColumnType` is
+  **SemVer-major**. Users have built schemas against the v1.3.0
+  mappings.
+- **Removing a mapping** is **SemVer-major** with the standard
+  deprecation cycle (warning in a minor release before removal in
+  the major).
+
 ## 5. Per-call-site dispatch table
 
 Six call-site dispatches and one net-new Subscript shape. The
@@ -175,15 +207,57 @@ bound `TypedSlot` and branching internally (see §9 piece (a)).
 filter and uses bare `Expr::Subscript` whose slice is a column-typed
 boolean expression. Disambiguation from the column-projection
 Subscript (`df[["x"]]`) and the single-column Subscript (`df["x"]`)
-is by inferred type of the slice:
+is by inferred type of the slice.
 
-- slice = string literal → column reference (shared with Spark)
-- slice = list of string literals → column projection (pandas
-  dispatch)
-- slice = expression whose type is `Bool` and whose schema matches
-  the receiver → boolean-mask filter (pandas dispatch)
+### Subscript-slice taxonomy (v1.3 settled)
 
-Anything else is an error or ignored per existing rules.
+The bare-`Expr::Subscript` shape has many concrete forms in real
+production code. v1.3 takes an explicit per-form position:
+
+| Slice shape | Example | v1.3 behavior |
+|---|---|---|
+| String literal | `df["col"]` | Piece (b) fires col-ref check → D0030 on unknown column |
+| List of string literals | `df[["a", "b"]]` | Dispatched as `select(["a", "b"])`; col-ref check fires on EACH literal |
+| `Bool`-typed expression | `df[df["x"] == "y"]` | Boolean-mask filter (pandas dispatch); piece (b) descends the inner subscript naturally |
+| Name variable | `df[some_var]` | Opaque slice; no check. Constant-folding attempts deferred to v1.4 |
+| Integer literal | `df[0]` | Pandas iloc-style row positional; v1.3 does not support row-positional access; quiet ignore |
+| Slice object | `df[:5]` | Row slicing; v1.3 ignores |
+| String `BinOp` | `df["a" + "b"]` | Constant-foldable but v1.3 does not fold; quiet ignore |
+| Chained Subscript | `df["a"]["b"]` | Outer Subscript fires col-ref check on `"a"`; result type is non-frame, so inner `["b"]` does not fire |
+
+"Quiet ignore" means no diagnostic and no result-type assignment;
+the existing analyzer state is preserved unchanged. Forms not listed
+above fall through to existing rules and are not v1.3's
+responsibility.
+
+### Result-type divergence: Spark vs pandas
+
+The col-ref check that piece (b) performs is dialect-agnostic — the
+same D0030 fires for unknown columns on either dialect. But the
+**result type** that the analyzer threads forward differs:
+
+- `SparkFrame[A]` receiver: `df["x"]` yields a `Column` reference
+  (Spark semantics).
+- `PandasFrame[A]` receiver: `df["x"]` yields a `Series` reference
+  (pandas semantics).
+
+Piece (b) is responsible for col-ref checking. Result-type
+assignment for the Subscript expression itself is dialect-aware and
+is the responsibility of the surrounding analyzer pass.
+
+### §5 SemVer extension policy
+
+- **Adding a new dispatched operation** post-v1.3.0 (e.g., adding
+  `.melt`, `.pivot`, `.groupby().agg(...)`) is **SemVer-minor**.
+  New operations expand checked coverage; they do not change the
+  meaning of existing code.
+- **Changing existing dispatch behavior** (e.g., flipping
+  `df[["a", "b"]]` from col-projection dispatch to something else)
+  is **SemVer-major**.
+- **Tightening an existing dispatch site** (adding a new firing
+  position to an already-dispatched site that previously missed a
+  case) follows the SemVer-minor `tighteningDiagnostics` policy
+  documented in §10.
 
 ## 6. `DataFrame` deprecation policy
 
@@ -205,6 +279,25 @@ Example:
 orders.pyk:4:14 - warning deprecatedDataFrameAlias: 'DataFrame[Order]' is a deprecated alias for 'SparkFrame[Order]' and will be removed in pykrete v2.0. Rewrite as 'SparkFrame[Order]'.
 ```
 
+### Rules-config interaction
+
+D0090 is subject to the standard rules-config override the way every
+other D-code is: users can set `"D0090": "off"` in their pykrete
+config and suppress the warning entirely. This is **intentional and
+allowed**. Deprecation warnings are informative-only; users who
+choose to silence the signal still face the v2.0 hard break.
+
+(Per existing rules-config semantics, all D-codes are subject to
+user override. D0090 is no exception.)
+
+### Hover and completion surface
+
+The echo-source-text policy (Q7) applies to hover and completion
+labels too: hover renders what the user wrote (`DataFrame[Order]`),
+not the canonicalized form (`SparkFrame[Order]`). The wording of
+the hover/completion label is part of the message-text surface and
+is not stable across minor releases (see §7).
+
 ## 7. Stability surface
 
 From v1.3.0, the following are part of pykrete's stable public
@@ -218,6 +311,11 @@ surface and follow the standard deprecation policy:
 - The pandas dtype → `ColumnType` mapping in §4, including the
   new `ColumnType::Float` variant.
 
+See §4 and §5 for the SemVer extension policies on dtype mappings
+and dispatched operations respectively. The summary: adding
+mappings and adding operations is minor; remapping or changing
+behavior is major.
+
 Items the v1.3 spec deliberately does *not* freeze:
 
 - The dispatch *factoring* (internal branching vs sibling modules)
@@ -226,6 +324,35 @@ Items the v1.3 spec deliberately does *not* freeze:
   a breakage notice.
 - The exact wording of D0090 (may be tuned without a breakage
   notice, per the diagnostic-text policy).
+
+### JSON output contract and message-text policy
+
+Per the v1.0 JSON stability contract:
+
+- D0090's **identity** (the code `D0090`, the rule name
+  `deprecatedDataFrameAlias`, the JSON output shape) is stable from
+  v1.3.0 onward.
+- D0090's **message wording** is NOT stable. The exact text may be
+  retuned in any minor release (e.g., to read "DataFrame[X] is
+  deprecated; use SparkFrame[X]" or any other clearer variant).
+- The **echo-source-text policy** from Q7 — D0090 messages echo
+  what the user wrote (`DataFrame[Order]`, not the canonicalized
+  `SparkFrame[Order]`) — is part of the message-text surface. The
+  SHAPE (echoing user source) is stable; the surrounding wording
+  is not.
+
+### Ordered `CategoricalDtype` characterization
+
+§4 reuses the v1.1 `enum[...]` vocabulary for pandas `category`
+columns. `ordered=True` is **NOT supported in v1.3** and ordered
+categoricals degrade to unordered set-equality.
+
+- **Adding ordered-category support post-v1.3.0** is **SemVer-minor**
+  (extension via new syntax — for example, `enum_ordered[...]` or
+  `enum[..., ordered=True]`). Unordered enums stay unordered;
+  ordered arrives as a distinct, opt-in syntax.
+- **Changing existing unordered enum semantics** (e.g., flipping
+  `enum["a", "b"]` to mean ordered) is **SemVer-major**.
 
 ## 8. Validation history
 
@@ -258,7 +385,9 @@ from bare Subscript expressions.
 The redesigned technique (described in §9 below) was implemented
 as a throwaway and re-probed. The same fixture now emits D0030
 on `"statuss"` and suggests `"status"`. The full workspace test
-suite (1174 tests) stayed green; no regressions on Spark fixtures.
+suite at the spike commit (1174 tests then; see the spike branch
+for the exact SHA — this count will drift as the workspace grows)
+stayed green; no regressions on Spark fixtures.
 
 Both rounds were thrown away after measurement; no spike-throwaway
 code lands in the v1.3 implementation PR(s). The implementation
@@ -302,6 +431,40 @@ reused unchanged.
 
 Net change: ~11 LOC.
 
+#### Receiver-shape bound
+
+Piece (b) fires **only** when `subscript.value` is an `Expr::Name`
+directly bound to a frame-typed slot in the analyzer's `ctx`. The
+following receiver shapes are deferred to v1.4 and are quiet-ignored
+in v1.3:
+
+| Receiver shape | Example | v1.3 behavior |
+|---|---|---|
+| `Expr::Name` | `df["col"]` | Piece (b) fires |
+| `Expr::Attribute` | `obj.df["col"]` | Out of scope; quiet ignore |
+| `Expr::Call` | `get_df()["col"]` | Out of scope; quiet ignore |
+| `Expr::IfExp` | `(df1 if cond else df2)["col"]` | Out of scope; quiet ignore |
+
+The Name-only bound keeps piece (b) under the ~11 LOC budget and
+matches how the existing column-ref pipeline already treats
+receivers. Rebinding behavior follows naturally from `ctx.lookup`:
+if a `Name` is rebound to a non-frame type, the lookup returns a
+non-frame slot and the col-ref check skips.
+
+#### `ColumnType::Float` exhaustiveness gate
+
+The v1.3 implementation PR(s) MUST include an exhaustiveness sweep:
+every site that matches on `ColumnType` must explicitly handle the
+new `ColumnType::Float` variant (either preserve it, document a
+deliberate widening to `Double`, or document a deliberate
+fallthrough). This is the same trap the v1.1 `ColumnType::Enum`
+PR-A hit and is called out here so the impl PR can't silently
+collapse `Float` into a `_` arm.
+
+The sweep is verified by `cargo check --workspace` after declaring
+`Float` as non-default. The PR description must list every site
+touched and the per-site disposition.
+
 ### Composability
 
 The two pieces compose cleanly through `ctx.lookup`. Piece (a)
@@ -339,17 +502,59 @@ because `collect_col_refs` only fires from method-call sites. Under
 v1.3, the bare `df["statuss"]` Subscript is checked regardless of
 dialect.
 
-This is intentional widening, not a behavior break. The 1174-test
-workspace stayed green under the round-2 throwaway, which is
-evidence that no Spark fixture relied on the old silence. We call
-the widening out explicitly in the v1.3 changelog so users who do
-hit a new diagnostic on previously-tolerated code understand the
-source.
+This is intentional widening, not a behavior break — the same
+D0030 identity is reused, not a new D-code.
+
+### Changelog commitment (required for v1.3.0 release notes)
+
+The v1.3 CHANGELOG MUST carry a dedicated **"Tightened coverage"**
+bullet that:
+
+- Names D0030 explicitly as the diagnostic involved.
+- Lists the new firing positions enabled by piece (b) (bare
+  `Expr::Subscript` against any frame-typed Name receiver).
+- Includes a minimal before/after example showing a v1.2-silent
+  shape that v1.3 catches.
+- Cross-references this §10.
+
+The internal evidence ("1174 workspace tests stayed green") is
+internal-fixtures-only and is not a substitute for external
+characterization. External users with brittle CI may see new
+diagnostics on existing code.
+
+### SemVer-minor `tighteningDiagnostics` policy
+
+Adding new firing positions to an existing D-code that was
+previously silent at those positions is **SemVer-minor** under
+pykrete's standard policy. The contract pykrete makes is:
+
+- A v1.x → v1.(x+1) upgrade may emit new diagnostics on code that
+  v1.x silently accepted, where the new diagnostics use **existing**
+  D-code identities. Users with brittle CI may need to triage these.
+- A v1.x → v1.(x+1) upgrade will not change the meaning or shape of
+  the JSON output for diagnostics that were already firing.
+- A v1.x → v1.(x+1) upgrade will not introduce a new D-code that
+  changes the severity envelope of existing diagnostics.
+
+The §10 widening lands squarely in the first bullet: existing D0030
+identity, new firing positions, no JSON shape change. The release
+notes acknowledge this is **intentional + a good catch** but worth
+flagging.
+
+### External-codebase implications
+
+Any v1.0/v1.1/v1.2 user with a bare `df["typo"]` subscript outside
+a method-call context will newly see D0030 fire when they upgrade
+to v1.3. The widening is a net win for correctness (it closes a
+silent gap) but the release notes call it out so users aren't
+surprised.
 
 ## 11. Out of scope (bright-lined)
 
 Explicit defers. v1.3 ships the tight slice; adjacent features
-land in v1.4+.
+land in v1.4+. The boolean-mask disambiguation rules in §5 already
+narrow the in-scope Subscript shapes; this section is the explicit
+defer-list for everything outside that boundary.
 
 - `.apply(lambda row: …)` and `.apply(lambda col: …, axis=0)` —
   runtime callbacks whose shape isn't statically inferable.
@@ -358,7 +563,9 @@ land in v1.4+.
   resolved: v1.4).
 - `pd.read_csv(...)` and other I/O entry points (v1.4).
 - Cross-dialect handoff via `.toPandas()` (Q8 resolved: v1.4).
-- `SparkFrame[X] | PandasFrame[X]` union annotations.
+- Cross-dialect union annotations like `SparkFrame[X] | PandasFrame[X]`
+  — v1.3 quietly skips dialect tagging on union annotations (see
+  §3); v1.4 is the candidate release for explicit support.
 - Copy-vs-view semantics (`SettingWithCopyWarning`) — runtime.
 - NumPy structured arrays as DataFrame sources.
 - Arrow-backed pandas dtype distinctions beyond the §4 mapping.
@@ -399,17 +606,39 @@ the cost of piece (b) (0.25 day). The corrected total is 8.25 days.
    piece (a), piece (b), the six dispatched operations, the
    net-new boolean-mask shape, `ColumnType::Float`, unsigned-int
    widening, and D0090. Each PR cites this spec and the relevant
-   §-anchor.
+   §-anchor. The PR(s) MUST include the `ColumnType::Float`
+   exhaustiveness sweep mandated in §9 piece (b), with a per-site
+   disposition list in the PR description.
 3. **Cross-codebase pandas fixture PR** — a ≤200 LOC, hand-curated
-   pandas fixture. Per the cross-codebase rule, every claim about
-   pandas dtype behavior must cite a pandas docs source so the
-   fixture verifies correctness rather than just "no diagnostic
-   fires."
+   pandas fixture. Per the cross-codebase rule (rule 4a:
+   upstream-cited), every claim about pandas dtype behavior must
+   cite a pandas docs source. The fixture set MUST include both
+   positive PROBE-RESOLVES (real pandas usage that should pass
+   under v1.3) AND negative fixtures under `probes_negative/` that
+   exercise:
+   - D0030 firing on bare `df["typo"]` subscripts against
+     `PandasFrame[X]`,
+   - D0030 firing on the same shape against `SparkFrame[X]` (the
+     §10 widening),
+   - D0090 firing on `DataFrame[X]` alias use.
+   Donor candidates: scikit-learn and statsmodels fixtures, both of
+   which use pandas heavily. The cross-codebase suite verifies
+   correctness, not just absence of false positives.
 4. **Atomic docs migration PR** — the docs-site reference, tutorials,
    and cookbook update to surface `PandasFrame[X]` alongside
    `SparkFrame[X]`. The `DataFrame[X]` references are not yet
    removed from docs in v1.3 (the alias is still valid); they are
    marked deprecated.
+5. **Atomic trust-claim migration** (required release-blocker for
+   the v1.3.0 tag). Following the same pattern as the v1.2 PR-D
+   trust-claim migration: coordinate updates to README "Reliability
+   and trust", docs-site `production-readiness.md`, docs-site
+   `pykrete-tests.md`, the splash page, and the pykrete-tests
+   README in a single PR (or a tightly coordinated pair) so the
+   headline claim — "we check pandas DataFrames in addition to
+   PySpark" — lands with the impl. No silent deployment window
+   between the impl-ship commit and the copy update. The v1.3.0
+   tag does not fly until the trust-claim copy is in place.
 
 ---
 
