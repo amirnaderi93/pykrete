@@ -108,8 +108,9 @@ def f(df: PandasFrame[Orders]):
 #[test]
 fn V13B_subscript_variable_quiet_ignored() {
     // `df[some_var]` — opaque slice; v1.3 does not fold. Quiet ignore
-    // per spec §5 taxonomy. Falsifiable: a wrong impl would either
-    // (a) fire D0030 on the var, or (b) crash on the lookup.
+    // per spec §5 taxonomy. Falsifiable with `key = "statuss"` (a real
+    // typo): a wrong impl that constant-folded the variable would
+    // fire D0030; the right impl leaves it alone.
     let result = check(
         r#"
 class Orders(Schema):
@@ -117,7 +118,7 @@ class Orders(Schema):
     status: string
 
 def f(df: PandasFrame[Orders]):
-    key = "id"
+    key = "statuss"
     return df[key]
 "#,
     );
@@ -454,6 +455,11 @@ def f(o: PandasFrame[Orders], r: PandasFrame[Refunds]):
 
 #[test]
 fn V13B_dispatch_merge_pandas_good_key_quiet() {
+    // The dispatch-under-test fires D0060 on a missing join key —
+    // assert no D0060 (and no D0030) when the key is real, so a
+    // regression that routed merge through the wrong dispatch (e.g.
+    // back to a column-method check that would fire D0030 on the
+    // string `"id"`) would still get caught.
     let result = check(
         r#"
 class Orders(Schema):
@@ -468,6 +474,7 @@ def f(o: PandasFrame[Orders], r: PandasFrame[Refunds]):
 "#,
     );
     assert_does_not_have_code(&result, "D0030");
+    assert_does_not_have_code(&result, "D0060");
 }
 
 // 6. Rename: Spark `.withColumnRenamed(...)` / pandas
@@ -545,4 +552,260 @@ def f(df: PandasFrame[Orders]):
 "#,
     );
     assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn V13B_dispatch_assign_pandas_fires_d0030_on_subscript_ref_col_typo() {
+    // Round-2 minor: parallel to the `col("statuss")` test, but with
+    // the idiomatic pandas `df["statuss"]` shape on the assign kwarg's
+    // RHS. Locks down the col-ref descent inside an assign kwarg
+    // value.
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+    status: string
+
+def f(df: PandasFrame[Orders]):
+    return df.assign(amount=df["statuss"])
+"#,
+    );
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "statuss");
+}
+
+// ===========================================================================
+// V13B — Round 2: drop positional silent-corruption guard (BLOCKER 1)
+// ===========================================================================
+
+#[test]
+fn V13B_pdf_drop_positional_does_not_fire_d0030() {
+    // Spec §5: pandas `pdf.drop("x")` (positional) is row-by-label,
+    // NOT column drop. Round 1 fell through to Spark's column-drop
+    // dispatch, wrongly firing D0030 AND silently erasing the column
+    // from the tracked schema. Round 2 quiet-ignores per §5 (row
+    // operations are out of v1.3 scope).
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+    status: string
+
+def f(df: PandasFrame[Orders]):
+    return df.drop("statuss")
+"#,
+    );
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn V13B_pdf_drop_positional_does_not_corrupt_schema() {
+    // The data-corruption half of BLOCKER 1: a subsequent reference
+    // to the (not-actually-dropped) column must still resolve. If the
+    // Spark column-drop dispatch erased the column from the tracked
+    // schema, `col("status")` on the chain result would false-fire
+    // D0030.
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+    status: string
+
+def f(df: PandasFrame[Orders]):
+    return df.drop("status").select(col("status"))
+"#,
+    );
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn V13B_sdf_drop_positional_fires_d0030_on_typo() {
+    // Spark's `.drop("x")` is the column-drop dispatch; the Spark side
+    // shouldn't regress. Spark `.drop` SILENTLY TOLERATES missing
+    // names, so the typo on the drop call itself doesn't fire D0030 —
+    // but the chained `col("status")` does, because the (claimed-
+    // dropped) name was tolerated, leaving the schema unchanged.
+    // (Round 1 covered this via the `V13B_dispatch_drop_spark_drops_named_column_from_schema`
+    // test; this one pins the bare-typo behavior so the round-2 gate
+    // can't silently lose Spark coverage.)
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+    status: string
+
+def f(df: SparkFrame[Orders]):
+    return df.drop("statuss").select(col("statuss"))
+"#,
+    );
+    assert_has_code(&result, "D0030");
+}
+
+// ===========================================================================
+// V13B — Round 2: List-projection result type (IMPORTANT 1)
+// ===========================================================================
+
+#[test]
+fn V13B_subscript_list_projection_chained_select_preserves_schema() {
+    // `df[["a"]]` returns a Derived schema containing just "a"; the
+    // chained `.select(col("a"))` resolves against that projected
+    // schema. A Round-1 impl that returned None would lose schema
+    // fidelity and false-fire D0030 on the legitimate access.
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+    status: string
+
+def f(df: PandasFrame[Orders]):
+    return df[["id"]].select(col("id"))
+"#,
+    );
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn V13B_subscript_list_projection_chained_select_fires_d0030_on_unprojected() {
+    // The other side of IMPORTANT 1: a chained access to a column that
+    // was NOT in the projection must fire D0030. Confirms the result
+    // schema is the projection, not the receiver's full schema.
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+    status: string
+
+def f(df: PandasFrame[Orders]):
+    return df[["id"]].select(col("status"))
+"#,
+    );
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "status");
+}
+
+// ===========================================================================
+// V13B — Round 2: df["new"] = expr schema-extend (IMPORTANT 2)
+// ===========================================================================
+
+#[test]
+fn V13B_pdf_subscript_assign_extends_schema() {
+    // After `pdf["new"] = expr`, a subsequent `col("new")` must
+    // resolve — Round 1 only fired the enum-sink check and never
+    // extended the schema, so a chained access would false-fire D0030.
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+
+def f(df: PandasFrame[Orders]):
+    df["new"] = "value"
+    return df.select(col("new"))
+"#,
+    );
+    assert_does_not_have_code(&result, "D0030");
+}
+
+// ===========================================================================
+// V13B — Round 2: Spark-gate tests for pandas-only dispatches (IMPORTANT 4)
+// ===========================================================================
+//
+// PR-B routes `rename`, `assign`, `drop(columns=...)`, and `merge` to
+// pandas-side handlers only when the receiver isn't Spark-tagged. The
+// round-1 PR description asked the reviewer to eyeball this gate;
+// memory `feedback_cross_codebase_must_verify_correctness` rejects
+// eyeballed gates. These tests pin each gate against a SparkFrame
+// receiver so an inverted-boolean regression would surface.
+
+#[test]
+fn V13B_sdf_rename_does_not_route_to_pandas_dispatch() {
+    // `sdf.rename(columns={"status": "state"})` on a SparkFrame must
+    // NOT route through pandas's `apply_rename_dict` — Spark's
+    // `.rename` is not a column-rename method (Spark uses
+    // `.withColumnRenamed`). Falsifier: with the pandas dispatch
+    // fired, `renamed` would carry `{id, state}` and the chained
+    // `col("status")` would fire D0030 (status was renamed away).
+    // With the gate, the chain returns Unknown — no schema mutation,
+    // no D0030. An inverted boolean (pandas dispatch fired on Spark)
+    // would surface as the spurious D0030 below.
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+    status: string
+
+def f(df: SparkFrame[Orders]):
+    renamed = df.rename(columns={"status": "state"})
+    return renamed.select(col("status"))
+"#,
+    );
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn V13B_sdf_assign_method_call_on_sparkframe_does_not_route_to_pandas() {
+    // `sdf.assign(...)` on a SparkFrame must NOT route through
+    // pandas's `apply_pandas_assign` — Spark doesn't have `.assign`.
+    // Falsifier: pandas dispatch walks the kwarg value's col-refs and
+    // fires D0030 on a typo. With the gate, the kwarg value isn't
+    // walked by the assign dispatch — no D0030 on the typo. (This
+    // mirrors `V13B_dispatch_assign_pandas_fires_d0030_on_value_col_typo`
+    // on PandasFrame; the SparkFrame counterpart must NOT fire.)
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+
+def f(df: SparkFrame[Orders]):
+    return df.assign(amount=col("statuss"))
+"#,
+    );
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn V13B_sdf_drop_columns_kwarg_on_sparkframe_does_not_route_to_pandas() {
+    // `sdf.drop(columns=[...])` on a SparkFrame must NOT route to
+    // pandas's `apply_pandas_drop_columns` (which would fire D0030 on
+    // a missing name). Spark's `.drop(...)` accepts kwargs only as
+    // positional; `columns=` isn't a Spark keyword. Falling through to
+    // the Spark column-method dispatch is the correct behavior:
+    // Spark's `.drop` tolerates missing names silently.
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+    status: string
+
+def f(df: SparkFrame[Orders]):
+    return df.drop(columns=["statuss"])
+"#,
+    );
+    // The pandas dispatch would have fired D0030 on the typo;
+    // the gate prevents that.
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn V13B_sdf_merge_does_not_route_to_pandas_join_dispatch() {
+    // `sdf.merge(...)` on a SparkFrame must NOT route to the
+    // join-dispatch (`two_df_method`) — Spark frames use `.join`.
+    // A misspelled `.merge` is wrong code, not a join. Round-1 PR-B
+    // explicitly skips Join when method == "merge" and the receiver
+    // is Spark-named, so no D0060 fires on the bogus key.
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+    status: string
+
+class Refunds(Schema):
+    id: int
+
+def f(o: SparkFrame[Orders], r: SparkFrame[Refunds]):
+    return o.merge(r, on="statuss")
+"#,
+    );
+    // Pandas merge would fire D0060 on "statuss"; the gate
+    // prevents the routing.
+    assert_does_not_have_code(&result, "D0060");
 }

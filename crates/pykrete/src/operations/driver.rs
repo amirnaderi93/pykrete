@@ -114,28 +114,49 @@ fn walk_stmt<'a>(
         Stmt::Assign(a) => {
             let schema = analyze_expr(&a.value, ctx, source, line_index, diagnostics);
             // v1.3 pandas dispatch (spec §5) — `df["new"] = expr`. The
-            // target is a Subscript whose value is a frame-bound Name;
-            // the slice (string literal) names a column to add or
-            // replace. The enum-sink check (D0084) rides along when
-            // the slice names an enum-typed column. The col-ref check
-            // on the RHS is the responsibility of the existing
-            // analyze_expr descent above.
+            // target is a Subscript whose value is a pandas-tagged
+            // frame-bound Name; the slice (string literal) names a
+            // column to add or replace. Gated on the Pandas dialect:
+            // Spark frames don't support item assignment, so firing
+            // there would be misleading (and the wider pandas
+            // dispatches all share this gate per spec §5).
+            //
+            // Two effects, in order:
+            // 1. enum-sink check on the RHS literal (D0084) when the
+            //    target column is enum-typed.
+            // 2. extend the tracked schema with the new column so a
+            //    later `df["new"]` access doesn't false-fire D0030.
+            //    Type is inferred from the RHS; falls back to None
+            //    (Unknown) for expressions we can't type.
+            //
+            // The col-ref check on the RHS itself is the analyze_expr
+            // descent above.
             for target in &a.targets {
                 if let Expr::Subscript(sub) = target
                     && let Some(name_expr) = sub.value.as_name_expr()
+                    && ctx.lookup_dialect(name_expr.id.as_str())
+                        == Some(crate::dataframe::Dialect::Pandas)
                     && let Some(recv) = ctx.lookup(name_expr.id.as_str())
                     && let Some(slice_lit) = sub.slice.as_string_literal_expr()
                 {
                     let col_name = slice_lit.value.to_str();
                     super::column_methods::check_pandas_subscript_assign_enum_sink(
                         col_name,
-                        slice_lit.range(),
                         &a.value,
                         &recv,
                         ctx,
                         source,
                         line_index,
                         diagnostics,
+                    );
+                    let ty = super::column_exprs::infer_expr_type(&a.value, &recv, ctx.type_ctx());
+                    let mut fields = recv.typed_fields(ctx.schemas());
+                    super::column_methods::add_or_replace_column(&mut fields, col_name, ty);
+                    let extended = SchemaView::Derived(fields);
+                    ctx.bind_df_with_dialect(
+                        name_expr.id.as_str(),
+                        extended,
+                        crate::dataframe::Dialect::Pandas,
                     );
                 }
             }

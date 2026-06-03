@@ -169,17 +169,29 @@ pub(super) fn analyze_expr<'a>(
             // per spec §9 receiver-shape bound. Spark + Pandas share the
             // same D0030 path — see spec §10 for the bonus Spark
             // coverage widening this lands.
-            if let Some(name) = s.value.as_name_expr()
+            //
+            // For all-string-literal List slices (`df[["a", "b"]]`),
+            // returns a `SchemaView::Derived` of the projected columns
+            // so chained analysis (`df[["a"]].select(col("a"))`)
+            // preserves schema fidelity. Other slice shapes (string
+            // literal scalar, variable, integer, slice, boolean mask)
+            // return None — the Subscript value isn't itself a frame.
+            let projection = if let Some(name) = s.value.as_name_expr()
                 && let Some(view) = ctx.lookup(name.id.as_str())
             {
                 report_subscript_col_refs(&s.slice, &view, ctx, source, line_index, diagnostics);
-            }
+                subscript_list_projection(&s.slice, &view, ctx)
+            } else {
+                None
+            };
             // `(df, df2)[1]` — neither half is a DataFrame on its own,
             // but a method call buried in either side still needs its
-            // diagnostics collected.
+            // diagnostics collected. Descent here is for nested-call
+            // collection only — the col-ref report above already
+            // covered the literal-name shapes piece (b) owns.
             let _ = analyze_expr(&s.value, ctx, source, line_index, diagnostics);
             let _ = analyze_expr(&s.slice, ctx, source, line_index, diagnostics);
-            None
+            projection
         }
         Expr::FString(f) => {
             // `f"{df.select('typo').count()}"` — descend into every
@@ -262,6 +274,37 @@ fn report_subscript_col_refs<'a>(
         return;
     }
     report_column_refs(&refs, view, ctx, source, line_index, diagnostics);
+}
+
+/// `df[["a", "b"]]` — the column-projection arm of piece (b). When the
+/// slice is an all-string-literal List, returns a `SchemaView::Derived`
+/// containing just those columns (with types pulled from the receiver
+/// when present). Any other slice shape — scalar string, variable, slice,
+/// integer, boolean mask, mixed list — returns `None` so the Subscript
+/// value isn't itself treated as a frame downstream.
+fn subscript_list_projection<'a>(
+    slice: &'a Expr,
+    view: &SchemaView<'a>,
+    ctx: &BodyContext<'a>,
+) -> Option<SchemaView<'a>> {
+    let list = slice.as_list_expr()?;
+    let mut names: Vec<&'a str> = Vec::with_capacity(list.elts.len());
+    for elt in &list.elts {
+        let lit = elt.as_string_literal_expr()?;
+        names.push(lit.value.to_str());
+    }
+    if names.is_empty() {
+        return None;
+    }
+    let recv_fields = view.typed_fields(ctx.schemas());
+    let fields: Vec<DerivedField<'a>> = names
+        .into_iter()
+        .map(|name| match recv_fields.iter().find(|f| f.name == name) {
+            Some(f) => f.clone(),
+            None => DerivedField { name, ty: None },
+        })
+        .collect();
+    Some(SchemaView::Derived(fields))
 }
 
 /// Walk each comprehension generator's `iter` (the iteration source)
@@ -479,11 +522,12 @@ pub(super) fn analyze_method_call<'a>(
     // falls through to the pandas dispatch by design: chains lose
     // dialect, and a real pandas chain (`pdf.merge(x).assign(...)`)
     // still needs its terminal method checked.
-    let receiver_is_spark_named = attr
+    let receiver_dialect = attr
         .value
         .as_name_expr()
-        .and_then(|n| ctx.lookup_dialect(n.id.as_str()))
-        == Some(Dialect::Spark);
+        .and_then(|n| ctx.lookup_dialect(n.id.as_str()));
+    let receiver_is_spark_named = receiver_dialect == Some(Dialect::Spark);
+    let receiver_is_pandas_named = receiver_dialect == Some(Dialect::Pandas);
 
     // `df.createOrReplaceTempView("name")` — register `df`'s schema
     // against `name` in the file's tempView registry, so a later
@@ -721,14 +765,7 @@ pub(super) fn analyze_method_call<'a>(
         && method == "rename"
         && let Some(dict) = pandas_dict_kwarg(call, "columns")
     {
-        return Some(apply_rename_dict(
-            dict,
-            &receiver,
-            ctx,
-            source,
-            line_index,
-            diagnostics,
-        ));
+        return Some(apply_rename_dict(dict, &receiver, ctx));
     }
     // `df.assign(new=expr, …)` → mirror of `withColumns`. Pandas
     // passes the new columns as kwargs (not a dict positional);
@@ -747,7 +784,7 @@ pub(super) fn analyze_method_call<'a>(
     }
     // `df.drop(columns=[...])` — pandas drop's column-only shape.
     // (Spark `.drop(...)` takes positional column names; pandas's
-    // unkwarg'd `.drop("x")` is *row-by-index*, not column drop, so
+    // unkwarg'd `.drop("x")` is *row-by-label*, not column drop, so
     // we deliberately ONLY recognize the explicit `columns=` form
     // here.) The check reuses Spark's `.drop` logic — col-refs +
     // schema minus the dropped names.
@@ -763,6 +800,16 @@ pub(super) fn analyze_method_call<'a>(
             line_index,
             diagnostics,
         ));
+    }
+    // Positional `pdf.drop("x")` on a pandas-named receiver is
+    // row-by-label, NOT column drop (v1.3 spec §5). Block the Spark
+    // column-method dispatch below so it doesn't fire a wrong D0030
+    // AND silently erase the column from the tracked schema.
+    // Out-of-scope for v1.3 — quiet ignore, returning the receiver
+    // unchanged so chained analysis stays coherent.
+    if receiver_is_pandas_named && method == "drop" && pandas_list_kwarg(call, "columns").is_none()
+    {
+        return Some(receiver);
     }
     if matches!(method, "melt" | "unpivot") {
         return Some(apply_melt(
