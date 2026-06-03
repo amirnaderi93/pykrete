@@ -27,7 +27,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.filter(col("price") > 0).select(col("place_code"), col("price"))
 "#,
     );
@@ -45,7 +45,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.filter(col("price") > 0).select(col("madeup"))
 "#,
     );
@@ -64,7 +64,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.select(col("place_code")).filter(col("price") > 0)
 "#,
     );
@@ -86,7 +86,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     filtered = raw.filter(col("price") > 0)
     return filtered.select(col("place_code"), col("price"))
 "#,
@@ -105,7 +105,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     partial = raw.select(col("place_code"))
     return partial.select(col("price"))
 "#,
@@ -123,7 +123,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     renamed = raw.withColumnRenamed("place_code", "code")
     return renamed.select(col("code"))
 "#,
@@ -139,7 +139,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     renamed = raw.withColumnRenamed("place_code", "code")
     return renamed.select(col("place_code"))
 "#,
@@ -156,7 +156,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     extended = raw.withColumn("doubled", col("price") * 2)
     return extended.select(col("doubled"))
 "#,
@@ -172,7 +172,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     trimmed = raw.drop("price")
     return trimmed.select(col("price"))
 "#,
@@ -192,7 +192,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(a: DataFrame[Orders], b: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(a: SparkFrame[Orders], b: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return a.unionByName(b)
 "#,
     );
@@ -211,7 +211,7 @@ class B(Schema):
     x: int
     z: int
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame[A]:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame[A]:
     return a.unionByName(b)
 "#,
     );
@@ -232,7 +232,7 @@ class A(Schema):
 class B(Schema):
     y: int
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame[A]:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame[A]:
     return a.union(b)
 "#,
     );
@@ -261,7 +261,7 @@ class SaleV2(Schema):
     amount: int
     timestamp: timestamp
 
-def f(old: DataFrame[Sale], new: DataFrame[SaleV2]) -> DataFrame:
+def f(old: SparkFrame[Sale], new: SparkFrame[SaleV2]) -> SparkFrame:
     return old.unionByName(new, allowMissingColumns=True)
 "#,
     );
@@ -284,7 +284,7 @@ class SaleV2(Schema):
     amount: int
     timestamp: timestamp
 
-def f(old: DataFrame[Sale], new: DataFrame[SaleV2]) -> DataFrame:
+def f(old: SparkFrame[Sale], new: SparkFrame[SaleV2]) -> SparkFrame:
     return old.unionByName(new, allowMissingColumns=True).select(col("timestamp"))
 "#,
     );
@@ -306,7 +306,7 @@ class SaleV2(Schema):
     amount: int
     timestamp: timestamp
 
-def f(old: DataFrame[Sale], new: DataFrame[SaleV2]) -> DataFrame:
+def f(old: SparkFrame[Sale], new: SparkFrame[SaleV2]) -> SparkFrame:
     return old.unionByName(new, allowMissingColumns=False)
 "#,
     );
@@ -327,7 +327,7 @@ class SaleV2(Schema):
     amount: int
     timestamp: timestamp
 
-def f(old: DataFrame[Sale], new: DataFrame[SaleV2]) -> DataFrame:
+def f(old: SparkFrame[Sale], new: SparkFrame[SaleV2]) -> SparkFrame:
     return old.unionByName(new)
 "#,
     );
@@ -351,7 +351,7 @@ class SaleV2(Schema):
     amount: int
     timestamp: timestamp
 
-def f(old: DataFrame[Sale], new: DataFrame[SaleV2], flag: bool) -> DataFrame:
+def f(old: SparkFrame[Sale], new: SparkFrame[SaleV2], flag: bool) -> SparkFrame:
     return old.unionByName(new, allowMissingColumns=flag)
 "#,
     );
@@ -375,7 +375,7 @@ class SaleV2(Schema):
     amount: int
     timestamp: timestamp
 
-def f(old: DataFrame[Sale], new: DataFrame[SaleV2]) -> DataFrame:
+def f(old: SparkFrame[Sale], new: SparkFrame[SaleV2]) -> SparkFrame:
     return old.unionByName(new, True)
 "#,
     );
@@ -398,7 +398,7 @@ class SaleV2(Schema):
     amount: int
     timestamp: timestamp
 
-def f(old: DataFrame[Sale], new: DataFrame[SaleV2]) -> DataFrame:
+def f(old: SparkFrame[Sale], new: SparkFrame[SaleV2]) -> SparkFrame:
     return old.unionByName(new, False)
 "#,
     );
@@ -420,7 +420,7 @@ class SaleV2(Schema):
     amount: int
     timestamp: timestamp
 
-def f(old: DataFrame[Sale], new: DataFrame[SaleV2], flag: bool) -> DataFrame:
+def f(old: SparkFrame[Sale], new: SparkFrame[SaleV2], flag: bool) -> SparkFrame:
     return old.unionByName(new, flag)
 "#,
     );
@@ -444,7 +444,7 @@ class Numbers(Schema):
     number1: int
     number2: int
 
-def f(a: DataFrame[Numbers], b: DataFrame[Numbers]) -> DataFrame:
+def f(a: SparkFrame[Numbers], b: SparkFrame[Numbers]) -> SparkFrame:
     return a.intersect(b).select(col("number1"))
 "#,
     );
@@ -459,7 +459,7 @@ class Numbers(Schema):
     number1: int
     number2: int
 
-def f(a: DataFrame[Numbers], b: DataFrame[Numbers]) -> DataFrame:
+def f(a: SparkFrame[Numbers], b: SparkFrame[Numbers]) -> SparkFrame:
     return a.intersect(b).select(col("nofield"))
 "#,
     );
@@ -479,7 +479,7 @@ class Numbers(Schema):
     number1: int
     number2: int
 
-def f(a: DataFrame[Numbers], b: DataFrame[Numbers]) -> DataFrame:
+def f(a: SparkFrame[Numbers], b: SparkFrame[Numbers]) -> SparkFrame:
     return a.{method}(b).select(col("nofield"))
 "#
         );
@@ -503,7 +503,7 @@ class B(Schema):
     x: int
     z: int
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame[A]:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame[A]:
     return a.intersect(b)
 "#,
     );
@@ -525,7 +525,7 @@ class A(Schema):
 class B(Schema):
     y: int
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame[A]:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame[A]:
     return a.subtract(b)
 "#,
     );
@@ -543,7 +543,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(a: DataFrame[Orders], b: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(a: SparkFrame[Orders], b: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return a.unionAll(b)
 "#,
     );
@@ -560,7 +560,7 @@ class A(Schema):
 class B(Schema):
     y: int
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame[A]:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame[A]:
     return a.unionAll(b)
 "#,
     );
@@ -582,7 +582,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.select(col("place_code"), col("price"))
 "#,
     );
@@ -598,7 +598,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.select(col("place_code"))
 "#,
     );
@@ -615,7 +615,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.withColumn("bonus", col("price") * 2)
 "#,
     );
@@ -626,13 +626,13 @@ def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
 #[test]
 fn d0050_does_not_fire_for_functions_without_a_typed_return_annotation() {
     // No declared return → nothing to validate against. The function is
-    // still typed (DataFrame[X] param) but return is not checked.
+    // still typed (SparkFrame[X] param) but return is not checked.
     let result = check(
         r#"
 class Orders(Schema):
     place_code: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.select(col("place_code"))
 "#,
     );

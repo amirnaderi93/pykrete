@@ -23,7 +23,7 @@ class Out(Schema):
     amount: string
     city: string
 
-def f(x: DataFrame[In]) -> DataFrame[Out]:
+def f(x: SparkFrame[In]) -> SparkFrame[Out]:
     return x.select(col(\"amount\"), col(\"city\"))
 "
     );
@@ -38,7 +38,7 @@ class Out(Schema):
     amount: int
     city: string
 
-def f(x: DataFrame[In]) -> DataFrame[Out]:
+def f(x: SparkFrame[In]) -> SparkFrame[Out]:
     return x.select(col(\"amount\"), col(\"city\"))
 "
     );
@@ -55,7 +55,7 @@ class Out(Schema):
     amount: string
     city: string
 
-def f(x: DataFrame[In]) -> DataFrame[Out]:
+def f(x: SparkFrame[In]) -> SparkFrame[Out]:
     return x.select(col(\"amount\").cast(\"string\"), col(\"city\"))
 "
     );
@@ -70,7 +70,7 @@ class Out(Schema):
     amount: int
     city: string
 
-def f(x: DataFrame[In]) -> DataFrame[Out]:
+def f(x: SparkFrame[In]) -> SparkFrame[Out]:
     return x.select(col(\"amount\").cast(\"string\"), col(\"city\"))
 "
     );
@@ -88,7 +88,7 @@ class Out(Schema):
     amount: long
     city: string
 
-def f(x: DataFrame[In]) -> DataFrame[Out]:
+def f(x: SparkFrame[In]) -> SparkFrame[Out]:
     return x.select(col(\"amount\"), col(\"city\"))
 "
     );
@@ -106,7 +106,7 @@ class Out(Schema):
     city: string
     total: long
 
-def f(x: DataFrame[In]) -> DataFrame[Out]:
+def f(x: SparkFrame[In]) -> SparkFrame[Out]:
     return x.withColumn(\"total\", F.sum(\"amount\"))
 "
     );
@@ -122,7 +122,7 @@ class Out(Schema):
     city: int
     total: long
 
-def f(x: DataFrame[In]) -> DataFrame[Out]:
+def f(x: SparkFrame[In]) -> SparkFrame[Out]:
     return x.groupBy(\"city\").agg(F.sum(\"amount\").alias(\"total\"))
 "
     );
@@ -146,7 +146,7 @@ class Out(Schema):
     amount: string
     label: string
 
-def f(l: DataFrame[L], r: DataFrame[R]) -> DataFrame[Out]:
+def f(l: SparkFrame[L], r: SparkFrame[R]) -> SparkFrame[Out]:
     return l.join(r, on=\"id\")
 ";
     // `amount` comes through the join as `int`, declared `string`.
@@ -164,7 +164,7 @@ class Out(Schema):
     x: string
     y: string
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.toDF(\"x\", \"y\")
 ";
     // `toDF` renames positionally — `x` takes `a`'s int type.
@@ -180,7 +180,7 @@ class Out(Schema):
     city: string
     doubled: string
 
-def f(x: DataFrame[In]) -> DataFrame[Out]:
+def f(x: SparkFrame[In]) -> SparkFrame[Out]:
     return x.withColumns({{\"doubled\": col(\"amount\")}})
 "
     );
@@ -205,7 +205,7 @@ class Out(Schema):
     name: string
     zip: string
 
-def f(p: DataFrame[Person]) -> DataFrame[Out]:
+def f(p: SparkFrame[Person]) -> SparkFrame[Out]:
     return p.select(col(\"name\"), col(\"address.zipcode\").alias(\"zip\"))
 ";
     assert_has_code(&check(src), "D0080");
@@ -226,7 +226,7 @@ class Out(Schema):
     name: string
     zip: int
 
-def f(p: DataFrame[Person]) -> DataFrame[Out]:
+def f(p: SparkFrame[Person]) -> SparkFrame[Out]:
     return p.select(col(\"name\"), col(\"address.zipcode\").alias(\"zip\"))
 ";
     assert_does_not_have_code(&check(src), "D0080");
@@ -242,7 +242,7 @@ class Out(Schema):
     amount: int
     city: string
 
-def f(x: DataFrame[In]) -> DataFrame[Out]:
+def f(x: SparkFrame[In]) -> SparkFrame[Out]:
     return x.withColumn(\"city\", F.lit(1))
 "
     );

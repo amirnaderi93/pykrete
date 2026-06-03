@@ -3,8 +3,8 @@
 //!
 //! Rule: an attribute access `name.attr` is treated as a column reference
 //! to `attr` when `name` is bound to a DataFrame in the current body
-//! context (a function parameter typed `DataFrame[Schema]`, or a local
-//! variable bound via assignment or `: DataFrame[Schema]` annotation).
+//! context (a function parameter typed `SparkFrame[Schema]`, or a local
+//! variable bound via assignment or `: SparkFrame[Schema]` annotation).
 //!
 //! Things that look like `name.attr` but where `name` is NOT a DataFrame
 //! (e.g. `F.add_months`, `datetime.now`) are deliberately NOT treated as
@@ -27,7 +27,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.select(raw.place_code, raw.price)
 "#,
     );
@@ -41,7 +41,7 @@ fn d0030_fires_when_df_X_references_an_unknown_column() {
 class Orders(Schema):
     place_code: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.select(raw.priec)
 "#,
     );
@@ -60,7 +60,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.select(raw.price.cast("int").alias("p_int"))
 "#,
     );
@@ -75,7 +75,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.select(raw.misspelled.cast("int").alias("x"))
 "#,
     );
@@ -91,7 +91,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.filter((raw.price > 0) & (raw.place_code.isNotNull()))
 "#,
     );
@@ -105,7 +105,7 @@ fn df_X_typo_inside_filter_is_caught() {
 class Orders(Schema):
     place_code: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.filter(raw.nonexistent > 0)
 "#,
     );
@@ -121,7 +121,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.withColumn("doubled", raw.price * 2)
 "#,
     );
@@ -144,7 +144,7 @@ class Orders(Schema):
     price: int
     log_date: timestamp
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.filter(raw.log_date > F.add_months(lit(NOW), -1))
 "#,
     );
@@ -161,7 +161,7 @@ fn attribute_access_on_unrelated_name_is_not_collected() {
 class Orders(Schema):
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.filter(raw.price > config.threshold)
 "#,
     );
@@ -186,7 +186,7 @@ class B(Schema):
     k: int
     b: int
 
-def f(left: DataFrame[A], right: DataFrame[B]) -> DataFrame:
+def f(left: SparkFrame[A], right: SparkFrame[B]) -> SparkFrame:
     return left.join(right, on="k").select(left.a, right.b)
 "#,
     );
@@ -207,7 +207,7 @@ class B(Schema):
     k: int
     b: int
 
-def f(left: DataFrame[A], right: DataFrame[B]) -> DataFrame:
+def f(left: SparkFrame[A], right: SparkFrame[B]) -> SparkFrame:
     return left.join(right, on="k").select(left.zzz)
 "#,
     );

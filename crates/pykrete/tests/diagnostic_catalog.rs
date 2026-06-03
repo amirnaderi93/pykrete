@@ -123,6 +123,11 @@ const FIXTURES: &[Fixture] = &[
         files: &["d0084_enum_value_mismatch.pyk"],
         mode: CheckMode::Standard,
     },
+    Fixture {
+        code: "D0090",
+        files: &["d0090_deprecated_dataframe_alias.pyk"],
+        mode: CheckMode::Standard,
+    },
 ];
 
 fn fixture_dir() -> PathBuf {
@@ -273,3 +278,4 @@ snapshot_case!(d0081, "D0081");
 snapshot_case!(d0082, "D0082");
 snapshot_case!(d0083, "D0083");
 snapshot_case!(d0084, "D0084");
+snapshot_case!(d0090, "D0090");

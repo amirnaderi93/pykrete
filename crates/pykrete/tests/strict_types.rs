@@ -19,7 +19,7 @@ class Raw(Schema):
 fn string_in_arithmetic_is_flagged_under_strict() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.withColumn(\"x\", col(\"city\") + col(\"amount\"))
 "
     );
@@ -31,7 +31,7 @@ fn string_in_arithmetic_is_silent_in_default_mode() {
     // The advisory check must not fire outside strict mode.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.withColumn(\"x\", col(\"city\") + col(\"amount\"))
 "
     );
@@ -42,7 +42,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn numeric_arithmetic_is_not_flagged() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.withColumn(\"x\", col(\"amount\") + col(\"amount2\"))
 "
     );
@@ -53,7 +53,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn cross_type_comparison_is_flagged_under_strict() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.filter(col(\"amount\") == col(\"city\"))
 "
     );
@@ -64,7 +64,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn cross_type_comparison_is_silent_in_default_mode() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.filter(col(\"amount\") == col(\"city\"))
 "
     );
@@ -77,7 +77,7 @@ fn date_versus_string_comparison_is_idiomatic_and_accepted() {
     // cast to a date. Strict mode must not flag it.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.filter(col(\"when_date\") > \"2024-01-01\")
 "
     );
@@ -88,7 +88,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn same_family_comparison_is_not_flagged() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.filter(col(\"amount\") > col(\"amount2\"))
 "
     );
@@ -100,7 +100,7 @@ fn nested_string_arithmetic_is_reached() {
     // The bad BinOp is nested inside an `F.lit`-style call argument.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.withColumn(\"x\", F.abs(col(\"city\") * col(\"amount\")))
 "
     );

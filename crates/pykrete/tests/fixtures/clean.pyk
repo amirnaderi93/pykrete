@@ -3,5 +3,5 @@ class Sale(Schema):
     amount: int
 
 
-def revenue(sales: DataFrame[Sale]) -> DataFrame[Sale]:
+def revenue(sales: SparkFrame[Sale]) -> SparkFrame[Sale]:
     return sales.select(col("region"), col("amount"))

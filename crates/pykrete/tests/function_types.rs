@@ -24,7 +24,7 @@ class Out(Schema):
     city: string
     n: string
 
-def f(x: DataFrame[In]) -> DataFrame[Out]:
+def f(x: SparkFrame[In]) -> SparkFrame[Out]:
     return x.groupBy(\"city\").agg(F.count(\"amount\").alias(\"n\"))
 "
     );
@@ -41,7 +41,7 @@ class Out(Schema):
     city: string
     total: int
 
-def f(x: DataFrame[In]) -> DataFrame[Out]:
+def f(x: SparkFrame[In]) -> SparkFrame[Out]:
     return x.groupBy(\"city\").agg(F.sum(\"amount\").alias(\"total\"))
 "
     );
@@ -58,7 +58,7 @@ class Out(Schema):
     when_date: date
     name_len: string
 
-def f(x: DataFrame[In]) -> DataFrame[Out]:
+def f(x: SparkFrame[In]) -> SparkFrame[Out]:
     return x.withColumn(\"name_len\", F.length(col(\"city\")))
 "
     );
@@ -74,7 +74,7 @@ class Out(Schema):
     amount: int
     when_date: date
 
-def f(x: DataFrame[In]) -> DataFrame[Out]:
+def f(x: SparkFrame[In]) -> SparkFrame[Out]:
     return x.withColumn(\"city\", F.lower(col(\"city\")))
 "
     );
@@ -93,7 +93,7 @@ class Out(Schema):
     when_date: date
     yr: string
 
-def f(x: DataFrame[In]) -> DataFrame[Out]:
+def f(x: SparkFrame[In]) -> SparkFrame[Out]:
     return x.withColumn(\"yr\", F.year(col(\"when_date\")))
 "
     );
@@ -106,7 +106,7 @@ fn function_result_type_flows_into_strict_comparison() {
     // column `city` is a cross-type comparison.
     let src = format!(
         "{IN}
-def f(x: DataFrame[In]) -> DataFrame:
+def f(x: SparkFrame[In]) -> SparkFrame:
     return x.filter(F.length(col(\"city\")) == col(\"city\"))
 "
     );

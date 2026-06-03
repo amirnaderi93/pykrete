@@ -23,7 +23,7 @@ fn project(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
 fn hover_on_imported_schema_reference_resolves_across_files() {
     // schemas.pyk declares Orders. pipeline.pyk imports it and uses
     // it in a typed signature. Hovering on `Orders` inside
-    // `DataFrame[Orders]` in pipeline.pyk must show Orders' fields,
+    // `SparkFrame[Orders]` in pipeline.pyk must show Orders' fields,
     // even though Orders lives in a sibling file.
     let files = project(&[
         (
@@ -39,15 +39,15 @@ class Orders(Schema):
             r#"
 from .schemas import Orders
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw
 "#,
         ),
     ]);
-    // Cursor on the `O` of `DataFrame[Orders]` (the second `Orders`
-    // in pipeline.pyk — line 4, char "def f(raw: DataFrame[".len() + 1).
+    // Cursor on the `O` of `SparkFrame[Orders]` (the second `Orders`
+    // in pipeline.pyk — line 4, char "def f(raw: SparkFrame[".len() + 1).
     let line = 4;
-    let column = "def f(raw: DataFrame[".len() + 1;
+    let column = "def f(raw: SparkFrame[".len() + 1;
     let info = hover_in_project(&files, "/proj/pipeline.pyk", line, column)
         .expect("expected cross-file hover info");
     assert!(info.markdown.contains("Orders"));
@@ -73,15 +73,15 @@ class Returns(Schema):
             r#"
 from .schemas import Orders, Returns
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw
 "#,
         ),
     ]);
-    // Cursor on the `O` of `DataFrame[Orders]` slot inside the def
+    // Cursor on the `O` of `SparkFrame[Orders]` slot inside the def
     // line — completion should list both imported schemas.
     let line = 4;
-    let column = "def f(raw: DataFrame[".len() + 1;
+    let column = "def f(raw: SparkFrame[".len() + 1;
     let items = completions_in_project(&files, "/proj/pipeline.pyk", line, column);
     let mut names: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
     names.sort();
@@ -103,13 +103,13 @@ class Orders(Schema):
             r#"
 from .schemas import Orders
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw
 "#,
         ),
     ]);
     let line = 4;
-    let column = "def f(raw: DataFrame[".len() + 1;
+    let column = "def f(raw: SparkFrame[".len() + 1;
     let (path, span) = definition_in_project(&files, "/proj/pipeline.pyk", line, column)
         .expect("expected a definition");
     // Resolves across files: the `Orders` class is declared in
@@ -140,7 +140,7 @@ class Orders(Schema):
             r#"
 from .schemas import Orders
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.select(col("price"))
 "#,
         ),
@@ -173,7 +173,7 @@ class Orders(Schema):
             r#"
 from .schemas import Orders
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw
 "#,
         ),

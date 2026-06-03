@@ -39,7 +39,7 @@ class Sale(Schema):
 fn F_try_divide_checks_column_args() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.withColumn(\"ratio\", F.try_divide(\"amount\", \"quantity\"))
 "
     );
@@ -50,7 +50,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn F_try_divide_typos_fire_D0030() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.withColumn(\"ratio\", F.try_divide(\"amunt\", \"quantity\"))
 "
     );
@@ -73,7 +73,7 @@ class Out(Schema):
     end_date: date
     ratio: string
 
-def f(raw: DataFrame[Sale]) -> DataFrame[Out]:
+def f(raw: SparkFrame[Sale]) -> SparkFrame[Out]:
     return raw.withColumn(\"ratio\", F.try_divide(col(\"amount\"), col(\"quantity\")))
 "
     );
@@ -88,7 +88,7 @@ class Out(Schema):
     region: string
     one_amount: string
 
-def f(raw: DataFrame[Sale]) -> DataFrame[Out]:
+def f(raw: SparkFrame[Sale]) -> SparkFrame[Out]:
     return raw.groupBy(\"region\").agg(F.any_value(\"amount\").alias(\"one_amount\"))
 "
     );
@@ -104,7 +104,7 @@ class Out(Schema):
     region: string
     products: string
 
-def f(raw: DataFrame[Sale]) -> DataFrame[Out]:
+def f(raw: SparkFrame[Sale]) -> SparkFrame[Out]:
     return raw.groupBy(\"region\").agg(F.array_agg(\"product\").alias(\"products\"))
 "
     );
@@ -126,7 +126,7 @@ class Out(Schema):
     end_date: date
     udate: string
 
-def f(raw: DataFrame[Sale]) -> DataFrame[Out]:
+def f(raw: SparkFrame[Sale]) -> SparkFrame[Out]:
     return raw.withColumn(\"udate\", F.unix_date(col(\"when_date\")))
 "
     );
@@ -141,7 +141,7 @@ class Out(Schema):
     region: string
     big: string
 
-def f(raw: DataFrame[Sale]) -> DataFrame[Out]:
+def f(raw: SparkFrame[Sale]) -> SparkFrame[Out]:
     return raw.groupBy(\"region\").agg(F.count_if(col(\"amount\") > 100).alias(\"big\"))
 "
     );
@@ -163,7 +163,7 @@ class Out(Schema):
     end_date: date
     days: string
 
-def f(raw: DataFrame[Sale]) -> DataFrame[Out]:
+def f(raw: SparkFrame[Sale]) -> SparkFrame[Out]:
     return raw.withColumn(\"days\", F.date_diff(col(\"end_date\"), col(\"when_date\")))
 "
     );
@@ -184,7 +184,7 @@ class Out(Schema):
     end_date: date
     first_tag: int
 
-def f(raw: DataFrame[Sale]) -> DataFrame[Out]:
+def f(raw: SparkFrame[Sale]) -> SparkFrame[Out]:
     return raw.withColumn(\"first_tag\", F.get(col(\"tags\"), 0))
 "
     );
@@ -196,7 +196,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame[Out]:
 fn F_count_if_typo_inside_predicate_fires_D0030() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").agg(F.count_if(col(\"amunt\") > 100).alias(\"big\"))
 "
     );
@@ -213,7 +213,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn posexplode_in_select_produces_pos_and_col() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.select(F.posexplode(\"tags\")).select(col(\"pos\"), col(\"col\"))
 "
     );
@@ -225,7 +225,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn posexplode_outer_in_select_produces_pos_and_col() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.select(F.posexplode_outer(\"tags\")).select(col(\"pos\"), col(\"col\"))
 "
     );
@@ -236,7 +236,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn posexplode_only_pos_and_col_resolve_others_fire_D0030() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.select(F.posexplode(\"tags\")).select(col(\"region\"))
 "
     );
@@ -249,7 +249,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn posexplode_unknown_array_arg_fires_D0030() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.select(F.posexplode(\"taggs\"))
 "
     );
@@ -268,7 +268,7 @@ fn summary_makes_chain_opaque() {
     // is NOT flagged — same contract as any opaque op.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.summary().select(col(\"nope\"))
 "
     );
@@ -279,7 +279,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn describe_makes_chain_opaque() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.describe(\"amount\").select(col(\"nope\"))
 "
     );
@@ -292,7 +292,7 @@ fn observe_is_pass_through() {
     // still resolves against the original schema.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.observe(\"metrics\", F.count(col(\"amount\")).alias(\"n\")).select(col(\"region\"))
 "
     );
@@ -303,7 +303,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn observe_pass_through_catches_downstream_typo() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.observe(\"metrics\", F.count(col(\"amount\")).alias(\"n\")).select(col(\"regoin\"))
 "
     );
@@ -324,7 +324,7 @@ fn groupBy_pivot_agg_checks_amount_against_pre_pivot_schema() {
     // *positive* case is unchanged: no D0030.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").pivot(\"product\").agg(F.sum(\"amount\"))
 "
     );
@@ -337,7 +337,7 @@ fn groupBy_pivot_agg_catches_typo_in_agg_argument() {
     // — the new behavior, since pre-v0.1.29 the chain died at `.pivot()`.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").pivot(\"product\").agg(F.sum(\"amunt\"))
 "
     );
@@ -350,7 +350,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn groupBy_pivot_unknown_pivot_column_fires_D0030() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").pivot(\"produkt\").agg(F.sum(\"amount\"))
 "
     );
@@ -366,7 +366,7 @@ fn groupBy_pivot_agg_post_chain_is_unknown() {
     // is NOT flagged. This guards the deliberate degradation.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").pivot(\"product\").agg(F.sum(\"amount\")).select(col(\"nope\"))
 "
     );
@@ -382,7 +382,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn groupBy_pivot_count_post_chain_is_unknown() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").pivot(\"product\").count().select(col(\"anything\"))
 "
     );
@@ -393,7 +393,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn groupBy_pivot_max_post_chain_is_unknown() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").pivot(\"product\").max(\"amount\").filter(col(\"amount\") > 100)
 "
     );
@@ -404,7 +404,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn groupBy_pivot_sum_post_chain_is_unknown() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").pivot(\"product\").sum(\"amount\").select(col(\"nope\"))
 "
     );
@@ -415,7 +415,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn groupBy_pivot_min_post_chain_is_unknown() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").pivot(\"product\").min(\"amount\").select(col(\"nope\"))
 "
     );
@@ -426,7 +426,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn groupBy_pivot_mean_post_chain_is_unknown() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").pivot(\"product\").mean(\"amount\").select(col(\"nope\"))
 "
     );
@@ -437,7 +437,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn groupBy_pivot_avg_post_chain_is_unknown() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").pivot(\"product\").avg(\"amount\").select(col(\"nope\"))
 "
     );
@@ -450,7 +450,7 @@ fn groupBy_pivot_max_typo_in_agg_arg_fires_D0030() {
     // on Sale, so the user's typo on the aggregate column is caught.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").pivot(\"product\").max(\"typo\")
 "
     );
@@ -463,7 +463,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn groupBy_pivot_sum_typo_in_agg_arg_fires_D0030() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.groupBy(\"region\").pivot(\"product\").sum(\"typo\")
 "
     );
@@ -480,7 +480,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn drop_duplicates_snake_case_preserves_schema() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.drop_duplicates([\"region\"]).select(col(\"region\"), col(\"amount\"))
 "
     );
@@ -497,7 +497,7 @@ fn drop_duplicates_snake_case_catches_downstream_typo() {
     // fires D0030 (it didn't pre-v0.1.29 — schema was lost).
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.drop_duplicates([\"region\"]).select(col(\"regoin\"))
 "
     );
@@ -510,7 +510,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn drop_duplicates_snake_case_catches_subset_typo() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.drop_duplicates(subset=[\"regoin\"])
 "
     );
@@ -523,7 +523,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn drop_duplicates_snake_case_catches_positional_typo() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.drop_duplicates([\"regoin\"])
 "
     );
@@ -540,7 +540,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn sampleBy_preserves_schema() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.sampleBy(\"region\", {{\"x\": 0.5}}).select(col(\"region\"), col(\"amount\"))
 "
     );
@@ -551,7 +551,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn sampleBy_catches_downstream_typo() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.sampleBy(\"region\", {{\"x\": 0.5}}).select(col(\"regoin\"))
 "
     );
@@ -568,7 +568,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn sampleBy_typo_in_col_arg_fires_D0030() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.sampleBy(\"typo\", {{\"us\": 0.5}})
 "
     );
@@ -581,7 +581,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn sampleBy_col_form_first_arg_resolved() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.sampleBy(col(\"region\"), {{\"us\": 0.5}})
 "
     );
@@ -594,7 +594,7 @@ fn sampleBy_dict_string_keys_are_values_not_column_refs() {
     // NOT column names — they must not be column-ref-checked.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.sampleBy(\"region\", {{\"us\": 0.5, \"eu\": 0.3}})
 "
     );
@@ -609,7 +609,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn describe_explicit_cols_no_typo_clean() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.describe(\"amount\", \"region\")
 "
     );
@@ -620,7 +620,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn describe_explicit_cols_typo_fires_D0030() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.describe(\"typo\")
 "
     );
@@ -639,7 +639,7 @@ fn observe_metric_name_not_treated_as_column_ref() {
     // NOT fire D0030 even though no column by that name exists.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.observe(\"metric_name\", F.sum(\"amount\").alias(\"total\"))
 "
     );
@@ -650,7 +650,7 @@ def f(raw: DataFrame[Sale]) -> DataFrame:
 fn observe_expr_arg_typo_fires_D0030() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Sale]) -> DataFrame:
+def f(raw: SparkFrame[Sale]) -> SparkFrame:
     return raw.observe(\"metric_name\", F.sum(\"typo\").alias(\"total\"))
 "
     );

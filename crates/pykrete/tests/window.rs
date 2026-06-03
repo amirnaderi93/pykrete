@@ -21,7 +21,7 @@ class Raw(Schema):
 fn bad_partition_by_key_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.withColumn(\"r\", F.row_number().over(Window.partitionBy(\"nonexistent\")))
 "
     );
@@ -34,7 +34,7 @@ fn bad_order_by_key_in_chained_spec_is_caught() {
     // outer link of the builder chain.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.withColumn(\"r\", F.row_number().over(Window.partitionBy(\"city\").orderBy(\"madeup\")))
 "
     );
@@ -47,7 +47,7 @@ fn bad_partition_by_key_in_chained_spec_is_caught() {
     // which sits in the call's `func`, not its arguments.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.withColumn(\"r\", F.row_number().over(Window.partitionBy(\"madeup\").orderBy(\"amount\")))
 "
     );
@@ -58,7 +58,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn valid_window_spec_keys_pass() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.withColumn(\"r\", F.row_number().over(Window.partitionBy(\"city\").orderBy(\"amount\")))
 "
     );
@@ -69,7 +69,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn window_spec_inside_select_is_checked() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.select(F.rank().over(Window.partitionBy(\"nope\")).alias(\"rk\"))
 "
     );

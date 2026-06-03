@@ -1,0 +1,6 @@
+---
+source: crates/pykrete/tests/diagnostic_catalog.rs
+expression: captured
+---
+d0090_deprecated_dataframe_alias.pyk:5:10-5:25 warning D0090 deprecatedDataFrameAlias: 'DataFrame[Sale]' is a deprecated alias for 'SparkFrame[Sale]' and will be removed in pykrete v2.0. Rewrite as 'SparkFrame[Sale]'.  suggestion: SparkFrame[Sale]
+d0090_deprecated_dataframe_alias.pyk:5:30-5:45 warning D0090 deprecatedDataFrameAlias: 'DataFrame[Sale]' is a deprecated alias for 'SparkFrame[Sale]' and will be removed in pykrete v2.0. Rewrite as 'SparkFrame[Sale]'.  suggestion: SparkFrame[Sale]

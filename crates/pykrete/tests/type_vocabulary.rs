@@ -17,7 +17,7 @@ class Sale(Schema):
     region: string
     amount: decimal(18, 2)
 
-def f(sales: DataFrame[Sale]) -> DataFrame:
+def f(sales: SparkFrame[Sale]) -> SparkFrame:
     return sales.select(col(\"amount\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -30,7 +30,7 @@ class Sale(Schema):
     region: string
     amount: decimal
 
-def f(sales: DataFrame[Sale]) -> DataFrame:
+def f(sales: SparkFrame[Sale]) -> SparkFrame:
     return sales.select(col(\"amount\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -44,7 +44,7 @@ class Row(Schema):
     code: short
     payload: binary
 
-def f(r: DataFrame[Row]) -> DataFrame:
+def f(r: SparkFrame[Row]) -> SparkFrame:
     return r.select(col(\"flag\"), col(\"code\"), col(\"payload\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -60,7 +60,7 @@ class Sale(Schema):
     region: string
     amount: int
 
-def repriced(sales: DataFrame[Sale]) -> DataFrame:
+def repriced(sales: SparkFrame[Sale]) -> SparkFrame:
     return sales.select(col(\"amount\").cast(\"decimal(18,2)\").alias(\"amount\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -73,7 +73,7 @@ class Sale(Schema):
     region: string
     amount: int
 
-def f(sales: DataFrame[Sale]) -> DataFrame:
+def f(sales: SparkFrame[Sale]) -> SparkFrame:
     return sales.select(
         col(\"amount\").cast(\"byte\").alias(\"b\"),
         col(\"amount\").cast(\"short\").alias(\"s\"),
@@ -94,7 +94,7 @@ fn cast_to_a_typo_is_flagged_with_d0011() {
 class Sale(Schema):
     amount: int
 
-def f(sales: DataFrame[Sale]) -> DataFrame:
+def f(sales: SparkFrame[Sale]) -> SparkFrame:
     return sales.select(col(\"amount\").cast(\"decimial(18,2)\").alias(\"amount\"))
 ";
     let result = check(src);
@@ -110,7 +110,7 @@ fn cast_with_recognized_target_does_not_fire_d0011() {
 class Sale(Schema):
     amount: int
 
-def f(sales: DataFrame[Sale]) -> DataFrame:
+def f(sales: SparkFrame[Sale]) -> SparkFrame:
     return sales.select(
         col(\"amount\").cast(\"decimal(18, 2)\").alias(\"d\"),
         col(\"amount\").cast(\"byte\").alias(\"b\"),
@@ -133,7 +133,7 @@ class Totals(Schema):
     city: string
     total: long
 
-def f(raw: DataFrame[Raw]) -> DataFrame[Totals]:
+def f(raw: SparkFrame[Raw]) -> SparkFrame[Totals]:
     return raw.groupBy(\"city\").sum(\"flag\").select(col(\"city\"), col(\"sum(flag)\").alias(\"total\"))
 ";
     assert_does_not_have_code(&check(src), "D0080");
@@ -157,7 +157,7 @@ class Totals(Schema):
     city: string
     total: decimal
 
-def f(raw: DataFrame[Raw]) -> DataFrame[Totals]:
+def f(raw: SparkFrame[Raw]) -> SparkFrame[Totals]:
     return raw.groupBy(\"city\").sum(\"amount\").select(col(\"city\"), col(\"sum(amount)\").alias(\"total\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -179,7 +179,7 @@ class Totals(Schema):
     city: string
     total: string
 
-def f(raw: DataFrame[Raw]) -> DataFrame[Totals]:
+def f(raw: SparkFrame[Raw]) -> SparkFrame[Totals]:
     return raw.groupBy(\"city\").sum(\"amount\").select(col(\"city\"), col(\"sum(amount)\").alias(\"total\"))
 ";
     assert_has_code(&check(src), "D0080");
@@ -201,7 +201,7 @@ class Avg(Schema):
     city: string
     average: decimal
 
-def f(raw: DataFrame[Raw]) -> DataFrame[Avg]:
+def f(raw: SparkFrame[Raw]) -> SparkFrame[Avg]:
     return raw.groupBy(\"city\").mean(\"amount\").select(col(\"city\"), col(\"mean(amount)\").alias(\"average\"))
 ";
     let agg = "\
@@ -213,7 +213,7 @@ class Avg(Schema):
     city: string
     average: decimal
 
-def f(raw: DataFrame[Raw]) -> DataFrame[Avg]:
+def f(raw: SparkFrame[Raw]) -> SparkFrame[Avg]:
     return raw.groupBy(\"city\").agg(F.mean(col(\"amount\")).alias(\"average\"))
 ";
     assert_no_diagnostics(&check(shortcut));
@@ -246,7 +246,7 @@ class Bad(Schema):
 class Sale(Schema):
     amount: int
 
-def f(s: DataFrame[Sale]) -> DataFrame:
+def f(s: SparkFrame[Sale]) -> SparkFrame:
     return s.select(col(\"amount\").cast(\"decimal(39, 0)\").alias(\"a\"))
 ";
     assert_has_code(&check(in_cast), "D0011");
@@ -261,7 +261,7 @@ fn decimal_single_arg_defaults_scale_to_zero() {
 class Order(Schema):
     qty: decimal(10)
 
-def f(o: DataFrame[Order]) -> DataFrame:
+def f(o: SparkFrame[Order]) -> SparkFrame:
     return o.select(col(\"qty\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -279,7 +279,7 @@ class Sale(Schema):
     region: string
     amount: int
 
-def f(sales: DataFrame[Sale]) -> DataFrame:
+def f(sales: SparkFrame[Sale]) -> SparkFrame:
     return sales.select(
         col(\"region\").cast(\"varchar(100)\").alias(\"v\"),
         col(\"region\").cast(\"char(10)\").alias(\"c\"),
@@ -302,7 +302,7 @@ fn cast_to_numeric_and_dec_are_accepted_as_decimal_aliases() {
 class Sale(Schema):
     amount: int
 
-def f(sales: DataFrame[Sale]) -> DataFrame:
+def f(sales: SparkFrame[Sale]) -> SparkFrame:
     return sales.select(
         col(\"amount\").cast(\"numeric(18, 2)\").alias(\"n\"),
         col(\"amount\").cast(\"dec(10, 0)\").alias(\"d\"),
@@ -323,7 +323,7 @@ class Sale(Schema):
     amount: numeric(18, 2)
     qty: dec(10)
 
-def f(sales: DataFrame[Sale]) -> DataFrame:
+def f(sales: SparkFrame[Sale]) -> SparkFrame:
     return sales.select(col(\"amount\"), col(\"qty\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -340,7 +340,7 @@ fn cast_typo_still_fires_d0011_even_with_allowlist() {
             "class Sale(Schema):
     amount: int
 
-def f(s: DataFrame[Sale]) -> DataFrame:
+def f(s: SparkFrame[Sale]) -> SparkFrame:
     return s.select(col(\"amount\").cast(\"{typo}\").alias(\"a\"))
 "
         );
@@ -367,7 +367,7 @@ class Out(Schema):
     city: string
     label: string
 
-def f(raw: DataFrame[Raw]) -> DataFrame[Out]:
+def f(raw: SparkFrame[Raw]) -> SparkFrame[Out]:
     return raw.groupBy(\"city\").mean(\"label\").select(col(\"city\"), col(\"mean(label)\").alias(\"label\"))
 ";
     let agg = "\
@@ -379,7 +379,7 @@ class Out(Schema):
     city: string
     label: string
 
-def f(raw: DataFrame[Raw]) -> DataFrame[Out]:
+def f(raw: SparkFrame[Raw]) -> SparkFrame[Out]:
     return raw.groupBy(\"city\").agg(F.mean(col(\"label\")).alias(\"label\"))
 ";
     assert_does_not_have_code(&check(shortcut), "D0080");
@@ -429,7 +429,7 @@ fn round4_cast_path_decimal_aliases_stay_case_insensitive() {
 class Sale(Schema):
     amount: int
 
-def f(s: DataFrame[Sale]) -> DataFrame:
+def f(s: SparkFrame[Sale]) -> SparkFrame:
     return s.select(
         col(\"amount\").cast(\"NUMERIC(18, 2)\").alias(\"n\"),
         col(\"amount\").cast(\"Dec(10, 0)\").alias(\"d\"),
@@ -464,7 +464,7 @@ fn round4_schema_decimal_at_max_precision_passes() {
 class Sale(Schema):
     amount: decimal(38, 18)
 
-def f(s: DataFrame[Sale]) -> DataFrame:
+def f(s: SparkFrame[Sale]) -> SparkFrame:
     return s.select(col(\"amount\").cast(\"decimal(38, 18)\").alias(\"a\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -490,7 +490,7 @@ fn round4_cast_to_paren_garbage_on_bare_unmodeled_types_fires_d0011() {
             "class Sale(Schema):
     amount: int
 
-def f(s: DataFrame[Sale]) -> DataFrame:
+def f(s: SparkFrame[Sale]) -> SparkFrame:
     return s.select(col(\"amount\").cast(\"{typo}\").alias(\"a\"))
 "
         );
@@ -508,7 +508,7 @@ class Sale(Schema):
     region: string
     amount: float
 
-def f(s: DataFrame[Sale]) -> DataFrame:
+def f(s: SparkFrame[Sale]) -> SparkFrame:
     return s.select(col(\"amount\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -520,7 +520,7 @@ fn array_of_float_resolves() {
 class Row(Schema):
     values: Array[float]
 
-def f(r: DataFrame[Row]) -> DataFrame:
+def f(r: SparkFrame[Row]) -> SparkFrame:
     return r.select(col(\"values\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -537,7 +537,7 @@ class In(Schema):
 class Out(Schema):
     a: double
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d
 ";
     let result = common::check_strict(src);
@@ -555,7 +555,7 @@ class Row(Schema):
     id: int
     payload: Struct
 
-def f(r: DataFrame[Row]) -> DataFrame:
+def f(r: SparkFrame[Row]) -> SparkFrame:
     return r.select(col(\"id\"), col(\"payload\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -567,7 +567,7 @@ fn opaque_struct_field_inside_array_is_clean() {
 class Row(Schema):
     events: Array[Struct]
 
-def f(r: DataFrame[Row]) -> DataFrame:
+def f(r: SparkFrame[Row]) -> SparkFrame:
     return r.select(col(\"events\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -582,7 +582,7 @@ fn opaque_struct_dotted_access_degrades_silently() {
 class Row(Schema):
     payload: Struct
 
-def f(r: DataFrame[Row]) -> DataFrame:
+def f(r: SparkFrame[Row]) -> SparkFrame:
     return r.select(col(\"payload.something\"))
 ";
     assert_does_not_have_code(&check(src), "D0030");
@@ -610,7 +610,7 @@ class Out(Schema):
     id: int
     addr: Addr
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d
 ";
     assert_does_not_have_code(&check(src), "D0080");
@@ -626,7 +626,7 @@ class Row(Schema):
     id: int
     payload: Struct
 
-def f(r: DataFrame[Row]) -> DataFrame:
+def f(r: SparkFrame[Row]) -> SparkFrame:
     return r.select(col(\"payload\").getField(\"anything\"))
 ";
     assert_does_not_have_code(&check(src), "D0030");
@@ -643,7 +643,7 @@ fn round4_cast_to_compound_interval_with_precision_does_not_fire_d0011() {
 class Sale(Schema):
     amount: int
 
-def f(s: DataFrame[Sale]) -> DataFrame:
+def f(s: SparkFrame[Sale]) -> SparkFrame:
     return s.select(
         col(\"amount\").cast(\"INTERVAL DAY(3) TO SECOND(6)\").alias(\"a\"),
         col(\"amount\").cast(\"interval day(3) to second(6)\").alias(\"b\"),

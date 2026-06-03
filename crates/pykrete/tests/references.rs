@@ -15,7 +15,7 @@ class Orders(Schema):
     amount: int
     city: string
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     a = raw.select(col(\"amount\"), \"city\")
     return a.filter(col(\"amount\") > 0)
 ";
@@ -45,7 +45,7 @@ class Orders(Schema):
     amount: int
     city: string
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.select(\"city\")
 ";
     let (line, col) = cursor_at(src, "\"city\")");

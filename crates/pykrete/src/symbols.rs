@@ -198,24 +198,44 @@ fn render_function_signature(name: &str, slots: &[TypedSlot<'_>]) -> String {
     let params: Vec<String> = slots
         .iter()
         .filter_map(|s| match s.label {
-            SlotLabel::Param(p) => Some(format!("{p}: {}", render_annotation(&s.kind))),
+            SlotLabel::Param(p) => Some(format!(
+                "{p}: {}",
+                render_annotation(&s.kind, s.dialect, s.is_deprecated_alias),
+            )),
             SlotLabel::Return => None,
         })
         .collect();
     let ret = slots
         .iter()
         .find(|s| matches!(s.label, SlotLabel::Return))
-        .map(|s| format!(" -> {}", render_annotation(&s.kind)))
+        .map(|s| {
+            format!(
+                " -> {}",
+                render_annotation(&s.kind, s.dialect, s.is_deprecated_alias)
+            )
+        })
         .unwrap_or_default();
     format!("{name}({}){ret}", params.join(", "))
 }
 
-fn render_annotation(kind: &DataFrameAnnotation<'_>) -> String {
+fn render_annotation(
+    kind: &DataFrameAnnotation<'_>,
+    dialect: crate::dataframe::Dialect,
+    is_deprecated_alias: bool,
+) -> String {
+    let frame = if is_deprecated_alias {
+        "DataFrame"
+    } else {
+        match dialect {
+            crate::dataframe::Dialect::Spark => "SparkFrame",
+            crate::dataframe::Dialect::Pandas => "PandasFrame",
+        }
+    };
     match kind {
-        DataFrameAnnotation::Typed(name) => format!("DataFrame[{name}]"),
-        DataFrameAnnotation::Derived(_) => "DataFrame[…]".to_string(),
-        DataFrameAnnotation::Untyped => "DataFrame".to_string(),
-        DataFrameAnnotation::NonBareName => "DataFrame[?]".to_string(),
+        DataFrameAnnotation::Typed(name) => format!("{frame}[{name}]"),
+        DataFrameAnnotation::Derived(_) => format!("{frame}[…]"),
+        DataFrameAnnotation::Untyped => frame.to_string(),
+        DataFrameAnnotation::NonBareName => format!("{frame}[?]"),
     }
 }
 

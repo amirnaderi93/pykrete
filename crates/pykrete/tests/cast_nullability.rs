@@ -16,7 +16,7 @@ class Out(Schema):
     id: int
     note: string
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn(\"note\", F.lit(None).cast(\"string\"))
 ";
     // The body's `note` is nullable; `Out` declares it non-null.
@@ -33,7 +33,7 @@ class Out(Schema):
     id: int
     note: string
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn(\"note\", F.lit(None).cast(\"string\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -49,7 +49,7 @@ class Out(Schema):
     id: int
     note: Optional[string]
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn(\"note\", F.lit(None).cast(\"string\"))
 ";
     assert_no_diagnostics(&check_strict(src));
@@ -67,7 +67,7 @@ class Out(Schema):
     id: int
     raw: int
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn(\"raw\", col(\"raw\").cast(\"int\"))
 ";
     assert_has_code(&check_strict(src), "D0083");
@@ -84,7 +84,7 @@ class Out(Schema):
     id: int
     n: string
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn(\"n\", col(\"n\").cast(\"string\"))
 ";
     assert_no_diagnostics(&check_strict(src));

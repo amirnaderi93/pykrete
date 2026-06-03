@@ -1,0 +1,6 @@
+class Sale(Schema):
+    region: string
+
+
+def f(d: DataFrame[Sale]) -> DataFrame[Sale]:
+    return d

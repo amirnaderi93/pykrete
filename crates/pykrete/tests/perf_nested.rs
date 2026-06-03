@@ -28,7 +28,7 @@ class Schema{idx}(Schema):
     region_{idx}: string
 
 
-def deep_{idx}(df: DataFrame[Schema{idx}], debug: bool, n: int) -> None:
+def deep_{idx}(df: SparkFrame[Schema{idx}], debug: bool, n: int) -> None:
     with open("x") as fh:
         try:
             if debug:
@@ -42,7 +42,7 @@ def deep_{idx}(df: DataFrame[Schema{idx}], debug: bool, n: int) -> None:
             df.select(col("id_{idx}")).show()
 
 
-def deep_assign_{idx}(df: DataFrame[Schema{idx}], debug: bool) -> None:
+def deep_assign_{idx}(df: SparkFrame[Schema{idx}], debug: bool) -> None:
     if debug:
         out = df.select(col("region_{idx}"), col("amount_{idx}"))
         for _ in range(3):

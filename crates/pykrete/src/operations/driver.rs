@@ -418,6 +418,31 @@ fn handle_ann_assign<'a>(
     let target_range = target_expr.range;
     ctx.mark_local(target_name);
 
+    // v1.3 pandas spec §6: fire D0090 once for the deprecated
+    // `DataFrame[X]` alias on local annotated assignments, mirroring
+    // the signature-renderer's emission. Echo source text per Q7.
+    if let Some(rec) = dataframe::recognize_with_dialect(&ann.annotation)
+        && rec.is_deprecated_alias
+    {
+        let raw_text = &source[ann.annotation.range()];
+        let rewrite = crate::spark_frame_rewrite(raw_text);
+        diagnostics.push(
+            Diagnostic::at_range(
+                Severity::Warning,
+                "D0090",
+                format!(
+                    "'{raw_text}' is a deprecated alias for '{rewrite}' \
+                     and will be removed in pykrete v2.0. \
+                     Rewrite as '{rewrite}'.",
+                ),
+                ann.annotation.range(),
+                source,
+                line_index,
+            )
+            .with_suggestion(Some(rewrite)),
+        );
+    }
+
     match dataframe::recognize(&ann.annotation) {
         Some(DataFrameAnnotation::Typed(schema_name)) => {
             if let Some(schema) = ctx.find_schema(schema_name) {

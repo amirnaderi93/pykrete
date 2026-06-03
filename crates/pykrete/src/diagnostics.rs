@@ -201,6 +201,12 @@ pub const DIAGNOSTIC_CATALOG: &[(&str, &str)] = &[
     // the v1.1 stability surface as soon as it lands; the check sites
     // that emit it are wired up in the follow-up PR-B.
     ("D0084", "enumValueMismatch"),
+    // Reserved by the v1.3 pandas-support spec
+    // (`docs/design/pandas-support.md` §6). Fires as a warning on the
+    // deprecated `DataFrame[X]` alias use, replaced by `SparkFrame[X]`
+    // in v1.3 and removed in v2.0. Subject to standard rules-config
+    // override (the spec permits suppression).
+    ("D0090", "deprecatedDataFrameAlias"),
 ];
 
 /// The human-readable name for a diagnostic code — what the CLI and

@@ -1,7 +1,7 @@
 //! Generic-function inference. The motivating use case is the DataSource
 //! pattern, where a `dal.read(SOURCE_CONST)` call should infer
-//! `DataFrame[Schema]` from the type of `SOURCE_CONST` flowing through a
-//! generic method like `def read[T](source: G[T]) -> DataFrame[T]`.
+//! `SparkFrame[Schema]` from the type of `SOURCE_CONST` flowing through a
+//! generic method like `def read[T](source: G[T]) -> SparkFrame[T]`.
 //!
 //! What pykrete recognizes in v0.1:
 //!
@@ -38,12 +38,12 @@ class DataSource[T]:
         pass
 
 class DataAccessLayer:
-    def read[T](self, source: DataSource[T]) -> DataFrame[T]:
+    def read[T](self, source: DataSource[T]) -> SparkFrame[T]:
         pass
 
 RAW_ORDERS: DataSource[RawOrders] = DataSource("/path")
 
-def f(dal: DataAccessLayer) -> DataFrame[RawOrders]:
+def f(dal: DataAccessLayer) -> SparkFrame[RawOrders]:
 {indented}
 "#,
         indented = indent(body, 4),
@@ -83,7 +83,7 @@ class Orders(Schema):
 
 RAW_ORDERS: DataSource[Orders] = DataSource("/path")
 
-def f() -> DataFrame[Orders]:
+def f() -> SparkFrame[Orders]:
     return RAW_ORDERS.select(col("place_code"))
 "#,
     );
@@ -100,7 +100,7 @@ class Orders(Schema):
 
 RAW_ORDERS: DataSource[Orders] = DataSource("/path")
 
-def f() -> DataFrame[Orders]:
+def f() -> SparkFrame[Orders]:
     return RAW_ORDERS.select(col("nope"))
 "#,
     );
@@ -115,8 +115,8 @@ def f() -> DataFrame[Orders]:
 #[test]
 fn dal_read_of_typed_constant_returns_dataframe_of_the_constants_schema() {
     // The headline test. `dal.read(RAW_ORDERS)` should infer
-    // `DataFrame[RawOrders]` end-to-end. Returning that value directly
-    // satisfies the function's declared `-> DataFrame[RawOrders]` return
+    // `SparkFrame[RawOrders]` end-to-end. Returning that value directly
+    // satisfies the function's declared `-> SparkFrame[RawOrders]` return
     // — no D0030, no D0050.
     let result = check(&with_dal(
         r#"
@@ -170,8 +170,8 @@ return raw.filter(col("price") > 0).select(col("place_code"), col("price"))
 
 #[test]
 fn dal_read_result_with_wrong_declared_return_fires_D0050() {
-    // Function declares `-> DataFrame[Other]` but the inferred result of
-    // `dal.read(RAW_ORDERS)` is DataFrame[RawOrders]. Mismatch.
+    // Function declares `-> SparkFrame[Other]` but the inferred result of
+    // `dal.read(RAW_ORDERS)` is SparkFrame[RawOrders]. Mismatch.
     let result = check(
         r#"
 class RawOrders(Schema):
@@ -185,11 +185,11 @@ class DataSource[T]:
     def __init__(self, path): pass
 
 class DataAccessLayer:
-    def read[T](self, source: DataSource[T]) -> DataFrame[T]: pass
+    def read[T](self, source: DataSource[T]) -> SparkFrame[T]: pass
 
 RAW_ORDERS: DataSource[RawOrders] = DataSource("/path")
 
-def f(dal: DataAccessLayer) -> DataFrame[Other]:
+def f(dal: DataAccessLayer) -> SparkFrame[Other]:
     return dal.read(RAW_ORDERS)
 "#,
     );
@@ -212,7 +212,7 @@ class Orders(Schema):
 
 whatever = some_loader()
 
-def f() -> DataFrame[Orders]:
+def f() -> SparkFrame[Orders]:
     return whatever.select(col("place_code"))
 "#,
     );
@@ -231,10 +231,10 @@ class Orders(Schema):
     place_code: int
 
 class DataAccessLayer:
-    def read(self, path: str) -> DataFrame:
+    def read(self, path: str) -> SparkFrame:
         pass
 
-def f(dal: DataAccessLayer) -> DataFrame[Orders]:
+def f(dal: DataAccessLayer) -> SparkFrame[Orders]:
     return dal.read("/some/path")
 "#,
     );

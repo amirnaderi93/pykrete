@@ -27,7 +27,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.persist().select(col("place_code"), col("price"))
 "#;
     let result = check(src);
@@ -52,7 +52,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.persist().select(col("priec"))
 "#;
     let result = check(src);
@@ -76,7 +76,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.cache().repartition(8).orderBy("price").select(col("place_code"), col("price"))
 "#;
     let result = check(src);
@@ -94,14 +94,14 @@ def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
 #[test]
 fn return_type_check_still_fires_through_pass_throughs() {
     // The return statement carries the chain's final schema. If
-    // pass-throughs preserve it correctly, a `-> DataFrame[X]`
+    // pass-throughs preserve it correctly, a `-> SparkFrame[X]`
     // mismatch should still fire.
     let src = r#"
 class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.cache().select(col("place_code"))
 "#;
     let result = check(src);

@@ -1,4 +1,4 @@
-//! `<chain>.cast(DataFrame[Schema])` — pykrete's fluent schema-cast.
+//! `<chain>.cast(SparkFrame[Schema])` — pykrete's fluent schema-cast.
 //! Re-anchors a pipeline whose schema pykrete has lost (after a pivot or
 //! another un-modeled op) to an explicit schema, so downstream column
 //! checks resume. `Column.cast("int")` is untouched.
@@ -25,8 +25,8 @@ fn cast_re_anchors_an_unknown_chain() {
     // the bad column after it is then caught against `Pivoted`.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
-    return raw.groupBy(\"city\").pivot(\"month\").sum(\"amount\").cast(DataFrame[Pivoted]).select(col(\"nonexistent\"))
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
+    return raw.groupBy(\"city\").pivot(\"month\").sum(\"amount\").cast(SparkFrame[Pivoted]).select(col(\"nonexistent\"))
 "
     );
     assert_has_code(&check(&src), "D0030");
@@ -36,8 +36,8 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn cast_lets_a_valid_downstream_column_resolve() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
-    return raw.groupBy(\"city\").pivot(\"month\").sum(\"amount\").cast(DataFrame[Pivoted]).select(col(\"Jan\"))
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
+    return raw.groupBy(\"city\").pivot(\"month\").sum(\"amount\").cast(SparkFrame[Pivoted]).select(col(\"Jan\"))
 "
     );
     assert_no_diagnostics(&check(&src));
@@ -45,12 +45,12 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 
 #[test]
 fn cast_overrides_the_receiver_schema() {
-    // `raw` is DataFrame[Raw]; the cast forces `Pivoted` regardless, so
+    // `raw` is SparkFrame[Raw]; the cast forces `Pivoted` regardless, so
     // `Jan` resolves and `amount` (a Raw column) no longer would.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
-    return raw.cast(DataFrame[Pivoted]).select(col(\"amount\"))
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
+    return raw.cast(SparkFrame[Pivoted]).select(col(\"amount\"))
 "
     );
     assert_has_code(&check(&src), "D0030");
@@ -60,8 +60,8 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn cast_to_an_unknown_schema_is_reported() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
-    return raw.cast(DataFrame[Bogus])
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
+    return raw.cast(SparkFrame[Bogus])
 "
     );
     assert_has_code(&check(&src), "D0020");
@@ -74,7 +74,7 @@ fn column_cast_is_left_untouched() {
     // the schema-cast path.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.select(col(\"amount\").cast(\"int\"))
 "
     );

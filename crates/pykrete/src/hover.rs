@@ -455,26 +455,49 @@ fn render_function_hover(
     let params: Vec<String> = slots
         .iter()
         .filter_map(|slot| match slot.label {
-            SlotLabel::Param(name) => Some(format!("{name}: {}", render_annotation(&slot.kind))),
+            SlotLabel::Param(name) => Some(format!(
+                "{name}: {}",
+                render_annotation(&slot.kind, slot.dialect, slot.is_deprecated_alias),
+            )),
             SlotLabel::Return => None,
         })
         .collect();
     let _ = write!(md, "{}", params.join(", "));
     let _ = write!(md, ")");
     if let Some(ret) = slots.iter().find(|s| matches!(s.label, SlotLabel::Return)) {
-        let _ = write!(md, " -> {}", render_annotation(&ret.kind));
+        let _ = write!(
+            md,
+            " -> {}",
+            render_annotation(&ret.kind, ret.dialect, ret.is_deprecated_alias)
+        );
     }
     let _ = writeln!(md);
     let _ = writeln!(md, "```");
     HoverInfo { markdown: md }
 }
 
-fn render_annotation(kind: &DataFrameAnnotation<'_>) -> String {
+/// Render the slot's annotation for hover. Per spec §6 (echo-source-text
+/// policy / Q7), the deprecated `DataFrame[X]` alias hovers as the user
+/// wrote it rather than the canonical form; only `SparkFrame` and
+/// `PandasFrame` get their canonical surface.
+fn render_annotation(
+    kind: &DataFrameAnnotation<'_>,
+    dialect: crate::dataframe::Dialect,
+    is_deprecated_alias: bool,
+) -> String {
+    let frame = if is_deprecated_alias {
+        "DataFrame"
+    } else {
+        match dialect {
+            crate::dataframe::Dialect::Spark => "SparkFrame",
+            crate::dataframe::Dialect::Pandas => "PandasFrame",
+        }
+    };
     match kind {
-        DataFrameAnnotation::Typed(name) => format!("DataFrame[{name}]"),
-        DataFrameAnnotation::Derived(_) => "DataFrame[…]".to_string(),
-        DataFrameAnnotation::Untyped => "DataFrame".to_string(),
-        DataFrameAnnotation::NonBareName => "DataFrame[?]".to_string(),
+        DataFrameAnnotation::Typed(name) => format!("{frame}[{name}]"),
+        DataFrameAnnotation::Derived(_) => format!("{frame}[…]"),
+        DataFrameAnnotation::Untyped => frame.to_string(),
+        DataFrameAnnotation::NonBareName => format!("{frame}[?]"),
     }
 }
 

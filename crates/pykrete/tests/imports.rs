@@ -38,7 +38,7 @@ class Orders(Schema):
             r#"
 from .schemas import Orders
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.select(col("x"))
 "#,
         ),
@@ -69,7 +69,7 @@ class Orders(Schema):
             r#"
 from .schemas import Orders as MyOrders
 
-def f(raw: DataFrame[MyOrders]) -> DataFrame[MyOrders]:
+def f(raw: SparkFrame[MyOrders]) -> SparkFrame[MyOrders]:
     return raw.select(col("x"))
 "#,
         ),
@@ -104,7 +104,7 @@ class Orders(Schema):
         (
             "pipeline.pyk",
             r#"
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw
 "#,
         ),

@@ -20,7 +20,7 @@ class Out(Schema):
     name: string
     scores: Array[int]
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.groupBy(\"name\").agg(F.collect_list(\"score\").alias(\"scores\"))
 "
     );
@@ -36,7 +36,7 @@ class Out(Schema):
     name: string
     scores: string
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.groupBy(\"name\").agg(F.collect_list(\"score\").alias(\"scores\"))
 "
     );
@@ -53,7 +53,7 @@ class Out(Schema):
     score: int
     tag: Array
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.withColumn(\"tag\", F.lower(col(\"name\")))
 "
     );
@@ -65,7 +65,7 @@ def f(d: DataFrame[In]) -> DataFrame[Out]:
 fn arithmetic_on_an_array_is_flagged_under_strict() {
     let src = format!(
         "{IN}
-def f(d: DataFrame[In]) -> DataFrame:
+def f(d: SparkFrame[In]) -> SparkFrame:
     return d.withColumn(\"x\", F.array(col(\"score\")) + F.lit(1))
 "
     );
@@ -76,7 +76,7 @@ def f(d: DataFrame[In]) -> DataFrame:
 fn comparing_an_array_to_an_atomic_is_flagged_under_strict() {
     let src = format!(
         "{IN}
-def f(d: DataFrame[In]) -> DataFrame:
+def f(d: SparkFrame[In]) -> SparkFrame:
     return d.filter(F.array(col(\"score\")) == col(\"score\"))
 "
     );

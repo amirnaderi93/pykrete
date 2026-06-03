@@ -37,7 +37,7 @@ from .schemas import Orders
 class Premium(Orders):
     tier: string
 
-def f(d: DataFrame[Premium]) -> DataFrame:
+def f(d: SparkFrame[Premium]) -> SparkFrame:
     return d.select(col("place_code"), col("price"), col("tier"))
 "#,
         ),
@@ -65,7 +65,7 @@ from .schemas import Orders
 class Premium(Orders):
     tier: string
 
-def f(d: DataFrame[Premium]) -> DataFrame:
+def f(d: SparkFrame[Premium]) -> SparkFrame:
     return d.select(col("nonexistent"))
 "#,
         ),
@@ -86,7 +86,7 @@ from .schemas import Orders
 class Premium(Orders):
     tier: string
 
-def f(d: DataFrame[Premium]) -> DataFrame[Premium]:
+def f(d: SparkFrame[Premium]) -> SparkFrame[Premium]:
     return d.select(col("place_code"))
 "#,
         ),
@@ -111,7 +111,7 @@ class Mid(Orders):
 class Top(Mid):
     top_col: int
 
-def f(d: DataFrame[Top]) -> DataFrame:
+def f(d: SparkFrame[Top]) -> SparkFrame:
     return d.select(col("place_code"), col("price"), col("mid_col"), col("top_col"))
 "#,
         ),
@@ -139,7 +139,7 @@ from .schemas import Orders as O
 class Premium(O):
     tier: string
 
-def f(d: DataFrame[Premium]) -> DataFrame:
+def f(d: SparkFrame[Premium]) -> SparkFrame:
     return d.select(col("place_code"), col("tier"))
 "#,
         ),

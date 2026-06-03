@@ -17,7 +17,7 @@ class Raw(Schema):
 fn fillna_keeps_the_chain_alive() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.fillna(0).select(col(\"nonexistent\"))
 "
     );
@@ -28,7 +28,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn replace_keeps_the_chain_alive() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.replace(0, 1).select(col(\"nonexistent\"))
 "
     );
@@ -41,7 +41,7 @@ fn fillna_does_not_flag_its_own_arguments() {
     // positions to be checked, and the schema is unchanged.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.fillna(0).select(col(\"amount\"))
 "
     );
@@ -53,7 +53,7 @@ fn to_df_renames_every_column() {
     // `toDF("x", "y")` discards the old names; `city` no longer exists.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.toDF(\"x\", \"y\").select(col(\"city\"))
 "
     );
@@ -64,7 +64,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn to_df_renamed_column_resolves() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.toDF(\"x\", \"y\").select(col(\"x\"))
 "
     );
@@ -75,7 +75,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn to_df_with_no_args_keeps_the_receiver_schema() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.toDF().select(col(\"city\"))
 "
     );

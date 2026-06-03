@@ -15,7 +15,7 @@ class Raw(Schema):
 fn with_columns_adds_the_dict_keys_to_the_schema() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.withColumns({{\"doubled\": col(\"amount\"), \"label\": col(\"city\")}}).select(col(\"doubled\"))
 "
     );
@@ -26,7 +26,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn with_columns_checks_references_inside_the_value_expressions() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.withColumns({{\"doubled\": col(\"nonexistent\")}})
 "
     );
@@ -37,7 +37,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn bad_column_after_with_columns_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.withColumns({{\"doubled\": col(\"amount\")}}).select(col(\"nope\"))
 "
     );
@@ -48,7 +48,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn with_columns_renamed_applies_the_renames() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.withColumnsRenamed({{\"amount\": \"price\"}}).select(col(\"price\"))
 "
     );
@@ -59,7 +59,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn with_columns_renamed_drops_the_old_name() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.withColumnsRenamed({{\"amount\": \"price\"}}).select(col(\"amount\"))
 "
     );
@@ -73,7 +73,7 @@ fn with_columns_renamed_silently_tolerates_missing_source_name() {
     // D0030 would flag working production code as broken.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.withColumnsRenamed({{\"nonexistent\": \"price\"}})
 "
     );
@@ -86,7 +86,7 @@ fn with_columns_renamed_silently_tolerates_mix_of_known_and_unknown() {
     // one is ignored; neither fires D0030.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.withColumnsRenamed({{\"amount\": \"price\", \"nonexistent\": \"x\"}})
 "
     );

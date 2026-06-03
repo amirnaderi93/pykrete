@@ -369,7 +369,7 @@ class Users(Schema):
     id: int
     name: string
 
-def keep(df: DataFrame[Users]) -> DataFrame[Users]:
+def keep(df: SparkFrame[Users]) -> SparkFrame[Users]:
     return df.select(col("id"), col("name"))
 "#;
         let diags = run_analyzer(source);

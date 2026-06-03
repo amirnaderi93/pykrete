@@ -1,4 +1,4 @@
-//! `Merge` derived schemas — `DataFrame[Merge[OrderInfo, CustomerInfo]]`
+//! `Merge` derived schemas — `SparkFrame[Merge[OrderInfo, CustomerInfo]]`
 //! is a schema with every column of both, the widening counterpart to
 //! `Pick` / `Omit`.
 
@@ -17,7 +17,7 @@ class CustomerInfo(Schema):
     customer_id: int
     name: string
 
-def f(d: DataFrame[Merge[OrderInfo, CustomerInfo]]) -> DataFrame:
+def f(d: SparkFrame[Merge[OrderInfo, CustomerInfo]]) -> SparkFrame:
     return d.select(col(\"order_id\"), col(\"amount\"), col(\"customer_id\"), col(\"name\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -32,7 +32,7 @@ class OrderInfo(Schema):
 class CustomerInfo(Schema):
     customer_id: int
 
-def f(d: DataFrame[Merge[OrderInfo, CustomerInfo]]) -> DataFrame:
+def f(d: SparkFrame[Merge[OrderInfo, CustomerInfo]]) -> SparkFrame:
     return d.select(col(\"nonexistent\"))
 ";
     assert_has_code(&check(src), "D0030");
@@ -47,7 +47,7 @@ class A(Schema):
 class B(Schema):
     b: int
 
-def f(d: DataFrame[Merge[A, B]]) -> DataFrame[Merge[A, B]]:
+def f(d: SparkFrame[Merge[A, B]]) -> SparkFrame[Merge[A, B]]:
     return d.select(col(\"a\"), col(\"b\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -65,7 +65,7 @@ class R(Schema):
     city: string
     rating: int
 
-def f(d: DataFrame[Merge[L, R]]) -> DataFrame:
+def f(d: SparkFrame[Merge[L, R]]) -> SparkFrame:
     return d.select(col(\"city\"), col(\"amount\"), col(\"rating\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -83,7 +83,7 @@ class B(Schema):
 class C(Schema):
     c: int
 
-def f(d: DataFrame[Merge[A, B, C]]) -> DataFrame:
+def f(d: SparkFrame[Merge[A, B, C]]) -> SparkFrame:
     return d.select(col(\"a\"), col(\"b\"), col(\"c\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -95,7 +95,7 @@ fn merge_with_an_unknown_schema_is_flagged() {
 class A(Schema):
     a: int
 
-def f(d: DataFrame[Merge[A, Bogus]]) -> DataFrame:
+def f(d: SparkFrame[Merge[A, Bogus]]) -> SparkFrame:
     return d
 ";
     assert_has_code(&check(src), "D0020");
@@ -114,7 +114,7 @@ class Derived(Base):
 class Other(Schema):
     c: int
 
-def f(d: DataFrame[Merge[Derived, Other]]) -> DataFrame:
+def f(d: SparkFrame[Merge[Derived, Other]]) -> SparkFrame:
     return d.select(col(\"a\"), col(\"b\"), col(\"c\"))
 ";
     assert_no_diagnostics(&check(src));

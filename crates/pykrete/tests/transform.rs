@@ -16,7 +16,7 @@ class Enriched(Schema):
     amount: int
     bonus: int
 
-def enrich(df: DataFrame[Raw]) -> DataFrame[Enriched]:
+def enrich(df: SparkFrame[Raw]) -> SparkFrame[Enriched]:
     return df.withColumn(\"bonus\", col(\"amount\"))
 
 def add_bonus(df):
@@ -27,7 +27,7 @@ def add_bonus(df):
 fn transform_result_schema_is_the_functions_declared_return() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.transform(enrich).select(col(\"bonus\"))
 "
     );
@@ -38,7 +38,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn bad_column_after_transform_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.transform(enrich).select(col(\"nonexistent\"))
 "
     );
@@ -47,11 +47,11 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 
 #[test]
 fn transform_input_schema_mismatch_is_caught() {
-    // `enrich` expects DataFrame[Raw]; feeding it a DataFrame[Enriched]
+    // `enrich` expects SparkFrame[Raw]; feeding it a SparkFrame[Enriched]
     // (which has an extra `bonus` column) is the wrong-step mistake.
     let src = format!(
         "{SCHEMA}
-def f(e: DataFrame[Enriched]) -> DataFrame:
+def f(e: SparkFrame[Enriched]) -> SparkFrame:
     return e.transform(enrich)
 "
     );
@@ -62,7 +62,7 @@ def f(e: DataFrame[Enriched]) -> DataFrame:
 fn transform_input_schema_match_is_accepted() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.transform(enrich)
 "
     );
@@ -75,7 +75,7 @@ fn undeclared_return_is_inferred_from_the_function_body() {
     // inferred by walking the body (`withColumn` adds `bonus`).
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.transform(add_bonus).select(col(\"bonus\"))
 "
     );
@@ -86,7 +86,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 fn bad_column_after_inferred_transform_is_caught() {
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame:
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.transform(add_bonus).select(col(\"nonexistent\"))
 "
     );
@@ -95,11 +95,11 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 
 #[test]
 fn transform_return_type_flows_into_the_outer_return_check() {
-    // `f` declares `-> DataFrame[Raw]` but returns `transform(enrich)`,
-    // which is DataFrame[Enriched] — a return mismatch.
+    // `f` declares `-> SparkFrame[Raw]` but returns `transform(enrich)`,
+    // which is SparkFrame[Enriched] — a return mismatch.
     let src = format!(
         "{SCHEMA}
-def f(raw: DataFrame[Raw]) -> DataFrame[Raw]:
+def f(raw: SparkFrame[Raw]) -> SparkFrame[Raw]:
     return raw.transform(enrich)
 "
     );

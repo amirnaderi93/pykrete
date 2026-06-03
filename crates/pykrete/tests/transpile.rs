@@ -89,7 +89,7 @@ fn orders_pyk_transpiles_to_parseable_python() {
 
 #[test]
 fn fluent_schema_cast_is_stripped_from_the_chain() {
-    // `<chain>.cast(DataFrame[Schema])` is a pykrete-only re-anchoring hint
+    // `<chain>.cast(SparkFrame[Schema])` is a pykrete-only re-anchoring hint
     // — `DataFrame` has no `.cast` method — so the transpiler removes the
     // `.cast(…)` segment and leaves the receiver wired straight through.
     let src = "\
@@ -99,8 +99,8 @@ class Raw(Schema):
 class Pivoted(Schema):
     city: string
 
-def f(raw: DataFrame[Raw]) -> DataFrame:
-    return raw.cast(DataFrame[Pivoted]).select(col(\"city\"))
+def f(raw: SparkFrame[Raw]) -> SparkFrame:
+    return raw.cast(SparkFrame[Pivoted]).select(col(\"city\"))
 ";
     let output = pykrete::transpile(src);
     assert!(
@@ -114,7 +114,7 @@ def f(raw: DataFrame[Raw]) -> DataFrame:
 #[test]
 fn column_cast_survives_the_transpile() {
     // The ordinary `Column.cast("int")` is real PySpark and must not be
-    // touched — only the `DataFrame[…]`-argument form is pykrete-only.
+    // touched — only the `SparkFrame[…]`-argument form is pykrete-only.
     let src = "def f(raw):\n    return raw.select(col(\"amount\").cast(\"int\"))\n";
     let output = pykrete::transpile(src);
     assert!(output.contains("cast(\"int\")"));

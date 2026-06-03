@@ -17,7 +17,7 @@ class Orders(Schema):
     price: int
     place_code: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.select(col("prce"))
 "#;
     let result = check(src);
@@ -41,7 +41,7 @@ class Orders(Schema):
     price: int
     place_code: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.select(col("totally_unrelated_field_name"))
 "#;
     let result = check(src);
@@ -66,7 +66,7 @@ class Orders(Schema):
     plate_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.select(col("plac_code"))
 "#;
     let result = check(src);

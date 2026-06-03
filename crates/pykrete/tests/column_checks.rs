@@ -15,7 +15,7 @@ use common::*;
 
 /// Wraps the snippet under test in a standard preamble that defines an
 /// `Orders(Schema)` with two fields and a function that takes
-/// `DataFrame[Orders]` and returns `DataFrame[Orders]`. The function body
+/// `SparkFrame[Orders]` and returns `SparkFrame[Orders]`. The function body
 /// is whatever the caller supplies.
 fn with_orders(body: &str) -> String {
     format!(
@@ -24,7 +24,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
 {body}
 "#,
         body = indent(body, 4)

@@ -1,4 +1,4 @@
-//! Explicit `name: DataFrame[Schema] = …` annotations on local variable
+//! Explicit `name: SparkFrame[Schema] = …` annotations on local variable
 //! assignments — the bridge to external dataframe sources.
 //!
 //! The motivating use case: real codebases load DataFrames from external
@@ -8,7 +8,7 @@
 //!
 //! Exercises:
 //! - `D0020` — annotated local references an unknown schema.
-//! - `D0021` — annotated local's `DataFrame[…]` inner is not a bare name.
+//! - `D0021` — annotated local's `SparkFrame[…]` inner is not a bare name.
 //! - The annotation is **authoritative**: the RHS is analyzed for its own
 //!   diagnostics, but the local's bound schema comes from the annotation.
 
@@ -33,8 +33,8 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f() -> DataFrame[Orders]:
-    raw: DataFrame[Orders] = external_source()
+def f() -> SparkFrame[Orders]:
+    raw: SparkFrame[Orders] = external_source()
     return raw.select(col("nope"))
 "#,
     );
@@ -50,8 +50,8 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f() -> DataFrame[Orders]:
-    raw: DataFrame[Orders] = some_loader()
+def f() -> SparkFrame[Orders]:
+    raw: SparkFrame[Orders] = some_loader()
     return raw.filter(col("price") > 0).select(col("place_code"), col("price"))
 "#,
     );
@@ -60,15 +60,15 @@ def f() -> DataFrame[Orders]:
 
 #[test]
 fn annotated_local_without_an_RHS_still_binds_the_schema() {
-    // `raw: DataFrame[Orders]` alone (no `= ...`) is uncommon in Python
+    // `raw: SparkFrame[Orders]` alone (no `= ...`) is uncommon in Python
     // but legal syntax. Treat the annotation as authoritative.
     let result = check(
         r#"
 class Orders(Schema):
     place_code: int
 
-def f() -> DataFrame:
-    raw: DataFrame[Orders]
+def f() -> SparkFrame:
+    raw: SparkFrame[Orders]
     return raw.select(col("place_code"))
 "#,
     );
@@ -83,8 +83,8 @@ def f() -> DataFrame:
 fn d0020_fires_when_annotated_local_references_an_unknown_schema() {
     let result = check(
         r#"
-def f() -> DataFrame:
-    raw: DataFrame[NoSuchSchema] = external_source()
+def f() -> SparkFrame:
+    raw: SparkFrame[NoSuchSchema] = external_source()
     return raw
 "#,
     );
@@ -96,8 +96,8 @@ def f() -> DataFrame:
 fn d0021_fires_when_annotated_local_uses_a_subscripted_inner() {
     let result = check(
         r#"
-def f() -> DataFrame:
-    raw: DataFrame[list[str]] = external_source()
+def f() -> SparkFrame:
+    raw: SparkFrame[list[str]] = external_source()
     return raw
 "#,
     );
@@ -124,8 +124,8 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(other: DataFrame[Orders]) -> DataFrame:
-    raw: DataFrame[Orders] = other.select(col("place_code"))
+def f(other: SparkFrame[Orders]) -> SparkFrame:
+    raw: SparkFrame[Orders] = other.select(col("place_code"))
     return raw.select(col("price"))
 "#,
     );
@@ -141,7 +141,7 @@ fn annotation_with_a_non_DataFrame_type_is_silently_ignored() {
 class Orders(Schema):
     x: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     threshold: int = 42
     return raw.filter(col("x") > threshold)
 "#,
@@ -158,8 +158,8 @@ fn body_diagnostics_on_RHS_still_fire_even_when_annotation_is_present() {
 class Orders(Schema):
     place_code: int
 
-def f(other: DataFrame[Orders]) -> DataFrame:
-    raw: DataFrame[Orders] = other.select(col("ghost"))
+def f(other: SparkFrame[Orders]) -> SparkFrame:
+    raw: SparkFrame[Orders] = other.select(col("ghost"))
     return raw
 "#,
     );

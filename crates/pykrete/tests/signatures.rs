@@ -1,11 +1,11 @@
-//! Function signature recognition — the `DataFrame[X]` shape.
+//! Function signature recognition — the `SparkFrame[X]` shape.
 
 #![allow(non_snake_case)] // Type names (DataFrame, Schema) appear in test names.
 
 //!
 //! Exercises diagnostics:
-//! - `D0020` — `DataFrame[X]` references a schema we don't know about.
-//! - `D0021` — the inner `X` in `DataFrame[X]` is not a bare name.
+//! - `D0020` — `SparkFrame[X]` references a schema we don't know about.
+//! - `D0021` — the inner `X` in `SparkFrame[X]` is not a bare name.
 
 mod common;
 use common::*;
@@ -17,7 +17,7 @@ fn function_typed_with_known_schema_is_counted_as_a_typed_function() {
 class Orders(Schema):
     place_code: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     pass
 "#,
     );
@@ -46,7 +46,7 @@ fn function_with_bare_DataFrame_is_typed_but_untyped_schema_emits_no_diagnostic(
     // still counts as typed because it touches DataFrame somewhere.
     let result = check(
         r#"
-def f(raw: DataFrame) -> DataFrame:
+def f(raw: DataFrame) -> SparkFrame:
     pass
 "#,
     );
@@ -60,7 +60,7 @@ fn d0020_fires_when_schema_inside_DataFrame_brackets_is_unknown() {
     // Orders is not declared anywhere in the file.
     let result = check(
         r#"
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     pass
 "#,
     );
@@ -73,7 +73,7 @@ fn d0020_fires_once_per_unknown_schema_reference() {
     // Two slots referencing the same unknown schema → two D0020s.
     let result = check(
         r#"
-def f(raw: DataFrame[Nope]) -> DataFrame[AlsoNope]:
+def f(raw: SparkFrame[Nope]) -> SparkFrame[AlsoNope]:
     pass
 "#,
     );
@@ -82,11 +82,11 @@ def f(raw: DataFrame[Nope]) -> DataFrame[AlsoNope]:
 
 #[test]
 fn d0021_fires_when_DataFrame_argument_is_subscripted() {
-    // `DataFrame[list[str]]` is a subscript whose inner expression is also
+    // `SparkFrame[list[str]]` is a subscript whose inner expression is also
     // a subscript — not a bare schema name.
     let result = check(
         r#"
-def f(y: DataFrame[list[str]]) -> DataFrame:
+def f(y: SparkFrame[list[str]]) -> SparkFrame:
     pass
 "#,
     );
@@ -95,10 +95,10 @@ def f(y: DataFrame[list[str]]) -> DataFrame:
 
 #[test]
 fn d0021_fires_on_return_annotation_just_like_parameters() {
-    // Return-type `DataFrame[X]` is checked the same way as parameters.
+    // Return-type `SparkFrame[X]` is checked the same way as parameters.
     let result = check(
         r#"
-def f(x: DataFrame) -> DataFrame[list[str]]:
+def f(x: DataFrame) -> SparkFrame[list[str]]:
     pass
 "#,
     );
@@ -115,7 +115,7 @@ class A(Schema):
 class B(Schema):
     y: int
 
-def join_them(left: DataFrame[A], right: DataFrame[B]) -> DataFrame[A]:
+def join_them(left: SparkFrame[A], right: SparkFrame[B]) -> SparkFrame[A]:
     pass
 "#,
     );

@@ -37,13 +37,13 @@ class DataAccessLayer:
     def __init__(self, spark):
         ...
 
-    def read[T](self, source: DataSource[T]) -> DataFrame[T]:
+    def read[T](self, source: DataSource[T]) -> SparkFrame[T]:
         ...
 
 class DataSources:
     RAW_ORDERS: DataSource[RawOrders] = DataSource("/path")
 
-def f(spark) -> DataFrame[RawOrders]:
+def f(spark) -> SparkFrame[RawOrders]:
     dal = DataAccessLayer(spark)
     return dal.read(DataSources.RAW_ORDERS).select(col("place_code"), col("price"))
 "#;
@@ -75,13 +75,13 @@ class DataAccessLayer:
     def __init__(self, spark):
         ...
 
-    def read[T](self, source: DataSource[T]) -> DataFrame[T]:
+    def read[T](self, source: DataSource[T]) -> SparkFrame[T]:
         ...
 
 class DataSources:
     RAW_ORDERS: DataSource[RawOrders] = DataSource("/path")
 
-def f(spark) -> DataFrame[RawOrders]:
+def f(spark) -> SparkFrame[RawOrders]:
     dal = DataAccessLayer(spark)
     return dal.read(DataSources.RAW_ORDERS).select(col("place_codee"))
 "#;
@@ -115,7 +115,7 @@ class DataSource[T]:
 class DataSources:
     RAW_ORDERS: DataSource[RawOrders] = DataSource("/path")
 
-def f() -> DataFrame[RawOrders]:
+def f() -> SparkFrame[RawOrders]:
     return DataSources.DOES_NOT_EXIST
 "#;
     let _ = check(src);

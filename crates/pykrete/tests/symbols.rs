@@ -32,7 +32,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def prepare_orders(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def prepare_orders(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw
 "#;
     let syms = document_symbols(src);
@@ -87,7 +87,7 @@ fn document_symbols_typed_function_detail_shows_signature() {
 class Orders(Schema):
     x: int
 
-def prepare_orders(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def prepare_orders(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw
 "#;
     let syms = document_symbols(src);
@@ -97,7 +97,7 @@ def prepare_orders(raw: DataFrame[Orders]) -> DataFrame[Orders]:
         .expect("expected the function symbol");
     assert_eq!(func.kind, SymbolKind::Function);
     let detail = func.detail.as_deref().unwrap_or("");
-    assert!(detail.contains("DataFrame[Orders]"));
+    assert!(detail.contains("SparkFrame[Orders]"));
     assert!(detail.contains("->"));
 }
 
@@ -178,11 +178,11 @@ fn definition_on_DataFrame_inner_schema_jumps_to_its_class() {
 class Orders(Schema):
     place_code: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw
 "#;
     // Cursor on the second occurrence of "Orders" — the one in
-    // `DataFrame[Orders]`, not the class declaration.
+    // `SparkFrame[Orders]`, not the class declaration.
     let first = src.find("Orders").unwrap();
     let second = src[first + 1..].find("Orders").unwrap() + first + 1;
     let prefix = &src[..second];
@@ -258,10 +258,10 @@ class Orders(Schema):
 
 #[test]
 fn definition_on_unknown_schema_reference_returns_none() {
-    // The schema name in DataFrame[Missing] doesn't resolve — there's
+    // The schema name in SparkFrame[Missing] doesn't resolve — there's
     // no class to jump to.
     let src = r#"
-def f(raw: DataFrame[Missing]) -> DataFrame[Missing]:
+def f(raw: SparkFrame[Missing]) -> SparkFrame[Missing]:
     return raw
 "#;
     let (line, col) = cursor_at(src, "Missing");
@@ -285,7 +285,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.select(col("price"))
 "#;
     // Cursor inside the string literal `"price"` (one past the opening
@@ -317,7 +317,7 @@ fn definition_on_col_literal_for_missing_column_returns_none() {
 class Orders(Schema):
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.select(col("priec"))
 "#;
     let idx = src.find("col(\"priec\")").unwrap() + "col(\"".len();

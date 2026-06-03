@@ -21,7 +21,7 @@ fn array_element_type_mismatch_is_caught() {
 class Out(Schema):
     tags: Array[string]
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.select(col(\"tags\"))
 "
     );
@@ -36,7 +36,7 @@ fn matching_array_element_type_passes() {
 class Out(Schema):
     tags: Array[int]
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.select(col(\"tags\"))
 "
     );
@@ -52,7 +52,7 @@ fn numeric_widening_applies_inside_collections() {
 class Out(Schema):
     tags: Array[long]
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.select(col(\"tags\"))
 "
     );
@@ -66,7 +66,7 @@ fn deeply_nested_array_mismatch_is_caught() {
 class Out(Schema):
     grid: Array[Array[string]]
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.select(col(\"grid\"))
 "
     );
@@ -81,7 +81,7 @@ fn map_value_type_mismatch_is_caught() {
 class Out(Schema):
     meta: Map[string, string]
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.select(col(\"meta\"))
 "
     );
@@ -98,7 +98,7 @@ fn unknown_element_type_is_permissive() {
 class Out(Schema):
     tags: Array
 
-def f(d: DataFrame[In]) -> DataFrame[Out]:
+def f(d: SparkFrame[In]) -> SparkFrame[Out]:
     return d.select(col(\"tags\"))
 "
     );

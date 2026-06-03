@@ -35,7 +35,7 @@ fn join_on_shared_key_is_clean() {
     let result = check(&format!(
         r#"{TWO_SCHEMAS}
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame:
     return a.join(b, on="k")
 "#
     ));
@@ -48,7 +48,7 @@ fn join_with_positional_on_argument_works_like_kwarg() {
     let result = check(&format!(
         r#"{TWO_SCHEMAS}
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame:
     return a.join(b, "k")
 "#
     ));
@@ -60,7 +60,7 @@ fn join_with_how_argument_does_not_affect_the_key_check() {
     let result = check(&format!(
         r#"{TWO_SCHEMAS}
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame:
     return a.join(b, on="k", how="left")
 "#
     ));
@@ -81,7 +81,7 @@ class B(Schema):
     k2: int
     b: int
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame:
     return a.join(b, on=["k1", "k2"])
 "#,
     );
@@ -103,7 +103,7 @@ class B(Schema):
     k: int
     b: int
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame:
     return a.join(b, on="k")
 "#,
     );
@@ -123,7 +123,7 @@ class A(Schema):
 class B(Schema):
     b: int
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame:
     return a.join(b, on="k")
 "#,
     );
@@ -143,7 +143,7 @@ class A(Schema):
 class B(Schema):
     k1: int
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame:
     return a.join(b, on=["k1", "k2"])
 "#,
     );
@@ -163,7 +163,7 @@ fn join_result_schema_dedups_the_on_key_and_concatenates_the_rest() {
     let result = check(&format!(
         r#"{TWO_SCHEMAS}
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame:
     return a.join(b, on="k").select(col("k"), col("a"), col("b"))
 "#
     ));
@@ -175,7 +175,7 @@ fn join_result_schema_excludes_columns_that_are_not_in_either_side() {
     let result = check(&format!(
         r#"{TWO_SCHEMAS}
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame:
     return a.join(b, on="k").select(col("nope"))
 "#
     ));
@@ -193,7 +193,7 @@ fn join_with_complex_on_expression_does_not_fire_when_keys_exist_on_at_least_one
     let result = check(&format!(
         r#"{TWO_SCHEMAS}
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame:
     return a.join(b, col("k") == col("k")).select(col("a"), col("b"))
 "#
     ));
@@ -211,7 +211,7 @@ fn d0030_fires_for_a_typo_in_an_expression_form_on_clause_left_ref() {
     let result = check(&format!(
         r#"{TWO_SCHEMAS}
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame:
     return a.join(b, col("typo") == col("k"))
 "#
     ));
@@ -224,7 +224,7 @@ fn d0030_fires_for_a_typo_in_an_expression_form_on_clause_right_ref() {
     let result = check(&format!(
         r#"{TWO_SCHEMAS}
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame:
     return a.join(b, col("k") == col("typo_right"))
 "#
     ));
@@ -238,7 +238,7 @@ fn d0030_fires_for_each_typo_in_an_expression_form_on_clause() {
     let result = check(&format!(
         r#"{TWO_SCHEMAS}
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame:
     return a.join(b, col("typo_left") == col("typo_right"))
 "#
     ));
@@ -251,7 +251,7 @@ fn expression_form_on_clause_does_not_fire_when_each_name_exists_on_some_side() 
     let result = check(&format!(
         r#"{TWO_SCHEMAS}
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame:
     return a.join(b, col("a") == col("b"))
 "#
     ));
@@ -266,7 +266,7 @@ fn expression_form_on_clause_handles_an_and_of_two_equalities() {
     let result = check(&format!(
         r#"{TWO_SCHEMAS}
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame:
     return a.join(b, (col("a") == col("b")) & (col("k") == col("k")))
 "#
     ));
@@ -279,7 +279,7 @@ fn expression_form_on_clause_fires_for_a_typo_inside_an_and_of_equalities() {
     let result = check(&format!(
         r#"{TWO_SCHEMAS}
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame:
     return a.join(b, (col("a") == col("b")) & (col("k") == col("nope")))
 "#
     ));
@@ -296,7 +296,7 @@ fn expression_form_on_clause_does_not_dedup_join_key_in_output_schema() {
     let result = check(&format!(
         r#"{TWO_SCHEMAS}
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame:
     return a.join(b, col("k") == col("k")).select(col("k"))
 "#
     ));
@@ -308,7 +308,7 @@ fn expression_form_on_clause_propagates_both_sides_columns_to_downstream_select(
     let result = check(&format!(
         r#"{TWO_SCHEMAS}
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame:
     return a.join(b, col("k") == col("k")).select(col("a"), col("b"))
 "#
     ));
@@ -327,7 +327,7 @@ class B(Schema):
     b1: int
     b2: int
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame:
     return a.crossJoin(b).select(col("a1"), col("a2"), col("b1"), col("b2"))
 "#,
     );
@@ -345,7 +345,7 @@ class A(Schema):
 class B(Schema):
     b1: int
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame:
     return a.crossJoin(b).select(col("c1"))
 "#,
     );
@@ -371,7 +371,7 @@ class Joined(Schema):
     a: int
     b: int
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame[Joined]:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame[Joined]:
     return a.join(b, on="k")
 "#,
     );
@@ -395,7 +395,7 @@ class Wrong(Schema):
     k: int
     a: int
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame[Wrong]:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame[Wrong]:
     return a.join(b, on="k")
 "#,
     );
@@ -412,7 +412,7 @@ fn expression_form_on_clause_handles_qualified_attribute_refs() {
     let result = check(&format!(
         r#"{TWO_SCHEMAS}
 
-def f(df1: DataFrame[A], df2: DataFrame[B]) -> DataFrame:
+def f(df1: SparkFrame[A], df2: SparkFrame[B]) -> SparkFrame:
     return df1.join(df2, df1.k == df2.k).select(col("a"), col("b"))
 "#
     ));
@@ -426,7 +426,7 @@ fn expression_form_on_clause_fires_for_a_typo_in_qualified_attribute_ref() {
     let result = check(&format!(
         r#"{TWO_SCHEMAS}
 
-def f(df1: DataFrame[A], df2: DataFrame[B]) -> DataFrame:
+def f(df1: SparkFrame[A], df2: SparkFrame[B]) -> SparkFrame:
     return df1.join(df2, df1.nope == df2.k)
 "#
     ));
@@ -441,7 +441,7 @@ fn expression_form_on_clause_handles_F_col_equality() {
     let result = check(&format!(
         r#"{TWO_SCHEMAS}
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame:
     return a.join(b, F.col("a") == F.col("b"))
 "#
     ));
@@ -455,7 +455,7 @@ fn expression_form_on_clause_fires_for_typo_inside_F_col() {
     let result = check(&format!(
         r#"{TWO_SCHEMAS}
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame:
     return a.join(b, F.col("k") == F.col("nope"))
 "#
     ));
@@ -486,7 +486,7 @@ fn aliased_qualified_col_ref_does_not_false_flag_on_join() {
     let result = check(&format!(
         r#"{ALIAS_SCHEMAS}
 
-def f(left: DataFrame[L], right: DataFrame[R]) -> DataFrame:
+def f(left: SparkFrame[L], right: SparkFrame[R]) -> SparkFrame:
     L_aliased = left.alias("L")
     R_aliased = right.alias("R")
     return L_aliased.join(R_aliased, col("L.region") == col("R.region"))
@@ -500,7 +500,7 @@ fn aliased_qualified_col_ref_typo_in_suffix_fires_d0030() {
     let result = check(&format!(
         r#"{ALIAS_SCHEMAS}
 
-def f(left: DataFrame[L], right: DataFrame[R]) -> DataFrame:
+def f(left: SparkFrame[L], right: SparkFrame[R]) -> SparkFrame:
     L_aliased = left.alias("L")
     R_aliased = right.alias("R")
     return L_aliased.join(R_aliased, col("L.regoin") == col("R.region"))
@@ -524,7 +524,7 @@ fn unknown_alias_prefix_in_join_on_clause_still_fires_d0030() {
     let result = check(&format!(
         r#"{ALIAS_SCHEMAS}
 
-def f(left: DataFrame[L], right: DataFrame[R]) -> DataFrame:
+def f(left: SparkFrame[L], right: SparkFrame[R]) -> SparkFrame:
     L_aliased = left.alias("L")
     R_aliased = right.alias("R")
     return L_aliased.join(R_aliased, col("BAD.region") == col("R.region"))
@@ -541,7 +541,7 @@ fn aliased_qualified_and_bare_refs_coexist_in_on_clause() {
     let result = check(&format!(
         r#"{ALIAS_SCHEMAS}
 
-def f(left: DataFrame[L], right: DataFrame[R]) -> DataFrame:
+def f(left: SparkFrame[L], right: SparkFrame[R]) -> SparkFrame:
     L_aliased = left.alias("L")
     R_aliased = right.alias("R")
     return L_aliased.join(
@@ -560,7 +560,7 @@ fn local_variable_bound_to_join_result_carries_the_combined_schema() {
     let result = check(&format!(
         r#"{TWO_SCHEMAS}
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> DataFrame:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> SparkFrame:
     joined = a.join(b, on="k")
     return joined.filter(col("b") > 0).select(col("k"), col("a"))
 "#

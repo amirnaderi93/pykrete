@@ -2,8 +2,8 @@
 //!
 //! Closes the function boundary on the input side. The return is already
 //! checked by `D0050 returnColumnsMismatch`; this one fires when a
-//! caller passes a `DataFrame[Wrong]` where the function declared
-//! `DataFrame[Right]`. An argument whose schema can't be inferred
+//! caller passes a `SparkFrame[Wrong]` where the function declared
+//! `SparkFrame[Right]`. An argument whose schema can't be inferred
 //! (an opaque chain, an untyped local) is silently skipped — the same
 //! degrade-rather-than-false-flag stance the rest of the checker uses.
 
@@ -24,10 +24,10 @@ class Sale(Schema):
     region: string
     amount: int
 
-def revenue(sales: DataFrame[Sale]) -> DataFrame:
+def revenue(sales: SparkFrame[Sale]) -> SparkFrame:
     return sales
 
-def caller(sales: DataFrame[Sale]) -> None:
+def caller(sales: SparkFrame[Sale]) -> None:
     revenue(sales)
 "#,
     );
@@ -50,10 +50,10 @@ class Refund(Schema):
     region: string
     refund: int
 
-def revenue(sales: DataFrame[Sale]) -> DataFrame:
+def revenue(sales: SparkFrame[Sale]) -> SparkFrame:
     return sales
 
-def caller(refunds: DataFrame[Refund]) -> None:
+def caller(refunds: SparkFrame[Refund]) -> None:
     revenue(refunds)
 "#,
     );
@@ -83,10 +83,10 @@ class Refund(Schema):
     region: string
     refund: int
 
-def revenue(sales: DataFrame[Sale]) -> DataFrame:
+def revenue(sales: SparkFrame[Sale]) -> SparkFrame:
     return sales
 
-def caller(refunds: DataFrame[Refund]) -> None:
+def caller(refunds: SparkFrame[Refund]) -> None:
     revenue(sales=refunds)
 "#,
     );
@@ -113,15 +113,15 @@ class Right(Schema):
 class A(Schema):
     id: int
 
-def combine(l: DataFrame[Left], r: DataFrame[Right]) -> DataFrame:
+def combine(l: SparkFrame[Left], r: SparkFrame[Right]) -> SparkFrame:
     return l
 
-def caller(a: DataFrame[A], b: DataFrame[A]) -> None:
+def caller(a: SparkFrame[A], b: SparkFrame[A]) -> None:
     combine(a, b)
 "#,
     );
     // Argument `a` matches Left (both have just `id`) — no diag for it.
-    // Argument `b` is DataFrame[A] (just id) but param is DataFrame[Right]
+    // Argument `b` is SparkFrame[A] (just id) but param is SparkFrame[Right]
     // (id, name) — diag.
     let d0051s = result.diagnostics_with_code("D0051");
     assert_eq!(
@@ -140,14 +140,14 @@ def caller(a: DataFrame[A], b: DataFrame[A]) -> None:
 #[test]
 fn opaque_argument_schema_is_silently_skipped() {
     // `mystery_df` has no annotation; pykrete can't infer its schema.
-    // The function expects DataFrame[Sale]. The check must NOT fire —
+    // The function expects SparkFrame[Sale]. The check must NOT fire —
     // we don't know enough to claim there's a mismatch.
     let result = check(
         r#"
 class Sale(Schema):
     region: string
 
-def revenue(sales: DataFrame[Sale]) -> DataFrame:
+def revenue(sales: SparkFrame[Sale]) -> SparkFrame:
     return sales
 
 def caller(mystery_df) -> None:
@@ -164,17 +164,17 @@ def caller(mystery_df) -> None:
 #[test]
 fn parameter_without_dataframe_annotation_is_skipped() {
     // The second parameter is just `int` — D0051 only checks
-    // `DataFrame[Schema]` parameters. Mismatched non-DataFrame args are
+    // `SparkFrame[Schema]` parameters. Mismatched non-DataFrame args are
     // someone else's problem (the embedded Python engine).
     let result = check(
         r#"
 class Sale(Schema):
     region: string
 
-def revenue(sales: DataFrame[Sale], limit: int) -> DataFrame:
+def revenue(sales: SparkFrame[Sale], limit: int) -> SparkFrame:
     return sales
 
-def caller(sales: DataFrame[Sale]) -> None:
+def caller(sales: SparkFrame[Sale]) -> None:
     revenue(sales, "not an int")
 "#,
     );
@@ -188,7 +188,7 @@ def caller(sales: DataFrame[Sale]) -> None:
 #[test]
 fn d0051_fires_when_chained_argument_resolves_to_wrong_schema() {
     // The argument is `sales.select("region")` — a derived schema with
-    // just one column. The function expects DataFrame[Sale] (two
+    // just one column. The function expects SparkFrame[Sale] (two
     // columns). The chain result is inferred; the check should fire.
     let result = check(
         r#"
@@ -196,10 +196,10 @@ class Sale(Schema):
     region: string
     amount: int
 
-def revenue(sales: DataFrame[Sale]) -> DataFrame:
+def revenue(sales: SparkFrame[Sale]) -> SparkFrame:
     return sales
 
-def caller(sales: DataFrame[Sale]) -> None:
+def caller(sales: SparkFrame[Sale]) -> None:
     revenue(sales.select("region"))
 "#,
     );
@@ -220,8 +220,8 @@ def caller(sales: DataFrame[Sale]) -> None:
 #[test]
 fn d0051_fires_for_nested_call_argument_mismatch() {
     // `f(f(b))` — the outer call passes `f(b)`, whose return type is
-    // DataFrame[A], to a parameter declared DataFrame[A]: clean. But the
-    // inner `f(b)` passes DataFrame[B] to a parameter declared DataFrame[A]:
+    // SparkFrame[A], to a parameter declared SparkFrame[A]: clean. But the
+    // inner `f(b)` passes SparkFrame[B] to a parameter declared SparkFrame[A]:
     // mismatch. Exactly one D0051 should fire, on the inner call.
     let result = check(
         r#"
@@ -231,10 +231,10 @@ class A(Schema):
 class B(Schema):
     y: int
 
-def f(a: DataFrame[A]) -> DataFrame[A]:
+def f(a: SparkFrame[A]) -> SparkFrame[A]:
     return a
 
-def caller(b: DataFrame[B]) -> None:
+def caller(b: SparkFrame[B]) -> None:
     f(f(b))
 "#,
     );
@@ -259,10 +259,10 @@ class Sale(Schema):
     region: string
     amount: int
 
-def revenue(sales: DataFrame[Sale]) -> DataFrame:
+def revenue(sales: SparkFrame[Sale]) -> SparkFrame:
     return sales
 
-def caller(sales: DataFrame[Sale]) -> None:
+def caller(sales: SparkFrame[Sale]) -> None:
     # `sales.revenue()` is a method call on `sales`, not a free call to
     # the `revenue` function. The check must not fire — even though the
     # name collides with our typed function.
@@ -278,7 +278,7 @@ def caller(sales: DataFrame[Sale]) -> None:
 
 #[test]
 fn d0051_skipped_when_callee_is_locally_shadowed() {
-    // `revenue` is a top-level function expecting DataFrame[Sale]; the
+    // `revenue` is a top-level function expecting SparkFrame[Sale]; the
     // caller rebinds the name locally. The subsequent call resolves to
     // the local at runtime, not the top-level function — pykrete must
     // not fire D0051 against the top-level signature.
@@ -291,13 +291,13 @@ class Sale(Schema):
 class Order(Schema):
     qty: int
 
-def revenue(sales: DataFrame[Sale]) -> DataFrame[Sale]:
+def revenue(sales: SparkFrame[Sale]) -> SparkFrame[Sale]:
     return sales
 
-def some_helper(o: DataFrame[Order]) -> DataFrame[Order]:
+def some_helper(o: SparkFrame[Order]) -> SparkFrame[Order]:
     return o
 
-def caller(orders: DataFrame[Order]) -> None:
+def caller(orders: SparkFrame[Order]) -> None:
     revenue = some_helper(orders)
     revenue(orders)
 "#,
@@ -328,10 +328,10 @@ class A(Schema):
 class B(Schema):
     y: int
 
-def f(a: DataFrame[A], /) -> None:
+def f(a: SparkFrame[A], /) -> None:
     return
 
-def caller(b: DataFrame[B]) -> None:
+def caller(b: SparkFrame[B]) -> None:
     f(a=b)
 "#,
     );
@@ -357,10 +357,10 @@ class A(Schema):
 class B(Schema):
     y: int
 
-def g(x: int, *, b: DataFrame[A]) -> None:
+def g(x: int, *, b: SparkFrame[A]) -> None:
     return
 
-def caller(wrong: DataFrame[B]) -> None:
+def caller(wrong: SparkFrame[B]) -> None:
     g(1, wrong)
 "#,
     );
@@ -374,12 +374,12 @@ def caller(wrong: DataFrame[B]) -> None:
 }
 
 // ===========================================================================
-// Variadics — `*args` / `**kwargs` typed as DataFrame[Schema]
+// Variadics — `*args` / `**kwargs` typed as SparkFrame[Schema]
 // ===========================================================================
 
 #[test]
 fn d0051_fires_for_each_vararg_with_wrong_schema() {
-    // `union_all(*items: DataFrame[Sale])`. The caller passes one matching
+    // `union_all(*items: SparkFrame[Sale])`. The caller passes one matching
     // arg (Sale) and one mismatching arg (Refund). pykrete must fire
     // exactly one D0051 — for the Refund argument.
     let result = check(
@@ -392,10 +392,10 @@ class Refund(Schema):
     region: string
     refund: int
 
-def union_all(*items: DataFrame[Sale]) -> DataFrame[Sale]:
+def union_all(*items: SparkFrame[Sale]) -> SparkFrame[Sale]:
     return items[0]
 
-def caller(sale: DataFrame[Sale], refund: DataFrame[Refund]) -> None:
+def caller(sale: SparkFrame[Sale], refund: SparkFrame[Refund]) -> None:
     union_all(sale, refund)
 "#,
     );
@@ -414,7 +414,7 @@ def caller(sale: DataFrame[Sale], refund: DataFrame[Refund]) -> None:
 
 #[test]
 fn d0051_fires_for_kwarg_with_wrong_schema() {
-    // `pile(**parts: DataFrame[Sale])`. The caller passes one matching
+    // `pile(**parts: SparkFrame[Sale])`. The caller passes one matching
     // kwarg (Sale) and one mismatching kwarg (Refund). Exactly one
     // D0051 — for the Refund keyword argument.
     let result = check(
@@ -427,10 +427,10 @@ class Refund(Schema):
     region: string
     refund: int
 
-def pile(**parts: DataFrame[Sale]) -> DataFrame[Sale]:
+def pile(**parts: SparkFrame[Sale]) -> SparkFrame[Sale]:
     return parts["a"]
 
-def caller(sale: DataFrame[Sale], refund: DataFrame[Refund]) -> None:
+def caller(sale: SparkFrame[Sale], refund: SparkFrame[Refund]) -> None:
     pile(a=sale, b=refund)
 "#,
     );
@@ -451,7 +451,7 @@ def caller(sale: DataFrame[Sale], refund: DataFrame[Refund]) -> None:
 
 #[test]
 fn d0051_skipped_when_callee_shadowed_via_tuple_unpack() {
-    // `revenue` is a top-level function expecting DataFrame[Sale]; the
+    // `revenue` is a top-level function expecting SparkFrame[Sale]; the
     // caller rebinds the name locally via a tuple-unpack LHS. The
     // subsequent call resolves to the local at runtime, not the top-level
     // function — pykrete must not fire D0051 against the top-level signature.
@@ -464,13 +464,13 @@ class Sale(Schema):
 class Order(Schema):
     qty: int
 
-def revenue(sales: DataFrame[Sale]) -> DataFrame[Sale]:
+def revenue(sales: SparkFrame[Sale]) -> SparkFrame[Sale]:
     return sales
 
-def some_helper(o: DataFrame[Order]) -> DataFrame[Order]:
+def some_helper(o: SparkFrame[Order]) -> SparkFrame[Order]:
     return o
 
-def caller(orders: DataFrame[Order]) -> None:
+def caller(orders: SparkFrame[Order]) -> None:
     revenue, junk = some_helper(orders), 1
     revenue(orders)
 "#,
@@ -503,13 +503,13 @@ class Sale(Schema):
 class Order(Schema):
     qty: int
 
-def revenue(sales: DataFrame[Sale]) -> DataFrame[Sale]:
+def revenue(sales: SparkFrame[Sale]) -> SparkFrame[Sale]:
     return sales
 
-def some_helper(o: DataFrame[Order]) -> DataFrame[Order]:
+def some_helper(o: SparkFrame[Order]) -> SparkFrame[Order]:
     return o
 
-def caller(orders: DataFrame[Order]) -> None:
+def caller(orders: SparkFrame[Order]) -> None:
     x = (revenue := some_helper(orders))
     revenue(orders)
 "#,
@@ -544,10 +544,10 @@ class B(Schema):
 class Wrong(Schema):
     z: int
 
-def f(a: DataFrame[A], b: DataFrame[B]) -> None:
+def f(a: SparkFrame[A], b: SparkFrame[B]) -> None:
     return
 
-def caller(wrong: DataFrame[Wrong]) -> None:
+def caller(wrong: SparkFrame[Wrong]) -> None:
     f(wrong, a=wrong)
 "#,
     );

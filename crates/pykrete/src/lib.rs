@@ -974,6 +974,18 @@ fn render_schema<'a>(
     }
 }
 
+/// Rewrite the `DataFrame` prefix of an annotation source text to
+/// `SparkFrame`, leaving everything else (brackets, schema name,
+/// derived-op nesting) byte-identical. Used by D0090's suggestion and
+/// rendered message so users see the exact fix.
+pub(crate) fn spark_frame_rewrite(raw: &str) -> String {
+    if let Some(rest) = raw.strip_prefix("DataFrame") {
+        format!("SparkFrame{rest}")
+    } else {
+        raw.to_string()
+    }
+}
+
 fn render_function(
     func: &DiscoveredFunction<'_>,
     slots: &[TypedSlot<'_>],
@@ -1020,6 +1032,30 @@ fn render_function(
             SlotLabel::Param(name) => format!("          {name}: "),
             SlotLabel::Return => "          -> ".to_string(),
         };
+
+        // v1.3 pandas spec §6: `DataFrame[X]` is a deprecated alias for
+        // `SparkFrame[X]`. Fire D0090 once per slot; the message echoes
+        // the source text so users see what they wrote (Q7-resolved).
+        // Suggestion fills the SparkFrame[X] canonical form for quick-fix.
+        if slot.is_deprecated_alias {
+            diagnostics.push(
+                Diagnostic::at_range(
+                    Severity::Warning,
+                    "D0090",
+                    format!(
+                        "'{raw_text}' is a deprecated alias for \
+                         '{}' and will be removed in pykrete v2.0. \
+                         Rewrite as '{}'.",
+                        spark_frame_rewrite(raw_text),
+                        spark_frame_rewrite(raw_text),
+                    ),
+                    ann_range,
+                    source,
+                    line_index,
+                )
+                .with_suggestion(Some(spark_frame_rewrite(raw_text))),
+            );
+        }
 
         match slot.kind {
             DataFrameAnnotation::Typed(name) => {

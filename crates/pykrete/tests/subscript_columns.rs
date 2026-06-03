@@ -24,7 +24,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.select(raw["place_code"], raw["price"])
 "#,
     );
@@ -38,7 +38,7 @@ fn d0030_fires_when_df_X_subscript_references_an_unknown_column() {
 class Orders(Schema):
     place_code: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.select(raw["priec"])
 "#,
     );
@@ -57,7 +57,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.select(raw["price"].cast("int").alias("p_int"))
 "#,
     );
@@ -72,7 +72,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.select(raw["misspelled"].cast("int").alias("x"))
 "#,
     );
@@ -88,7 +88,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.filter((raw["price"] > 0) & (raw["place_code"] > 100))
 "#,
     );
@@ -102,7 +102,7 @@ fn df_X_subscript_typo_inside_filter_is_caught() {
 class Orders(Schema):
     place_code: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.filter(raw["nonexistent"] > 0)
 "#,
     );
@@ -118,7 +118,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.withColumn("doubled", raw["price"] * 2)
 "#,
     );
@@ -137,7 +137,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.groupBy(raw["place_code"]).agg(F.sum("price").alias("total"))
 "#,
     );
@@ -158,7 +158,7 @@ class Orders(Schema):
     place_code: int
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.drop(raw["price"]).select(col("price"))
 "#,
     );
@@ -179,7 +179,7 @@ fn subscript_on_unrelated_name_is_not_treated_as_a_column_ref() {
 class Orders(Schema):
     price: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame:
+def f(raw: SparkFrame[Orders]) -> SparkFrame:
     return raw.filter(raw["price"] > config["threshold"])
 "#,
     );
@@ -196,7 +196,7 @@ fn computed_subscript_on_df_falls_through() {
 class Orders(Schema):
     price: int
 
-def f(raw: DataFrame[Orders], colname) -> DataFrame:
+def f(raw: SparkFrame[Orders], colname) -> SparkFrame:
     return raw.select(raw[colname])
 "#,
     );

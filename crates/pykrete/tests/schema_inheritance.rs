@@ -1,6 +1,6 @@
 //! Schema inheritance — a `Schema` class can extend another `Schema`
 //! class to inherit its columns: `class Premium(Orders): tier: string`.
-//! The subclass is itself a schema (recognized in `DataFrame[Premium]`),
+//! The subclass is itself a schema (recognized in `SparkFrame[Premium]`),
 //! and its column set is the base's columns plus its own.
 
 mod common;
@@ -17,7 +17,7 @@ class Orders(Schema):
 class PricedOrders(Orders):
     discount: int
 
-def f(d: DataFrame[PricedOrders]) -> DataFrame:
+def f(d: SparkFrame[PricedOrders]) -> SparkFrame:
     return d.select(col(\"place_code\"), col(\"price\"), col(\"discount\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -32,7 +32,7 @@ class Orders(Schema):
 class PricedOrders(Orders):
     discount: int
 
-def f(d: DataFrame[PricedOrders]) -> DataFrame:
+def f(d: SparkFrame[PricedOrders]) -> SparkFrame:
     return d.select(col(\"nonexistent\"))
 ";
     assert_has_code(&check(src), "D0030");
@@ -41,7 +41,7 @@ def f(d: DataFrame[PricedOrders]) -> DataFrame:
 #[test]
 fn return_type_check_counts_inherited_columns() {
     // The body must produce the base's columns plus the subclass's own
-    // to satisfy `-> DataFrame[Derived]`.
+    // to satisfy `-> SparkFrame[Derived]`.
     let src = "\
 class Base(Schema):
     a: int
@@ -50,7 +50,7 @@ class Base(Schema):
 class Derived(Base):
     c: int
 
-def f(d: DataFrame[Derived]) -> DataFrame[Derived]:
+def f(d: SparkFrame[Derived]) -> SparkFrame[Derived]:
     return d.select(col(\"a\"), col(\"b\"), col(\"c\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -67,7 +67,7 @@ class Base(Schema):
 class Derived(Base):
     c: int
 
-def f(d: DataFrame[Derived]) -> DataFrame[Derived]:
+def f(d: SparkFrame[Derived]) -> SparkFrame[Derived]:
     return d.select(col(\"a\"), col(\"c\"))
 ";
     assert_has_code(&check(src), "D0050");
@@ -85,7 +85,7 @@ class L2(L1):
 class L3(L2):
     c: int
 
-def f(d: DataFrame[L3]) -> DataFrame:
+def f(d: SparkFrame[L3]) -> SparkFrame:
     return d.select(col(\"a\"), col(\"b\"), col(\"c\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -103,7 +103,7 @@ class Base(Schema):
 class Derived(Base):
     id: int
 
-def f(d: DataFrame[Derived]) -> DataFrame:
+def f(d: SparkFrame[Derived]) -> SparkFrame:
     return d.select(col(\"id\"), col(\"name\"))
 ";
     assert_no_diagnostics(&check(src));
@@ -112,7 +112,7 @@ def f(d: DataFrame[Derived]) -> DataFrame:
 #[test]
 fn extending_a_non_schema_class_is_not_a_schema() {
     // `Plain` has no `Schema` base, so `Derived` does not inherit
-    // schema-ness — `DataFrame[Derived]` is an unknown-schema reference.
+    // schema-ness — `SparkFrame[Derived]` is an unknown-schema reference.
     let src = "\
 class Plain:
     x: int
@@ -120,7 +120,7 @@ class Plain:
 class Derived(Plain):
     y: int
 
-def f(d: DataFrame[Derived]) -> DataFrame:
+def f(d: SparkFrame[Derived]) -> SparkFrame:
     return d
 ";
     assert_has_code(&check(src), "D0020");
@@ -140,7 +140,7 @@ class Event(Base):
 class Log(Schema):
     event: Event
 
-def f(d: DataFrame[Log]) -> DataFrame:
+def f(d: SparkFrame[Log]) -> SparkFrame:
     return d.select(col(\"event.label\"), col(\"event.id\"))
 ";
     assert_no_diagnostics(&check(src));

@@ -11,7 +11,7 @@
 //!   preserves the class identity through the chain, so the trailing
 //!   `.read(SRC)` still routes through generic inference.
 //! - **`type[T]`-shaped parameters** — `def cast_to[T](self, _:
-//!   type[T]) -> DataFrame[T]`. The argument is a class object whose
+//!   type[T]) -> SparkFrame[T]`. The argument is a class object whose
 //!   static type is `type[Schema]`, so the matcher binds `T` from the
 //!   arg's identifier rather than its runtime value.
 //!
@@ -46,11 +46,11 @@ class DataSource[T]:
 
 class DataAccessLayer:
     def with_path(self, path: str) -> "DataAccessLayer": ...
-    def read[T](self, source: DataSource[T]) -> DataFrame[T]: ...
+    def read[T](self, source: DataSource[T]) -> SparkFrame[T]: ...
 
 ORDERS_SRC: DataSource[Orders] = DataSource("/o")
 
-def f(x: DataFrame[Anchor], dal: DataAccessLayer):
+def f(x: SparkFrame[Anchor], dal: DataAccessLayer):
     dal.with_path("/x").read(ORDERS_SRC).select(col("order_id"))
 "#,
     );
@@ -69,11 +69,11 @@ class DataSource[T]:
 
 class DataAccessLayer:
     def with_path(self, path: str) -> "DataAccessLayer": ...
-    def read[T](self, source: DataSource[T]) -> DataFrame[T]: ...
+    def read[T](self, source: DataSource[T]) -> SparkFrame[T]: ...
 
 ORDERS_SRC: DataSource[Orders] = DataSource("/o")
 
-def f(x: DataFrame[Anchor], dal: DataAccessLayer):
+def f(x: SparkFrame[Anchor], dal: DataAccessLayer):
     dal.with_path("/x").read(ORDERS_SRC).select(col("order_nope"))
 "#,
     );
@@ -101,11 +101,11 @@ class DataSource[T]:
 class DataAccessLayer:
     def with_path(self, path: str) -> "DataAccessLayer": ...
     def with_options(self, opts) -> "DataAccessLayer": ...
-    def read[T](self, source: DataSource[T]) -> DataFrame[T]: ...
+    def read[T](self, source: DataSource[T]) -> SparkFrame[T]: ...
 
 ORDERS_SRC: DataSource[Orders] = DataSource("/o")
 
-def f(x: DataFrame[Anchor], dal: DataAccessLayer):
+def f(x: SparkFrame[Anchor], dal: DataAccessLayer):
     dal.with_path("/x").with_options({"a": 1}).read(ORDERS_SRC).select(col("order_id"))
 "#,
     );
@@ -131,7 +131,7 @@ class DataSource[T]:
 
 class DataAccessLayer:
     def with_path(self, path: str) -> "DataAccessLayer": ...
-    def read[T](self, source: DataSource[T]) -> DataFrame[T]: ...
+    def read[T](self, source: DataSource[T]) -> SparkFrame[T]: ...
 
 ORDERS_SRC: DataSource[Orders] = DataSource("/o")
 
@@ -139,7 +139,7 @@ ORDERS_SRC: DataSource[Orders] = DataSource("/o")
 # diagnose it here, but the chain through `.with_path` must still
 # preserve the class so `.read(ORDERS_SRC)` resolves and downstream
 # column refs land cleanly.
-def f(x: DataFrame[Anchor], dal: DataAccessLayer):
+def f(x: SparkFrame[Anchor], dal: DataAccessLayer):
     dal.with_path(123).read(ORDERS_SRC).select(col("order_id"), col("order_nope"))
 "#,
     );
@@ -173,11 +173,11 @@ class OtherLayer:
 
 class DataAccessLayer:
     def do_something(self) -> OtherLayer: ...
-    def some_method[T](self, source: DataSource[T]) -> DataFrame[T]: ...
+    def some_method[T](self, source: DataSource[T]) -> SparkFrame[T]: ...
 
 ORDERS_SRC: DataSource[Orders] = DataSource("/o")
 
-def f(x: DataFrame[Anchor], dal: DataAccessLayer):
+def f(x: SparkFrame[Anchor], dal: DataAccessLayer):
     # `do_something` returns OtherLayer — chain must break here.
     # Downstream `.some_method(...)` (which only exists on DAL) and a
     # made-up column reference must NOT emit D0030 — the schema is
@@ -190,7 +190,7 @@ def f(x: DataFrame[Anchor], dal: DataAccessLayer):
 
 /// Regression — the existing non-chained call `dal.read(SOURCE)`
 /// (without any intermediate `with_*`) must still resolve to
-/// `DataFrame[Orders]`.
+/// `SparkFrame[Orders]`.
 #[test]
 fn non_chained_direct_call_still_works() {
     let result = check(
@@ -205,11 +205,11 @@ class DataSource[T]:
     def __init__(self, path): pass
 
 class DataAccessLayer:
-    def read[T](self, source: DataSource[T]) -> DataFrame[T]: ...
+    def read[T](self, source: DataSource[T]) -> SparkFrame[T]: ...
 
 ORDERS_SRC: DataSource[Orders] = DataSource("/o")
 
-def f(x: DataFrame[Anchor], dal: DataAccessLayer):
+def f(x: SparkFrame[Anchor], dal: DataAccessLayer):
     dal.read(ORDERS_SRC).select(col("order_id"))
 "#,
     );
@@ -220,10 +220,10 @@ def f(x: DataFrame[Anchor], dal: DataAccessLayer):
 // `type[T]`-shaped generic methods
 // ---------------------------------------------------------------------------
 
-/// `def cast_to[T](self, _: type[T]) -> DataFrame[T]` called as
+/// `def cast_to[T](self, _: type[T]) -> SparkFrame[T]` called as
 /// `dal.cast_to(Orders)` binds `T=Orders` from the arg's identifier
 /// (its static type is `type[Orders]`). The result resolves to
-/// `DataFrame[Orders]`, so a real-column select lands cleanly.
+/// `SparkFrame[Orders]`, so a real-column select lands cleanly.
 #[test]
 fn cast_to_typeof_T_binds_from_class_identifier() {
     let happy = check(
@@ -235,9 +235,9 @@ class Orders(Schema):
     order_id: int
 
 class DataAccessLayer:
-    def cast_to[T](self, _: type[T]) -> DataFrame[T]: ...
+    def cast_to[T](self, _: type[T]) -> SparkFrame[T]: ...
 
-def f(x: DataFrame[Anchor], dal: DataAccessLayer):
+def f(x: SparkFrame[Anchor], dal: DataAccessLayer):
     dal.cast_to(Orders).select(col("order_id"))
 "#,
     );
@@ -252,9 +252,9 @@ class Orders(Schema):
     order_id: int
 
 class DataAccessLayer:
-    def cast_to[T](self, _: type[T]) -> DataFrame[T]: ...
+    def cast_to[T](self, _: type[T]) -> SparkFrame[T]: ...
 
-def f(x: DataFrame[Anchor], dal: DataAccessLayer):
+def f(x: SparkFrame[Anchor], dal: DataAccessLayer):
     dal.cast_to(Orders).select(col("order_nope"))
 "#,
     );
@@ -274,9 +274,9 @@ class Anchor(Schema):
     a: int
 
 class DataAccessLayer:
-    def cast_to[T](self, _: type[T]) -> DataFrame[T]: ...
+    def cast_to[T](self, _: type[T]) -> SparkFrame[T]: ...
 
-def f(x: DataFrame[Anchor], dal: DataAccessLayer, some_var):
+def f(x: SparkFrame[Anchor], dal: DataAccessLayer, some_var):
     dal.cast_to(some_var).select(col("made_up"))
 "#,
     );
@@ -306,7 +306,7 @@ class Products(Schema):
     sku: string
 
 class DataAccessLayer:
-    def merge_into[T](self, a: type[T], b: type[T]) -> DataFrame[T]: ...
+    def merge_into[T](self, a: type[T], b: type[T]) -> SparkFrame[T]: ...
 
 def f(dal: DataAccessLayer):
     dal.merge_into(Orders, Products).select(col("order_id"), col("sku"))
@@ -329,9 +329,9 @@ class Anchor(Schema):
     a: int
 
 class DataAccessLayer:
-    def cast_to[T](self, _: type[T]) -> DataFrame[T]: ...
+    def cast_to[T](self, _: type[T]) -> SparkFrame[T]: ...
 
-def f(x: DataFrame[Anchor], dal: DataAccessLayer):
+def f(x: SparkFrame[Anchor], dal: DataAccessLayer):
     dal.cast_to("a_string_literal").select(col("made_up"))
 "#,
     );
@@ -354,9 +354,9 @@ class Orders(Schema):
 
 class DataAccessLayer:
     def with_path(self, path: str) -> "DataAccessLayer": ...
-    def cast_to[T](self, _: type[T]) -> DataFrame[T]: ...
+    def cast_to[T](self, _: type[T]) -> SparkFrame[T]: ...
 
-def f(x: DataFrame[Anchor], dal: DataAccessLayer):
+def f(x: SparkFrame[Anchor], dal: DataAccessLayer):
     dal.with_path("/x").cast_to(Orders).select(col("order_id"))
 "#,
     );
@@ -380,11 +380,11 @@ class DataSource[T]:
     def __init__(self, path): pass
 
 class DataAccessLayer:
-    def read[T](self, source: DataSource[T]) -> DataFrame[T]: ...
+    def read[T](self, source: DataSource[T]) -> SparkFrame[T]: ...
 
 ORDERS_SRC: DataSource[Orders] = DataSource("/o")
 
-def f(x: DataFrame[Anchor], dal: DataAccessLayer):
+def f(x: SparkFrame[Anchor], dal: DataAccessLayer):
     dal.read(ORDERS_SRC).select(col("order_id"))
 "#,
     );

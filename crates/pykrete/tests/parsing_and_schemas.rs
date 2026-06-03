@@ -296,7 +296,7 @@ class User(Schema):
     name: string
     address: Address
 
-def f(u: DataFrame[User]) -> DataFrame:
+def f(u: SparkFrame[User]) -> SparkFrame:
     return u.select(col("name"), col("address"))
 "#,
     );
