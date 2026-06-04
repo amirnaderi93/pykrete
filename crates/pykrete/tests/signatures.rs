@@ -281,6 +281,71 @@ def f(df: PandasFrame[list[str]]) -> PandasFrame:
 }
 
 #[test]
+fn V13E4_d0020_ann_assign_pandas_frame_uses_pandas_prefix() {
+    // Round-2 PR-E4 fix: positive coverage for driver.rs's ann-assign
+    // D0020 emit site (the `x: PandasFrame[Mystery] = …` shape). The
+    // dispatched dialect must surface as `PandasFrame`, not `DataFrame`.
+    let result = check(
+        r#"
+class Orders(Schema):
+    place_code: int
+
+def f(raw: PandasFrame[Orders]) -> PandasFrame:
+    x: PandasFrame[Mystery] = raw
+    return x
+"#,
+    );
+    assert_has_code(&result, "D0020");
+    assert_message_contains(&result, "D0020", "PandasFrame[Mystery]");
+    let has_dataframe_surface = result
+        .diagnostics_with_code("D0020")
+        .iter()
+        .any(|d| d.message.contains("DataFrame"));
+    assert!(
+        !has_dataframe_surface,
+        "D0020 on a PandasFrame ann-assign must not mention DataFrame; got:\n  {}",
+        result
+            .diagnostics_with_code("D0020")
+            .iter()
+            .map(|d| d.message.clone())
+            .collect::<Vec<_>>()
+            .join("\n  "),
+    );
+}
+
+#[test]
+fn V13E4_d0021_ann_assign_pandas_frame_uses_pandas_prefix() {
+    // Round-2 PR-E4 fix: positive coverage for driver.rs's ann-assign
+    // D0021 emit site (the `x: PandasFrame[list[str]] = …` shape).
+    let result = check(
+        r#"
+class Orders(Schema):
+    place_code: int
+
+def f(raw: PandasFrame[Orders]) -> PandasFrame:
+    x: PandasFrame[list[str]] = raw
+    return x
+"#,
+    );
+    assert_has_code(&result, "D0021");
+    assert_message_contains(&result, "D0021", "PandasFrame schema must be a bare name");
+    let has_dataframe_surface = result
+        .diagnostics_with_code("D0021")
+        .iter()
+        .any(|d| d.message.starts_with("DataFrame schema"));
+    assert!(
+        !has_dataframe_surface,
+        "D0021 on a PandasFrame ann-assign must not lead with 'DataFrame schema'; got:\n  {}",
+        result
+            .diagnostics_with_code("D0021")
+            .iter()
+            .map(|d| d.message.clone())
+            .collect::<Vec<_>>()
+            .join("\n  "),
+    );
+}
+
+#[test]
 fn V13E4_d0020_d0021_deprecated_alias_preserved() {
     // Per spec §6 Q7, the deprecated `DataFrame[X]` alias renders as
     // the user typed it. Both D0020 and D0021 must keep the `DataFrame`

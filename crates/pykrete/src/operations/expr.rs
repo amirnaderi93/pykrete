@@ -524,7 +524,8 @@ fn analyze_method_call_inner<'a>(
     // (whose argument is a type string, and whose receiver is a `Column`).
     if method == "cast"
         && let Some(arg) = call.arguments.args.first()
-        && let Some(DataFrameAnnotation::Typed(name)) = dataframe::recognize(arg)
+        && let Some(rec) = dataframe::recognize_with_dialect(arg)
+        && let DataFrameAnnotation::Typed(name) = rec.kind
     {
         // Analyze the receiver for its own diagnostics; its schema
         // is discarded — the cast overrides whatever it was.
@@ -532,11 +533,16 @@ fn analyze_method_call_inner<'a>(
         return match ctx.find_schema(name) {
             Some(schema) => Some(SchemaView::Declared(schema)),
             None => {
+                let rendered = dataframe::render_annotation(
+                    &DataFrameAnnotation::Untyped,
+                    rec.dialect,
+                    rec.is_deprecated_alias,
+                );
                 diagnostics.push(Diagnostic::at_range(
                     Severity::Error,
                     "D0020",
                     format!(
-                        "Unknown schema '{name}' in .cast(DataFrame[…]). \
+                        "Unknown schema '{name}' in .cast({rendered}[…]). \
                                  Declare it as a class extending Schema.",
                     ),
                     arg.range(),
