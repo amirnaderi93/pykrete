@@ -28,13 +28,15 @@
 /// resolves them.
 ///
 /// Two groups of names — both are pykrete's *own* syntax:
-/// - `Schema` (the schema base class) and `DataFrame`. `DataFrame` is
-///   defined generic so the pykrete-specific `DataFrame[X]` annotation
-///   resolves — plain PySpark's `DataFrame` isn't subscriptable. Its
-///   `__getattr__` / `__getitem__` make every attribute and `df["col"]`
-///   access type as `Any`: dataframe *operations* (`.select`, `.filter`,
-///   …) are pykrete's to check, so the embedded engine must not flag
-///   them as unknown members of this stand-in class.
+/// - `Schema` (the schema base class) and the frame names — `DataFrame`,
+///   `SparkFrame` (canonical Spark form), and `PandasFrame` (pandas form
+///   added in v1.3). Each is defined generic so the pykrete-specific
+///   `<Frame>[X]` annotation resolves — plain PySpark's `DataFrame` and
+///   pandas' `DataFrame` aren't subscriptable. Their `__getattr__` /
+///   `__getitem__` make every attribute and `df["col"]` access type as
+///   `Any`: dataframe *operations* (`.select`, `.filter`, …) are
+///   pykrete's to check, so the embedded engine must not flag them as
+///   unknown members of these stand-in classes.
 /// - The column-type vocabulary — `string` / `double` / `long` / `date`
 ///   / `timestamp` and the collection generics `Array` / `Map`. Schema
 ///   fields name these as bare type annotations (`checkin: date`,
@@ -64,10 +66,16 @@ class Schema: ...
 class DataFrame(_PykreteGeneric[_DT]):
     def __getattr__(self, _name: str) -> _PykreteAny: ...
     def __getitem__(self, _key: _PykreteAny) -> _PykreteAny: ...
+class SparkFrame(_PykreteGeneric[_DT]):
+    def __getattr__(self, _name: str) -> _PykreteAny: ...
+    def __getitem__(self, _key: _PykreteAny) -> _PykreteAny: ...
+class PandasFrame(_PykreteGeneric[_DT]):
+    def __getattr__(self, _name: str) -> _PykreteAny: ...
+    def __getitem__(self, _key: _PykreteAny) -> _PykreteAny: ...
 ";
 
 /// Newline-terminated line count of [`PREAMBLE`].
-const PREAMBLE_LINE_COUNT: u32 = 14;
+const PREAMBLE_LINE_COUNT: u32 = 20;
 
 /// Lines the virtual document injects ahead of the user's source: one
 /// hoisted `from __future__` line plus the [`PREAMBLE`]. A real
@@ -167,8 +175,30 @@ pub fn to_editor_line(virtual_line: u32) -> Option<u32> {
 }
 
 #[cfg(test)]
+#[allow(non_snake_case)] // V13E2_ test names match the PR-tag convention.
 mod tests {
     use super::*;
+
+    /// v1.3 PR-E2: the preamble must declare every frame name users can
+    /// write in `.pyk` annotations — `SparkFrame` and `PandasFrame` as
+    /// well as the deprecated `DataFrame` alias — so the embedded
+    /// Python engine doesn't fire `reportUndefinedVariable` on a
+    /// `def f(df: PandasFrame[Orders])` annotation.
+    #[test]
+    fn V13E2_lsp_preamble_declares_sparkframe_and_pandasframe() {
+        assert!(
+            PREAMBLE.contains("class SparkFrame(_PykreteGeneric[_DT])"),
+            "preamble must declare SparkFrame so PandasFrame[X]/SparkFrame[X] \
+             annotations resolve in the embedded engine",
+        );
+        assert!(
+            PREAMBLE.contains("class PandasFrame(_PykreteGeneric[_DT])"),
+            "preamble must declare PandasFrame so PandasFrame[X] annotations \
+             resolve in the embedded engine",
+        );
+        // DataFrame (deprecated alias) must also stay — users still write it.
+        assert!(PREAMBLE.contains("class DataFrame(_PykreteGeneric[_DT])"));
+    }
 
     #[test]
     fn preamble_line_count_matches_constant() {
