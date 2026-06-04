@@ -37,7 +37,7 @@ For the full list of every shipped feature with diagnostics, see the [Operations
 
 `PandasFrame[Schema]` joins `SparkFrame[Schema]` as a **canonical** dataframe-annotation form. `DataFrame[Schema]` is a **deprecated alias** for `SparkFrame[Schema]` — every use fires `D0090 deprecatedDataFrameAlias` (warning) with a quick-fix to the canonical name. The alias stays valid through the v1 line and is **removed in v2.0** so the migration is unhurried.
 
-Six pandas operations dispatch through dialect-specific check sites: column selection (`df[col_list]`), boolean-mask filtering (`df[mask]`), assignment (`df["new"] = expr`), `df.drop`, `df.merge`, and `df.rename`. The §10 widening also fires `D0030` on bare `df["typo"]` subscripts in non-method contexts on both `SparkFrame[X]` and `PandasFrame[X]`. Cross-codebase pandas fixtures land for mlflow, feast, and iceberg-python.
+Six pandas operations dispatch through dialect-specific check sites: column selection (`df[col_list]`), boolean-mask filtering (`df[mask]`), assignment (`df["new"] = expr`), `df.drop`, `df.merge`, and `df.rename`. The bare-subscript widening rule also fires `D0030` on bare `df["typo"]` subscripts in non-method contexts on both `SparkFrame[X]` and `PandasFrame[X]`. Cross-codebase pandas fixtures land for mlflow, feast, and iceberg-python.
 
 See [Production readiness → Real-codebase testing](/pykrete/about/production-readiness/#real-codebase-testing) for the per-release verification posture.
 
