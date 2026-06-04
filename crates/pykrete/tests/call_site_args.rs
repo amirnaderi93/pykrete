@@ -559,3 +559,41 @@ def caller(wrong: SparkFrame[Wrong]) -> None:
         d0051s.iter().map(|d| &d.message).collect::<Vec<_>>()
     );
 }
+
+// ===========================================================================
+// v1.3 PR-E2: D0051 wording uses the parameter's actual dialect prefix.
+// Pre-PR-E2 the message hardcoded "expected DataFrame[X]" even when the
+// param was `PandasFrame[X]`.
+// ===========================================================================
+
+#[test]
+fn V13E2_d0051_message_uses_param_actual_dialect() {
+    // Parameter declared `PandasFrame[Right]`; caller passes a
+    // `PandasFrame[Wrong]`. The D0051 message must read
+    // "expected PandasFrame[Right]", not the legacy "expected DataFrame[Right]".
+    let result = check(
+        r#"
+class Right(Schema):
+    id: int
+    name: string
+
+class Wrong(Schema):
+    id: int
+
+def consume(d: PandasFrame[Right]) -> PandasFrame[Right]:
+    return d
+
+def caller(o: PandasFrame[Wrong]) -> PandasFrame[Right]:
+    return consume(o)
+"#,
+    );
+    assert_has_code(&result, "D0051");
+    assert_message_contains(&result, "D0051", "expected PandasFrame[Right]");
+    // And it must not slip back to the hardcoded DataFrame surface.
+    let d0051 = &result.diagnostics_with_code("D0051")[0];
+    assert!(
+        !d0051.message.contains("expected DataFrame["),
+        "D0051 message must not hardcode DataFrame for a PandasFrame param; got: {}",
+        d0051.message,
+    );
+}

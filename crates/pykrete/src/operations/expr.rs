@@ -1835,12 +1835,15 @@ fn check_one_call_arg<'a>(
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    // Only checks `DataFrame[Schema]` parameters — other annotation
-    // shapes (an unannotated param, a non-DataFrame type, `DataFrame`
-    // without a schema, a derived expression like `DataFrame[Pick[...]]`)
-    // fall through.
-    let Some(DataFrameAnnotation::Typed(pname)) = param.annotation.and_then(dataframe::recognize)
-    else {
+    // Only checks `<Frame>[Schema]` parameters — other annotation
+    // shapes (an unannotated param, a non-frame type, bare `<Frame>`
+    // without a schema, a derived expression like `<Frame>[Pick[...]]`)
+    // fall through. Recognize with dialect so the D0051 message echoes
+    // the actual frame surface the parameter declared.
+    let Some(rec) = param.annotation.and_then(dataframe::recognize_with_dialect) else {
+        return;
+    };
+    let DataFrameAnnotation::Typed(pname) = rec.kind else {
         return;
     };
     let Some(param_schema) = ctx.find_schema(pname) else {
@@ -1864,11 +1867,16 @@ fn check_one_call_arg<'a>(
     let mut extra: Vec<&str> = arg_names.difference(&param_names).copied().collect();
     missing.sort();
     extra.sort();
+    // v1.3 PR-E2: render the parameter's actual frame surface
+    // (`SparkFrame[X]` / `PandasFrame[X]` / `DataFrame[X]` alias)
+    // through `dataframe::render_annotation`, not a hardcoded
+    // "DataFrame[X]".
+    let expected = dataframe::render_annotation(&rec.kind, rec.dialect, rec.is_deprecated_alias);
     let message = format!(
-        "Argument schema mismatch for parameter '{}': expected DataFrame[{}], \
+        "Argument schema mismatch for parameter '{}': expected {}, \
          got {}. Missing: [{}]; extra: [{}].",
         param.name,
-        param_schema.name(),
+        expected,
         arg_schema.display_name(),
         missing.join(", "),
         extra.join(", "),
