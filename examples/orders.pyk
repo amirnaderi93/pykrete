@@ -1,4 +1,4 @@
-# Synthetic demo input for pykrete's v0.1 acceptance checks.
+# Synthetic demo input for pykrete's acceptance checks.
 #
 # A small orders pipeline with three planted schema bugs that pykrete
 # catches statically — without running Spark:

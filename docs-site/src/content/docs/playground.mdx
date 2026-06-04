@@ -54,12 +54,12 @@ This is a single-file pykrete sandbox. Scope-wise:
 - **No cross-file resolution.** Multi-file imports, project
   configuration, and the `.pyk-import` mechanism need real file
   system access — use the CLI for those.
-- **Pre-declared globals.** `Schema`, `DataFrame`, `col`, `F`, and
-  the lowercase PySpark-style type aliases (`string`, `double`,
-  `long`, …) are pre-declared in the playground so you can start
-  typing without import boilerplate. Real projects use explicit
-  imports — see the [Install](/pykrete/getting-started/install/)
-  page.
+- **Pre-declared globals.** `Schema`, `SparkFrame`, `PandasFrame`,
+  `DataFrame` (the v1.x deprecated alias), `col`, `F`, and the
+  lowercase PySpark-style type aliases (`string`, `double`, `long`,
+  …) are pre-declared in the playground so you can start typing
+  without import boilerplate. Real projects use explicit imports —
+  see the [Install](/pykrete/getting-started/install/) page.
 
 ## Limits
 

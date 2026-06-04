@@ -126,9 +126,9 @@ The trust suite verifies, on every release:
   `df.rename` — 122 positive probes across 37 annotated fixtures.
 - **Diagnostic firing** on broken fixtures — 27 negative probes
   across all 21 `probes_negative/` fixtures pinning D0030
-  `unknownColumn`, D0081 `nonNumericArithmetic`, D0082
-  `crossTypeComparison`, D0084 `enumValueMismatch`, and D0090
-  `deprecatedDataFrameAlias`.
+  `unknownColumn`, D0060 `missingJoinKey`, D0081
+  `nonNumericArithmetic`, D0082 `crossTypeComparison`, D0084
+  `enumValueMismatch`, and D0090 `deprecatedDataFrameAlias`.
 - **Spark type tracking** through transformations, scoped to D0081
   via the `PROBE-TYPE-IS` synth-shape path (shipped v1.2), with
   raw-mutation coverage on D0080 / D0082 until follow-up synth

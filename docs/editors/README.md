@@ -118,4 +118,4 @@ VS Code extension or one of the editors above.
 
 Any LSP client works: launch `pykrete-lsp`, communicate over stdio, and
 send it `.pyk` documents. Use `pykrete.json` at the project root as the
-root marker and for [strictness configuration](../v0.1-spec.md#10-strictness-modes).
+root marker and for [strictness configuration](https://amirnaderi93.github.io/pykrete/reference/configuration/#typecheckingmode).

@@ -1,6 +1,6 @@
 # Contributing to pykrete
 
-pykrete is a static schema checker for PySpark, written in Rust. This guide covers everything you need to get set up, run tests, and submit changes. If anything here is unclear or missing, open an issue.
+pykrete is a static schema checker for PySpark and pandas, written in Rust. This guide covers everything you need to get set up, run tests, and submit changes. If anything here is unclear or missing, open an issue.
 
 ## Getting set up
 
