@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.43
+
+Tracks the v1.4 PR-A pykrete checker change — `infer_expr_type` now
+recognizes `df["x"]` (Subscript-on-Name with string-literal slice) as
+a scalar column reference, mirroring how `col("x")` is resolved. This
+closes the v1.3 gap where pandas arithmetic-on-string expressions
+inside `df.assign(__probe=df["x"] + 1)` produced no D0081 warning even
+under `typeCheckingMode: "strict"`. No new D-codes, no new annotation
+forms; this is SemVer-minor under the `tighteningDiagnostics` policy.
+
 ## 0.2.42
 
 Tracks the v1.3.0 pykrete release — pandas dialect support. The
