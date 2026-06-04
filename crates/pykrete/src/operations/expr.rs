@@ -9,7 +9,7 @@ use super::column_methods::{
     check_with_column_enum_sink, check_with_columns_enum_sinks, report_column_refs,
 };
 use super::context::{BodyContext, MAX_INFER_DEPTH};
-use super::driver::check_function_body;
+use super::driver::{check_function_body, inherited_dialect};
 use super::shapes::{
     column_method_shape, is_spark_opaque_source_call, is_terminal_method, two_df_method,
 };
@@ -514,20 +514,21 @@ pub(super) fn analyze_method_call<'a>(
 
     let receiver = analyze_expr(&attr.value, ctx, source, line_index, diagnostics)?;
 
-    // v1.3 — when the immediate receiver is a Name bound to a frame
-    // slot, surface its dialect tag (PR-A). Used by the pandas-only
-    // method dispatches (`merge`, `assign`, …) to skip a Spark
-    // receiver — a misnamed Spark call doesn't silently get pandas
-    // treatment. A chain receiver (call result, no dialect threaded)
-    // falls through to the pandas dispatch by design: chains lose
-    // dialect, and a real pandas chain (`pdf.merge(x).assign(...)`)
-    // still needs its terminal method checked.
-    let receiver_dialect = attr
-        .value
-        .as_name_expr()
-        .and_then(|n| ctx.lookup_dialect(n.id.as_str()));
+    // v1.3 — surface the dialect inherited by the receiver chain. For
+    // a Name receiver this is the Name's own tag; for a chain receiver
+    // (`pdf.merge(other).rename(...)`) this walks down to the deepest
+    // Name and reports ITS dialect. Used by the pandas-only method
+    // dispatches (`merge`, `assign`, `rename`, `drop(columns=)`) so:
+    //  - Spark Name AND Spark chains (`sdf.cache().rename(...)`) skip
+    //    the pandas dispatch — preventing silent schema mutation.
+    //  - Pandas Name AND pandas chains (`pdf.merge(x).rename(...)`)
+    //    correctly dispatch — preserving the refactor pattern of
+    //    chaining pandas methods.
+    //  - Truly opaque receivers (no Name at the bottom of the chain)
+    //    return None and fall through.
+    let receiver_dialect = inherited_dialect(&attr.value, ctx);
     let receiver_is_spark_named = receiver_dialect == Some(Dialect::Spark);
-    let receiver_is_pandas_named = receiver_dialect == Some(Dialect::Pandas);
+    let receiver_is_pandas_inherited = receiver_dialect == Some(Dialect::Pandas);
 
     // `df.createOrReplaceTempView("name")` — register `df`'s schema
     // against `name` in the file's tempView registry, so a later
@@ -751,22 +752,18 @@ pub(super) fn analyze_method_call<'a>(
     // pandas-side method names route through the same Spark check-
     // site impls because the col-ref check + result-schema
     // computation are dialect-agnostic; only the surface method
-    // name + argument shape differ. Gated on a Pandas-tagged Name
-    // receiver: a Spark receiver doesn't get pandas treatment, and
-    // a chain-result receiver also falls through. Chains lose their
-    // dialect tag at the rebind boundary unless explicitly preserved
-    // (see `bind_df`'s optional-dialect param at the Assign site), so
-    // dispatching pandas semantics on an untagged chain risks silent
-    // schema mutation on a Spark `df.cache().rename(columns={…})`.
-    // Real pandas chains carry their dialect forward via the
-    // preservation path and re-enter this dispatch on the next
-    // method call against the now-Pandas-tagged Name.
+    // name + argument shape differ. Gated on `receiver_is_pandas_
+    // inherited` — `inherited_dialect` walks chain receivers down to
+    // the deepest Name and uses ITS dialect. So `pdf.merge(x).rename(
+    // ...)` correctly dispatches (pdf is pandas-tagged), AND
+    // `sdf.cache().rename(...)` correctly skips (sdf is spark-tagged),
+    // preventing silent schema mutation on a Spark chain.
     //
     // `df.rename(columns={"old": "new"})` → mirror of
     // `withColumnsRenamed`. The `columns=` kwarg carries the rename
     // dict; legacy positional `mapper=` + `axis=1` forms are not
     // statically inspected (deferred to v1.4).
-    if receiver_is_pandas_named
+    if receiver_is_pandas_inherited
         && method == "rename"
         && let Some(dict) = pandas_dict_kwarg(call, "columns")
     {
@@ -777,7 +774,7 @@ pub(super) fn analyze_method_call<'a>(
     // route them through the shared adder. Enum-sink checks (D0084)
     // fire on string-literal kwarg values written into an enum-typed
     // sink column.
-    if receiver_is_pandas_named && method == "assign" {
+    if receiver_is_pandas_inherited && method == "assign" {
         check_pandas_assign_enum_sinks(call, &receiver, ctx, source, line_index, diagnostics);
         return Some(apply_pandas_assign(
             call,
@@ -794,7 +791,7 @@ pub(super) fn analyze_method_call<'a>(
     // we deliberately ONLY recognize the explicit `columns=` form
     // here.) The check reuses Spark's `.drop` logic — col-refs +
     // schema minus the dropped names.
-    if receiver_is_pandas_named
+    if receiver_is_pandas_inherited
         && method == "drop"
         && let Some(list) = pandas_list_kwarg(call, "columns")
     {
@@ -813,7 +810,9 @@ pub(super) fn analyze_method_call<'a>(
     // AND silently erase the column from the tracked schema.
     // Out-of-scope for v1.3 — quiet ignore, returning the receiver
     // unchanged so chained analysis stays coherent.
-    if receiver_is_pandas_named && method == "drop" && pandas_list_kwarg(call, "columns").is_none()
+    if receiver_is_pandas_inherited
+        && method == "drop"
+        && pandas_list_kwarg(call, "columns").is_none()
     {
         return Some(receiver);
     }

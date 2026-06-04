@@ -111,15 +111,16 @@ fn declared_return_view<'a>(
 /// that follows. Truly opaque RHS (a call like `some_unrelated_call()`
 /// whose receiver isn't a tagged Name) returns `None` and the
 /// existing erase-on-rebind behavior holds.
-fn inherited_dialect<'a>(expr: &Expr, ctx: &BodyContext<'a>) -> Option<crate::dataframe::Dialect> {
+pub(crate) fn inherited_dialect<'a>(
+    expr: &Expr,
+    ctx: &BodyContext<'a>,
+) -> Option<crate::dataframe::Dialect> {
     let mut cursor = expr;
     loop {
         match cursor {
             Expr::Name(n) => return ctx.lookup_dialect(n.id.as_str()),
             Expr::Call(c) => {
-                let Some(attr) = c.func.as_attribute_expr() else {
-                    return None;
-                };
+                let attr = c.func.as_attribute_expr()?;
                 cursor = &attr.value;
             }
             Expr::Attribute(a) => cursor = &a.value,

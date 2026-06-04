@@ -851,14 +851,11 @@ def f(pdf: PandasFrame[Orders]):
 }
 
 #[test]
-fn V13E1_sdf_assign_method_not_dispatched() {
-    // Spark frame with `.assign(status="BOGUS")` must NOT fire D0084
-    // via the pandas dispatch path — Spark frames have no `.assign`,
-    // and pre-fix the dispatch gate (`!receiver_is_spark_named`)
-    // already excluded SparkFrame receivers from .assign routing. After
-    // Fix 2 the gate is `receiver_is_pandas_named`, which preserves the
-    // same exclusion. (Spark's column-method shape table doesn't list
-    // `.assign`, so nothing else here fires D0084 either.)
+fn V13E1_sdf_named_assign_not_dispatched_baseline() {
+    // Baseline — a Spark-tagged Name receiver doesn't enter the pandas
+    // `.assign` dispatch (and Spark has no .assign in its shape table),
+    // so D0084 doesn't fire. Pre-existing-behavior guard; the gate
+    // logic that protects this is the same under round-1 and round-2.
     let result = check(
         r#"
 class Orders(Schema):
@@ -873,14 +870,16 @@ def f(sdf: SparkFrame[Orders]):
 }
 
 #[test]
-fn V13E1_chain_spark_cache_rename_does_not_mutate_schema() {
-    // Pre-fix (`!receiver_is_spark_named`): the chain receiver
-    // `df.cache()` had no dialect, so `.rename(columns={…})` would
-    // dispatch as pandas and silently rename `status` → `state` on the
-    // tracked schema. Then `col("status")` would D0030.
-    // Post-fix (`receiver_is_pandas_named`): chain receivers fall
-    // through; the rename is unrecognized; the original Spark schema
-    // is preserved; `col("status")` still resolves.
+fn V13E1_chain_spark_cache_then_rename_does_NOT_mutate() {
+    // Fix 2 witness — Spark chain. `df.cache()` is a chain receiver.
+    // Pre-Fix-2 (`!receiver_is_spark_named`): chain has no dialect →
+    // pandas dispatch FIRES → `status` silently renamed to `state` →
+    // later `col("status")` D0030s.
+    // Post-Fix-2 (round-2: `receiver_is_pandas_inherited` via
+    // `inherited_dialect`): the helper walks `df.cache()` down to
+    // `df`, finds Spark dialect → gate evaluates false → pandas
+    // dispatch correctly SKIPPED → Spark schema preserved →
+    // `col("status")` resolves.
     let result = check(
         r#"
 class Orders(Schema):
@@ -915,19 +914,46 @@ def f(pdf: PandasFrame[Orders]):
 }
 
 #[test]
-fn V13E1_chain_unrecognized_receiver_rename_quiet() {
-    // `something_else.rename(columns=...)` where the receiver has no
-    // dialect tag (here a function call result whose source type isn't
-    // a tagged Name) — pandas dispatch must NOT fire, and nothing else
-    // here should either. No D0030 on the rename argument.
+fn V13E1_chain_pandas_named_merge_then_rename_preserves_dispatch() {
+    // Round-2 critical test. Pandas chain
+    // `pdf.merge(other, on="id").rename(columns={"status": "state"})`.
+    // Round-1 (broken) gate `receiver_is_pandas_named` reads the
+    // immediate receiver only — here a Call expr, not a Name — so it
+    // evaluated false and silently SKIPPED pandas dispatch. The rename
+    // dict was unobserved, the schema was preserved as Orders, and a
+    // post-chain access of `"state"` would fire a false D0030 (or a
+    // post-chain access of `"status"` would WRONGLY pass).
+    // Round-2 fix routes through `inherited_dialect`: chain receiver
+    // walks down to `pdf` (Pandas-tagged) → gate evaluates true → the
+    // rename DOES dispatch → schema mutates `status` → `state` → the
+    // post-chain `out["state"]` resolves AND `out["status"]` D0030s.
     let result = check(
         r#"
-def f():
-    something_else = make_thing()
-    return something_else.rename(columns={"x": "y"})
+class Orders(Schema):
+    id: int
+    status: string
+
+def f(pdf: PandasFrame[Orders], other: PandasFrame[Orders]):
+    out = pdf.merge(other, on="id").rename(columns={"status": "state"})
+    return out["state"]
 "#,
     );
     assert_does_not_have_code(&result, "D0030");
+    // And the OLD name must now be unknown — proves the rename was
+    // actually dispatched, not just quietly tolerated.
+    let result2 = check(
+        r#"
+class Orders(Schema):
+    id: int
+    status: string
+
+def f(pdf: PandasFrame[Orders], other: PandasFrame[Orders]):
+    out = pdf.merge(other, on="id").rename(columns={"status": "state"})
+    return out["status"]
+"#,
+    );
+    assert_has_code(&result2, "D0030");
+    assert_message_contains(&result2, "D0030", "status");
 }
 
 #[test]
