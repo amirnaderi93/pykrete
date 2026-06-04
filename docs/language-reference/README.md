@@ -1,18 +1,10 @@
 # Language Reference
 
-User-facing reference for writing pykrete code.
+User-facing reference for writing pykrete code lives on the docs site
+at [`docs-site/src/content/docs/reference/`](../../docs-site/src/content/docs/reference/) —
+configuration (`pykrete.json`), the diagnostics catalog, the
+per-operation behavior, and schema declarations. The site is published
+at <https://amirnaderi93.github.io/pykrete/reference/>.
 
-**Status:** not yet written. v0.1 (checker + LSP + transpiler) shipped
-without a dedicated language reference; the README, the
-[v0.1 spec](../v0.1-spec.md), and
-[`docs/design/architecture.md`](../design/architecture.md) cover most of
-the territory in the meantime. Filling this in is on the
-[roadmap](../roadmap.md).
-
-## Planned sections
-
-- **Syntax** — schema declarations, `DataFrame[S]` annotations, type operators.
-- **Supported operations** — one page per PySpark operation, with examples and edge cases.
-- **Error catalog** — every error code with example, explanation, and fix.
-- **Configuration** — `pykrete.json` reference.
-- **Cookbook** — common patterns and idioms.
+This directory is kept for legacy in-repo links; new content goes on the
+site.

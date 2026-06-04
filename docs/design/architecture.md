@@ -1,7 +1,7 @@
 # Architecture
 
-How pykrete is organized. pykrete is a static schema checker for PySpark —
-`.pyk` files are a strict superset of Python.
+How pykrete is organized. pykrete is a static schema checker for
+PySpark and pandas — `.pyk` files are a strict superset of Python.
 
 ## Workspace
 
@@ -26,11 +26,15 @@ type checking.
 .pyk source
   → ruff_python_parser           (Python AST — ModModule)
   → walk                         (discover top-level classes + functions)
-  → schema / dataframe / registry (Schema classes, DataFrame[X] slots,
+  → schema / dataframe / registry (Schema classes, SparkFrame[X] /
+                                   PandasFrame[X] slots — DataFrame[X]
+                                   is the v1.x deprecated alias —
                                    classes/methods/functions/UDFs/constants)
   → operations                   (per-function body analysis: operation
                                    modeling, result-schema inference,
-                                   column-existence + column-type checks)
+                                   column-existence + column-type checks;
+                                   pandas vs Spark dispatch driven by the
+                                   slot's dialect tag)
   → diagnostics                  (TypeScript-style: path:line:col - sev code: msg)
 ```
 
@@ -106,10 +110,14 @@ constants), and UDFs (`@udf` / `@pandas_udf` decorators and the functional
 
 ### `dataframe`
 
-Recognizes `DataFrame[X]` annotations on function signatures —
-`Untyped` / `Typed("Foo")` / `Derived` (a `Pick` / `Omit` / `Merge`
-operator or an inline `{…}` schema, resolved by `schema`) /
-`NonBareName` — and the typed parameter / return slots.
+Recognizes the frame annotations on function signatures —
+`SparkFrame[X]` (canonical PySpark form), `PandasFrame[X]` (canonical
+pandas form, v1.3+), and `DataFrame[X]` (the v1.x deprecated alias for
+`SparkFrame[X]`, which fires `D0090` and is removed in v2.0). Each slot
+resolves to `Untyped` / `Typed("Foo")` / `Derived` (a `Pick` / `Omit` /
+`Merge` operator or an inline `{…}` schema, resolved by `schema`) /
+`NonBareName`, with a dialect tag (`spark` / `pandas`) that drives
+check-site dispatch in `operations`.
 
 ### `imports`
 
@@ -133,8 +141,13 @@ recognized call against the receiver's schema.
 `dropDuplicates`, `dropna`, `groupBy`/`cube`/`rollup` + `agg`, `pivot`,
 `join`/`crossJoin`/`union`/`unionByName`, `selectExpr`, `transform`,
 `toDF`, the `df.na.*` family, `Window` key checking, the schema-cast
-`.cast(DataFrame[Schema])`, and a wide pass-through set
-(`persist`/`cache`/`orderBy`/`limit`/…).
+`.cast(SparkFrame[Schema])` (and the deprecated `.cast(DataFrame[Schema])`
+alias), and a wide pass-through set
+(`persist`/`cache`/`orderBy`/`limit`/…). On `PandasFrame[X]` chains,
+the six dispatched pandas operations (`df[col_list]` / `df[mask]` /
+`df["new"] = expr` / `df.drop` / `df.merge` / `df.rename`) route
+through pandas-aware check sites — see
+[pandas-support.md](pandas-support.md).
 
 **Column-type inference** — `infer_expr_type` works out the type of a
 column expression (`col(...)`, `.cast(...)`, `F.lit(...)`, literals, and a
@@ -170,12 +183,15 @@ LSP payload.
 
 `.pyk` → `.py`. `.pyk` is a strict superset of Python, so this is nearly
 an identity transform — it prepends `from __future__ import annotations`
-(so pykrete's atomic type names and `DataFrame[X]` annotations don't
-evaluate at runtime) and strips the schema-cast `.cast(DataFrame[Schema])`
-— the one pykrete-only construct in *expression* position, which the
-Python runtime has no `.cast` method for. Stripping is AST-located but
-byte-surgical: only the `.cast(…)` slice is deleted, line numbers are
-preserved, everything else is copied verbatim.
+(so pykrete's atomic type names and the frame annotations —
+`SparkFrame[X]`, `PandasFrame[X]`, and the deprecated `DataFrame[X]`
+alias — don't evaluate at runtime) and strips the schema-cast
+`.cast(SparkFrame[Schema])` / `.cast(PandasFrame[Schema])` /
+`.cast(DataFrame[Schema])` — the one pykrete-only construct in
+*expression* position, which the Python runtime has no `.cast` method
+for. Stripping is AST-located but byte-surgical: only the `.cast(…)`
+slice is deleted, line numbers are preserved, everything else is
+copied verbatim.
 
 ### `config`
 
@@ -225,6 +241,8 @@ accepts either).
 | `D0081` | `nonNumericArithmetic` | Arithmetic on a non-numeric column (advisory; `typeCheckingMode: strict` only). |
 | `D0082` | `crossTypeComparison` | Comparison of unrelated types (advisory; `strict` only). |
 | `D0083` | `nullabilityMismatch` | A nullable column declared non-nullable by the return type (advisory; `strict` only). |
+| `D0084` | `enumValueMismatch` | A string literal flowing into an enum-typed column is off-vocabulary. |
+| `D0090` | `deprecatedDataFrameAlias` | `DataFrame[X]` annotation (v1.x deprecated alias for `SparkFrame[X]`; removed in v2.0). Warning. |
 
 ## Column-type checking
 

@@ -39,14 +39,24 @@ implementation detail.
 ## Virtual documents
 
 `.pyk` files are valid Python today, so the child can analyze them
-almost as-is. The one transform: pykrete's magic names (`Schema`,
-`DataFrame`, `col`) aren't defined anywhere the child can see. So for
-every `.pyk` document, pykrete-lsp constructs a **virtual document**:
+almost as-is. The one transform: pykrete's own syntax — `Schema`, the
+frame names (`DataFrame`, `SparkFrame`, `PandasFrame`), and the bare
+column-type vocabulary (`string` / `double` / `long` / `date` /
+`timestamp` / `Array` / `Map`) — isn't defined anywhere the child can
+see. So for every `.pyk` document, pykrete-lsp constructs a **virtual
+document**:
 
 ```
-<injected preamble: defines Schema, DataFrame, col + the column-type names>
+<injected preamble: defines Schema, DataFrame, SparkFrame, PandasFrame + the column-type vocabulary>
 <original .pyk content, verbatim>
 ```
+
+Ordinary Python names like `col` (which is `pyspark.sql.functions.col`,
+an import the user writes) are deliberately NOT in the preamble — a
+`.pyk` file that uses `col` without importing it should get the same
+missing-import error any Python file would. See the
+[`PREAMBLE` constant in `crates/pykrete-lsp/src/virtualdoc.rs`](../../crates/pykrete-lsp/src/virtualdoc.rs)
+for the authoritative list.
 
 The child receives the virtual document under the same URI. The
 preamble is a fixed number of leading lines, so **position mapping is a
