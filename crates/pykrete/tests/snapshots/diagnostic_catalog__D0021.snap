@@ -2,4 +2,4 @@
 source: crates/pykrete/tests/diagnostic_catalog.rs
 expression: captured
 ---
-d0021_invalid_schema_expression.pyk:1:10-1:27 error D0021 invalidSchemaExpression: DataFrame schema must be a bare name; got 'DataFrame["Sale"]'. Subscripted/complex schema expressions are not supported in v0.1.
+d0021_invalid_schema_expression.pyk:1:10-1:27 error D0021 invalidSchemaExpression: DataFrame schema must be a bare name; got 'DataFrame["Sale"]'. Subscripted/complex schema expressions are not supported.
