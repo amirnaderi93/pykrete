@@ -11,8 +11,11 @@ new `D0090 deprecatedDataFrameAlias` warning on `DataFrame[X]` (which
 is removed in v2.0), and widens `D0030` to bare `df["typo"]`
 subscripts in non-method contexts on both `SparkFrame[X]` and
 `PandasFrame[X]`. Hover and completion surface the dialect tag.
-Quick-fix on D0090 rewrites `DataFrame[X]` to `SparkFrame[X]`. See
-the [main CHANGELOG](../../CHANGELOG.md#130---2026-06-03) for details.
+Quick-fix on D0090 rewrites `DataFrame[X]` to `SparkFrame[X]`. Tracks
+v1.3.0: 149 schema-tracking probes across 59 fixtures from 10 real
+codebases now verify pandas check-site coverage in addition to
+PySpark. See the
+[main CHANGELOG](../../CHANGELOG.md#130---2026-06-03) for details.
 
 ## 0.2.39
 
