@@ -218,3 +218,88 @@ def f(df: PandasFrame) -> PandasFrame:
         result.body,
     );
 }
+
+// ------------------------------------------------------------------
+// v1.3 PR-E4: D0020 / D0021 diagnostic messages must echo the slot's
+// actual dialect prefix rather than the hardcoded "DataFrame" surface.
+// Mirrors the PR-E2 fix shape applied to D0051.
+
+#[test]
+fn V13E4_d0020_message_uses_param_actual_dialect() {
+    // A `PandasFrame[Mystery]` slot with no `Mystery` schema declared
+    // must say "referenced in PandasFrame[Mystery]" — not "DataFrame[…]".
+    let result = check(
+        r#"
+def f(df: PandasFrame[Mystery]) -> PandasFrame[Mystery]:
+    return df
+"#,
+    );
+    assert_has_code(&result, "D0020");
+    assert_message_contains(&result, "D0020", "PandasFrame[Mystery]");
+    let has_dataframe_surface = result
+        .diagnostics_with_code("D0020")
+        .iter()
+        .any(|d| d.message.contains("DataFrame"));
+    assert!(
+        !has_dataframe_surface,
+        "D0020 on a PandasFrame slot must not mention DataFrame; got:\n  {}",
+        result
+            .diagnostics_with_code("D0020")
+            .iter()
+            .map(|d| d.message.clone())
+            .collect::<Vec<_>>()
+            .join("\n  "),
+    );
+}
+
+#[test]
+fn V13E4_d0021_message_uses_param_actual_dialect() {
+    // A `PandasFrame[<complex>]` slot — message must lead with
+    // "PandasFrame schema must be a bare name", not "DataFrame".
+    let result = check(
+        r#"
+def f(df: PandasFrame[list[str]]) -> PandasFrame:
+    return df
+"#,
+    );
+    assert_has_code(&result, "D0021");
+    assert_message_contains(&result, "D0021", "PandasFrame schema must be a bare name");
+    let has_dataframe_surface = result
+        .diagnostics_with_code("D0021")
+        .iter()
+        .any(|d| d.message.starts_with("DataFrame schema"));
+    assert!(
+        !has_dataframe_surface,
+        "D0021 on a PandasFrame slot must not lead with 'DataFrame schema'; got:\n  {}",
+        result
+            .diagnostics_with_code("D0021")
+            .iter()
+            .map(|d| d.message.clone())
+            .collect::<Vec<_>>()
+            .join("\n  "),
+    );
+}
+
+#[test]
+fn V13E4_d0020_d0021_deprecated_alias_preserved() {
+    // Per spec §6 Q7, the deprecated `DataFrame[X]` alias renders as
+    // the user typed it. Both D0020 and D0021 must keep the `DataFrame`
+    // surface when the slot was declared as the alias.
+    let d0020 = check(
+        r#"
+def f(df: DataFrame[Mystery]) -> DataFrame[Mystery]:
+    return df
+"#,
+    );
+    assert_has_code(&d0020, "D0020");
+    assert_message_contains(&d0020, "D0020", "DataFrame[Mystery]");
+
+    let d0021 = check(
+        r#"
+def f(df: DataFrame[list[str]]) -> DataFrame:
+    return df
+"#,
+    );
+    assert_has_code(&d0021, "D0021");
+    assert_message_contains(&d0021, "D0021", "DataFrame schema must be a bare name");
+}

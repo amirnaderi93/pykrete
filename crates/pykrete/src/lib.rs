@@ -1065,7 +1065,7 @@ fn render_function(
                         Severity::Error,
                         "D0020",
                         format!(
-                            "Unknown schema '{name}' referenced in DataFrame[…]. \
+                            "Unknown schema '{name}' referenced in {rendered}. \
                              Declare it as a class extending Schema.",
                         ),
                         ann_range,
@@ -1121,11 +1121,16 @@ fn render_function(
                 // they wrote (e.g. `DataFrame[list[str]]`, not the
                 // lossy `DataFrame[?]` from `render_annotation`).
                 writeln!(out, "{prefix}{raw_text}  (unresolved)").unwrap();
+                let frame_name = render_annotation(
+                    &DataFrameAnnotation::Untyped,
+                    slot.dialect,
+                    slot.is_deprecated_alias,
+                );
                 diagnostics.push(Diagnostic::at_range(
                     Severity::Error,
                     "D0021",
                     format!(
-                        "DataFrame schema must be a bare name; got '{raw_text}'. \
+                        "{frame_name} schema must be a bare name; got '{raw_text}'. \
                          Subscripted/complex schema expressions are not supported in v0.1.",
                     ),
                     ann_range,

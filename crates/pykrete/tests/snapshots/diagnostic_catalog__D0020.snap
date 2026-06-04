@@ -2,4 +2,4 @@
 source: crates/pykrete/tests/diagnostic_catalog.rs
 expression: captured
 ---
-d0020_unknown_schema.pyk:1:10-1:28 error D0020 unknownSchema: Unknown schema 'Mystery' referenced in DataFrame[…]. Declare it as a class extending Schema.
+d0020_unknown_schema.pyk:1:10-1:28 error D0020 unknownSchema: Unknown schema 'Mystery' referenced in DataFrame[Mystery]. Declare it as a class extending Schema.
