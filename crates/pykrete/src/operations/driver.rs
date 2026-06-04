@@ -603,7 +603,7 @@ fn handle_ann_assign<'a>(
                 "D0021",
                 format!(
                     "{frame_name} schema must be a bare name; got '{raw_text}'. \
-                     Subscripted/complex schema expressions are not supported in v0.1.",
+                     Subscripted/complex schema expressions are not supported.",
                 ),
                 ann.annotation.range(),
                 source,

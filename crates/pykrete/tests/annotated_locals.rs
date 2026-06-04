@@ -104,6 +104,45 @@ def f() -> SparkFrame:
     assert_has_code(&result, "D0021");
 }
 
+#[test]
+fn V13E5_d0021_message_no_version_reference() {
+    // PR-E5 (v1.3.0 tag blocker): D0021's message must not name any
+    // specific pykrete release. Users get the version from the binary.
+    // Covers both emission sites (signature-annotation in lib.rs and
+    // local-annotation in driver.rs) by exercising one of each.
+    let local_anno = check(
+        r#"
+def f() -> SparkFrame:
+    raw: SparkFrame[list[str]] = external_source()
+    return raw
+"#,
+    );
+    let sig_anno = check(
+        r#"
+def f(raw: SparkFrame[list[str]]) -> SparkFrame:
+    return raw
+"#,
+    );
+    for result in [&local_anno, &sig_anno] {
+        let msgs: Vec<String> = result
+            .diagnostics_with_code("D0021")
+            .iter()
+            .map(|d| d.message.clone())
+            .collect();
+        assert!(!msgs.is_empty(), "expected at least one D0021");
+        for msg in &msgs {
+            assert!(
+                !msg.contains("v0.1"),
+                "D0021 must not mention 'v0.1'; got: {msg}"
+            );
+            assert!(
+                !msg.contains("v1."),
+                "D0021 must not mention any 'v1.*' version literal; got: {msg}"
+            );
+        }
+    }
+}
+
 // ===========================================================================
 // Edge cases
 // ===========================================================================
