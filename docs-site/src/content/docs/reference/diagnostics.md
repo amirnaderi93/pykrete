@@ -186,8 +186,8 @@ class Sale(Schema):
     amount: int
 
 def revenue(sales: DataFrame[Sale]) -> DataFrame[Sale]:
-    #                ^^^^^^^^^^^^^^                    D0090
-    #                                  ^^^^^^^^^^^^^^  D0090
+    #                ^^^^^^^^^^^^^^^                   D0090
+    #                                  ^^^^^^^^^^^^^^^  D0090
     return sales
 ```
 

@@ -439,7 +439,7 @@ These are the operations that read or write *via the dataframe itself*, not via 
 
 Each one reports column refs against the schema in scope; the output schema flows forward the same way it does in PySpark chains.
 
-### `§10 widening` for `df["new"] = expr`
+### Widening for `df["new"] = expr`
 
 A column assignment of the form `df["new"] = expr` widens the schema with a new column whose type follows from `expr` — same inference path that powers `withColumn`. Reassigning an existing column replaces it; the runtime semantics are pandas's, but pykrete tracks the post-assignment shape so chained reads stay checked.
 
