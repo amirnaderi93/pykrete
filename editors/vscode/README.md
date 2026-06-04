@@ -24,7 +24,7 @@ pykrete is a strict superset of Python that adds a type layer for dataframes. Th
 
 **Checks that follow the data.** pykrete tracks the schema through `select`, `filter`, `withColumn`, `drop`, `join`, `groupBy` + `agg`, `pivot`, `union`, and the rest. Reference a column three transforms after it was dropped, and the squiggle lands exactly where you used it.
 
-**Hover to see a schema.** Hover a `DataFrame[…]` parameter and see its columns without leaving the file. Go-to-definition jumps to the schema declaration.
+**Hover to see a schema.** Hover a `SparkFrame[…]` or `PandasFrame[…]` parameter and see its columns without leaving the file. Go-to-definition jumps to the schema declaration. (`DataFrame[…]` is a deprecated alias for `SparkFrame[…]` and renders the same hover.)
 
 **Autocomplete for column names.** Type a column name in a string argument and pykrete completes the ones that actually exist on the dataframe in scope.
 

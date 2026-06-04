@@ -136,8 +136,8 @@ against the `status` sink's vocabulary, but the **output column** drops
 the enum constraint to plain `string`. Downstream code that re-uses the
 returned frame's `status` column won't see the vocabulary preserved.
 The vocabulary check at the literal still fires at the write site,
-which is where the bug lives in practice; the preservation of the
-constraint on the output column is tracked for v1.2.
+which is where the bug lives in practice; preservation of the
+constraint on the output column is tracked in the polish backlog.
 
 ### What you can't do
 
@@ -180,7 +180,7 @@ class Customer(Schema):
 Dotted column references walk into the struct:
 
 ```python
-def f(customers: DataFrame[Customer]) -> DataFrame:
+def f(customers: SparkFrame[Customer]) -> SparkFrame:
     return customers.select(F.col("address.city"))
 ```
 
@@ -293,7 +293,7 @@ class Sale(Schema):
 # sales.pyk
 from schemas import Sale
 
-def revenue_by_region(sales: DataFrame[Sale]) -> DataFrame:
+def revenue_by_region(sales: SparkFrame[Sale]) -> SparkFrame:
     return sales.groupBy("region").agg(F.sum("amount").alias("total"))
 ```
 

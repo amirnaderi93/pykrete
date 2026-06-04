@@ -6,6 +6,165 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-06-03
+
+Third minor release on the v1.0 line. The headline change is **pandas
+dialect support**: `PandasFrame[X]` joins `SparkFrame[X]` as a
+canonical dataframe-annotation form, with `DataFrame[X]` demoted to a
+deprecated alias (warning `D0090`, removed in v2.0). Six pandas
+operations dispatch through dialect-specific check sites, the §10
+widening fires `D0030` on bare `df["typo"]` subscripts in
+non-method contexts (both Spark and pandas), and three donor
+fixtures land cross-codebase pandas coverage. Cross-codebase CI on
+pykrete-tests is now pinned to the catalog's `pykreteSourceCommit`
+(no more `PYKRETE_REF: main` silent drift), and 48 goldens were
+mass-refreshed to absorb the new `D0090` warnings on existing
+`DataFrame[X]` annotations.
+
+### Added
+
+- **`PandasFrame[X]` annotation surface.** The pandas dialect is a
+  parser-level peer of `SparkFrame[X]`: same `Pick[…]` / `Omit[…]` /
+  `Merge[…]` derived-schema operators, same inline dict shape, same
+  `Schema` class declarations. The dialect tag on the resulting
+  `TypedSlot` drives check-site dispatch — a `df: PandasFrame[X]`
+  parameter routes through the pandas-shape operations, a
+  `SparkFrame[X]` parameter routes through Spark's. Spec settled in
+  [`docs/design/pandas-support.md`](docs/design/pandas-support.md).
+- **Six dispatched pandas operations.** Column selection
+  (`df[col_list]` mirroring `.select`), boolean-mask filtering
+  (`df[mask]` mirroring `.filter`), assignment (`df["new"] = expr`
+  mirroring `withColumn`), drop (`df.drop(columns=[…])`), merge
+  (`df.merge(other, on=…)` mirroring `.join`), and rename
+  (`df.rename(columns={…})`). Each one mirrors its Spark cousin's
+  schema-tracking behavior; runtime semantics are pandas's.
+- **`D0090 deprecatedDataFrameAlias`.** Stable, warning severity.
+  Fires on every `DataFrame[X]` annotation, with a quick-fix
+  suggesting `SparkFrame[X]`. The alias remains valid in v1.3 for
+  source compatibility; it is **removed in v2.0** — projects should
+  migrate to `SparkFrame[X]` (or `PandasFrame[X]` where applicable)
+  before the next major.
+- **`ColumnType::Float` variant** (SemVer-minor: new variant on the
+  public type enum). Pandas's `float32` / `float64` distinction
+  required the new variant; existing Spark `double` mappings are
+  unchanged. Exhaustive-match sites were swept per the spec § 9
+  piece (b) requirement.
+- **§10 widening: bare `df["typo"]` fires D0030 in non-method
+  contexts.** Previously a bare `df["typo"]` subscript outside a
+  method-call context was silently accepted on `SparkFrame[X]`
+  (also future-`PandasFrame[X]`); v1.3 widens D0030 to fire at the
+  same position. Before: `x = df["typo"]` was silent on
+  `SparkFrame[Sale]` even when `typo` was not in `Sale`. After:
+  same line fires `D0030 unknownColumn` on `"typo"` with a *did you
+  mean* against the schema. Existing D-code identity, new firing
+  positions — policy: SemVer-minor `tighteningDiagnostics`. Users
+  with brittle CI may see new D0030 fires on previously-silent
+  code; the change is a net win for correctness.
+- **3 new cross-codebase pandas fixtures.** mlflow, feast, and
+  iceberg-python each contribute an annotated `PandasFrame[X]`
+  fixture exercising the six dispatched operations, paired with
+  `probes_negative/` counterparts asserting D0030 on bare
+  `df["typo"]` subscripts and D0090 on the deprecated
+  `DataFrame[X]` alias.
+- **Probe count: 130 → 149 (+19).** Pandas check-site coverage adds
+  9 positive probes (column resolution across the new operations)
+  and 10 negative probes (D0030 + D0090 on probes_negative shapes)
+  across the three new donor fixtures.
+- **Fixture count: 47 → 59 (+12).** 38 annotated (was 35) + 21
+  `probes_negative/` (was 12). Donor count stays at 10.
+
+### Changed
+
+- **DataFrame[X] is now a deprecated alias for SparkFrame[X].**
+  Every existing `DataFrame[X]` annotation in the wild fires
+  `D0090` as a warning starting in v1.3, with a quick-fix to the
+  canonical `SparkFrame[X]`. Removal is committed for v2.0; the
+  v1 line keeps the alias working so the migration is unhurried.
+- **Trust-claim surfaces.** README "Reliability and trust",
+  docs-site `about/production-readiness`, `about/pykrete-tests`,
+  the splash page, and the pykrete-tests README all refresh to the
+  v1.3 reality: 149 probes across 59 fixtures from 10 donors;
+  pandas check-site coverage in 3 of 10 donors; D0090 in the
+  D-code list; honest scoping that pandas **positive type-tracking**
+  via `PROBE-TYPE-IS` is deferred to v1.4 (parallel to how v1.2
+  added Spark type-tracking after v1.1 introduced Spark column
+  tracking) — tracker [pykrete-tests#14](https://github.com/amirnaderi93/pykrete-tests/issues/14).
+- **pykrete-tests CI hardening.** `cross-codebase.yml` now reads
+  `PYKRETE_REF` from `scripts/diagnostic_catalog.json`'s
+  `pykreteSourceCommit` pin (matching `probes.yml`), removing the
+  silent-drift class where `PYKRETE_REF: main` could disagree with
+  the catalog pin and surface unrelated regressions on every cron
+  run. The exit-mask block in the same file mirrors `probes.yml`'s
+  `set +e` pattern so the friendly `::error::` annotation lands on
+  pipeline failure (previously `bash -e` on the pipeline boundary
+  could skip it).
+- **48 goldens refreshed.** The mass refresh absorbs the new D0090
+  warnings on every existing `DataFrame[X]`-annotated fixture in
+  pykrete-tests. The change set is mechanical: D0090 additions
+  plus warningCount bumps; non-D0090 diagnostics on the same
+  fixtures are preserved. Two pre-existing strict-mode
+  `probes_negative/` goldens (mlflow `withColumn_arith_on_string`
+  for D0081, spark `cross_type_comparison` for D0082) drop their
+  strict-mode entries because `golden.sh` invokes pykrete from the
+  repo root, so the sibling `pykrete.json` (`typeCheckingMode:
+  "strict"`) is not discovered — this matches a pre-existing v1.2
+  tracker (`pykrete.json` config discovery on absolute paths) and
+  is NOT a regression introduced by v1.3. Strict-mode coverage on
+  those fixtures remains enforced by `probes_ci.sh`, which stages
+  the fixture's full directory into a tempdir and invokes pykrete
+  from there — the `pykrete.json` is picked up and `D0081` /
+  `D0082` continue to fire under PROBE-EXPECTS verification.
+
+### Verified properties (cumulative)
+
+The trust suite verifies, on every release:
+
+- **Column resolution** through `.select` / `.filter` /
+  `.withColumn` / `.drop` / `.join` / `.groupBy` and the rest of
+  the Spark v1.0 surface, plus the pandas analogues `df[col_list]`
+  / `df[mask]` / `df["new"] = expr` / `df.drop` / `df.merge` /
+  `df.rename` — 122 positive probes across 37 annotated fixtures.
+- **Diagnostic firing** on broken fixtures — 27 negative probes
+  across all 21 `probes_negative/` fixtures pinning D0030
+  `unknownColumn`, D0081 `nonNumericArithmetic`, D0082
+  `crossTypeComparison`, D0084 `enumValueMismatch`, and D0090
+  `deprecatedDataFrameAlias`.
+- **Spark type tracking** through transformations, scoped to D0081
+  via the `PROBE-TYPE-IS` synth-shape path (shipped v1.2), with
+  raw-mutation coverage on D0080 / D0082 until follow-up synth
+  shapes ship.
+
+### Deferred (v1.4 trackers)
+
+- **Positive `PROBE-TYPE-IS` coverage on `PandasFrame[X]`.** v1.3
+  ships pandas check sites; positive type-tracking probes on
+  pandas annotations land in v1.4, parallel to how v1.2 added
+  Spark type-tracking after v1.1 introduced Spark column tracking.
+  Tracker: [pykrete-tests#14](https://github.com/amirnaderi93/pykrete-tests/issues/14).
+- **Cross-dialect handoff annotations** (`SparkFrame[X] →
+  PandasFrame[X]` across `.toPandas()` and friends). Spec § 11
+  defers to v1.4.
+- **`df.query("...")` / `df.eval("...")` mini-DSL.** Spec § 11
+  defers to v1.4.
+
+### Coordinated with
+
+- pykrete-tests: PR-A through PR-D of the v1.3 cycle ship the
+  cross-codebase pandas fixtures, the probes runner extensions,
+  the catalog pin alignment, the cross-codebase exit-mask
+  hardening, and the mass golden refresh.
+
+### Compatibility
+
+- **`DataFrame[X]` source-compatible through v1.x.** Every existing
+  `DataFrame[X]` annotation continues to type-check; the warning
+  is informational and downgradable to off via the standard
+  `pykrete.json` `rules` block. Removal is committed for v2.0.
+- **JSON output contract.** `schemaVersion` stays at `"1"`. Adding
+  `D0090` is a non-breaking change per the v1.0 stability contract
+  (consumers must accept unknown D-codes). No existing diagnostic's
+  shape or semantics changed.
+
 ## [1.2.0] - 2026-06-02
 
 Second minor release on the v1.0 line. The headline change is a

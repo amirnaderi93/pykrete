@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.42
+
+Tracks the v1.3.0 pykrete release — pandas dialect support. The
+bundled `pykrete-lsp` now recognizes the `PandasFrame[X]` annotation
+form alongside `SparkFrame[X]`, dispatches the six pandas operations
+(`df[col_list]` / `df[mask]` / `df["new"] = expr` / `df.drop` /
+`df.merge` / `df.rename`) through pandas-aware check sites, fires the
+new `D0090 deprecatedDataFrameAlias` warning on `DataFrame[X]` (which
+is removed in v2.0), and widens `D0030` to bare `df["typo"]`
+subscripts in non-method contexts on both `SparkFrame[X]` and
+`PandasFrame[X]`. Hover and completion surface the dialect tag.
+Quick-fix on D0090 rewrites `DataFrame[X]` to `SparkFrame[X]`. See
+the [main CHANGELOG](../../CHANGELOG.md#130---2026-06-03) for details.
+
 ## 0.2.39
 
 Tracks the v1.2.0 pykrete release — trust-system extension, no
