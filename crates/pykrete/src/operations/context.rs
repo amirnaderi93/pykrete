@@ -120,6 +120,13 @@ pub(crate) struct BodyContext<'a> {
     /// one each time [`infer_transform_output`] recurses into a transform
     /// function's body. Caps runaway recursion on a `transform` cycle.
     pub(super) infer_depth: u32,
+    /// Names currently bound by an enclosing comprehension generator
+    /// whose body we're walking (`elt` and `ifs`). A Subscript receiver
+    /// whose name is in this set is treated as a fresh loop variable
+    /// rather than a frame ref — even if the outer scope binds the
+    /// same name as a frame. Push/pop in lockstep with the comprehension
+    /// descent so nested comprehensions stack correctly.
+    comp_bound_names: RefCell<HashSet<&'a str>>,
     /// File-scoped `createOrReplaceTempView` registrations, shared by
     /// reference across every function-body context in the same file.
     /// `None` means "no registry was wired in" — used by call sites that
@@ -193,6 +200,7 @@ impl<'a> BodyContext<'a> {
             local_bindings: RefCell::new(Vec::new()),
             call_results: RefCell::new(Vec::new()),
             infer_depth: 0,
+            comp_bound_names: RefCell::new(HashSet::new()),
             temp_views: None,
         }
     }
@@ -454,6 +462,26 @@ impl<'a> BodyContext<'a> {
     /// Whether `name` has been bound locally in this body.
     pub(crate) fn is_locally_bound(&self, name: &str) -> bool {
         self.local_names.borrow().contains(name)
+    }
+
+    /// Push a comprehension-bound name onto the shadow set, returning
+    /// `true` if it was newly inserted (i.e. the caller is responsible
+    /// for popping it). A nested comprehension that re-binds the same
+    /// name gets `false` and skips its own pop — the outer scope owns
+    /// the entry.
+    pub(crate) fn push_comp_bound(&self, name: &'a str) -> bool {
+        self.comp_bound_names.borrow_mut().insert(name)
+    }
+
+    /// Remove a comprehension-bound name from the shadow set.
+    pub(crate) fn pop_comp_bound(&self, name: &str) {
+        self.comp_bound_names.borrow_mut().remove(name);
+    }
+
+    /// Whether `name` is currently shadowed by an enclosing
+    /// comprehension generator whose body we're walking.
+    pub(crate) fn is_comp_bound(&self, name: &str) -> bool {
+        self.comp_bound_names.borrow().contains(name)
     }
 
     /// Bind a local name as an instance of `class_name`. Used to thread
