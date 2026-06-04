@@ -181,16 +181,22 @@ These fire before any schema checking — they mean pykrete couldn't read someth
 `DataFrame[X]` is the v1.0–v1.2 spelling. v1.3 introduces dialect-specific annotations — `SparkFrame[X]` for PySpark code and `PandasFrame[X]` for pandas code — and `DataFrame[X]` now fires D0090 as a warning at every use.
 
 ```pyk
-from pyspark.sql import DataFrame, SparkSession
+class Sale(Schema):
+    region: string
+    amount: int
 
 def revenue(sales: DataFrame[Sale]) -> DataFrame[Sale]:
-    #                ^^^^^^^^^^^^^^ D0090
-    return sales.filter(col("amount") > 0)
+    #                ^^^^^^^^^^^^^^                    D0090
+    #                                  ^^^^^^^^^^^^^^  D0090
+    return sales
 ```
 
 ```
-sales.pyk:3:20 - warning deprecatedDataFrameAlias: 'DataFrame[Sale]' is the v1.0 alias; prefer the dialect-specific 'SparkFrame[Sale]' (PySpark) or 'PandasFrame[Sale]' (pandas). DataFrame[X] continues to behave as an alias for SparkFrame[X] in v1.3.
+sales.pyk:5:20 - warning deprecatedDataFrameAlias: 'DataFrame[Sale]' is a deprecated alias for 'SparkFrame[Sale]' and will be removed in pykrete v2.0. Rewrite as 'SparkFrame[Sale]'.
+sales.pyk:5:40 - warning deprecatedDataFrameAlias: 'DataFrame[Sale]' is a deprecated alias for 'SparkFrame[Sale]' and will be removed in pykrete v2.0. Rewrite as 'SparkFrame[Sale]'.
 ```
+
+Every `DataFrame[X]` annotation fires — parameter, return, and any `.cast(DataFrame[X])` re-anchors all emit the warning independently. A function with two `DataFrame[Sale]` slots gets two warnings, as above.
 
 **Severity.** Warning, not error — existing `DataFrame[X]` code keeps checking exactly as it did. The runtime is unaffected (the transpiler still strips `.cast(DataFrame[Schema])` re-anchors the same way it strips `.cast(SparkFrame[Schema])`).
 

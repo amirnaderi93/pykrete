@@ -36,7 +36,7 @@ def revenue_by_region(sales: SparkFrame[Sale]) -> DataFrame:
     return sales.groupBy("region").agg(F.sum("amount").alias("total"))
 ```
 
-The same recipe with a pandas dataframe — different annotation, same checking story:
+The same recipe with a pandas dataframe — different annotation, same column-reference story on the operations pykrete dispatches:
 
 ```python
 # sales.pyk — pandas
@@ -46,11 +46,13 @@ class Sale(Schema):
     region: string
     amount: int
 
-def revenue_by_region(sales: PandasFrame[Sale]) -> pd.DataFrame:
-    return sales[["region", "amount"]].groupby("region").sum()
+def positive_sales(sales: PandasFrame[Sale]) -> pd.DataFrame:
+    return sales[sales["amount"] > 0][["region", "amount"]]
 ```
 
-**What you get.** Existence checks ([`D0030`](/pykrete/reference/diagnostics/#unknowncolumn--d0030)) on every column reference in the chain. The other `.py` files in the project remain unchanged and unchecked — `.py` and `.pyk` coexist in the same repo, and `.pyk` is a strict superset of Python, so the file still runs.
+**What you get.** Existence checks ([`D0030`](/pykrete/reference/diagnostics/#unknowncolumn--d0030)) on the column references in the [six dispatched pandas operations](/pykrete/reference/operations/#pandas-dispatch-v13) — `df[col_list]` / `df[mask]` / `df["new"] = expr` / `df.drop` / `df.merge` / `df.rename`. Other pandas surface (`.groupby`, `.agg`, `.read_parquet`, window ops) currently falls back to **opaque** in v1.3 — re-anchor with `.cast(PandasFrame[X])` when you need checking to resume. PySpark column references are checked on every operation pykrete models, not just dispatched ones — the per-operation matrix is in the [operations reference](/pykrete/reference/operations/).
+
+The other `.py` files in the project remain unchanged and unchecked — `.py` and `.pyk` coexist in the same repo, and `.pyk` is a strict superset of Python, so the file still runs.
 
 **Pitfall.** pykrete only enters a function when its signature has a `SparkFrame[…]` or `PandasFrame[…]` slot. Untyped helper functions in the same file aren't checked — that's by design, but it surprises people who expect whole-file coverage from the rename alone. (`DataFrame[…]` still works as a deprecated alias and emits [D0090](/pykrete/reference/diagnostics/#deprecateddataframealias--d0090).)
 

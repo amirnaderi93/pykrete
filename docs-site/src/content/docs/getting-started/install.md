@@ -49,9 +49,9 @@ This builds from `main`. For a pinned release, add `--tag` with the
 ```sh
 pykrete --version
 # pykrete 1.3.0
-pykrete-lsp --version
-# pykrete-lsp 1.3.0
 ```
+
+`pykrete-lsp` is a stdio-based language server with no CLI surface — it has no `--version` flag and exits with an error if invoked directly from a terminal. Verify it instead by opening a `.pyk` file in VS Code (or any LSP-capable editor configured per [Other editors](#other-editors)) and watching diagnostics appear.
 
 ## VS Code extension
 

@@ -413,6 +413,7 @@ class Sale(Schema):
     region: string
     product: string
     amount: int
+    quantity: int
 
 def revenue(sales: PandasFrame[Sale]) -> pd.DataFrame:
     return (
@@ -459,7 +460,7 @@ For the PySpark-only operations on this page (joins / aggregations / windows / I
 Some of the surface is intentionally outside pykrete's reach. These aren't gaps to fill — they're runtime concerns, not schema concerns:
 
 - **Structured streaming** (`readStream`, `writeStream`, `isStreaming`). pykrete is a static checker against declared schemas; streaming state is a runtime construct.
-- **Pandas-on-Spark and Arrow conversions** (`toPandas`, `toArrow`, `mapInPandas`, `pandas_api`, ...). The result isn't a Spark dataframe anymore; pandas check-site coverage shipped in v1.3 as its own typed surface (`PandasFrame[X]`) — see the [Pandas dispatch (v1.3)](#pandas-dispatch-v13) section below; polars is next on the [roadmap](/pykrete/about/roadmap/).
+- **Pandas-on-Spark and Arrow conversions** (`toPandas`, `toArrow`, `mapInPandas`, `pandas_api`, ...). The result isn't a Spark dataframe anymore; pandas check-site coverage shipped in v1.3 as its own typed surface (`PandasFrame[X]`) — see the [Pandas dispatch (v1.3)](#pandas-dispatch-v13) section above; polars is next on the [roadmap](/pykrete/about/roadmap/).
 - **RDD-level operations** (`rdd`, `mapPartitions`, `foreach`). These drop below the dataframe abstraction by design.
 - **Runtime introspection** (`describe`, `summary`, `stat.*`). These return shape-of-data summaries, not schemas.
 - **UDF internals**. The decorator's return type is honored, but the body is opaque.
