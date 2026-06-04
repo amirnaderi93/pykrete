@@ -545,18 +545,23 @@ fn handle_ann_assign<'a>(
     }
 
     let recognized_dialect = recognized.map(|r| r.dialect);
-    match recognized.map(|r| r.kind) {
-        Some(DataFrameAnnotation::Typed(schema_name)) => {
+    match recognized.map(|r| (r.kind, r.dialect, r.is_deprecated_alias)) {
+        Some((DataFrameAnnotation::Typed(schema_name), dialect, is_deprecated_alias)) => {
             if let Some(schema) = ctx.find_schema(schema_name) {
                 let view = SchemaView::Declared(schema);
                 ctx.bind_df(target_name, view.clone(), recognized_dialect);
                 ctx.record_local_binding(target_name, target_range, view);
             } else {
+                let rendered = dataframe::render_annotation(
+                    &DataFrameAnnotation::Typed(schema_name),
+                    dialect,
+                    is_deprecated_alias,
+                );
                 diagnostics.push(Diagnostic::at_range(
                     Severity::Error,
                     "D0020",
                     format!(
-                        "Unknown schema '{schema_name}' referenced in DataFrame[…]. \
+                        "Unknown schema '{schema_name}' referenced in {rendered}. \
                          Declare it as a class extending Schema.",
                     ),
                     ann.annotation.range(),
@@ -565,7 +570,7 @@ fn handle_ann_assign<'a>(
                 ));
             }
         }
-        Some(DataFrameAnnotation::Derived(expr)) => {
+        Some((DataFrameAnnotation::Derived(expr), _, _)) => {
             // `x: DataFrame[Pick[…]] = …` — a local derived-schema
             // re-annotation. Surface its validation errors, then bind
             // the resolved view.
@@ -586,13 +591,18 @@ fn handle_ann_assign<'a>(
                 ctx.record_local_binding(target_name, target_range, view);
             }
         }
-        Some(DataFrameAnnotation::NonBareName) => {
+        Some((DataFrameAnnotation::NonBareName, dialect, is_deprecated_alias)) => {
             let raw_text = &source[ann.annotation.range()];
+            let frame_name = dataframe::render_annotation(
+                &DataFrameAnnotation::Untyped,
+                dialect,
+                is_deprecated_alias,
+            );
             diagnostics.push(Diagnostic::at_range(
                 Severity::Error,
                 "D0021",
                 format!(
-                    "DataFrame schema must be a bare name; got '{raw_text}'. \
+                    "{frame_name} schema must be a bare name; got '{raw_text}'. \
                      Subscripted/complex schema expressions are not supported in v0.1.",
                 ),
                 ann.annotation.range(),
@@ -600,7 +610,7 @@ fn handle_ann_assign<'a>(
                 line_index,
             ));
         }
-        Some(DataFrameAnnotation::Untyped) => {
+        Some((DataFrameAnnotation::Untyped, _, _)) => {
             // Bare `DataFrame` — no schema to bind. Nothing to do.
         }
         None => {

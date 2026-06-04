@@ -131,7 +131,7 @@ def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
 fn d0020_still_fires_when_a_schema_is_not_declared_in_any_file() {
     // No file declares MysterySchema; the cross-file lookup also fails;
     // pykrete emits the existing D0020 ("Unknown schema 'X' referenced in
-    // SparkFrame[…]").
+    // SparkFrame[X]").
     let results = check_project_pairs(&[
         (
             "schemas.pyk",

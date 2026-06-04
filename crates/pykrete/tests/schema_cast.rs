@@ -3,9 +3,11 @@
 //! another un-modeled op) to an explicit schema, so downstream column
 //! checks resume. `Column.cast("int")` is untouched.
 
+#![allow(non_snake_case)] // V13E4 test naming convention.
+
 mod common;
 
-use common::{assert_has_code, assert_no_diagnostics, check};
+use common::{assert_has_code, assert_message_contains, assert_no_diagnostics, check};
 
 const SCHEMA: &str = "\
 class Raw(Schema):
@@ -64,7 +66,39 @@ def f(raw: SparkFrame[Raw]) -> SparkFrame:
     return raw.cast(SparkFrame[Bogus])
 "
     );
-    assert_has_code(&check(&src), "D0020");
+    let result = check(&src);
+    assert_has_code(&result, "D0020");
+    assert_message_contains(&result, "D0020", "SparkFrame[…]");
+}
+
+#[test]
+fn V13E4_d0020_cast_pandas_frame_uses_pandas_prefix() {
+    // Round-2 PR-E4 fix: the `.cast(PandasFrame[Mystery])` emission site
+    // in expr.rs must echo the dispatched dialect, not the hardcoded
+    // `DataFrame[...]` surface. Mirrors the signature/ann-assign paths.
+    let src = format!(
+        "{SCHEMA}
+def f(raw: PandasFrame[Raw]) -> PandasFrame:
+    return raw.cast(PandasFrame[Mystery])
+"
+    );
+    let result = check(&src);
+    assert_has_code(&result, "D0020");
+    assert_message_contains(&result, "D0020", "PandasFrame");
+    let has_dataframe_surface = result
+        .diagnostics_with_code("D0020")
+        .iter()
+        .any(|d| d.message.contains("DataFrame"));
+    assert!(
+        !has_dataframe_surface,
+        "D0020 from .cast(PandasFrame[…]) must not mention DataFrame; got:\n  {}",
+        result
+            .diagnostics_with_code("D0020")
+            .iter()
+            .map(|d| d.message.clone())
+            .collect::<Vec<_>>()
+            .join("\n  "),
+    );
 }
 
 #[test]
