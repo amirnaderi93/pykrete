@@ -1002,3 +1002,61 @@ def f():
     );
     assert_does_not_have_code(&result, "D0084");
 }
+
+// ===========================================================================
+// V13E6 — chain-merge gate coverage (spark-coverage re-audit)
+//
+// V13B's gate-coverage tests pinned the merge skip for Spark-tagged
+// Names. V13E1's round-2 fix rewrote the gate against `inherited_dialect`
+// so chain receivers route the same way as Name receivers — but no test
+// covered the merge gate on a chain receiver. These two pin that path:
+// Spark chain → merge skips (no D0060), pandas chain → merge dispatches
+// (D0060 fires on a bogus key).
+// ===========================================================================
+
+#[test]
+fn V13E6_sdf_cache_chain_merge_does_not_fire_d0060() {
+    // Spark chain into `.merge`. `inherited_dialect` walks
+    // `o.cache()` → `o` (Spark-tagged) → gate evaluates true → the
+    // join dispatch is skipped → no D0060 on the bogus key. Without
+    // the chain walk (round-1 immediate-Name gate), the chain receiver
+    // would carry no dialect, gate would evaluate false, and pandas
+    // join dispatch would fire D0060 on "bogus" — a misspelled `.merge`
+    // on a Spark chain is wrong code, not a join.
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+
+class Refunds(Schema):
+    id: int
+
+def f(o: SparkFrame[Orders], r: SparkFrame[Refunds]):
+    return o.cache().merge(r, on="bogus")
+"#,
+    );
+    assert_does_not_have_code(&result, "D0060");
+}
+
+#[test]
+fn V13E6_pdf_chain_merge_still_fires_d0060() {
+    // Pandas chain into `.merge`. The inner `.rename(columns={})` is a
+    // no-op pandas dispatch that produces a chain receiver (a Call,
+    // not a Name) for the outer `.merge`. `inherited_dialect` walks
+    // down to `p` → Pandas → gate evaluates false → handle_two_df_method
+    // runs → D0060 fires on the bogus key. Pins that PR-E1's chain
+    // walk doesn't accidentally skip pandas chains too.
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+
+class Refunds(Schema):
+    id: int
+
+def f(p: PandasFrame[Orders], q: PandasFrame[Refunds]):
+    return p.rename(columns={"id": "id"}).merge(q, on="bogus")
+"#,
+    );
+    assert_has_code(&result, "D0060");
+}
