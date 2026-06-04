@@ -120,6 +120,13 @@ pub(crate) struct BodyContext<'a> {
     /// one each time [`infer_transform_output`] recurses into a transform
     /// function's body. Caps runaway recursion on a `transform` cycle.
     pub(super) infer_depth: u32,
+    /// Names currently bound by an enclosing comprehension generator
+    /// whose body we're walking (`elt` and `ifs`). A Subscript receiver
+    /// whose name is in this set is treated as a fresh loop variable
+    /// rather than a frame ref — even if the outer scope binds the
+    /// same name as a frame. Push/pop in lockstep with the comprehension
+    /// descent so nested comprehensions stack correctly.
+    comp_bound_names: RefCell<HashSet<&'a str>>,
     /// File-scoped `createOrReplaceTempView` registrations, shared by
     /// reference across every function-body context in the same file.
     /// `None` means "no registry was wired in" — used by call sites that
@@ -193,6 +200,7 @@ impl<'a> BodyContext<'a> {
             local_bindings: RefCell::new(Vec::new()),
             call_results: RefCell::new(Vec::new()),
             infer_depth: 0,
+            comp_bound_names: RefCell::new(HashSet::new()),
             temp_views: None,
         }
     }
@@ -456,6 +464,26 @@ impl<'a> BodyContext<'a> {
         self.local_names.borrow().contains(name)
     }
 
+    /// Push a comprehension-bound name onto the shadow set, returning
+    /// `true` if it was newly inserted (i.e. the caller is responsible
+    /// for popping it). A nested comprehension that re-binds the same
+    /// name gets `false` and skips its own pop — the outer scope owns
+    /// the entry.
+    pub(crate) fn push_comp_bound(&self, name: &'a str) -> bool {
+        self.comp_bound_names.borrow_mut().insert(name)
+    }
+
+    /// Remove a comprehension-bound name from the shadow set.
+    pub(crate) fn pop_comp_bound(&self, name: &str) {
+        self.comp_bound_names.borrow_mut().remove(name);
+    }
+
+    /// Whether `name` is currently shadowed by an enclosing
+    /// comprehension generator whose body we're walking.
+    pub(crate) fn is_comp_bound(&self, name: &str) -> bool {
+        self.comp_bound_names.borrow().contains(name)
+    }
+
     /// Bind a local name as an instance of `class_name`. Used to thread
     /// class-method calls (`data_access.read(...)`) through the
     /// generic-inference path when the receiver was assigned locally
@@ -473,6 +501,15 @@ impl<'a> BodyContext<'a> {
     ///    the constant carries the named schema regardless of the outer
     ///    generic class.
     pub(crate) fn lookup(&self, name: &str) -> Option<SchemaView<'a>> {
+        // Comp-shadow guard: when an enclosing comprehension generator
+        // rebinds this name (`for df in items`), the inner reference is
+        // a fresh loop variable, not the outer frame. Every Name-arm
+        // path inherits the guard from here so that a comp-shadowed
+        // `df.select("typo")` / `df.fillna(...)` / `df["typo"] = ...`
+        // doesn't false-fire D0030 against the outer SparkFrame.
+        if self.is_comp_bound(name) {
+            return None;
+        }
         if let Some(view) = self.df_bindings.get(name).cloned() {
             return Some(view);
         }
@@ -489,12 +526,18 @@ impl<'a> BodyContext<'a> {
     /// off a chain result (no dialect threading from chain returns),
     /// and for module-scope constants (`DataSources.RAW_ORDERS`).
     pub(crate) fn lookup_dialect(&self, name: &str) -> Option<Dialect> {
+        if self.is_comp_bound(name) {
+            return None;
+        }
         self.df_dialects.get(name).copied()
     }
 
     /// Resolve a name as a *class instance* (not a DataFrame). Used to
     /// route method calls through the class registry.
     pub(crate) fn lookup_instance(&self, name: &str) -> Option<&'a str> {
+        if self.is_comp_bound(name) {
+            return None;
+        }
         self.instance_bindings.get(name).copied()
     }
 

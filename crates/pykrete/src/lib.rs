@@ -54,7 +54,7 @@ use ruff_python_ast::{ModModule, Stmt};
 use ruff_source_file::LineIndex;
 use ruff_text_size::{Ranged, TextRange};
 
-use crate::dataframe::{DataFrameAnnotation, SlotLabel, TypedSlot, typed_slots};
+use crate::dataframe::{DataFrameAnnotation, SlotLabel, TypedSlot, render_annotation, typed_slots};
 pub use crate::diagnostics::CheckMode;
 use crate::diagnostics::{Diagnostic, Severity};
 use crate::imports::{ModulePath, find_pyproject_root, longest_common_ancestor, parse_imports};
@@ -1046,16 +1046,21 @@ fn render_function(
             );
         }
 
+        // Render the slot's frame surface through `render_annotation` so
+        // every rendering site agrees on the dialect prefix —
+        // `SparkFrame` / `PandasFrame` / the deprecated `DataFrame`
+        // alias — and the CLI text output matches hover/symbols.
+        let rendered = render_annotation(&slot.kind, slot.dialect, slot.is_deprecated_alias);
         match slot.kind {
             DataFrameAnnotation::Typed(name) => {
                 if schemas.iter().any(|s| s.name() == name) {
-                    writeln!(out, "{prefix}DataFrame[{name}]").unwrap();
+                    writeln!(out, "{prefix}{rendered}").unwrap();
                 } else if func_type_params.contains(&name) {
-                    // `DataFrame[T]` where T is a TypeVar on this
+                    // `<Frame>[T]` where T is a TypeVar on this
                     // function — generic, resolved at call sites.
-                    writeln!(out, "{prefix}DataFrame[{name}]  (generic)").unwrap();
+                    writeln!(out, "{prefix}{rendered}  (generic)").unwrap();
                 } else {
-                    writeln!(out, "{prefix}{raw_text}  (unresolved)").unwrap();
+                    writeln!(out, "{prefix}{rendered}  (unresolved)").unwrap();
                     diagnostics.push(Diagnostic::at_range(
                         Severity::Error,
                         "D0020",
@@ -1104,9 +1109,17 @@ fn render_function(
                 }
             }
             DataFrameAnnotation::Untyped => {
-                writeln!(out, "{prefix}DataFrame  (untyped)").unwrap();
+                // Architecture-audit nit #11: untyped path must carry
+                // the slot's actual dialect — bare `PandasFrame` reads
+                // as "PandasFrame (untyped)", not the prior hardcoded
+                // "DataFrame (untyped)".
+                writeln!(out, "{prefix}{rendered}  (untyped)").unwrap();
             }
             DataFrameAnnotation::NonBareName => {
+                // `raw_text` already carries the user-typed dialect
+                // prefix verbatim — preserve it so the user sees what
+                // they wrote (e.g. `DataFrame[list[str]]`, not the
+                // lossy `DataFrame[?]` from `render_annotation`).
                 writeln!(out, "{prefix}{raw_text}  (unresolved)").unwrap();
                 diagnostics.push(Diagnostic::at_range(
                     Severity::Error,

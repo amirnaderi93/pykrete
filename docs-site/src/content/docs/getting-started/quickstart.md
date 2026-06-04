@@ -31,10 +31,10 @@ Field name is column name; field type is column type. The atomic types are `int`
 
 ## 3. Annotate the function
 
-Add the schema to a parameter with `DataFrame[Sale]`:
+Add the schema to a parameter with `SparkFrame[Sale]` (or `PandasFrame[Sale]` for a pandas dataframe):
 
 ```python
-def revenue_by_region(sales: DataFrame[Sale]) -> DataFrame:
+def revenue_by_region(sales: SparkFrame[Sale]) -> DataFrame:
     return (
         sales
         .filter(F.col("quantity") > 0)
@@ -77,7 +77,7 @@ So a `.select(F.col("amount"))` tacked on the end would be flagged — `amount` 
 
 One file is a complete, useful state — leave it there as long as you like.
 
-When the `Sale` schema would help elsewhere, move it to a shared module and import it; other files can stay `.py`. pykrete only enters a function when its signature has a `DataFrame[…]` slot, so unannotated code costs nothing.
+When the `Sale` schema would help elsewhere, move it to a shared module and import it; other files can stay `.py`. pykrete only enters a function when its signature has a `SparkFrame[…]` or `PandasFrame[…]` slot, so unannotated code costs nothing.
 
 When you want the whole project checked at once:
 

@@ -141,13 +141,37 @@ fn walk_stmt<'a>(
     match stmt {
         Stmt::Assign(a) => {
             let schema = analyze_expr(&a.value, ctx, source, line_index, diagnostics);
+            // v1.3 §10 widening — `spark_df["typo"] = ...` LHS col-ref
+            // check. Spark frames don't support item assignment at
+            // runtime, but the *column name* in the slice is still a
+            // genuine reference the user expected to exist on the
+            // schema — a typo here is wrong code. Gated to Spark
+            // because pandas's `pdf["new"] = ...` is the legitimate
+            // schema-extend path (handled below); firing D0030 there
+            // would flag the new-column add as a typo.
+            for target in &a.targets {
+                if let Expr::Subscript(sub) = target
+                    && let Some(name_expr) = sub.value.as_name_expr()
+                    && ctx.lookup_dialect(name_expr.id.as_str())
+                        == Some(crate::dataframe::Dialect::Spark)
+                    && let Some(recv) = ctx.lookup(name_expr.id.as_str())
+                {
+                    super::expr::report_subscript_col_refs(
+                        &sub.slice,
+                        &recv,
+                        ctx,
+                        source,
+                        line_index,
+                        diagnostics,
+                    );
+                }
+            }
             // v1.3 pandas dispatch (spec §5) — `df["new"] = expr`. The
             // target is a Subscript whose value is a pandas-tagged
             // frame-bound Name; the slice (string literal) names a
             // column to add or replace. Gated on the Pandas dialect:
-            // Spark frames don't support item assignment, so firing
-            // there would be misleading (and the wider pandas
-            // dispatches all share this gate per spec §5).
+            // Spark frames don't support item assignment, so the
+            // schema-extend half stays pandas-only.
             //
             // Two effects, in order:
             // 1. enum-sink check on the RHS literal (D0084) when the
@@ -158,7 +182,8 @@ fn walk_stmt<'a>(
             //    (Unknown) for expressions we can't type.
             //
             // The col-ref check on the RHS itself is the analyze_expr
-            // descent above.
+            // descent above; the LHS col-ref check is the §10 widening
+            // block immediately above.
             for target in &a.targets {
                 if let Expr::Subscript(sub) = target
                     && let Some(name_expr) = sub.value.as_name_expr()

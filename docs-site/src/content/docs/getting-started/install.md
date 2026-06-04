@@ -42,16 +42,16 @@ cargo install --git https://github.com/amirnaderi93/pykrete pykrete-lsp
 
 This builds from `main`. For a pinned release, add `--tag` with the
 [latest release tag](https://github.com/amirnaderi93/pykrete/releases/latest)
-(e.g. `--tag v0.1.40`).
+(e.g. `--tag v1.3.0`).
 
 ### Verify
 
 ```sh
 pykrete --version
-# pykrete 0.1.40
-pykrete-lsp --version
-# pykrete-lsp 0.1.40
+# pykrete 1.3.0
 ```
+
+`pykrete-lsp` is a stdio-based language server with no CLI surface — it has no `--version` flag and exits with an error if invoked directly from a terminal. Verify it instead by opening a `.pyk` file in VS Code (or any LSP-capable editor configured per [Other editors](#other-editors)) and watching diagnostics appear.
 
 ## VS Code extension
 

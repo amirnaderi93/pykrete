@@ -47,8 +47,8 @@ The server embeds a full Python language server alongside pykrete's own analysis
 
 `.pyk` → `.py` is nearly an identity transform. Two adjustments:
 
-- It prepends `from __future__ import annotations`, so pykrete's type names and `DataFrame[…]` annotations are never evaluated at runtime — they're just strings as far as Python is concerned.
-- It strips the one pykrete-only construct that appears in *expression* position — the schema re-anchor `.cast(DataFrame[Schema])`, which a stock Python runtime has no method for. The removal is surgical: only that call is deleted, line numbers and everything else are preserved byte-for-byte.
+- It prepends `from __future__ import annotations`, so pykrete's type names and `SparkFrame[…]` / `PandasFrame[…]` / `DataFrame[…]` annotations are never evaluated at runtime — they're just strings as far as Python is concerned.
+- It strips the one pykrete-only construct that appears in *expression* position — the schema re-anchor `.cast(SparkFrame[Schema])` (and the `PandasFrame[Schema]` / deprecated `DataFrame[Schema]` forms), which a stock Python runtime has no method for. The removal is surgical: only that call is deleted, line numbers and everything else are preserved byte-for-byte.
 
 ## Why these choices
 

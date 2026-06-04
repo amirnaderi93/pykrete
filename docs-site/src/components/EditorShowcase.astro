@@ -57,7 +57,7 @@
           <li>    amount: <span class="cls">int</span></li>
           <li>    quantity: <span class="cls">int</span></li>
           <li> </li>
-          <li><span class="kw">def</span> <span class="fn">revenue_by_region</span>(sales: <span class="cls">DataFrame</span>[<span class="cls">Sale</span>]):</li>
+          <li><span class="kw">def</span> <span class="fn">revenue_by_region</span>(sales: <span class="cls">SparkFrame</span>[<span class="cls">Sale</span>]):</li>
           <li class="err-line">    <span class="kw">return</span> sales.<span class="fn">groupBy</span>(<span class="str">"<span class="squiggle">regoin</span>"</span>).<span class="fn">agg</span>(<span class="fn">F</span>.<span class="fn">sum</span>(<span class="str">"amount"</span>))</li>
         </ol>
         <div class="diagnostic">
@@ -84,7 +84,7 @@
           <span class="filename">sales.pyk</span>
         </div>
         <ol class="code">
-          <li><span class="kw">def</span> <span class="fn">revenue_by_region</span>(sales: <span class="cls">DataFrame</span>[<span class="cls">Sale</span>]):</li>
+          <li><span class="kw">def</span> <span class="fn">revenue_by_region</span>(sales: <span class="cls">SparkFrame</span>[<span class="cls">Sale</span>]):</li>
           <li>    <span class="kw">return</span> sales.<span class="fn">groupBy</span>(<span class="str">"<span class="caret"></span>"</span>)</li>
         </ol>
         <div class="popup popup-complete">
@@ -100,7 +100,7 @@
     <div
       class="panel panel-3"
       role="img"
-      aria-label="Hovering the sales parameter shows its schema: DataFrame[Sale] with columns region string, product string, amount int, quantity int."
+      aria-label="Hovering the sales parameter shows its schema: SparkFrame[Sale] with columns region string, product string, amount int, quantity int."
     >
       <div class="win">
         <div class="titlebar">
@@ -110,11 +110,11 @@
           <span class="filename">sales.pyk</span>
         </div>
         <ol class="code">
-          <li><span class="kw">def</span> <span class="fn">revenue_by_region</span>(sales: <span class="cls">DataFrame</span>[<span class="cls">Sale</span>]):</li>
+          <li><span class="kw">def</span> <span class="fn">revenue_by_region</span>(sales: <span class="cls">SparkFrame</span>[<span class="cls">Sale</span>]):</li>
           <li>    <span class="kw">return</span> <span class="hover-tok">sales</span>.<span class="fn">groupBy</span>(<span class="str">"region"</span>).<span class="fn">agg</span>(<span class="fn">F</span>.<span class="fn">sum</span>(<span class="str">"amount"</span>))</li>
         </ol>
         <div class="popup popup-hover">
-          <div class="hov-head">(parameter) <b>sales</b>: <span class="cls">DataFrame</span>[<span class="cls">Sale</span>]</div>
+          <div class="hov-head">(parameter) <b>sales</b>: <span class="cls">SparkFrame</span>[<span class="cls">Sale</span>]</div>
           <div class="hov-rule"></div>
           <div class="hov-schema">
             <div class="hov-row"><span class="opt-n">region</span><span class="opt-t">string</span></div>
@@ -140,7 +140,7 @@
           <span class="filename">sales.pyk</span>
         </div>
         <ol class="code">
-          <li><span class="kw">def</span> <span class="fn">eu_revenue</span>(sales: <span class="cls">DataFrame</span>[<span class="cls">Sale</span>]):</li>
+          <li><span class="kw">def</span> <span class="fn">eu_revenue</span>(sales: <span class="cls">SparkFrame</span>[<span class="cls">Sale</span>]):</li>
           <li>    <span class="kw">return</span> (</li>
           <li>        sales</li>
           <li class="err-line">        .<span class="fn">filter</span>(<span class="str">"region = 'EU' AND <span class="squiggle">amuont</span> &gt; 1000"</span>)</li>
@@ -163,7 +163,7 @@
     <div
       class="panel panel-5"
       role="img"
-      aria-label="pykrete tracks the schema through a transformation chain. Hovering the result shows its derived schema — a DataFrame with columns region string and total long, after withColumn, drop, groupBy and agg."
+      aria-label="pykrete tracks the schema through a transformation chain. Hovering the result shows its derived schema — a SparkFrame with columns region string and total long, after withColumn, drop, groupBy and agg."
     >
       <div class="win">
         <div class="titlebar">
@@ -173,7 +173,7 @@
           <span class="filename">sales.pyk</span>
         </div>
         <ol class="code">
-          <li><span class="kw">def</span> <span class="fn">report</span>(sales: <span class="cls">DataFrame</span>[<span class="cls">Sale</span>]):</li>
+          <li><span class="kw">def</span> <span class="fn">report</span>(sales: <span class="cls">SparkFrame</span>[<span class="cls">Sale</span>]):</li>
           <li>    summary = (</li>
           <li>        sales</li>
           <li>        .<span class="fn">withColumn</span>(<span class="str">"revenue"</span>, <span class="fn">F</span>.<span class="fn">col</span>(<span class="str">"amount"</span>) * <span class="fn">F</span>.<span class="fn">col</span>(<span class="str">"quantity"</span>))</li>
@@ -184,7 +184,7 @@
           <li>    <span class="kw">return</span> <span class="hover-tok">summary</span></li>
         </ol>
         <div class="popup popup-hover">
-          <div class="hov-head">(local) <b>summary</b>: <span class="cls">DataFrame</span></div>
+          <div class="hov-head">(local) <b>summary</b>: <span class="cls">SparkFrame</span></div>
           <div class="hov-rule"></div>
           <div class="hov-schema">
             <div class="hov-row"><span class="opt-n">region</span><span class="opt-t">string</span></div>
@@ -198,7 +198,7 @@
     <div
       class="panel panel-6"
       role="img"
-      aria-label="pykrete flags a return-type mismatch: the function declares it returns DataFrame[Summary] but the body produces a different column set — missing total, extra amount."
+      aria-label="pykrete flags a return-type mismatch: the function declares it returns SparkFrame[Summary] but the body produces a different column set — missing total, extra amount."
     >
       <div class="win">
         <div class="titlebar">
@@ -212,7 +212,7 @@
           <li>    region: <span class="cls">string</span></li>
           <li>    total: <span class="cls">int</span></li>
           <li> </li>
-          <li><span class="kw">def</span> <span class="fn">report</span>(sales: <span class="cls">DataFrame</span>[<span class="cls">Sale</span>]) -&gt; <span class="cls">DataFrame</span>[<span class="cls">Summary</span>]:</li>
+          <li><span class="kw">def</span> <span class="fn">report</span>(sales: <span class="cls">SparkFrame</span>[<span class="cls">Sale</span>]) -&gt; <span class="cls">SparkFrame</span>[<span class="cls">Summary</span>]:</li>
           <li class="err-line">    <span class="kw">return</span> <span class="squiggle">sales.<span class="fn">select</span>(<span class="str">"region"</span>, <span class="str">"amount"</span>)</span></li>
         </ol>
         <div class="diagnostic">
