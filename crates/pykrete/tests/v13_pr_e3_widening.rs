@@ -91,6 +91,94 @@ def f(df: SparkFrame[Orders]):
     assert_does_not_have_code(&result, "D0030");
 }
 
+// Comp-shadow false-positive sweep — the comp-shadow guard now lives
+// in `BodyContext::lookup`, so EVERY Name-arm path inherits it. These
+// cover the recognized-method dispatch paths (`.select`, `.fillna`,
+// `.withColumn`, `.merge`) where, before the lift, a comp-shadowed
+// `df` would still resolve to the outer SparkFrame via `Expr::Name`
+// and false-fire D0030 on the method's args.
+
+#[test]
+fn V13E3_listcomp_shadowed_name_method_call_quiet() {
+    // `[df.select("typo") for df in items]` — the comp-bound `df` is
+    // a fresh loop variable, not the outer SparkFrame. The method
+    // call's arg `"typo"` must not be checked against Orders.
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+    status: string
+
+def f(df: SparkFrame[Orders], items):
+    return [df.select("typo") for df in items]
+"#,
+    );
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn V13E3_listcomp_shadowed_name_fillna_dict_key_quiet() {
+    // `.fillna({"typo": 0})` with `df` comp-shadowed — the dict-key
+    // col-ref check runs against the resolved receiver. Without the
+    // guard, the receiver resolves to outer Orders and "typo" fires
+    // D0030. With it, the comp-shadowed `df` returns no schema and
+    // the dispatch's per-key check is silent.
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+    status: string
+
+def f(df: SparkFrame[Orders], items):
+    return [df.fillna({"typo": 0}) for df in items]
+"#,
+    );
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn V13E3_listcomp_shadowed_name_withColumn_quiet() {
+    // `.withColumn("new", df["typo"])` with `df` comp-shadowed — same
+    // shape: receiver and arg-Subscript both shadowed.
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+    status: string
+
+def f(df: SparkFrame[Orders], items):
+    return [df.withColumn("new", df["typo"]) for df in items]
+"#,
+    );
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn V13E3_listcomp_shadowed_name_merge_quiet() {
+    // `.merge(other, on="typo")` with `df` comp-shadowed — the merge
+    // dispatch's join-key check (D0060) must not run against the outer
+    // PandasFrame's schema since the comp-bound `df` is a fresh loop
+    // variable. Receiver dialect resolves to Pandas via
+    // `lookup_dialect` (would, without its guard); both lookups now
+    // return None for comp-shadowed names so the merge dispatcher
+    // doesn't run and the join-key check is silent.
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+    status: string
+
+class Refunds(Schema):
+    id: int
+
+def f(df: PandasFrame[Orders], other: PandasFrame[Refunds], items):
+    return [df.merge(other, on="typo") for df in items]
+"#,
+    );
+    assert_does_not_have_code(&result, "D0030");
+    assert_does_not_have_code(&result, "D0060");
+}
+
 #[test]
 fn V13E3_dictcomp_value_subscript_fires_d0030() {
     // DictComp's `value` is the dict-comprehension equivalent of `elt`.
@@ -250,7 +338,7 @@ def f(df: SparkFrame[Orders]):
 }
 
 #[test]
-fn V13E3_pandas_subscript_assign_lhs_typo_still_fires_d0030() {
+fn V13E3_pandas_subscript_assign_lhs_new_column_extends_schema_no_d0030() {
     // Regression guard — pandas LHS-subscript-assign behavior is
     // unchanged from PR-B: `pdf["new"] = ...` is the legitimate
     // column-add path. Firing D0030 on every non-existent column

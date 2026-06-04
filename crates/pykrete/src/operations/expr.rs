@@ -235,7 +235,6 @@ pub(super) fn analyze_expr<'a>(
             // literal scalar, variable, integer, slice, boolean mask)
             // return None — the Subscript value isn't itself a frame.
             let projection = if let Some(name) = s.value.as_name_expr()
-                && !ctx.is_comp_bound(name.id.as_str())
                 && let Some(view) = ctx.lookup(name.id.as_str())
             {
                 report_subscript_col_refs(&s.slice, &view, ctx, source, line_index, diagnostics);

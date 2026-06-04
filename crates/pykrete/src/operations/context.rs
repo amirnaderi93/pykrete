@@ -501,6 +501,15 @@ impl<'a> BodyContext<'a> {
     ///    the constant carries the named schema regardless of the outer
     ///    generic class.
     pub(crate) fn lookup(&self, name: &str) -> Option<SchemaView<'a>> {
+        // Comp-shadow guard: when an enclosing comprehension generator
+        // rebinds this name (`for df in items`), the inner reference is
+        // a fresh loop variable, not the outer frame. Every Name-arm
+        // path inherits the guard from here so that a comp-shadowed
+        // `df.select("typo")` / `df.fillna(...)` / `df["typo"] = ...`
+        // doesn't false-fire D0030 against the outer SparkFrame.
+        if self.is_comp_bound(name) {
+            return None;
+        }
         if let Some(view) = self.df_bindings.get(name).cloned() {
             return Some(view);
         }
@@ -517,12 +526,18 @@ impl<'a> BodyContext<'a> {
     /// off a chain result (no dialect threading from chain returns),
     /// and for module-scope constants (`DataSources.RAW_ORDERS`).
     pub(crate) fn lookup_dialect(&self, name: &str) -> Option<Dialect> {
+        if self.is_comp_bound(name) {
+            return None;
+        }
         self.df_dialects.get(name).copied()
     }
 
     /// Resolve a name as a *class instance* (not a DataFrame). Used to
     /// route method calls through the class registry.
     pub(crate) fn lookup_instance(&self, name: &str) -> Option<&'a str> {
+        if self.is_comp_bound(name) {
+            return None;
+        }
         self.instance_bindings.get(name).copied()
     }
 
