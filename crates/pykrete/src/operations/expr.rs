@@ -5,8 +5,8 @@ use super::column_exprs::select_arg_type;
 use super::column_methods::{
     apply_melt, apply_pandas_assign, apply_pandas_drop_columns, apply_rename_dict,
     apply_with_columns, apply_with_columns_renamed, check_column_method_args,
-    check_fillna_dict_keys, check_subset_kwarg, check_with_column_enum_sink,
-    check_with_columns_enum_sinks, report_column_refs,
+    check_fillna_dict_keys, check_pandas_assign_enum_sinks, check_subset_kwarg,
+    check_with_column_enum_sink, check_with_columns_enum_sinks, report_column_refs,
 };
 use super::context::{BodyContext, MAX_INFER_DEPTH};
 use super::driver::check_function_body;
@@ -751,17 +751,22 @@ pub(super) fn analyze_method_call<'a>(
     // pandas-side method names route through the same Spark check-
     // site impls because the col-ref check + result-schema
     // computation are dialect-agnostic; only the surface method
-    // name + argument shape differ. A Spark-tagged receiver is
-    // skipped here so a misnamed call doesn't silently get pandas
-    // treatment; chain receivers (no dialect threaded) fall through
-    // so real pandas chains (`pdf.merge(x).assign(...)`) still get
-    // their terminal method checked.
+    // name + argument shape differ. Gated on a Pandas-tagged Name
+    // receiver: a Spark receiver doesn't get pandas treatment, and
+    // a chain-result receiver also falls through. Chains lose their
+    // dialect tag at the rebind boundary unless explicitly preserved
+    // (see `bind_df`'s optional-dialect param at the Assign site), so
+    // dispatching pandas semantics on an untagged chain risks silent
+    // schema mutation on a Spark `df.cache().rename(columns={…})`.
+    // Real pandas chains carry their dialect forward via the
+    // preservation path and re-enter this dispatch on the next
+    // method call against the now-Pandas-tagged Name.
     //
     // `df.rename(columns={"old": "new"})` → mirror of
     // `withColumnsRenamed`. The `columns=` kwarg carries the rename
     // dict; legacy positional `mapper=` + `axis=1` forms are not
     // statically inspected (deferred to v1.4).
-    if !receiver_is_spark_named
+    if receiver_is_pandas_named
         && method == "rename"
         && let Some(dict) = pandas_dict_kwarg(call, "columns")
     {
@@ -772,7 +777,8 @@ pub(super) fn analyze_method_call<'a>(
     // route them through the shared adder. Enum-sink checks (D0084)
     // fire on string-literal kwarg values written into an enum-typed
     // sink column.
-    if !receiver_is_spark_named && method == "assign" {
+    if receiver_is_pandas_named && method == "assign" {
+        check_pandas_assign_enum_sinks(call, &receiver, ctx, source, line_index, diagnostics);
         return Some(apply_pandas_assign(
             call,
             &receiver,
@@ -788,7 +794,7 @@ pub(super) fn analyze_method_call<'a>(
     // we deliberately ONLY recognize the explicit `columns=` form
     // here.) The check reuses Spark's `.drop` logic — col-refs +
     // schema minus the dropped names.
-    if !receiver_is_spark_named
+    if receiver_is_pandas_named
         && method == "drop"
         && let Some(list) = pandas_list_kwarg(call, "columns")
     {
@@ -1671,7 +1677,7 @@ pub(super) fn infer_transform_output<'a>(
         child = child.with_temp_views(tv);
     }
     child.infer_depth = ctx.infer_depth + 1;
-    child.bind_df(param_name, input);
+    child.bind_df(param_name, input, None);
 
     let discovered = DiscoveredFunction { def: func_def };
     let mut sink: Vec<Diagnostic> = Vec::new();

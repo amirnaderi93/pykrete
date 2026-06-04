@@ -101,6 +101,33 @@ fn declared_return_view<'a>(
     None
 }
 
+/// Return the v1.3 dialect tag inherited by an assignment's RHS, when
+/// the RHS originates in a dialect-tagged frame Name. Walks a method-
+/// call chain (`pdf.merge(x).rename(...)`) down to its deepest `Name`
+/// receiver; if that name carries a dialect, the resulting chain
+/// inherits it. Without this, `pdf = pdf.merge(...)` would silently
+/// drop pandas dispatch on `pdf`, breaking the refactor pattern
+/// `pdf = pdf.<op>(...)` and the `pdf["new"] = …` subscript-assign
+/// that follows. Truly opaque RHS (a call like `some_unrelated_call()`
+/// whose receiver isn't a tagged Name) returns `None` and the
+/// existing erase-on-rebind behavior holds.
+fn inherited_dialect<'a>(expr: &Expr, ctx: &BodyContext<'a>) -> Option<crate::dataframe::Dialect> {
+    let mut cursor = expr;
+    loop {
+        match cursor {
+            Expr::Name(n) => return ctx.lookup_dialect(n.id.as_str()),
+            Expr::Call(c) => {
+                let Some(attr) = c.func.as_attribute_expr() else {
+                    return None;
+                };
+                cursor = &attr.value;
+            }
+            Expr::Attribute(a) => cursor = &a.value,
+            _ => return None,
+        }
+    }
+}
+
 fn walk_stmt<'a>(
     stmt: &'a Stmt,
     declared_return: Option<&SchemaView<'a>>,
@@ -153,10 +180,10 @@ fn walk_stmt<'a>(
                     let mut fields = recv.typed_fields(ctx.schemas());
                     super::column_methods::add_or_replace_column(&mut fields, col_name, ty);
                     let extended = SchemaView::Derived(fields);
-                    ctx.bind_df_with_dialect(
+                    ctx.bind_df(
                         name_expr.id.as_str(),
                         extended,
-                        crate::dataframe::Dialect::Pandas,
+                        Some(crate::dataframe::Dialect::Pandas),
                     );
                 }
             }
@@ -169,9 +196,10 @@ fn walk_stmt<'a>(
                 ctx.mark_local_target(target);
             }
             if let Some(schema) = schema {
+                let inherited = inherited_dialect(&a.value, ctx);
                 for target in &a.targets {
                     if let Some(name) = target.as_name_expr() {
-                        ctx.bind_df(name.id.as_str(), schema.clone());
+                        ctx.bind_df(name.id.as_str(), schema.clone(), inherited);
                         ctx.record_local_binding(name.id.as_str(), name.range, schema.clone());
                     }
                 }
@@ -297,7 +325,8 @@ fn walk_stmt<'a>(
                 if let Some(vars) = item.optional_vars.as_deref() {
                     ctx.mark_local_target(vars);
                     if let (Some(name), Some(schema)) = (vars.as_name_expr(), schema) {
-                        ctx.bind_df(name.id.as_str(), schema.clone());
+                        let inherited = inherited_dialect(&item.context_expr, ctx);
+                        ctx.bind_df(name.id.as_str(), schema.clone(), inherited);
                         ctx.record_local_binding(name.id.as_str(), name.range, schema);
                     }
                 }
@@ -494,11 +523,7 @@ fn handle_ann_assign<'a>(
         Some(DataFrameAnnotation::Typed(schema_name)) => {
             if let Some(schema) = ctx.find_schema(schema_name) {
                 let view = SchemaView::Declared(schema);
-                if let Some(dialect) = recognized_dialect {
-                    ctx.bind_df_with_dialect(target_name, view.clone(), dialect);
-                } else {
-                    ctx.bind_df(target_name, view.clone());
-                }
+                ctx.bind_df(target_name, view.clone(), recognized_dialect);
                 ctx.record_local_binding(target_name, target_range, view);
             } else {
                 diagnostics.push(Diagnostic::at_range(
@@ -531,11 +556,7 @@ fn handle_ann_assign<'a>(
                 ));
             }
             if let Some(view) = crate::schema::resolve_derived_schema(expr, ctx.schemas()) {
-                if let Some(dialect) = recognized_dialect {
-                    ctx.bind_df_with_dialect(target_name, view.clone(), dialect);
-                } else {
-                    ctx.bind_df(target_name, view.clone());
-                }
+                ctx.bind_df(target_name, view.clone(), recognized_dialect);
                 ctx.record_local_binding(target_name, target_range, view);
             }
         }

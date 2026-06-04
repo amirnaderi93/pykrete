@@ -809,3 +809,170 @@ def f(o: SparkFrame[Orders], r: SparkFrame[Refunds]):
     // prevents the routing.
     assert_does_not_have_code(&result, "D0060");
 }
+
+// ===========================================================================
+// V13E1 — v1.3.0 followup #1: dispatch-correctness fixes
+//   Fix 1: pandas .assign(kw=...) enum-sink check (D0084)
+//   Fix 2: chain-receiver gate inversion (silent schema mutation on
+//          `df.cache().rename(columns={…})`)
+//   Fix 3: bind_df dialect preservation across self-rebind through a
+//          pandas op (`pdf = pdf.merge(...)`)
+// ===========================================================================
+
+#[test]
+fn V13E1_pdf_assign_enum_sink_off_vocab_fires_d0084() {
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+    status: enum["shipped", "pending", "cancelled"]
+
+def f(pdf: PandasFrame[Orders]):
+    return pdf.assign(status="BOGUS")
+"#,
+    );
+    assert_has_code(&result, "D0084");
+    assert_message_contains(&result, "D0084", "BOGUS");
+}
+
+#[test]
+fn V13E1_pdf_assign_enum_sink_in_vocab_quiet() {
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+    status: enum["shipped", "pending", "cancelled"]
+
+def f(pdf: PandasFrame[Orders]):
+    return pdf.assign(status="shipped")
+"#,
+    );
+    assert_does_not_have_code(&result, "D0084");
+}
+
+#[test]
+fn V13E1_sdf_assign_method_not_dispatched() {
+    // Spark frame with `.assign(status="BOGUS")` must NOT fire D0084
+    // via the pandas dispatch path — Spark frames have no `.assign`,
+    // and pre-fix the dispatch gate (`!receiver_is_spark_named`)
+    // already excluded SparkFrame receivers from .assign routing. After
+    // Fix 2 the gate is `receiver_is_pandas_named`, which preserves the
+    // same exclusion. (Spark's column-method shape table doesn't list
+    // `.assign`, so nothing else here fires D0084 either.)
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+    status: enum["shipped", "pending", "cancelled"]
+
+def f(sdf: SparkFrame[Orders]):
+    return sdf.assign(status="BOGUS")
+"#,
+    );
+    assert_does_not_have_code(&result, "D0084");
+}
+
+#[test]
+fn V13E1_chain_spark_cache_rename_does_not_mutate_schema() {
+    // Pre-fix (`!receiver_is_spark_named`): the chain receiver
+    // `df.cache()` had no dialect, so `.rename(columns={…})` would
+    // dispatch as pandas and silently rename `status` → `state` on the
+    // tracked schema. Then `col("status")` would D0030.
+    // Post-fix (`receiver_is_pandas_named`): chain receivers fall
+    // through; the rename is unrecognized; the original Spark schema
+    // is preserved; `col("status")` still resolves.
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+    status: string
+
+def f(df: SparkFrame[Orders]):
+    return df.cache().rename(columns={"status": "state"}).select(col("status"))
+"#,
+    );
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn V13E1_chain_pandas_named_rename_still_dispatches() {
+    // Positive case unaffected: when the receiver IS a pandas-tagged
+    // Name, `.rename(columns={…})` still mutates the schema. Accessing
+    // the old name after the rename fires D0030.
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+    status: string
+
+def f(pdf: PandasFrame[Orders]):
+    out = pdf.rename(columns={"status": "state"})
+    return out["status"]
+"#,
+    );
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "status");
+}
+
+#[test]
+fn V13E1_chain_unrecognized_receiver_rename_quiet() {
+    // `something_else.rename(columns=...)` where the receiver has no
+    // dialect tag (here a function call result whose source type isn't
+    // a tagged Name) — pandas dispatch must NOT fire, and nothing else
+    // here should either. No D0030 on the rename argument.
+    let result = check(
+        r#"
+def f():
+    something_else = make_thing()
+    return something_else.rename(columns={"x": "y"})
+"#,
+    );
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn V13E1_pdf_self_reassign_through_pandas_op_preserves_dispatch() {
+    // Pre-fix: `pdf = pdf.merge(other, on="id")` calls bind_df, which
+    // unconditionally removed pdf's pandas dialect tag. Then
+    // `pdf["new"] = "value"` (which dispatches only on the Pandas tag)
+    // silently did nothing, and a later `col("new")` D0030'd.
+    // Post-fix: bind_df receives Some(Pandas) inherited from the RHS
+    // receiver (pdf is pandas-tagged), preserving dispatch on the
+    // rebound name.
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+
+class Refunds(Schema):
+    id: int
+
+def f(pdf: PandasFrame[Orders], other: PandasFrame[Refunds]):
+    pdf = pdf.merge(other, on="id")
+    pdf["new"] = "value"
+    return pdf["new"]
+"#,
+    );
+    assert_does_not_have_code(&result, "D0030");
+}
+
+#[test]
+fn V13E1_pdf_to_local_name_assignment_unchanged_for_truly_opaque() {
+    // `result = some_unrelated_call()` — the RHS has no dialect-tagged
+    // receiver. Post-fix bind_df receives None, and `result` doesn't
+    // accidentally inherit a stale dialect from anything. A later
+    // `result.assign(status="BOGUS")` must NOT fire D0084 (no pandas
+    // dispatch on an untagged Name).
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+    status: enum["shipped", "pending", "cancelled"]
+
+def f():
+    result = some_unrelated_call()
+    return result.assign(status="BOGUS")
+"#,
+    );
+    assert_does_not_have_code(&result, "D0084");
+}

@@ -309,7 +309,7 @@ impl<'a> BodyContext<'a> {
                 DataFrameAnnotation::Untyped | DataFrameAnnotation::NonBareName => None,
             };
             if let Some(view) = view {
-                ctx.bind_df_with_dialect(name, view, slot.dialect);
+                ctx.bind_df(name, view, Some(slot.dialect));
             }
         }
 
@@ -349,25 +349,25 @@ impl<'a> BodyContext<'a> {
         ctx
     }
 
-    pub(crate) fn bind_df(&mut self, name: &'a str, view: SchemaView<'a>) {
-        self.df_bindings.insert(name, view);
-        self.df_dialects.remove(name);
-        self.mark_local(name);
-    }
-
-    /// Same as [`Self::bind_df`] but also records the dialect tag (PR-A)
-    /// for the binding. Used at signature-bound and `DataFrame[X]`
-    /// annotated-assign sites where the v1.3 dialect is known; chain-
-    /// result bindings (`x = df.select(...)`) go through [`Self::bind_df`]
-    /// and have no dialect attached.
-    pub(crate) fn bind_df_with_dialect(
+    /// Bind a frame schema to `name`, optionally recording its v1.3
+    /// dialect tag. `Some(d)` is used at signature-bound /
+    /// `DataFrame[X]` annotated-assign sites where the dialect is
+    /// declared, and at chain-rebind sites whose RHS originates in a
+    /// known-dialect receiver (see [`inherited_dialect`] in `driver`).
+    /// `None` erases any prior tag — the binding's dialect becomes
+    /// unknown (truly opaque RHS, function-param input).
+    pub(crate) fn bind_df(
         &mut self,
         name: &'a str,
         view: SchemaView<'a>,
-        dialect: Dialect,
+        dialect: Option<Dialect>,
     ) {
         self.df_bindings.insert(name, view);
-        self.df_dialects.insert(name, dialect);
+        if let Some(d) = dialect {
+            self.df_dialects.insert(name, d);
+        } else {
+            self.df_dialects.remove(name);
+        }
         self.mark_local(name);
     }
 
