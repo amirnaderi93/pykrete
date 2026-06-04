@@ -37,6 +37,35 @@ use crate::walk::DiscoveredFunction;
 // analyze_expr — the recursive heart
 // ---------------------------------------------------------------------------
 
+/// `check_call_argument_schemas` already walked this call's
+/// DataFrame-typed args via `analyze_expr` (and re-walking would
+/// duplicate every nested D0051). True when the callee is a bare-Name
+/// reference to a non-shadowed registry function — matches the
+/// early-return guards inside `check_call_argument_schemas`.
+fn is_registry_function_call(call: &ExprCall, ctx: &BodyContext<'_>) -> bool {
+    let Some(name_expr) = call.func.as_name_expr() else {
+        return false;
+    };
+    if ctx.is_locally_bound(name_expr.id.as_str()) {
+        return false;
+    }
+    ctx.registry()
+        .find_function(name_expr.id.as_str())
+        .is_some()
+}
+
+/// Outcome of dispatching one of pykrete's call-shape recognizers.
+/// `Handled` means the dispatcher matched the call's shape (method name,
+/// free-function generic, …) and walked its own args; the caller must
+/// NOT re-walk the arg list. `Unhandled` means no recognizer matched —
+/// the caller is responsible for walking args so embedded `df["col"]`
+/// references still surface D0030. See the v1.3 §10 widening callout
+/// in `Expr::Call` for the rationale.
+pub(super) enum CallOutcome<'a> {
+    Handled(Option<SchemaView<'a>>),
+    Unhandled,
+}
+
 pub(super) fn analyze_expr<'a>(
     expr: &'a Expr,
     ctx: &BodyContext<'a>,
@@ -64,12 +93,41 @@ pub(super) fn analyze_expr<'a>(
             // doesn't change what schema this call evaluates to.
             check_call_argument_schemas(call, ctx, source, line_index, diagnostics);
 
-            let result = analyze_method_call(call, ctx, source, line_index, diagnostics)
-                // Free-function fallback — `my_join(orders, refunds)` on a
-                // generic `def my_join[A, B](...)`. Tried only when the
-                // callee isn't a method on something (the attribute path
-                // above already handled that).
-                .or_else(|| handle_free_function_call(call, ctx, source, line_index, diagnostics));
+            let method_outcome = analyze_method_call(call, ctx, source, line_index, diagnostics);
+            let (result, handled) = match method_outcome {
+                CallOutcome::Handled(view) => (view, true),
+                CallOutcome::Unhandled => {
+                    // Free-function fallback — `my_join(orders, refunds)`
+                    // on a generic `def my_join[A, B](...)`. Tried only
+                    // when the attribute-method path didn't recognize
+                    // the call.
+                    match handle_free_function_call(call, ctx, source, line_index, diagnostics) {
+                        CallOutcome::Handled(view) => (view, true),
+                        CallOutcome::Unhandled => (None, false),
+                    }
+                }
+            };
+            // v1.3 §10 widening — for a call neither path dispatched
+            // (`print(df["typo"])`, `logger.info(msg=df["typo"])`), walk
+            // every positional arg and kwarg value so an embedded
+            // `df["col"]` still surfaces D0030. Handled calls already
+            // walked their own args through the column-method machinery;
+            // re-walking here would double-fire (e.g. D0051 for nested
+            // `f(f(b))` would emit twice).
+            //
+            // The free-function registry path is also "handled" for
+            // walk-purposes: `check_call_argument_schemas` above already
+            // descended `analyze_expr` into every DataFrame-typed
+            // positional and kwarg slot. Skip when the callee is a
+            // bare-Name registry function so that walk isn't repeated.
+            if !handled && !is_registry_function_call(call, ctx) {
+                for arg in &call.arguments.args {
+                    let _ = analyze_expr(arg, ctx, source, line_index, diagnostics);
+                }
+                for kw in &call.arguments.keywords {
+                    let _ = analyze_expr(&kw.value, ctx, source, line_index, diagnostics);
+                }
+            }
             // Record the call's result schema so completion can offer
             // the chain's columns at `<call>.<cursor>`.
             if let Some(schema) = &result {
@@ -206,19 +264,47 @@ pub(super) fn analyze_expr<'a>(
             None
         }
         Expr::ListComp(c) => {
-            descend_comprehension_iters(&c.generators, ctx, source, line_index, diagnostics);
+            descend_comprehension(
+                &c.generators,
+                &[c.elt.as_ref()],
+                ctx,
+                source,
+                line_index,
+                diagnostics,
+            );
             None
         }
         Expr::SetComp(c) => {
-            descend_comprehension_iters(&c.generators, ctx, source, line_index, diagnostics);
+            descend_comprehension(
+                &c.generators,
+                &[c.elt.as_ref()],
+                ctx,
+                source,
+                line_index,
+                diagnostics,
+            );
             None
         }
         Expr::DictComp(c) => {
-            descend_comprehension_iters(&c.generators, ctx, source, line_index, diagnostics);
+            descend_comprehension(
+                &c.generators,
+                &[c.key.as_ref(), c.value.as_ref()],
+                ctx,
+                source,
+                line_index,
+                diagnostics,
+            );
             None
         }
         Expr::Generator(g) => {
-            descend_comprehension_iters(&g.generators, ctx, source, line_index, diagnostics);
+            descend_comprehension(
+                &g.generators,
+                &[g.elt.as_ref()],
+                ctx,
+                source,
+                line_index,
+                diagnostics,
+            );
             None
         }
         // `Lambda` is deliberately NOT descended: its body sits inside a
@@ -243,7 +329,7 @@ pub(super) fn analyze_expr<'a>(
 /// per the §5 Subscript-slice taxonomy — the surrounding analyzer
 /// already descends into the slice expression separately, so any
 /// embedded col-ref still surfaces through the normal pipeline.
-fn report_subscript_col_refs<'a>(
+pub(super) fn report_subscript_col_refs<'a>(
     slice: &'a Expr,
     view: &SchemaView<'a>,
     ctx: &BodyContext<'a>,
@@ -307,23 +393,63 @@ fn subscript_list_projection<'a>(
     Some(SchemaView::Derived(fields))
 }
 
-/// Walk each comprehension generator's `iter` (the iteration source)
-/// for embedded method calls. The `elt` / `ifs` parts run inside a new
-/// scope where the comprehension's bound name is in effect; analyzing
-/// them without tracking that scope could trigger spurious D0030 on
-/// the bound name, so the descent is conservative — only the iter
-/// source, which evaluates in the outer scope, is walked. Catches the
-/// common shape `[f(x) for x in dfs.select("typo")]` without risking a
-/// false positive on the bound-name half.
-fn descend_comprehension_iters<'a>(
+/// Walk a comprehension expression — generator iters, ifs, and the
+/// outer body parts (`elt` for list/set/generator, `key`+`value` for
+/// dict). Each generator's bound names (the `target` LHS of `for X in
+/// Y`) are pushed onto the ctx's comp-bound shadow set before the body
+/// is walked, so a Subscript receiver matching a bound name is treated
+/// as a fresh loop variable rather than checked against an outer-
+/// scope frame of the same name. Bound names are popped on exit in
+/// reverse order to keep nested comprehensions correct.
+fn descend_comprehension<'a>(
     generators: &'a [ruff_python_ast::Comprehension],
+    body_parts: &[&'a Expr],
     ctx: &BodyContext<'a>,
     source: &str,
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    let mut pushed: Vec<&'a str> = Vec::new();
     for comp in generators {
         let _ = analyze_expr(&comp.iter, ctx, source, line_index, diagnostics);
+        let mut bound_here: Vec<&'a str> = Vec::new();
+        collect_comp_target_names(&comp.target, &mut bound_here);
+        for name in &bound_here {
+            if ctx.push_comp_bound(name) {
+                pushed.push(name);
+            }
+        }
+        for if_expr in &comp.ifs {
+            let _ = analyze_expr(if_expr, ctx, source, line_index, diagnostics);
+        }
+    }
+    for body in body_parts {
+        let _ = analyze_expr(body, ctx, source, line_index, diagnostics);
+    }
+    for name in pushed.into_iter().rev() {
+        ctx.pop_comp_bound(name);
+    }
+}
+
+/// Collect every name bound by a comprehension generator's `target`
+/// expression — a `Name`, a `Tuple`/`List` unpack, or a `Starred`
+/// wrapper. Mirrors `BodyContext::mark_local_target` but writes into a
+/// caller-owned `Vec` instead of the local-names set.
+fn collect_comp_target_names<'a>(target: &'a Expr, out: &mut Vec<&'a str>) {
+    match target {
+        Expr::Name(n) => out.push(n.id.as_str()),
+        Expr::Tuple(t) => {
+            for elt in &t.elts {
+                collect_comp_target_names(elt, out);
+            }
+        }
+        Expr::List(l) => {
+            for elt in &l.elts {
+                collect_comp_target_names(elt, out);
+            }
+        }
+        Expr::Starred(s) => collect_comp_target_names(&s.value, out),
+        _ => {}
     }
 }
 
@@ -355,8 +481,38 @@ pub(super) fn analyze_method_call<'a>(
     source: &str,
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
+) -> CallOutcome<'a> {
+    let Some(attr) = call.func.as_attribute_expr() else {
+        return CallOutcome::Unhandled;
+    };
+    let mut handled = true;
+    let view = analyze_method_call_inner(
+        call,
+        attr,
+        ctx,
+        source,
+        line_index,
+        diagnostics,
+        &mut handled,
+    );
+    if handled {
+        CallOutcome::Handled(view)
+    } else {
+        CallOutcome::Unhandled
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
+fn analyze_method_call_inner<'a>(
+    call: &'a ExprCall,
+    attr: &'a ExprAttribute,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+    handled: &mut bool,
 ) -> Option<SchemaView<'a>> {
-    let attr = call.func.as_attribute_expr()?;
     let method = attr.attr.id.as_str();
 
     // pykrete schema-cast — `<chain>.cast(DataFrame[Schema])` re-anchors a
@@ -512,7 +668,15 @@ pub(super) fn analyze_method_call<'a>(
         );
     }
 
-    let receiver = analyze_expr(&attr.value, ctx, source, line_index, diagnostics)?;
+    let Some(receiver) = analyze_expr(&attr.value, ctx, source, line_index, diagnostics) else {
+        // Receiver isn't a frame pykrete can dispatch against — the
+        // per-method handlers below can't run, so this call's args
+        // haven't been checked through the column-method machinery.
+        // Mark unhandled so the caller walks them via `analyze_expr`
+        // for embedded `df["col"]` references.
+        *handled = false;
+        return None;
+    };
 
     // v1.3 — when the immediate receiver is a Name bound to a frame
     // slot, surface its dialect tag (PR-A). Used by the pandas-only
@@ -937,6 +1101,7 @@ pub(super) fn analyze_method_call<'a>(
     if is_opaque_reshape_method(method) {
         return None;
     }
+    *handled = false;
     None
 }
 
@@ -1162,17 +1327,21 @@ fn handle_free_function_call<'a>(
     source: &str,
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Option<SchemaView<'a>> {
-    let name_expr = call.func.as_name_expr()?;
+) -> CallOutcome<'a> {
+    let Some(name_expr) = call.func.as_name_expr() else {
+        return CallOutcome::Unhandled;
+    };
     // A local binding (an assignment, a walrus) shadows the top-level
     // function; resolving against the registry would then be a false
     // positive.
     if ctx.is_locally_bound(name_expr.id.as_str()) {
-        return None;
+        return CallOutcome::Unhandled;
     }
-    let sig = ctx.registry().find_function(name_expr.id.as_str())?;
+    let Some(sig) = ctx.registry().find_function(name_expr.id.as_str()) else {
+        return CallOutcome::Unhandled;
+    };
     if sig.type_params.is_empty() {
-        return None;
+        return CallOutcome::Unhandled;
     }
     let subst = bind_type_vars(
         &sig.params,
@@ -1184,7 +1353,10 @@ fn handle_free_function_call<'a>(
         line_index,
         diagnostics,
     );
-    resolve_return_type(sig.return_annotation?, &sig.type_params, &subst, ctx)
+    let view = sig
+        .return_annotation
+        .and_then(|ann| resolve_return_type(ann, &sig.type_params, &subst, ctx));
+    CallOutcome::Handled(view)
 }
 
 /// Walk each parameter / argument pair to bind every TypeVar that

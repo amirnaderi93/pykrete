@@ -689,9 +689,9 @@ def f(df: SparkFrame[Sale]) -> str:
 #[test]
 fn typo_inside_list_comprehension_iter_is_caught() {
     // `[x for x in df.select("typo").collect()]` — the typo's call is
-    // the iteration source. The bound name `x` lives in a new scope
-    // (so the comprehension's `elt` / `ifs` are not walked), but the
-    // `iter` half evaluates in the outer scope.
+    // the iteration source, in the comprehension's `iter` half. The
+    // `elt` / `ifs` halves are walked too (PR-E3 §10), so a typo on
+    // either side surfaces D0030.
     let src = format!(
         "{SCHEMA}
 def f(df: SparkFrame[Sale]) -> list:
