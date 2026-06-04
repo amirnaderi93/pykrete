@@ -24,12 +24,12 @@ The **rule name** (`unknownColumn`) is what the CLI prints and what the editor s
 | `D0001` | `parseError` | The file isn't valid Python syntax. |
 | `D0010` | `unknownColumnType` | A schema field's type isn't a recognized type. |
 | `D0011` | `invalidColumnType` | A schema field's type isn't a valid type expression. |
-| `D0020` | `unknownSchema` | `DataFrame[X]` names a schema pykrete can't find. |
-| `D0021` | `invalidSchemaExpression` | The thing inside `DataFrame[…]` isn't a schema name or a valid operator. |
+| `D0020` | `unknownSchema` | `SparkFrame[X]` / `PandasFrame[X]` / `DataFrame[X]` names a schema pykrete can't find. |
+| `D0021` | `invalidSchemaExpression` | The thing inside `SparkFrame[…]` / `PandasFrame[…]` / `DataFrame[…]` isn't a schema name or a valid operator. |
 | `D0030` | `unknownColumn` | A column reference doesn't exist on the schema in scope. |
 | `D0040` | `unionSchemaMismatch` | `union` / `intersect` / `subtract` between dataframes whose columns don't match. |
 | `D0050` | `returnColumnsMismatch` | A function's returned **columns** differ from its declared return schema. |
-| `D0051` | `argumentColumnsMismatch` | A call-site argument's schema differs from the parameter's declared `DataFrame[Schema]`. |
+| `D0051` | `argumentColumnsMismatch` | A call-site argument's schema differs from the parameter's declared `SparkFrame[Schema]` (or `PandasFrame[Schema]`). |
 | `D0060` | `missingJoinKey` | A join key isn't present on one side of the join. |
 | `D0070` | `unresolvedImport` | An `import` can't be resolved. |
 | `D0071` | `unexportedName` | An imported name isn't exported by the module. |
@@ -40,6 +40,7 @@ The **rule name** (`unknownColumn`) is what the CLI prints and what the editor s
 | `D0082` | `crossTypeComparison` | A comparison between unrelated types. Strict mode only. |
 | `D0083` | `nullabilityMismatch` | A nullable column flows into a slot the return schema declares non-null. Strict mode only. |
 | `D0084` | `enumValueMismatch` | A string literal compared against, or written into, a column declared `enum[...]` is not in the column's vocabulary. |
+| `D0090` | `deprecatedDataFrameAlias` | `DataFrame[X]` is used instead of the dialect-specific `SparkFrame[X]` / `PandasFrame[X]`. Warning. |
 
 ## The ones you'll see most
 
@@ -77,27 +78,27 @@ report.pyk:14:12 - error unionSchemaMismatch: union between schema 'Sale' and sc
 
 ### `returnColumnsMismatch` — D0050
 
-A function declared `-> DataFrame[Schema]` returns a dataframe whose **column set** doesn't match — a column is missing, or an extra one is present.
+A function declared `-> SparkFrame[Schema]` returns a dataframe whose **column set** doesn't match — a column is missing, or an extra one is present.
 
 ```
-summary.pyk:8:5 - error returnColumnsMismatch: declared return DataFrame[SaleSummary] expects columns [region, total]; the body produces [region, amount].
+summary.pyk:8:5 - error returnColumnsMismatch: declared return SparkFrame[SaleSummary] expects columns [region, total]; the body produces [region, amount].
 ```
 
-**Fix:** correct the body, or re-anchor an opaque chain (like `spark.read.parquet(...)`) with `.cast(DataFrame[Schema])` so pykrete knows the shape.
+**Fix:** correct the body, or re-anchor an opaque chain (like `spark.read.parquet(...)`) with `.cast(SparkFrame[Schema])` so pykrete knows the shape.
 
 ### `argumentColumnsMismatch` — D0051
 
-The mirror of `returnColumnsMismatch`, one frame earlier: a `DataFrame[…]` argument at a call site has a schema that doesn't match the parameter's declared `DataFrame[Schema]`. Same missing / extra column reporting.
+The mirror of `returnColumnsMismatch`, one frame earlier: a `SparkFrame[…]` argument at a call site has a schema that doesn't match the parameter's declared `SparkFrame[Schema]`. Same missing / extra column reporting.
 
 ```
-caller.pyk:13:13 - error argumentColumnsMismatch: Argument schema mismatch for parameter 'sales': expected DataFrame[Sale], got schema 'Refund'. Missing: [amount]; extra: [refund].
+caller.pyk:13:13 - error argumentColumnsMismatch: Argument schema mismatch for parameter 'sales': expected SparkFrame[Sale], got schema 'Refund'. Missing: [amount]; extra: [refund].
 ```
 
 Arguments whose schema pykrete can't infer (an untyped local, an opaque `spark.read.json(...)` chain) are silently skipped — the checker degrades rather than false-flag.
 
-D0051 also respects Python's calling rules: a local name that rebinds a top-level function shadows it (the call resolves to the local, so the top-level signature isn't checked) — whether the rebind is a plain assignment, a tuple-unpack LHS (`revenue, _ = …`), or a walrus binding (`(revenue := …)`); positional-only (`/`) and keyword-only (`*`) markers are honored when matching arguments to parameters; `*args: DataFrame[Schema]` / `**kwargs: DataFrame[Schema]` variadics are checked against every argument that lands in them; and a parameter that's filled both positionally *and* by keyword (which Python rejects as `TypeError`) is diagnosed once, not twice.
+D0051 also respects Python's calling rules: a local name that rebinds a top-level function shadows it (the call resolves to the local, so the top-level signature isn't checked) — whether the rebind is a plain assignment, a tuple-unpack LHS (`revenue, _ = …`), or a walrus binding (`(revenue := …)`); positional-only (`/`) and keyword-only (`*`) markers are honored when matching arguments to parameters; `*args: SparkFrame[Schema]` / `**kwargs: SparkFrame[Schema]` variadics are checked against every argument that lands in them; and a parameter that's filled both positionally *and* by keyword (which Python rejects as `TypeError`) is diagnosed once, not twice.
 
-**Fix:** pass a dataframe with the expected shape, or re-anchor the argument with `.cast(DataFrame[Schema])` if the chain's schema was lost upstream.
+**Fix:** pass a dataframe with the expected shape, or re-anchor the argument with `.cast(SparkFrame[Schema])` if the chain's schema was lost upstream.
 
 ### `missingJoinKey` — D0060
 
@@ -131,7 +132,7 @@ class Order(Schema):
     id: long
     status: enum["pending", "shipped", "delivered", "cancelled"]
 
-def stale(orders: DataFrame[Order]) -> DataFrame[Order]:
+def stale(orders: SparkFrame[Order]) -> SparkFrame[Order]:
     return orders.filter(col("status") == "shippd")
     #                                       ^^^^^^^ D0084
 ```
@@ -164,16 +165,38 @@ These fire before any schema checking — they mean pykrete couldn't read someth
 
 - **`parseError` — D0001.** The file isn't valid Python. The message comes from Ruff's parser.
 - **`unknownColumnType` / `invalidColumnType` — D0010 / D0011.** A `Schema` field's type annotation isn't a type pykrete recognizes.
-- **`unknownSchema` / `invalidSchemaExpression` — D0020 / D0021.** A `DataFrame[X]` annotation where `X` isn't a known schema, or isn't a schema name / valid operator at all — usually a typo or a missing import.
+- **`unknownSchema` / `invalidSchemaExpression` — D0020 / D0021.** A `SparkFrame[X]` / `PandasFrame[X]` / `DataFrame[X]` annotation where `X` isn't a known schema, or isn't a schema name / valid operator at all — usually a typo or a missing import.
 - **`unresolvedImport` / `unexportedName` — D0070 / D0071.** An `import` that doesn't resolve, or a name the imported module doesn't export.
 - **`duplicateSchemaName` — D0072.** The same `class X(Schema)` is declared in more than one file in the project. Pykrete picks one for cross-file resolution (the alphabetically-earliest declaration site), but the ambiguity is usually unintentional — a forgotten old copy, or two teams converging on the same name. Fires as a **warning** at every duplicate past the first, naming both files for context. Same-file redeclarations don't fire D0072 — that's a different concern.
-- **`transformInputMismatch` — D0073.** A `df.transform(fn)` call where the receiver `df`'s schema doesn't match `fn`'s declared `DataFrame[Schema]` parameter. Spark's `.transform` is just a fluent-style apply — `df.transform(fn)` is `fn(df)` — so this is the same kind of shape check as D0051, surfaced at the call site where Spark would silently pass the wrong frame through. The message names the function, the expected schema, and the missing / extra columns.
+- **`transformInputMismatch` — D0073.** A `df.transform(fn)` call where the receiver `df`'s schema doesn't match `fn`'s declared `SparkFrame[Schema]` parameter. Spark's `.transform` is just a fluent-style apply — `df.transform(fn)` is `fn(df)` — so this is the same kind of shape check as D0051, surfaced at the call site where Spark would silently pass the wrong frame through. The message names the function, the expected schema, and the missing / extra columns.
 
   ```
   pipeline.pyk:12:8 - error transformInputMismatch: transform('add_total') expects a DataFrame matching schema 'Sale', but the receiver (schema 'Refund') does not. Missing: [amount]; extra: [refund].
   ```
 
-  **Fix:** call `transform` on a frame whose schema matches `fn`'s parameter, or anchor an opaque chain with `.cast(DataFrame[Schema])` so pykrete can see the shape.
+  **Fix:** call `transform` on a frame whose schema matches `fn`'s parameter, or anchor an opaque chain with `.cast(SparkFrame[Schema])` so pykrete can see the shape.
+
+### `deprecatedDataFrameAlias` — D0090
+
+`DataFrame[X]` is the v1.0–v1.2 spelling. v1.3 introduces dialect-specific annotations — `SparkFrame[X]` for PySpark code and `PandasFrame[X]` for pandas code — and `DataFrame[X]` now fires D0090 as a warning at every use.
+
+```pyk
+from pyspark.sql import DataFrame, SparkSession
+
+def revenue(sales: DataFrame[Sale]) -> DataFrame[Sale]:
+    #                ^^^^^^^^^^^^^^ D0090
+    return sales.filter(col("amount") > 0)
+```
+
+```
+sales.pyk:3:20 - warning deprecatedDataFrameAlias: 'DataFrame[Sale]' is the v1.0 alias; prefer the dialect-specific 'SparkFrame[Sale]' (PySpark) or 'PandasFrame[Sale]' (pandas). DataFrame[X] continues to behave as an alias for SparkFrame[X] in v1.3.
+```
+
+**Severity.** Warning, not error — existing `DataFrame[X]` code keeps checking exactly as it did. The runtime is unaffected (the transpiler still strips `.cast(DataFrame[Schema])` re-anchors the same way it strips `.cast(SparkFrame[Schema])`).
+
+**Why dispatch matters.** v1.3 dispatches the six pandas operations — `df[col_list]` / `df[mask]` / `df["new"] = expr` / `df.drop` / `df.merge` / `df.rename` — based on which annotation the dataframe carries. A `PandasFrame[Sale]` parameter recognizes `sales[["region", "amount"]]` as a column-list select; a `SparkFrame[Sale]` parameter would flag the same code as a column-name typo (Spark doesn't subscript with a list). The dialect-specific annotation lets the check site say what it means.
+
+**Fix.** Rename `DataFrame[X]` to `SparkFrame[X]` for PySpark code or `PandasFrame[X]` for pandas code. The import path (`pyspark.sql.DataFrame` vs `pandas.DataFrame`) is unchanged; only the pykrete annotation slot is renamed.
 
 ## Changing severity
 

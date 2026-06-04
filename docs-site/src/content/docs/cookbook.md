@@ -23,22 +23,36 @@ class Sale(Schema):
 
 1. [Install pykrete](/pykrete/getting-started/install/).
 2. Pick one file whose dataframes you understand. Rename it from `.py` to `.pyk`.
-3. Declare a schema for the dataframe the file's main function takes. Annotate the parameter with `DataFrame[Sale]`.
+3. Declare a schema for the dataframe the file's main function takes. Annotate the parameter with `SparkFrame[Sale]` (or `PandasFrame[Sale]` if it's a pandas dataframe).
 4. Run `pykrete check sales.pyk`. Nothing else in the repo is checked yet.
 
 ```python
-# sales.pyk
+# sales.pyk — PySpark
 class Sale(Schema):
     region: string
     amount: int
 
-def revenue_by_region(sales: DataFrame[Sale]) -> DataFrame:
+def revenue_by_region(sales: SparkFrame[Sale]) -> DataFrame:
     return sales.groupBy("region").agg(F.sum("amount").alias("total"))
+```
+
+The same recipe with a pandas dataframe — different annotation, same checking story:
+
+```python
+# sales.pyk — pandas
+import pandas as pd
+
+class Sale(Schema):
+    region: string
+    amount: int
+
+def revenue_by_region(sales: PandasFrame[Sale]) -> pd.DataFrame:
+    return sales[["region", "amount"]].groupby("region").sum()
 ```
 
 **What you get.** Existence checks ([`D0030`](/pykrete/reference/diagnostics/#unknowncolumn--d0030)) on every column reference in the chain. The other `.py` files in the project remain unchanged and unchecked — `.py` and `.pyk` coexist in the same repo, and `.pyk` is a strict superset of Python, so the file still runs.
 
-**Pitfall.** pykrete only enters a function when its signature has a `DataFrame[…]` slot. Untyped helper functions in the same file aren't checked — that's by design, but it surprises people who expect whole-file coverage from the rename alone.
+**Pitfall.** pykrete only enters a function when its signature has a `SparkFrame[…]` or `PandasFrame[…]` slot. Untyped helper functions in the same file aren't checked — that's by design, but it surprises people who expect whole-file coverage from the rename alone. (`DataFrame[…]` still works as a deprecated alias and emits [D0090](/pykrete/reference/diagnostics/#deprecateddataframealias--d0090).)
 
 ## 2. Re-anchor an opaque `spark.read.*` chain
 
@@ -47,7 +61,7 @@ def revenue_by_region(sales: DataFrame[Sale]) -> DataFrame:
 **Steps.**
 
 1. Declare the schema the read produces.
-2. Re-anchor the read with `.cast(DataFrame[Sale])`, or assign to a typed local.
+2. Re-anchor the read with `.cast(SparkFrame[Sale])`, or assign to a typed local.
 3. Everything after the re-anchor is checked against `Sale`.
 
 ```python
@@ -58,7 +72,7 @@ class Sale(Schema):
 def load_and_summarize(spark) -> DataFrame:
     return (
         spark.read.parquet("s3://sales/")    # opaque — schema unknown
-        .cast(DataFrame[Sale])               # re-anchored
+        .cast(SparkFrame[Sale])              # re-anchored
         .select("region", "amount")          # checked against Sale
         .groupBy("region")
         .agg(F.sum("amount").alias("total"))
@@ -68,11 +82,11 @@ def load_and_summarize(spark) -> DataFrame:
 Equivalent — a typed local does the same job:
 
 ```python
-sales: DataFrame[Sale] = spark.read.parquet("s3://sales/")
+sales: SparkFrame[Sale] = spark.read.parquet("s3://sales/")
 sales.select("region", "amount")
 ```
 
-**What you get.** Every column reference after the re-anchor fires [`D0030`](/pykrete/reference/diagnostics/#unknowncolumn--d0030) on a typo. `.cast(DataFrame[Sale])` is a static annotation only — at runtime it's an identity no-op.
+**What you get.** Every column reference after the re-anchor fires [`D0030`](/pykrete/reference/diagnostics/#unknowncolumn--d0030) on a typo. `.cast(SparkFrame[Sale])` is a static annotation only — at runtime it's an identity no-op.
 
 **Pitfall.** Re-anchor right at the boundary. Anything written between the opaque source and the `.cast(...)` is unchecked. See [`.cast` in the operations reference](/pykrete/reference/operations/#cast--the-re-anchor-primitive).
 
@@ -101,7 +115,7 @@ class Refund(Schema):
 # revenue.pyk
 from schemas import Sale
 
-def revenue_by_region(sales: DataFrame[Sale]) -> DataFrame:
+def revenue_by_region(sales: SparkFrame[Sale]) -> DataFrame:
     return sales.groupBy("region").agg(F.sum("amount").alias("total"))
 ```
 
@@ -109,7 +123,7 @@ def revenue_by_region(sales: DataFrame[Sale]) -> DataFrame:
 # refunds.pyk
 from schemas import Refund
 
-def total_refunds(refunds: DataFrame[Refund]) -> DataFrame:
+def total_refunds(refunds: SparkFrame[Refund]) -> DataFrame:
     return refunds.groupBy("region").agg(F.sum("refund").alias("total"))
 ```
 
@@ -119,12 +133,12 @@ def total_refunds(refunds: DataFrame[Refund]) -> DataFrame:
 
 ## 4. Check a function's signature at the call site
 
-**Scenario.** You have `def summarize(sales: DataFrame[Sale]) -> DataFrame[SaleSummary]`. You want pykrete to enforce that callers actually pass a `Sale`-shaped dataframe, and that the body produces a `SaleSummary`-shaped one.
+**Scenario.** You have `def summarize(sales: SparkFrame[Sale]) -> SparkFrame[SaleSummary]`. You want pykrete to enforce that callers actually pass a `Sale`-shaped dataframe, and that the body produces a `SaleSummary`-shaped one.
 
 **Steps.**
 
 1. Annotate both the parameter and the return.
-2. Call the function from another typed location — a caller with its own `DataFrame[…]` annotation, or from a chain whose schema pykrete can infer.
+2. Call the function from another typed location — a caller with its own `SparkFrame[…]` annotation, or from a chain whose schema pykrete can infer.
 
 ```python
 class Sale(Schema):
@@ -135,10 +149,10 @@ class SaleSummary(Schema):
     region: string
     total: long
 
-def summarize(sales: DataFrame[Sale]) -> DataFrame[SaleSummary]:
+def summarize(sales: SparkFrame[Sale]) -> SparkFrame[SaleSummary]:
     return sales.groupBy("region").agg(F.sum("amount").alias("total"))
 
-def report(refunds: DataFrame[Refund]) -> DataFrame:
+def report(refunds: SparkFrame[Refund]) -> DataFrame:
     return summarize(refunds)   # mismatch
 ```
 
@@ -147,7 +161,7 @@ def report(refunds: DataFrame[Refund]) -> DataFrame:
 - The body's output is compared to `SaleSummary`. A drift fires [`D0050 returnColumnsMismatch`](/pykrete/reference/diagnostics/) or [`D0080 returnTypeMismatch`](/pykrete/reference/diagnostics/#type-checking-diagnostics).
 - Each call site whose argument has a known schema is compared to `Sale`. A mismatch fires [`D0051 argumentColumnsMismatch`](/pykrete/reference/diagnostics/) with a *missing / extra* breakdown.
 
-**Pitfall.** Arguments whose schema pykrete can't infer (an untyped local, an opaque `spark.read.parquet(...)` chain that isn't re-anchored) are silently skipped — the checker degrades rather than false-flag. Re-anchor the caller's argument with `.cast(DataFrame[Sale])` if you want D0051 to fire there.
+**Pitfall.** Arguments whose schema pykrete can't infer (an untyped local, an opaque `spark.read.parquet(...)` chain that isn't re-anchored) are silently skipped — the checker degrades rather than false-flag. Re-anchor the caller's argument with `.cast(SparkFrame[Sale])` if you want D0051 to fire there.
 
 ## 5. Configure `pykrete.json` for an existing codebase
 

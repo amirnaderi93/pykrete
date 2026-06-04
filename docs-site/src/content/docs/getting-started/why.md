@@ -28,19 +28,19 @@ class Sale(Schema):
 You annotate the dataframes that have that shape:
 
 ```python
-def revenue_by_region(sales: DataFrame[Sale]) -> DataFrame:
+def revenue_by_region(sales: SparkFrame[Sale]) -> DataFrame:
     return sales.groupBy("region").agg(F.sum("amount").alias("total"))
 ```
 
 And pykrete checks every column you touch against the schema in scope — `groupBy("regoin")` is flagged, `F.sum("amuont")` is flagged, and a reference to a column that an earlier `drop` removed is flagged at the line that uses it. The checks follow the data through the whole chain, because each operation transforms the schema and pykrete tracks the result.
 
-`.pyk` is a strict superset of Python. Every valid Python file is valid pykrete; the schema class and the `DataFrame[Sale]` annotation are ordinary Python that the interpreter is happy to ignore. The file runs unchanged. pykrete is the layer that reads those annotations at edit time — nothing it adds reaches runtime.
+`.pyk` is a strict superset of Python. Every valid Python file is valid pykrete; the schema class and the `SparkFrame[Sale]` annotation are ordinary Python that the interpreter is happy to ignore. The file runs unchanged. pykrete is the layer that reads those annotations at edit time — nothing it adds reaches runtime.
 
 ## Adopt it one file at a time
 
 You do not convert a codebase to use pykrete. You convert a file.
 
-Rename `sales.py` to `sales.pyk` — it still runs exactly as before. Add one `Schema` class and one `DataFrame[…]` annotation to the function whose dataframe you actually understand. That function is now checked. The other two hundred files stay `.py` and untouched; pykrete only analyzes functions you've annotated.
+Rename `sales.py` to `sales.pyk` — it still runs exactly as before. Add one `Schema` class and one `SparkFrame[…]` annotation (or `PandasFrame[…]` for pandas) to the function whose dataframe you actually understand. That function is now checked. The other two hundred files stay `.py` and untouched; pykrete only analyzes functions you've annotated.
 
 This is the whole reason pykrete is a *superset* and not a new language. Adoption scales with the annotations you've added, and stops costing you anything the moment you stop adding them. There is no all-or-nothing migration, no flag day.
 
@@ -52,6 +52,6 @@ It **isn't** a runtime validator, a query planner, or a replacement for tests. I
 
 ## Where it's going
 
-PySpark is supported today. Every dataframe library has the same shape — a value carries a schema, operations narrow or widen it, column names must exist when referenced — so pandas and polars are next. The [roadmap](/pykrete/about/roadmap/) has the detail.
+PySpark is feature-complete; pandas check-site coverage shipped in v1.3 (column-reference recognition, the six dispatched operations, and the D0090 deprecation). Polars is next, and pandas type-tracking probe parity follows in v1.4. The [roadmap](/pykrete/about/roadmap/) has the detail.
 
 Ready to try it? [Install](/pykrete/getting-started/install/) takes a minute; the [quickstart](/pykrete/getting-started/quickstart/) gets a real function under checking in five.

@@ -30,13 +30,14 @@ matter on a `.pyk` file:
   and docstring summary.
 - **Completion.** Type a column name inside `col("…")` to get
   pykrete's column suggestions from the bound schema. Type `sales.`
-  on a `DataFrame[Schema]`-typed local to get the DataFrame method
+  on a `SparkFrame[Schema]`-typed local to get the DataFrame method
   surface; `F.` to get `pyspark.sql.functions`; `.groupBy("…").` to
   get GroupedData methods. The Spark suggestions are generated at
   build time from a real pyspark install — see
   `docs-site/scripts/gen-pyspark-symbols.py` in the repo.
-- **Go-to-definition.** Cmd/Ctrl+click (or F12) on a `DataFrame[X]`
-  reference to jump to `class X(Schema):`.
+- **Go-to-definition.** Cmd/Ctrl+click (or F12) on a `SparkFrame[X]`,
+  `PandasFrame[X]`, or (deprecated) `DataFrame[X]` reference to jump to
+  `class X(Schema):`.
 
 ## What's NOT here
 
