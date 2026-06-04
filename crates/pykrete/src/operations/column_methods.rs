@@ -752,6 +752,40 @@ pub(super) fn check_with_columns_enum_sinks<'a>(
     }
 }
 
+/// v1.3 pandas dispatch (spec §5) — `pdf.assign(status="…", …)`. Pandas
+/// analog of [`check_with_columns_enum_sinks`]: kwargs carry the new-
+/// column writes, so iterate `call.arguments.keywords` instead of a
+/// dict-literal positional arg. Only kwargs whose key names an existing
+/// enum-typed column on the receiver participate; brand-new columns
+/// have no declared constraint to check against.
+pub(super) fn check_pandas_assign_enum_sinks<'a>(
+    call: &'a ExprCall,
+    schema: &SchemaView<'a>,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for kw in &call.arguments.keywords {
+        let Some(name) = kw.arg.as_ref() else {
+            continue;
+        };
+        let column = name.id.as_str();
+        let Some(ty) = schema.field_type(column, ctx.schemas()) else {
+            continue;
+        };
+        let Some(vocab) = enum_vocab(&ty) else {
+            continue;
+        };
+        let mut cx = EnumCheckCtx {
+            source,
+            line_index,
+            diagnostics,
+        };
+        check_value_against_enum_vocab(column, vocab, &kw.value, &mut cx);
+    }
+}
+
 /// Check the dict-literal first positional arg of `fillna` / `na.fill`,
 /// whose keys are column names. Non-dict-literal first args (a bare
 /// value, a variable) fall through silently — only the syntactically
