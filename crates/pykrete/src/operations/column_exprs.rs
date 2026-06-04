@@ -52,6 +52,19 @@ pub(super) fn infer_expr_type<'a>(
     if let Some((name, _)) = col_reference(expr) {
         return schema.field_type(name, tcx.schemas);
     }
+    // `df["x"]` (Subscript-on-Name, string-literal slice) — the pandas
+    // scalar column-ref idiom. v1.4 spec §3c fork (a): treat the
+    // subscript as a column reference and look the name up on `schema`,
+    // mirroring `col("x")` above. The receiver's identity isn't
+    // verified (parallel to `col`'s shape-only contract). Other
+    // receiver shapes (`Expr::Attribute`, `Expr::Call`, nested
+    // `Expr::Subscript`) and non-literal slices fall through.
+    if let Expr::Subscript(sub) = expr
+        && sub.value.is_name_expr()
+        && let Some(lit) = sub.slice.as_string_literal_expr()
+    {
+        return schema.field_type(lit.value.to_str(), tcx.schemas);
+    }
     match expr {
         Expr::Call(call) => {
             if let Some(attr) = call.func.as_attribute_expr() {

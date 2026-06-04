@@ -897,9 +897,12 @@ pub(super) fn select_output_name<'a>(
 /// Resolve the column type of an `F.explode(<arg>)` payload — `<arg>`
 /// may be a string literal (`"map_col"`), a `col("map_col")` /
 /// `F.col(...)` ref, OR an attribute/subscript-style ref
-/// (`data.map_col`, `data["map_col"]`). The last two shapes are common
-/// in real PySpark code but `infer_expr_type` doesn't bottom them out
-/// to the receiver field, so this helper steps in.
+/// (`data.map_col`, `data["map_col"]`). The attribute form
+/// (`data.map_col`) is common in real PySpark code but `infer_expr_type`
+/// doesn't bottom it out to the receiver field, so this helper steps in.
+/// (`infer_expr_type` does handle the subscript form natively as of
+/// v1.4; the local arm below is kept for symmetry and because it does
+/// not require `tcx` for the lookup.)
 fn explode_map_arg_type<'a>(
     arg: &Expr,
     recv: &SchemaView<'a>,
