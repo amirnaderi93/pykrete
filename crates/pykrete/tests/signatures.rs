@@ -122,3 +122,99 @@ def join_them(left: SparkFrame[A], right: SparkFrame[B]) -> SparkFrame[A]:
     assert_eq!(result.typed_function_count, 1);
     assert_does_not_have_code(&result, "D0020");
 }
+
+// ------------------------------------------------------------------
+// v1.3 PR-E2: CLI render_function must carry the slot's dialect prefix.
+// Hover/symbols routed through `dataframe::render_annotation` long ago
+// (v1.3 PR-B); these pin the CLI text output to the same surface so a
+// `PandasFrame[X]` signature doesn't render as "DataFrame[X]" in the
+// text body.
+
+#[test]
+fn V13E2_cli_render_pandasframe_keeps_dialect_prefix() {
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+
+def f(df: PandasFrame[Orders]) -> PandasFrame[Orders]:
+    return df
+"#,
+    );
+    assert!(
+        result.body.contains("PandasFrame[Orders]"),
+        "CLI body should render PandasFrame[Orders] verbatim; got:\n{}",
+        result.body,
+    );
+    assert!(
+        !result.body.contains("DataFrame[Orders]"),
+        "CLI body must not collapse PandasFrame to DataFrame; got:\n{}",
+        result.body,
+    );
+}
+
+#[test]
+fn V13E2_cli_render_sparkframe_keeps_dialect_prefix() {
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+
+def f(df: SparkFrame[Orders]) -> SparkFrame[Orders]:
+    return df
+"#,
+    );
+    assert!(
+        result.body.contains("SparkFrame[Orders]"),
+        "CLI body should render SparkFrame[Orders] verbatim; got:\n{}",
+        result.body,
+    );
+    // No D0090 — the user wrote SparkFrame, not the deprecated alias.
+    assert!(
+        !result.body.contains("DataFrame[Orders]"),
+        "CLI body must not render SparkFrame as DataFrame; got:\n{}",
+        result.body,
+    );
+}
+
+#[test]
+fn V13E2_cli_render_deprecated_alias_preserved() {
+    // Per v1.3 §6 Q7, the deprecated `DataFrame[X]` alias renders as the
+    // user wrote it — `DataFrame[X]`, not its canonical `SparkFrame[X]`.
+    // Pins the alias-preserved surface for the CLI text body.
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+
+def f(df: DataFrame[Orders]) -> DataFrame[Orders]:
+    return df
+"#,
+    );
+    assert!(
+        result.body.contains("DataFrame[Orders]"),
+        "CLI body should preserve the user-typed DataFrame alias; got:\n{}",
+        result.body,
+    );
+    // D0090 still fires on the slot (alias deprecation) but the rendered
+    // surface stays as the user wrote it.
+    assert_has_code(&result, "D0090");
+}
+
+#[test]
+fn V13E2_cli_render_untyped_pandasframe_uses_pandas_prefix() {
+    // Architecture-audit nit #11: bare `PandasFrame` (no `[X]`) must
+    // render as "PandasFrame  (untyped)", not the prior hardcoded
+    // "DataFrame  (untyped)".
+    let result = check(
+        r#"
+def f(df: PandasFrame) -> PandasFrame:
+    return df
+"#,
+    );
+    assert!(
+        result.body.contains("PandasFrame  (untyped)"),
+        "CLI body should render bare PandasFrame as 'PandasFrame  (untyped)'; got:\n{}",
+        result.body,
+    );
+}

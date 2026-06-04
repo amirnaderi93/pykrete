@@ -30,7 +30,7 @@ has the full menu; the short version, in order of preference:
    ```
 
    For a pinned release add `--tag` with the latest release tag
-   (e.g. `--tag v0.1.40`).
+   (e.g. `--tag v1.3.0`).
 
 4. **Prebuilt binaries** — every release attaches per-platform archives
    for macOS arm64/x64 and Linux x64; extract and put the binaries on

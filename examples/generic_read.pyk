@@ -24,8 +24,8 @@ class DataSource[T]:
 
 class DataAccessLayer:
     # Generic method: `T` is bound from the source argument's instantiation
-    # (DataSource[X]) and substituted through the return (DataFrame[T]).
-    def read[T](self, source: DataSource[T]) -> DataFrame[T]:
+    # (DataSource[X]) and substituted through the return (SparkFrame[T]).
+    def read[T](self, source: DataSource[T]) -> SparkFrame[T]:
         pass
 
 
@@ -34,14 +34,14 @@ class DataAccessLayer:
 RAW_ORDERS: DataSource[RawOrders] = DataSource("/path/raw_orders")
 
 
-def use_raw(dal: DataAccessLayer) -> DataFrame[RawOrders]:
-    # No annotation on `raw` — pykrete infers DataFrame[RawOrders] from
+def use_raw(dal: DataAccessLayer) -> SparkFrame[RawOrders]:
+    # No annotation on `raw` — pykrete infers SparkFrame[RawOrders] from
     # the call to the generic read.
     raw = dal.read(RAW_ORDERS)
     return raw.filter(col("UnitPrice") > 0)
 
 
-def prepare_orders(dal: DataAccessLayer) -> DataFrame[Orders]:
+def prepare_orders(dal: DataAccessLayer) -> SparkFrame[Orders]:
     # Same pattern, but the body projects to a different schema. Column
     # references against RawOrders are checked all the way through the
     # filter and the projection. The aliases produce the declared
@@ -56,7 +56,7 @@ def prepare_orders(dal: DataAccessLayer) -> DataFrame[Orders]:
     )
 
 
-def bug_demo(dal: DataAccessLayer) -> DataFrame[Orders]:
+def bug_demo(dal: DataAccessLayer) -> SparkFrame[Orders]:
     # Typo `ProductCdoe` (single 'c'). Caught against RawOrders via the
     # inferred-from-generic chain — pykrete points right at the typo
     # because it knows the receiver's schema all the way through.

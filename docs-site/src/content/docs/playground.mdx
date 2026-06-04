@@ -25,18 +25,20 @@ matter on a `.pyk` file:
   mismatches, and the rest of the `D00xx` rule surface — same engine
   the VS Code extension runs.
 - **Hover.** Hover a Schema class name to see its fields; hover a
-  DataFrame-typed identifier to see the bound schema; hover a Spark
-  method (`sales.select`, `F.sum`) to see its real pyspark signature
-  and docstring summary.
+  `SparkFrame[X]`- or `PandasFrame[X]`-typed identifier (or a legacy
+  `DataFrame[X]`) to see the bound schema; hover a Spark method
+  (`sales.select`, `F.sum`) to see its real pyspark signature and
+  docstring summary.
 - **Completion.** Type a column name inside `col("…")` to get
   pykrete's column suggestions from the bound schema. Type `sales.`
-  on a `DataFrame[Schema]`-typed local to get the DataFrame method
+  on a `SparkFrame[Schema]`-typed local to get the DataFrame method
   surface; `F.` to get `pyspark.sql.functions`; `.groupBy("…").` to
   get GroupedData methods. The Spark suggestions are generated at
   build time from a real pyspark install — see
   `docs-site/scripts/gen-pyspark-symbols.py` in the repo.
-- **Go-to-definition.** Cmd/Ctrl+click (or F12) on a `DataFrame[X]`
-  reference to jump to `class X(Schema):`.
+- **Go-to-definition.** Cmd/Ctrl+click (or F12) on a `SparkFrame[X]`,
+  `PandasFrame[X]`, or (deprecated) `DataFrame[X]` reference to jump to
+  `class X(Schema):`.
 
 ## What's NOT here
 
