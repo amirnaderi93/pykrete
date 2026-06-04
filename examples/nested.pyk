@@ -33,12 +33,12 @@ class User(Schema):
     home: Place
 
 
-def keep_top_level_columns(users: DataFrame[User]) -> DataFrame:
+def keep_top_level_columns(users: SparkFrame[User]) -> SparkFrame:
     # Selecting nested-struct columns by their top-level name is supported.
     return users.select(col("user_id"), col("name"), col("home"))
 
 
-def project_dotted_paths(users: DataFrame[User]) -> DataFrame:
+def project_dotted_paths(users: SparkFrame[User]) -> SparkFrame:
     # Dotted paths walk into nested schemas. All four columns here are
     # valid: home.address resolves to a Place→Address chain; .street is
     # a string field of Address; .coordinates.lat goes three deep.

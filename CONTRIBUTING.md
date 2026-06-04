@@ -176,7 +176,7 @@ fn my_new_check_fires_on_the_obvious_bad_case() {
 class Orders(Schema):
     place_code: int
 
-def f(raw: DataFrame[Orders]) -> DataFrame[Orders]:
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Orders]:
     return raw.select(col("typo"))
 "#);
     assert_has_code(&result, "D0030");

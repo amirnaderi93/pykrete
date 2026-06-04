@@ -87,7 +87,7 @@ interface SparkSymbols {
   functions: SparkSymbol[];
 }
 
-const EMPTY_SOURCE = `# Define a schema, then a function over a DataFrame[Schema].
+const EMPTY_SOURCE = `# Define a schema, then a function over a SparkFrame[Schema].
 # pykrete checks column names, types, and the shape of return values.
 
 class Users(Schema):
@@ -95,7 +95,7 @@ class Users(Schema):
     name: string
     email: string
 
-def keep(df: DataFrame[Users]) -> DataFrame[Users]:
+def keep(df: SparkFrame[Users]) -> SparkFrame[Users]:
     return df.select(col("id"), col("name"), col("email"))
 `;
 
@@ -111,7 +111,7 @@ const SNIPPETS: Snippet[] = [
     amount: int
     quantity: int
 
-def revenue_by_region(sales: DataFrame[Sale]):
+def revenue_by_region(sales: SparkFrame[Sale]):
     # "regoin" is a typo — pykrete suggests "region".
     return sales.groupBy("regoin").agg(F.sum("amount"))
 `,
@@ -127,7 +127,7 @@ def revenue_by_region(sales: DataFrame[Sale]):
     amount: int
     quantity: int
 
-def report(sales: DataFrame[Sale]):
+def report(sales: SparkFrame[Sale]):
     # Hover \`Sale\` above to see its fields.
     # Hover \`sales\` here to see the bound schema.
     summary = (
@@ -218,8 +218,8 @@ async function loadSparkSymbols(): Promise<SparkSymbols | null> {
  * Spark suggestions where they're useless; misclassifying a DataFrame
  * as not-a-DataFrame is the failure mode we want to avoid.
  */
-const DATAFRAME_ANNOTATION_RE = /^[ \t]*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*DataFrame\b/;
-const PARAM_DATAFRAME_RE = /([A-Za-z_][A-Za-z0-9_]*)\s*:\s*DataFrame\b/g;
+const DATAFRAME_ANNOTATION_RE = /^[ \t]*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?:SparkFrame|PandasFrame|DataFrame)\b/;
+const PARAM_DATAFRAME_RE = /([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?:SparkFrame|PandasFrame|DataFrame)\b/g;
 const DATAFRAME_RETURNING_METHODS = new Set([
   'select',
   'filter',

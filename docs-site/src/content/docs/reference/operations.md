@@ -15,9 +15,9 @@ Every operation is marked with one of five status tags. They describe what you'l
 | **pass-through** | pykrete carries the receiver's schema forward unchanged. Correct for ops that don't reshape (`cache`, `orderBy`, `limit`, ...). The chain keeps flowing. |
 | **column-check only** | pykrete checks the column names you pass but doesn't re-derive the output schema. Typos still fire [`unknownColumn`](/pykrete/reference/diagnostics/#unknowncolumn--d0030); chains after this point may degrade. |
 | **unmodeled** | pykrete doesn't understand the call. Column references inside the arguments may still be caught, but the chain after this point loses its schema. |
-| **opaque** | Intentionally returns an unknown type — usually because the result genuinely depends on runtime data (UDF outputs, pandas conversions, RDD ops). Re-anchor with [`.cast(DataFrame[X])`](#cast--the-re-anchor-primitive) if you want checking to resume. |
+| **opaque** | Intentionally returns an unknown type — usually because the result genuinely depends on runtime data (UDF outputs, pandas conversions, RDD ops). Re-anchor with [`.cast(SparkFrame[X])`](#cast--the-re-anchor-primitive) if you want checking to resume. |
 
-If you see a method below tagged something other than **modeled**, the operation itself still works at runtime — pykrete just won't catch typos *past* that point in the chain. Re-anchoring with `.cast(DataFrame[X])` or a typed local annotation restores checking.
+If you see a method below tagged something other than **modeled**, the operation itself still works at runtime — pykrete just won't catch typos *past* that point in the chain. Re-anchoring with `.cast(SparkFrame[X])` or a typed local annotation restores checking.
 
 The rest of this page walks each operation category. For the workhorse methods there's a short worked example; for the long tail, a table suffices.
 
@@ -32,7 +32,7 @@ class Sale(Schema):
     amount: int
     quantity: int
 
-def f(sales: DataFrame[Sale]) -> DataFrame:
+def f(sales: SparkFrame[Sale]) -> DataFrame:
     return (
         sales
         .select("region", "amount")          # modeled — output is {region, amount}
@@ -69,7 +69,7 @@ A typo anywhere in that chain — `.select("regoin", ...)`, `.drop("amunt")` —
 | `dropDuplicatesWithinWatermark` | unmodeled | Streaming-only. |
 
 ```python
-def adults(people: DataFrame[Person]) -> DataFrame:
+def adults(people: SparkFrame[Person]) -> DataFrame:
     return people.filter(F.col("age") >= 18)   # 'age' checked against Person
 ```
 
@@ -86,7 +86,7 @@ class Region(Schema):
     region: string
     manager: string
 
-def with_manager(sales: DataFrame[Sale], regions: DataFrame[Region]) -> DataFrame:
+def with_manager(sales: SparkFrame[Sale], regions: SparkFrame[Region]) -> DataFrame:
     return sales.join(regions, "region", how="inner")
 ```
 
@@ -111,7 +111,7 @@ class Sale(Schema):
     region: string
     amount: int
 
-def revenue_by_region(sales: DataFrame[Sale]) -> DataFrame:
+def revenue_by_region(sales: SparkFrame[Sale]) -> DataFrame:
     return (
         sales
         .groupBy("region")
@@ -139,7 +139,7 @@ The result schema is the grouping keys plus each aggregation, named by `.alias(.
 | `unpivot` | modeled | Spark 3.4+ alias of `melt` — same shape and checks. |
 | `transpose` | unmodeled | Spark 4.0+; unmodeled. |
 
-`pivot` is the deliberate compromise here — its column names depend on the data, so pykrete checks what it can (the pivot key) and steps out of the way for the result. Use `.cast(DataFrame[PivotedSchema])` when you're ready to resume checking on the pivoted output.
+`pivot` is the deliberate compromise here — its column names depend on the data, so pykrete checks what it can (the pivot key) and steps out of the way for the result. Use `.cast(SparkFrame[PivotedSchema])` when you're ready to resume checking on the pivoted output.
 
 ## Sampling / ordering / limits
 
@@ -177,7 +177,7 @@ Spark execution hints. None of them reshape data — schemas flow through.
 
 ### `.cast` — the re-anchor primitive
 
-`.cast(DataFrame[X])` is pykrete-specific. It tells the checker "treat this dataframe as having schema `X` from here on". It's how you bring an opaque chain back under checking:
+`.cast(SparkFrame[X])` is pykrete-specific. It tells the checker "treat this dataframe as having schema `X` from here on". It's how you bring an opaque chain back under checking:
 
 ```python
 class Sale(Schema):
@@ -187,7 +187,7 @@ class Sale(Schema):
 def f(spark) -> DataFrame:
     return (
         spark.read.parquet("s3://...")          # opaque source → schema unknown
-        .cast(DataFrame[Sale])                   # re-anchored: schema = Sale
+        .cast(SparkFrame[Sale])                   # re-anchored: schema = Sale
         .select("region", "amount")              # checked against Sale
     )
 ```
@@ -195,17 +195,17 @@ def f(spark) -> DataFrame:
 Equivalent forms work too — a typed local annotation does the same job:
 
 ```python
-sales: DataFrame[Sale] = spark.read.parquet("s3://...")
+sales: SparkFrame[Sale] = spark.read.parquet("s3://...")
 sales.select("region", "amount")   # checked
 ```
 
-Use `.cast(DataFrame[X])` after any operation tagged **opaque** or **unmodeled** to resume checking. It's not a runtime cast — at runtime it's an identity no-op.
+Use `.cast(SparkFrame[X])` after any operation tagged **opaque** or **unmodeled** to resume checking. It's not a runtime cast — at runtime it's an identity no-op.
 
 ### Other introspection methods
 
 | Method | Status | Notes |
 | --- | --- | --- |
-| `cast(DataFrame[X])` | modeled | See above. Re-anchors the chain. |
+| `cast(SparkFrame[X])` | modeled | See above. Re-anchors the chain. |
 | `printSchema` | modeled | Recognized terminal — returns None; the chain ends. |
 | `explain` | modeled | Recognized terminal — returns None; the chain ends. |
 | `schema` | unmodeled | Property. |
@@ -216,7 +216,7 @@ Use `.cast(DataFrame[X])` after any operation tagged **opaque** or **unmodeled**
 
 ## IO (read / write / table / views)
 
-Reading from external storage is intentionally opaque — pykrete can't see the parquet's actual schema. The expected pattern is `.cast(DataFrame[X])` or a typed local annotation right after the read:
+Reading from external storage is intentionally opaque — pykrete can't see the parquet's actual schema. The expected pattern is `.cast(SparkFrame[X])` or a typed local annotation right after the read:
 
 ```python
 class Sale(Schema):
@@ -224,11 +224,11 @@ class Sale(Schema):
     amount: int
 
 # Re-anchor pattern (preferred):
-sales: DataFrame[Sale] = spark.read.parquet("s3://sales/")
+sales: SparkFrame[Sale] = spark.read.parquet("s3://sales/")
 sales.select("region")           # checked
 
 # Or chained:
-spark.read.parquet("s3://sales/").cast(DataFrame[Sale]).select("region")
+spark.read.parquet("s3://sales/").cast(SparkFrame[Sale]).select("region")
 ```
 
 `createOrReplaceTempView` is special — it registers the chain's schema against the view name, and a later `spark.sql("SELECT … FROM name")` in the same file resolves identifiers against that schema:
@@ -243,7 +243,7 @@ spark.sql("SELECT regoin FROM sales_view")
 | Method | Status | Notes |
 | --- | --- | --- |
 | `dal.read(SOURCE)` | modeled | Generic class-method substitution; the schema-aware path. |
-| `spark.read.parquet` / `.csv` / `.json` / `.orc` / `.text` / `.xml` / `.jdbc` / `.load` | opaque | Returns unknown — re-anchor with `.cast(DataFrame[X])`. |
+| `spark.read.parquet` / `.csv` / `.json` / `.orc` / `.text` / `.xml` / `.jdbc` / `.load` | opaque | Returns unknown — re-anchor with `.cast(SparkFrame[X])`. |
 | `spark.read.format(...).load(...)` | opaque | Same. |
 | `spark.read.schema(...).<format>(...)` | opaque | Same. |
 | `spark.table` | opaque | Same. |
@@ -259,7 +259,7 @@ spark.sql("SELECT regoin FROM sales_view")
 
 ### Reader-receiver heuristic
 
-The `.read.<format>(…)` recognition is structural: pykrete matches any chain of the form `<X>.read.<format>(…)` (and the equivalent `<X>.read.format(...).load(...)` / `<X>.read.schema(...).<format>(...)` builder shapes) without verifying that `<X>` is a `SparkSession`. In practice `<X>` is `spark`, `ss`, `sess`, …; we deliberately don't pin the receiver name. The trade-off: a non-Spark API that happens to expose a `.read.<format>(...)` shape (e.g. an in-house loader) is also matched and yields **opaque** instead of the loader's real return type. If your own type-checker tooling agrees the loader returns `DataFrame[X]`, re-anchor with `.cast(DataFrame[X])` — same workaround as a genuine `spark.read`. Tracked for a follow-up if the false-positive rate ever bites.
+The `.read.<format>(…)` recognition is structural: pykrete matches any chain of the form `<X>.read.<format>(…)` (and the equivalent `<X>.read.format(...).load(...)` / `<X>.read.schema(...).<format>(...)` builder shapes) without verifying that `<X>` is a `SparkSession`. In practice `<X>` is `spark`, `ss`, `sess`, …; we deliberately don't pin the receiver name. The trade-off: a non-Spark API that happens to expose a `.read.<format>(...)` shape (e.g. an in-house loader) is also matched and yields **opaque** instead of the loader's real return type. If your own type-checker tooling agrees the loader returns a `DataFrame`, re-anchor with `.cast(SparkFrame[X])` — same workaround as a genuine `spark.read`. Tracked for a follow-up if the false-positive rate ever bites.
 
 ## Streaming
 
@@ -295,7 +295,7 @@ class Sale(Schema):
     region: string
     amount: Optional[int]
 
-def with_defaults(sales: DataFrame[Sale]) -> DataFrame:
+def with_defaults(sales: SparkFrame[Sale]) -> DataFrame:
     return sales.fillna({"amount": 0})   # 'amount' checked; nullability cleared
 ```
 
@@ -314,7 +314,7 @@ def with_defaults(sales: DataFrame[Sale]) -> DataFrame:
 | `collect` / `first` / `head` / `take` / `tail` | modeled | Recognized terminals. |
 | `show` | modeled | Recognized terminal (returns None). |
 | `stat.crosstab` / `freqItems` / `approxQuantile` / `corr` / `cov` | unmodeled | |
-| `summary` | opaque | Returns a statistics table whose schema depends on the receiver's numeric subset. Re-anchor with `.cast(DataFrame[X])`. |
+| `summary` | opaque | Returns a statistics table whose schema depends on the receiver's numeric subset. Re-anchor with `.cast(SparkFrame[X])`. |
 | `describe` | opaque | Same as `summary`. |
 | `observe` | pass-through | Observability hook — returns the receiver unchanged. |
 | `inputFiles` | unmodeled | |
@@ -363,7 +363,7 @@ class Region(Schema):
     region: string
     manager: string
 
-def with_manager(sales: DataFrame[Sale], regions: DataFrame[Region]) -> DataFrame:
+def with_manager(sales: SparkFrame[Sale], regions: SparkFrame[Region]) -> DataFrame:
     return sales.join(F.broadcast(regions), "region", how="inner")   # 'region' checked on both sides
 ```
 
@@ -402,17 +402,70 @@ These are methods on a `Column` expression rather than `F.*` calls. The headline
 | `Window.rowsBetween` / `rangeBetween` | unmodeled | No column refs to check. |
 | `Window.unboundedPreceding` / `unboundedFollowing` / `currentRow` | unmodeled | Constants. |
 
+## Pandas dispatch (v1.3)
+
+v1.3 adds a pandas check-site dialect alongside the PySpark surface above. Annotate a parameter with `PandasFrame[Schema]` and pykrete switches to the pandas operation shapes — same column-reference checking, different syntax.
+
+```python
+import pandas as pd
+
+class Sale(Schema):
+    region: string
+    product: string
+    amount: int
+    quantity: int
+
+def revenue(sales: PandasFrame[Sale]) -> pd.DataFrame:
+    return (
+        sales[sales["amount"] > 0]                 # filter via df[mask]
+        [["region", "amount"]]                     # select via df[col_list]
+    )
+```
+
+A typo anywhere — `sales["amunt"]`, `sales[["regoin", "amount"]]` — fires `unknownColumn` against `Sale` the same way PySpark column refs do. The dialect is the only thing that changes; the diagnostic story is identical.
+
+### Six dispatched operations
+
+These are the operations that read or write *via the dataframe itself*, not via a method call — Spark and pandas spell them differently, so v1.3 dispatches them on the annotation:
+
+| Operation | PySpark form | pandas form |
+| --- | --- | --- |
+| Select columns | `df.select("region", "amount")` | `df[["region", "amount"]]` |
+| Filter rows | `df.filter(F.col("amount") > 0)` | `df[df["amount"] > 0]` |
+| Add / replace column | `df.withColumn("doubled", F.col("amount") * 2)` | `df["doubled"] = df["amount"] * 2` |
+| Drop columns | `df.drop("region")` | `df.drop(columns=["region"])` |
+| Join | `df.join(other, "region", "inner")` | `df.merge(other, on="region", how="inner")` |
+| Rename | `df.withColumnRenamed("region", "country")` | `df.rename(columns={"region": "country"})` |
+
+Each one reports column refs against the schema in scope; the output schema flows forward the same way it does in PySpark chains.
+
+### Widening for `df["new"] = expr`
+
+A column assignment of the form `df["new"] = expr` widens the schema with a new column whose type follows from `expr` — same inference path that powers `withColumn`. Reassigning an existing column replaces it; the runtime semantics are pandas's, but pykrete tracks the post-assignment shape so chained reads stay checked.
+
+```python
+def annotate(sales: PandasFrame[Sale]) -> pd.DataFrame:
+    sales["total"] = sales["amount"] * sales["quantity"]    # widens schema with 'total: int'
+    return sales[["region", "total"]]                        # checked against widened shape
+```
+
+### What pandas check-site coverage means in v1.3
+
+v1.3 ships **column-reference recognition** for pandas — the six dispatched operations above plus the D0090 deprecation. Positive **type-tracking** verification for pandas (the `PROBE-TYPE-IS` parity that PySpark got in v1.2) lands in v1.4; see [pykrete-tests#14](https://github.com/amirnaderi93/pykrete-tests/issues/14).
+
+For the PySpark-only operations on this page (joins / aggregations / windows / IO), `PandasFrame[X]` chains fall back to **opaque** — pykrete doesn't model pandas's `groupby` / `agg` / `read_parquet` / window surface yet. Re-anchor with `.cast(PandasFrame[X])` when needed.
+
 ## What's not modeled — by design
 
 Some of the surface is intentionally outside pykrete's reach. These aren't gaps to fill — they're runtime concerns, not schema concerns:
 
 - **Structured streaming** (`readStream`, `writeStream`, `isStreaming`). pykrete is a static checker against declared schemas; streaming state is a runtime construct.
-- **Pandas-on-Spark and Arrow conversions** (`toPandas`, `toArrow`, `mapInPandas`, `pandas_api`, ...). The result isn't a Spark dataframe anymore; pandas/polars support is on the [roadmap](/pykrete/about/roadmap/) as its own typed surface (`PandasFrame[X]`).
+- **Pandas-on-Spark and Arrow conversions** (`toPandas`, `toArrow`, `mapInPandas`, `pandas_api`, ...). The result isn't a Spark dataframe anymore; pandas check-site coverage shipped in v1.3 as its own typed surface (`PandasFrame[X]`) — see the [Pandas dispatch (v1.3)](#pandas-dispatch-v13) section above; polars is next on the [roadmap](/pykrete/about/roadmap/).
 - **RDD-level operations** (`rdd`, `mapPartitions`, `foreach`). These drop below the dataframe abstraction by design.
 - **Runtime introspection** (`describe`, `summary`, `stat.*`). These return shape-of-data summaries, not schemas.
 - **UDF internals**. The decorator's return type is honored, but the body is opaque.
 
-For all of these, the chain ends or becomes opaque at the call site. Downstream code that needs to be checked can resume with [`.cast(DataFrame[X])`](#cast--the-re-anchor-primitive) or a typed local annotation.
+For all of these, the chain ends or becomes opaque at the call site. Downstream code that needs to be checked can resume with [`.cast(SparkFrame[X])`](#cast--the-re-anchor-primitive) or a typed local annotation.
 
 ## See also
 

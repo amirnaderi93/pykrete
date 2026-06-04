@@ -32,14 +32,22 @@ a Python language server (an LSP multiplexer — see
 
 The **`.pyk` → `.py` transpiler** is complete: it prepends
 `from __future__ import annotations` (so pykrete's atomic type names and
-`DataFrame[X]` annotations don't evaluate at runtime) and strips the
-schema-cast `.cast(DataFrame[Schema])` — the one pykrete-only construct in
-expression position, which the Python runtime has no `.cast` method for.
+`SparkFrame[X]` / `PandasFrame[X]` / `DataFrame[X]` annotations don't
+evaluate at runtime) and strips the schema-cast
+`.cast(SparkFrame[Schema])` / `.cast(PandasFrame[Schema])` /
+`.cast(DataFrame[Schema])` — the one pykrete-only construct in expression
+position, which the Python runtime has no `.cast` method for.
+
+**Pandas check-site coverage shipped in v1.3** alongside PySpark: the six
+dispatched operations (`df[col_list]` / `df[mask]` / `df["new"] = expr` /
+`df.drop` / `df.merge` / `df.rename`), `PandasFrame[X]` annotations, and
+the `D0090 deprecatedDataFrameAlias` warning that nudges existing
+`DataFrame[X]` users toward the dialect-specific spellings.
 
 ## PyCharm support
 
-A JetBrains integration via PyCharm's LSP client. Deferred well past
-pandas (v2) and polars (v3) — VS Code is the only supported editor for now.
+A JetBrains integration via PyCharm's LSP client. Deferred until after
+polars — VS Code is the only supported editor for now.
 
 ## Configuration
 
@@ -63,10 +71,11 @@ Already shipped (recorded here for completeness):
 - **In-browser playground reaches pykrete IDE parity.** The Monaco
   editor at [`/playground`](https://amirnaderi93.github.io/pykrete/playground/)
   now serves the same pykrete capabilities the VS Code extension does
-  for `.pyk` files: hover on schema names, `DataFrame[X]` references,
-  and chain-bound locals; column-name completion inside `col("…")` and
-  schema-name completion inside `DataFrame[…]`; and go-to-definition
-  on Schema references. Wired through three new `pykrete-wasm` entry
+  for `.pyk` files: hover on schema names, `SparkFrame[X]` /
+  `PandasFrame[X]` / `DataFrame[X]` references, and chain-bound locals;
+  column-name completion inside `col("…")` and schema-name completion
+  inside `SparkFrame[…]` / `PandasFrame[…]` / `DataFrame[…]`; and
+  go-to-definition on Schema references. Wired through three new `pykrete-wasm` entry
   points (`hover_at`, `complete_at`, `definition_at`) that delegate to
   the same `pykrete::hover` / `pykrete::completions` / `pykrete::definition`
   the LSP server uses, so playground behavior matches a local install.
@@ -91,7 +100,7 @@ Already shipped (recorded here for completeness):
 
 - **Generic-inference: full coverage of the four extension patterns.**
   Multi-TypeVar binding —
-  `def join[A, B](left: DataFrame[A], right: DataFrame[B]) -> DataFrame[Merge[A, B]]`
+  `def join[A, B](left: SparkFrame[A], right: SparkFrame[B]) -> SparkFrame[Merge[A, B]]`
   binds each TypeVar from its own argument slot and substitutes through
   the return, producing a derived view with the concatenated columns.
   Nested parameter shapes are unwrapped during binding:
@@ -103,7 +112,7 @@ Already shipped (recorded here for completeness):
   any intermediate method whose return annotation is the class itself
   (`-> "DataAccessLayer"`, `-> DataAccessLayer`, or `-> Self`), so the
   trailing generic call still dispatches. `type[T]`-shaped parameters —
-  `def cast_to[T](self, _: type[T]) -> DataFrame[T]` called as
+  `def cast_to[T](self, _: type[T]) -> SparkFrame[T]` called as
   `dal.cast_to(Orders)` — bind T from the arg's class identifier
   rather than its runtime value. Incompatible bindings (a list whose
   elements carry different T values, a non-class arg in a `type[T]`
@@ -176,13 +185,13 @@ Already shipped (recorded here for completeness):
   `spark.read.format(...).load(...)`, `spark.read.schema(...).<format>(...)`)
   and bare `spark.table(...)` are now recognized as opaque IO sources.
   The result is still Unknown — the schema is genuinely runtime data —
-  but the user re-anchors the chain with `.cast(DataFrame[Schema])` or a
-  typed variable annotation (`raw: DataFrame[Schema] = spark.read.parquet(...)`)
+  but the user re-anchors the chain with `.cast(SparkFrame[Schema])` or a
+  typed variable annotation (`raw: SparkFrame[Schema] = spark.read.parquet(...)`)
   and downstream column checks resume. Closes the headline gap where
   real PySpark codebases lost their chain at line one.
 - **Call-site argument checking** (`D0051 argumentColumnsMismatch`) —
   closes the function boundary on the input side. Passing a
-  `DataFrame[Wrong]` into a function that declares `DataFrame[Right]`
+  `SparkFrame[Wrong]` into a function that declares `SparkFrame[Right]`
   is now flagged at the call site, with the same missing / extra column
   reporting as `returnColumnsMismatch`. v0.1.8 closes the edge cases:
   local-name shadowing of a top-level function suppresses the check —
@@ -209,18 +218,25 @@ These are larger structural moves, not increments.
 
 ### Multi-dataframe support (pandas, polars, …)
 
-PySpark is the v1 target, but every dataframe library has the same shape:
-a value carries a schema, methods narrow or widen it, column names must
-exist when referenced. Schema checking is valuable for every one.
+Status: **PySpark feature-complete; pandas check-site coverage shipped in
+v1.3; polars is next.** Every dataframe library has the same shape — a
+value carries a schema, methods narrow or widen it, column names must
+exist when referenced.
 
-Priority: **PySpark → pandas → polars** → others (DuckDB, Dask, …).
+Priority: **PySpark (done) → pandas check-site (done, v1.3) → pandas
+type-tracking (v1.4) → polars** → others (DuckDB, Dask, …).
 
-The core type model — `DataFrame[Schema]`, the `Schema` class, column
-checks, return-type validation — generalizes. The library-specific layer
-is method dispatch (`raw.select(col("x"))` vs `raw[["x"]]` vs
-`raw.select(pl.col("x"))`). This argues for a plugin/dispatch model for
-operation handling **before** pandas support accumulates more
-PySpark-specific code in `operations`.
+The core type model — `SparkFrame[Schema]` / `PandasFrame[Schema]` /
+`DataFrame[Schema]`, the `Schema` class, column checks, return-type
+validation — generalizes. The library-specific layer is method dispatch
+(`raw.select(col("x"))` vs `raw[["x"]]` vs `raw.select(pl.col("x"))`).
+v1.3 ships the per-annotation dispatch (`SparkFrame[X]` recognizes Spark
+shapes, `PandasFrame[X]` recognizes pandas shapes — `df[col_list]` /
+`df[mask]` / `df["new"] = expr` / `df.drop` / `df.merge` / `df.rename`)
+and the `D0090` deprecation that nudges callers off the legacy
+`DataFrame[X]` alias. Positive type-tracking verification for pandas via
+`PROBE-TYPE-IS` lands in v1.4 — see
+[pykrete-tests#14](https://github.com/amirnaderi93/pykrete-tests/issues/14).
 
 ### Forking `ty`
 
