@@ -522,9 +522,10 @@ impl<'a> BodyContext<'a> {
     }
 
     /// The v1.3 dialect tag for a Name-bound frame slot, if any.
-    /// Returns `None` for non-frame names, for frame bindings produced
-    /// off a chain result (no dialect threading from chain returns),
-    /// and for module-scope constants (`DataSources.RAW_ORDERS`).
+    /// Returns `None` for non-frame names and for module-scope constants
+    /// (`DataSources.RAW_ORDERS`). Chain-rebind sites (`pdf = pdf.merge(...)`)
+    /// preserve the tag via [`bind_df`] + `inherited_dialect`, so a name
+    /// reassigned off a same-dialect chain keeps its dialect.
     pub(crate) fn lookup_dialect(&self, name: &str) -> Option<Dialect> {
         if self.is_comp_bound(name) {
             return None;

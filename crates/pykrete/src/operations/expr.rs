@@ -697,7 +697,7 @@ fn analyze_method_call_inner<'a>(
     //  - Truly opaque receivers (no Name at the bottom of the chain)
     //    return None and fall through.
     let receiver_dialect = inherited_dialect(&attr.value, ctx);
-    let receiver_is_spark_named = receiver_dialect == Some(Dialect::Spark);
+    let receiver_is_spark_inherited = receiver_dialect == Some(Dialect::Spark);
     let receiver_is_pandas_inherited = receiver_dialect == Some(Dialect::Pandas);
 
     // `df.createOrReplaceTempView("name")` — register `df`'s schema
@@ -1038,10 +1038,12 @@ fn analyze_method_call_inner<'a>(
     }
     if let Some(kind) = two_df_method(method) {
         // `merge` is the pandas spelling of join (spec §5). Skip the
-        // Join dispatch when the receiver is a Spark-tagged Name —
-        // a misspelled `.merge` on a SparkFrame is wrong code, not a
-        // join. Chain receivers fall through (no dialect threaded).
-        if method == "merge" && receiver_is_spark_named {
+        // Join dispatch when the receiver inherits the Spark dialect —
+        // `inherited_dialect` walks chain receivers down to the deepest
+        // Name, so `sdf.cache().merge(other, ...)` is gated just like
+        // `sdf.merge(other, ...)`. A misspelled `.merge` on a SparkFrame
+        // (or a Spark chain) is wrong code, not a join.
+        if method == "merge" && receiver_is_spark_inherited {
             return None;
         }
         return handle_two_df_method(
