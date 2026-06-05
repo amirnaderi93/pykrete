@@ -111,6 +111,13 @@ fn declared_return_view<'a>(
 /// that follows. Truly opaque RHS (a call like `some_unrelated_call()`
 /// whose receiver isn't a tagged Name) returns `None` and the
 /// existing erase-on-rebind behavior holds.
+///
+/// **v1.4 PR-B Bug 2**: walrus receivers (`(target := value).chain(...)`)
+/// recurse into `value` — Python's walrus binds the value, so the chain
+/// inherits the value's dialect tag. Subscript receivers (container
+/// indexing like `pandas_frames[0].merge(...)`) stay quiet; resolving
+/// those needs container-element-type tracking the v1.3 tracker doesn't
+/// provide and is explicitly deferred to v1.5+ per v1.4 spec §4 Bug 2.
 pub(crate) fn inherited_dialect<'a>(
     expr: &Expr,
     ctx: &BodyContext<'a>,
@@ -119,6 +126,7 @@ pub(crate) fn inherited_dialect<'a>(
     loop {
         match cursor {
             Expr::Name(n) => return ctx.lookup_dialect(n.id.as_str()),
+            Expr::Named(named) => cursor = &named.value,
             Expr::Call(c) => {
                 let attr = c.func.as_attribute_expr()?;
                 cursor = &attr.value;
