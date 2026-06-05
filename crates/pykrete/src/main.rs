@@ -449,6 +449,8 @@ fn load_config(anchor: Option<&Path>) -> pykrete::Config {
 /// `pykrete check /abs/path/to/project/foo.pyk` from any CWD pick up
 /// `/abs/path/to/project/pykrete.json`.
 fn find_pykrete_json(anchor: Option<&Path>) -> Option<PathBuf> {
+    // canonicalize() resolves symlinks before the walk — a .pyk reached
+    // through a symlink discovers the real project's pykrete.json.
     let start = anchor
         .and_then(|p| p.canonicalize().ok())
         .and_then(|p| p.parent().map(Path::to_path_buf));

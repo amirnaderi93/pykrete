@@ -148,7 +148,7 @@ Concrete uses:
 from pykrete import col, lit
 from quinn.schemas import Order
 
-def pipeline(orders: DataFrame[Order]) -> DataFrame[Order]:
+def pipeline(orders: SparkFrame[Order]) -> SparkFrame[Order]:
     # PROBE-RESOLVES: id=quinn-select-region -- region survives narrow select
     df = orders.select("region", "amount")
 

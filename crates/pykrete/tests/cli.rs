@@ -500,7 +500,7 @@ fn v14d_bug2_config_walks_up_dirs() {
 /// invocation `pykrete check bad.pyk` from the project root), the
 /// discovery must still fall back to the CWD walk that v1.3 used.
 #[test]
-fn v14d_bug2_config_fallback_to_cwd_when_file_path_empty() {
+fn v14d_bug2_config_uses_anchor_when_file_path_provided() {
     let proj = v14d_tmpdir("cwd-fallback");
     std::fs::write(
         proj.join("pykrete.json"),
