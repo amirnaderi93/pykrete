@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.44
+## 0.2.45
 
 Tracks the v1.4 PR-D pykrete checker fix — `pykrete.json` config
 discovery now walks from the input file's parent directory (falling
@@ -9,6 +9,24 @@ so `pykrete check /abs/path/to/project/foo.pyk` from any CWD picks
 up the project's `pykrete.json`. LSP discovery was already file-
 anchored via the project-root resolver; this aligns the CLI. No new
 D-codes, no new annotation forms.
+
+## 0.2.44
+
+Tracks the v1.4 PR-B pykrete checker bug closures (spec §4) — three
+PRE-EXISTING silent-pass regressions surfaced by v1.3 audits.
+(1) Registry-call args (`util(df["typo"])` where `util(x: int)` has
+no `DataFrame[X]` slot) are now walked unconditionally, so the
+embedded column-typo fires D0030 instead of slipping past the §10
+widening gate.
+(2) Walrus receivers (`(pdf := build()).rename(...)`) now inherit
+the assigned value's dialect, so pandas dispatch fires on
+walrus-bound chains.
+(3) `.transform(helper)` now threads the receiver's dialect into the
+helper's body inference, so pandas-only operations inside the helper
+(e.g., `.assign`) dispatch under the correct dialect and the inferred
+return schema reaches downstream column references.
+No new D-codes, no new annotation forms; SemVer-minor under the
+`tighteningDiagnostics` policy.
 
 ## 0.2.43
 
