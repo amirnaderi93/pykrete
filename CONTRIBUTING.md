@@ -54,7 +54,7 @@ crates/pykrete/
 │   ├── diagnostics.rs    # Diagnostic types + TS-style formatting
 │   ├── schema.rs         # Schema discovery, SchemaView, field resolution
 │   ├── types.rs          # ColumnType atoms (Int, String, Date, …)
-│   ├── dataframe.rs      # DataFrame[Schema] annotation recognition
+│   ├── dataframe.rs      # SparkFrame/PandasFrame/DataFrame annotation recognition
 │   ├── walk.rs           # Top-level AST walks (classes, functions)
 │   ├── registry.rs       # Class + constant registries (for generics)
 │   ├── transpiler.rs     # .pyk → .py emit

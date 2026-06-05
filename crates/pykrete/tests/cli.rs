@@ -401,3 +401,127 @@ fn transpile_help_flag_prints_transpile_usage() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("pykrete transpile"));
 }
+
+// ===========================================================================
+// v1.4 PR-D Bug 2 (#98): pykrete.json discovery walks from the input file's
+// directory, not just the working directory. Anchoring on the file lets
+// `pykrete check /abs/path/to/foo.pyk` from any CWD pick up the project's
+// `pykrete.json`. Falls back to CWD when the input path can't be resolved.
+// ===========================================================================
+
+fn v14d_tmpdir(tag: &str) -> PathBuf {
+    let mut dir = std::env::temp_dir();
+    dir.push(format!(
+        "pykrete-v14d-bug2-{}-{}-{}",
+        tag,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    // Surface ambient pollution: find_pykrete_json walks up to /, so a
+    // stray pykrete.json anywhere on the ancestor chain (e.g. a stale
+    // /tmp/pykrete.json from a manual experiment) would silently muddle
+    // every assertion below. Mirror the LSP project tests' check.
+    let mut probe = dir.clone();
+    loop {
+        if probe.join("pykrete.json").exists() {
+            panic!(
+                "v14d bug2 tests cannot run: ambient pykrete.json at {} pollutes the test environment. Delete or relocate it.",
+                probe.join("pykrete.json").display()
+            );
+        }
+        if !probe.pop() {
+            break;
+        }
+    }
+    dir
+}
+
+const V14D_TYPO_PYK: &str = "class Sale(Schema):\n    region: string\n    amount: int\n\n\ndef revenue(sales: SparkFrame[Sale]) -> SparkFrame[Sale]:\n    return sales.select(col(\"regoin\"), col(\"amount\"))\n";
+
+/// Falsifiable: with the fix, the absolute-path invocation discovers
+/// the sibling `pykrete.json` and applies its `unknownColumn: off`
+/// rule, so D0030 is suppressed. Revert the file-anchored walk and
+/// this test fails (D0030 fires because CWD has no `pykrete.json`).
+#[test]
+fn v14d_bug2_config_discovered_from_file_path() {
+    let proj = v14d_tmpdir("from-file-path");
+    std::fs::write(
+        proj.join("pykrete.json"),
+        r#"{"rules": {"unknownColumn": "off"}}"#,
+    )
+    .unwrap();
+    std::fs::write(proj.join("bad.pyk"), V14D_TYPO_PYK).unwrap();
+
+    let out = Command::new(bin())
+        .arg("check")
+        // CWD is the cargo manifest dir during `cargo test`; the input
+        // is an absolute path under /tmp, so the only way to find the
+        // pykrete.json is to walk from the file's parent.
+        .arg(proj.join("bad.pyk"))
+        .output()
+        .expect("run pykrete check");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("D0030") && !stderr.contains("unknownColumn"),
+        "D0030 should be suppressed by sibling pykrete.json: {stderr}"
+    );
+}
+
+/// Falsifiable: the deeper `sub/` directory has no `pykrete.json` of
+/// its own — the walk has to climb to the project root to find one.
+#[test]
+fn v14d_bug2_config_walks_up_dirs() {
+    let proj = v14d_tmpdir("walks-up-dirs");
+    std::fs::write(
+        proj.join("pykrete.json"),
+        r#"{"rules": {"unknownColumn": "off"}}"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(proj.join("sub")).unwrap();
+    std::fs::write(proj.join("sub").join("bad.pyk"), V14D_TYPO_PYK).unwrap();
+
+    let out = Command::new(bin())
+        .arg("check")
+        .arg(proj.join("sub").join("bad.pyk"))
+        .output()
+        .expect("run pykrete check");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("D0030") && !stderr.contains("unknownColumn"),
+        "D0030 should be suppressed by ancestor pykrete.json: {stderr}"
+    );
+}
+
+/// Backward-compat: when the input file path can't help (e.g. relative
+/// invocation `pykrete check bad.pyk` from the project root), the
+/// discovery must still fall back to the CWD walk that v1.3 used.
+#[test]
+fn v14d_bug2_config_uses_anchor_when_file_path_provided() {
+    let proj = v14d_tmpdir("cwd-fallback");
+    std::fs::write(
+        proj.join("pykrete.json"),
+        r#"{"rules": {"unknownColumn": "off"}}"#,
+    )
+    .unwrap();
+    std::fs::write(proj.join("bad.pyk"), V14D_TYPO_PYK).unwrap();
+
+    // CWD = project root, input = relative "bad.pyk". Even if the
+    // file's parent resolution succeeds it points at the same dir as
+    // CWD; the test still pins backward compat by NOT supplying an
+    // absolute path.
+    let out = Command::new(bin())
+        .arg("check")
+        .arg("bad.pyk")
+        .current_dir(&proj)
+        .output()
+        .expect("run pykrete check");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("D0030") && !stderr.contains("unknownColumn"),
+        "D0030 should be suppressed by CWD pykrete.json: {stderr}"
+    );
+}

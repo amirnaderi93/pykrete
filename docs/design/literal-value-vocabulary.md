@@ -27,7 +27,7 @@ class Order(Schema):
 ```
 
 ```python
-def stale(orders: DataFrame[Order]) -> DataFrame[Order]:
+def stale(orders: SparkFrame[Order]) -> SparkFrame[Order]:
     return orders.filter(col("status") == "pendig")
     #                                       ^^^^^^^ D0084: 'pendig' is not in the
     #                                              enum vocabulary for 'status'.
@@ -128,7 +128,7 @@ Concrete shape:
 class Order(Schema):
     status: enum["pending", "shipped"]
 
-def f(orders: DataFrame[Order]) -> DataFrame[Order]:
+def f(orders: SparkFrame[Order]) -> SparkFrame[Order]:
     return orders.withColumn("status", lit("delivered"))
     #                                   ^^^^^^^^^^^^^^ D0084: 'delivered' is not
     #                                                  in the enum vocabulary
@@ -533,7 +533,7 @@ class Order(Schema):
     status: enum["pending", "shipped", "delivered", "cancelled"]
 
 
-def fix_nulls(orders: DataFrame[Order]) -> DataFrame[Order]:
+def fix_nulls(orders: SparkFrame[Order]) -> SparkFrame[Order]:
     # Fires D0084 on 'shippd' — coalesce flows into the 'status' sink
     # via withColumn, so the surrounding enum constraint is applied to
     # every literal branch.
@@ -597,7 +597,7 @@ class Order(Schema):
     region: enum["us-east", "us-west", "eu-central"]
 
 
-def stale_orders(orders: DataFrame[Order]) -> DataFrame[Order]:
+def stale_orders(orders: SparkFrame[Order]) -> SparkFrame[Order]:
     # 1. Typo in `==` RHS — D0084 fires on the literal.
     a = orders.filter(col("status") == "pendig")
     #                                    ^^^^^^^ D0084: 'pendig' is not in the
