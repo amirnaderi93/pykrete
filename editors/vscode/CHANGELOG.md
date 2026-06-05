@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.44
+
+Tracks the v1.4 PR-D pykrete checker fix — `pykrete.json` config
+discovery now walks from the input file's parent directory (falling
+back to the working directory when no input resolves to a file path),
+so `pykrete check /abs/path/to/project/foo.pyk` from any CWD picks
+up the project's `pykrete.json`. LSP discovery was already file-
+anchored via the project-root resolver; this aligns the CLI. No new
+D-codes, no new annotation forms.
+
 ## 0.2.43
 
 Tracks the v1.4 PR-A pykrete checker change — `infer_expr_type` now

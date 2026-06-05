@@ -284,10 +284,26 @@ warning. Message echoes the source text — if the user wrote
 `DataFrame[Order]`, not the canonicalized `SparkFrame[Order]`.
 (Q7 resolved: respect the source.)
 
-Example:
+D0090 fires at two annotation positions:
+
+1. **Subscripted alias**: `DataFrame[X]` in any frame-annotation
+   slot — `def f(df: DataFrame[Order]) -> DataFrame[Order]: ...`,
+   `result: DataFrame[Order] = …`, etc.
+2. **Bare alias**: `DataFrame` (no subscript) in any frame-annotation
+   slot — `def f(df: DataFrame) -> DataFrame: ...`. The bare form is
+   itself the deprecated alias name; pykrete treats it as
+   `SparkFrame` (`Untyped`) and fires D0090 per slot just as for the
+   subscripted form.
+
+Examples (paste-from-binary at v1.4.0 tip):
 
 ```
 orders.pyk:4:14 - warning deprecatedDataFrameAlias: 'DataFrame[Order]' is a deprecated alias for 'SparkFrame[Order]' and will be removed in pykrete v2.0. Rewrite as 'SparkFrame[Order]'.
+```
+
+```
+orders.pyk:4:11 - warning deprecatedDataFrameAlias: 'DataFrame' is a deprecated alias for 'SparkFrame' and will be removed in pykrete v2.0. Rewrite as 'SparkFrame'.
+orders.pyk:4:25 - warning deprecatedDataFrameAlias: 'DataFrame' is a deprecated alias for 'SparkFrame' and will be removed in pykrete v2.0. Rewrite as 'SparkFrame'.
 ```
 
 ### Rules-config interaction

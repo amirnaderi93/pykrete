@@ -161,10 +161,6 @@ fn run_check(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
 
-    // Project config — `pykrete.json`, found at or above the working
-    // directory. Absent or malformed → defaults.
-    let config = load_config();
-
     // Phase 1: expand directories to .pyk files, then read every file.
     // If any path fails to expand or read, abort early with a usage-
     // style error rather than analyzing a partial project.
@@ -175,6 +171,14 @@ fn run_check(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+
+    // Project config — `pykrete.json`, found at or above the first
+    // input file's directory, falling back to the working directory if
+    // no input resolved to a real file path. Absent or malformed →
+    // defaults. Anchoring on the file (not just CWD) means
+    // `pykrete check /abs/path/to/project/foo.pyk` from any CWD still
+    // picks up `/abs/path/to/project/pykrete.json`.
+    let config = load_config(expanded.first().map(PathBuf::as_path));
     // Drop files matched by a `pykrete.json` `exclude` entry.
     expanded.retain(|p| !config.is_excluded(&p.to_string_lossy()));
     let mut sources: Vec<(String, String)> = Vec::with_capacity(expanded.len());
@@ -415,11 +419,12 @@ fn run_transpile(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Load `pykrete.json` from the working directory or an ancestor.
-/// Absent → defaults; present but malformed → a warning and defaults
-/// (a config typo shouldn't block the whole check).
-fn load_config() -> pykrete::Config {
-    let Some(path) = find_pykrete_json() else {
+/// Load `pykrete.json` walking up from `anchor`'s parent directory (or
+/// the working directory if `anchor` is `None`). Absent → defaults;
+/// present but malformed → a warning and defaults (a config typo
+/// shouldn't block the whole check).
+fn load_config(anchor: Option<&Path>) -> pykrete::Config {
+    let Some(path) = find_pykrete_json(anchor) else {
         return pykrete::Config::default();
     };
     match fs::read_to_string(&path) {
@@ -437,9 +442,21 @@ fn load_config() -> pykrete::Config {
     }
 }
 
-/// Walk up from the working directory looking for a `pykrete.json`.
-fn find_pykrete_json() -> Option<PathBuf> {
-    let mut dir = env::current_dir().ok()?;
+/// Walk up from `anchor`'s parent directory looking for a
+/// `pykrete.json`. If `anchor` is `None` or its parent can't be
+/// resolved to an absolute path, fall back to the working directory.
+/// Anchoring on the input file (not just CWD) lets
+/// `pykrete check /abs/path/to/project/foo.pyk` from any CWD pick up
+/// `/abs/path/to/project/pykrete.json`.
+fn find_pykrete_json(anchor: Option<&Path>) -> Option<PathBuf> {
+    let start = anchor
+        .and_then(|p| p.canonicalize().ok())
+        .and_then(|p| p.parent().map(Path::to_path_buf));
+    let start = match start {
+        Some(s) => s,
+        None => env::current_dir().ok()?,
+    };
+    let mut dir = start;
     loop {
         let candidate = dir.join("pykrete.json");
         if candidate.is_file() {

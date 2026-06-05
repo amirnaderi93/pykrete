@@ -226,12 +226,12 @@ accepts either).
 | `D0001` | `parseError` | Parse error. |
 | `D0010` | `unknownColumnType` | Unknown column type. |
 | `D0011` | `invalidColumnType` | Column type is not a recognized type expression. |
-| `D0020` | `unknownSchema` | Unknown schema in `DataFrame[…]`. |
+| `D0020` | `unknownSchema` | Unknown schema in `SparkFrame[…]` / `PandasFrame[…]` (or the deprecated `DataFrame[…]` alias). |
 | `D0021` | `invalidSchemaExpression` | Schema is not a bare name / valid operator. |
 | `D0030` | `unknownColumn` | Column does not exist on the schema. |
 | `D0040` | `unionSchemaMismatch` | `union` / `unionByName` schema mismatch. |
 | `D0050` | `returnColumnsMismatch` | Return type mismatch — column *set* differs from the declared schema. |
-| `D0051` | `argumentColumnsMismatch` | Call-site argument's schema differs from the parameter's declared `DataFrame[Schema]`. |
+| `D0051` | `argumentColumnsMismatch` | Call-site argument's schema differs from the parameter's declared `SparkFrame[Schema]` / `PandasFrame[Schema]`. |
 | `D0060` | `missingJoinKey` | Join key missing on one side. |
 | `D0070` | `unresolvedImport` | Unresolved import. |
 | `D0071` | `unexportedName` | Name not exported by a module. |

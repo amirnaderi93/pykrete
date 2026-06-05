@@ -207,8 +207,9 @@ async function loadSparkSymbols(): Promise<SparkSymbols | null> {
 /** Scan the source for identifiers known to be DataFrames.
  *
  * Recognises:
- *   - `name: DataFrame[Schema]`   (function params, locals)
- *   - `name: DataFrame`           (bare annotation, rare)
+ *   - `name: SparkFrame[Schema]` / `name: PandasFrame[Schema]` /
+ *     `name: DataFrame[Schema]` (deprecated alias) — function params, locals
+ *   - `name: SparkFrame` / `name: PandasFrame` / `name: DataFrame` (bare annotation, rare)
  *   - `name = <chain>.<method>(`  where method is a known DataFrame-returning method
  *
  * We only handle the first two precisely; the third is approximated by

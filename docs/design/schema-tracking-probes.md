@@ -246,7 +246,8 @@ are tracked here so future-us does not relitigate.
   inconclusive rather than firing D0081. The v1.2.0 fix injects the
   rewritten expression **inside** a `df.select(...)` against the
   typed DataFrame in scope (typically the function parameter whose
-  annotation is `DataFrame[X]`), so `col()` binds and D0081 can fire.
+  annotation is `SparkFrame[X]` — `DataFrame[X]` is the deprecated
+  v1.x alias), so `col()` binds and D0081 can fire.
   Harness-only change; no pykrete-core release required.
   **Implemented per the v1.2 spec: PROBE-TYPE-IS scope-binding fix**
   (see the v1.2 spec section below).

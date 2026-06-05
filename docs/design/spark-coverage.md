@@ -130,7 +130,7 @@ The headline gaps:
 
 | Method | State | Notes |
 | --- | --- | --- |
-| `cast(DataFrame[X])` | ✅ | pykrete-only; re-anchors the chain |
+| `cast(SparkFrame[X])` | ✅ | pykrete-only; re-anchors the chain. Also accepted: the deprecated `cast(DataFrame[X])` alias. |
 | `printSchema` | ✅ | Recognized terminal; returns None, chain ends |
 | `schema` | ⚠️ | Property, unmodeled |
 | `columns` | ⚠️ | Property, unmodeled |
@@ -144,7 +144,7 @@ The headline gaps:
 | Method | State | Notes |
 | --- | --- | --- |
 | `dal.read(SOURCE)` | ✅ | Generic class-method substitution; the intended path |
-| `spark.read` / `.parquet` / `.csv` / `.json` / `.orc` / `.text` / `.xml` / `.jdbc` / `.load` | ✅ | Recognized as opaque source; returns Unknown — re-anchor with `.cast(DataFrame[X])` or a typed variable annotation |
+| `spark.read` / `.parquet` / `.csv` / `.json` / `.orc` / `.text` / `.xml` / `.jdbc` / `.load` | ✅ | Recognized as opaque source; returns Unknown — re-anchor with `.cast(SparkFrame[X])` or a typed variable annotation |
 | `spark.read.format(...).load(...)` / `.schema(...).<format>(...)` | ✅ | Builder forms recognized; same opaque-source treatment |
 | `spark.table` | ✅ | Recognized as opaque source; same re-anchor pattern |
 | `write` (`.parquet` / `.csv` / …) | ⚠️ | Unmodeled (terminal in practice) |
@@ -454,8 +454,8 @@ by how commonly real PySpark code uses them.
   `spark.read.format(...).load(...)`, `spark.read.schema(...).<format>(...)`)
   and bare `spark.table(...)` are recognized as opaque IO sources. The
   result is still Unknown — the schema is genuinely runtime data — but
-  the user re-anchors with `.cast(DataFrame[Schema])` or
-  `name: DataFrame[Schema] = spark.read.parquet(...)` and downstream
+  the user re-anchors with `.cast(SparkFrame[Schema])` or
+  `name: SparkFrame[Schema] = spark.read.parquet(...)` and downstream
   column checks resume. Before this change, every codebase outside the
   `dal.read(SOURCE)` pattern lost its chain at line one.
 
@@ -692,7 +692,7 @@ ninth item below is a follow-up to the I8 fix shipped in this PR.
     receiver name would have broken real codebases; the trade-off is
     that an in-house loader exposing the same `.read.<format>(…)`
     shape also matches and yields opaque. The workaround is identical
-    to a genuine `spark.read` (re-anchor with `.cast(DataFrame[X])`),
+    to a genuine `spark.read` (re-anchor with `.cast(SparkFrame[X])`),
     documented in `docs-site/.../reference/operations.md` §
     "Reader-receiver heuristic". Tightening the receiver check
     requires plumbing binding context into `shapes.rs` (currently
