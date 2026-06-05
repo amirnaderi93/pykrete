@@ -37,11 +37,12 @@ use crate::walk::DiscoveredFunction;
 // analyze_expr — the recursive heart
 // ---------------------------------------------------------------------------
 
-/// `check_call_argument_schemas` already walked this call's
-/// DataFrame-typed args via `analyze_expr` (and re-walking would
-/// duplicate every nested D0051). True when the callee is a bare-Name
-/// reference to a non-shadowed registry function — matches the
-/// early-return guards inside `check_call_argument_schemas`.
+/// `check_call_argument_schemas` already walked this call's args via
+/// `analyze_expr` (one walk per arg, regardless of slot annotation —
+/// see v1.4 PR-B Bug 1) and re-walking via the §10 fallback would
+/// duplicate every nested D0030/D0051. True when the callee is a
+/// bare-Name reference to a non-shadowed registry function — matches
+/// the early-return guards inside `check_call_argument_schemas`.
 fn is_registry_function_call(call: &ExprCall, ctx: &BodyContext<'_>) -> bool {
     let Some(name_expr) = call.func.as_name_expr() else {
         return false;
@@ -115,11 +116,13 @@ pub(super) fn analyze_expr<'a>(
             // re-walking here would double-fire (e.g. D0051 for nested
             // `f(f(b))` would emit twice).
             //
-            // The free-function registry path is also "handled" for
-            // walk-purposes: `check_call_argument_schemas` above already
-            // descended `analyze_expr` into every DataFrame-typed
-            // positional and kwarg slot. Skip when the callee is a
-            // bare-Name registry function so that walk isn't repeated.
+            // **v1.4 PR-B Bug 1**: the bare-Name registry-call path now
+            // walks every arg (typed or not) inside
+            // `check_call_argument_schemas`, so the gate stays — but the
+            // walk is unconditional rather than DataFrame-typed-slot
+            // only. Without that, `util(df["typo"])` where `util(x: int)`
+            // had no DataFrame slot went silent (the §10 fallback was
+            // gated off, and the typed-slot walk skipped non-typed args).
             if !handled && !is_registry_function_call(call, ctx) {
                 for arg in &call.arguments.args {
                     let _ = analyze_expr(arg, ctx, source, line_index, diagnostics);
@@ -1824,7 +1827,23 @@ fn handle_transform<'a>(
     }
     // …otherwise infer it by analyzing fn's body with the receiver bound
     // to fn's parameter. Needs a known receiver to feed in.
-    infer_transform_output(sig.def, receiver?, ctx, source, line_index)
+    //
+    // **v1.4 PR-B Bug 3**: thread the receiver's dialect (pandas /
+    // Spark) into the bind so pandas-only dispatch (`.assign`,
+    // `.rename(columns={...})`, etc.) inside the helper body fires
+    // under the correct dialect. Without this, `pdf.transform(helper)`
+    // bound `helper`'s param with `None` → pandas dispatch silently
+    // skipped → inferred return schema came back `None` and downstream
+    // col-refs went silent.
+    let receiver_dialect = crate::operations::driver::inherited_dialect(&attr.value, ctx);
+    infer_transform_output(
+        sig.def,
+        receiver?,
+        receiver_dialect,
+        ctx,
+        source,
+        line_index,
+    )
 }
 
 /// Infer the output schema of a `transform` function whose return type
@@ -1839,6 +1858,7 @@ fn handle_transform<'a>(
 pub(super) fn infer_transform_output<'a>(
     func_def: &'a StmtFunctionDef,
     input: SchemaView<'a>,
+    input_dialect: Option<crate::dataframe::Dialect>,
     ctx: &BodyContext<'a>,
     source: &str,
     line_index: &LineIndex,
@@ -1856,7 +1876,7 @@ pub(super) fn infer_transform_output<'a>(
         child = child.with_temp_views(tv);
     }
     child.infer_depth = ctx.infer_depth + 1;
-    child.bind_df(param_name, input, None);
+    child.bind_df(param_name, input, input_dialect);
 
     let discovered = DiscoveredFunction { def: func_def };
     let mut sink: Vec<Diagnostic> = Vec::new();
@@ -1917,6 +1937,17 @@ fn check_transform_input(
 /// An argument whose schema can't be inferred (untyped local, an
 /// opaque `spark.read.json(...)` chain) is silently skipped — the same
 /// degrade-rather-than-false-flag stance the rest of the checker takes.
+///
+/// **v1.4 PR-B Bug 1**: every positional arg and kwarg value is
+/// `analyze_expr`-walked unconditionally, regardless of whether the
+/// matching param is `DataFrame[X]`-typed. The walk surfaces embedded
+/// `df["typo"]` D0030s on registry calls like `util(df["typo"])` where
+/// `util(x: int)` has no DataFrame-typed slot — without this, the §10
+/// widening at the Expr::Call site is gated off
+/// (`is_registry_function_call` short-circuit) and the typo went silent.
+/// The captured schema is re-used by `check_one_call_arg` for the D0051
+/// mismatch check, so no arg is `analyze_expr`-walked twice
+/// (idempotency requirement).
 fn check_call_argument_schemas<'a>(
     call: &'a ExprCall,
     ctx: &BodyContext<'a>,
@@ -1940,6 +1971,22 @@ fn check_call_argument_schemas<'a>(
         return;
     };
 
+    // Walk every positional arg and kwarg value once; record the
+    // resulting schema by arg index so `check_one_call_arg` doesn't
+    // re-walk. See the §10-widening / Bug-1 note above.
+    let pos_schemas: Vec<Option<SchemaView<'a>>> = call
+        .arguments
+        .args
+        .iter()
+        .map(|arg| analyze_expr(arg, ctx, source, line_index, diagnostics))
+        .collect();
+    let kw_schemas: Vec<Option<SchemaView<'a>>> = call
+        .arguments
+        .keywords
+        .iter()
+        .map(|kw| analyze_expr(&kw.value, ctx, source, line_index, diagnostics))
+        .collect();
+
     // Walk positional args in lockstep with positional-or-regular params;
     // overflow goes to `*args` if the function declared one. A positional
     // arg that lands past `*` with no vararg slot is a Python TypeError —
@@ -1952,7 +1999,7 @@ fn check_call_argument_schemas<'a>(
     // second time on the same slot is double-diagnosis, not double bugs.
     let mut pos_idx = 0;
     let mut consumed_positional: HashSet<&str> = HashSet::new();
-    for arg in &call.arguments.args {
+    for (arg, arg_schema) in call.arguments.args.iter().zip(pos_schemas.iter()) {
         let matched = match_positional(&sig.params, &mut pos_idx);
         if let Some(param) = matched {
             // VarPositional is sticky — every remaining positional arg
@@ -1961,7 +2008,15 @@ fn check_call_argument_schemas<'a>(
             if !matches!(param.kind, ParamKind::VarPositional) {
                 consumed_positional.insert(param.name);
             }
-            check_one_call_arg(arg, param, ctx, source, line_index, diagnostics);
+            check_one_call_arg(
+                arg,
+                arg_schema.as_ref(),
+                param,
+                ctx,
+                source,
+                line_index,
+                diagnostics,
+            );
         }
     }
 
@@ -1971,7 +2026,7 @@ fn check_call_argument_schemas<'a>(
     // skip it. Likewise, skip any kwarg whose name targets a slot already
     // filled positionally (Python rejects this as a TypeError, and we'd
     // otherwise re-diagnose the same parameter).
-    for kw in &call.arguments.keywords {
+    for (kw, arg_schema) in call.arguments.keywords.iter().zip(kw_schemas.iter()) {
         let Some(name) = kw.arg.as_ref().map(|n| n.id.as_str()) else {
             continue;
         };
@@ -1983,7 +2038,15 @@ fn check_call_argument_schemas<'a>(
         });
         let param = named.or_else(|| sig.params.iter().find(|p| p.kind == ParamKind::VarKeyword));
         if let Some(param) = param {
-            check_one_call_arg(&kw.value, param, ctx, source, line_index, diagnostics);
+            check_one_call_arg(
+                &kw.value,
+                arg_schema.as_ref(),
+                param,
+                ctx,
+                source,
+                line_index,
+                diagnostics,
+            );
         }
     }
 }
@@ -2014,6 +2077,7 @@ fn match_positional<'a, 'p>(
 
 fn check_one_call_arg<'a>(
     arg: &'a Expr,
+    arg_schema: Option<&SchemaView<'a>>,
     param: &MethodParam<'a>,
     ctx: &BodyContext<'a>,
     source: &str,
@@ -2035,11 +2099,12 @@ fn check_one_call_arg<'a>(
         return;
     };
 
-    // Resolve the argument's schema. Pass the real diagnostics sink so
-    // that nested calls inside this argument (e.g. `f(f(b))`) get their
-    // own D0051s reported — the normal walker doesn't recurse into call
-    // arguments, so this is the only path that visits them.
-    let Some(arg_schema) = analyze_expr(arg, ctx, source, line_index, diagnostics) else {
+    // The arg's schema was already resolved by
+    // `check_call_argument_schemas` (one walk per arg per call, by index).
+    // If the walk produced None (untyped local, opaque chain) the D0051
+    // mismatch can't be checked — silently skip in keeping with the
+    // rest of the checker's degrade-rather-than-false-flag stance.
+    let Some(arg_schema) = arg_schema else {
         return;
     };
 
