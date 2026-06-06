@@ -30,8 +30,9 @@ policy.
   accept `PandasFrame[X]` / `SparkFrame[X]` annotations in
   `_first_dataframe_param`; pykrete's `infer_expr_type` learned an
   `Expr::Subscript(Name)` arm so the synthesized arithmetic actually
-  reaches the D0081 dispatch. **39 markers across the 7 new donors**
-  (≥5 per donor; spec §1 floor was ≥3 per donor / ≥21 total).
+  reaches the D0081 dispatch. **21 markers across the 7 new donors**
+  (3 per donor, exactly meeting the spec §1 floor of ≥3 per donor /
+  ≥21 total).
 - **Seven new pandas-heavy donors in pykrete-tests** —
   scikit-learn, statsmodels, pandera, Great Expectations, prophet,
   seaborn, yfinance. Donor count 10 → 17; pandas-coverage donor count
@@ -77,9 +78,10 @@ policy.
   `pykrete.json`. LSP discovery was already file-anchored via the
   project-root resolver; this aligns the CLI.
 - **Probe count: 149 → 223 (+74).** Pandas type-tracking and the
-  seven new pandas donors drive the increase: 39 new
-  `PROBE-TYPE-IS` markers + new `PROBE-RESOLVES` / `PROBE-EXPECTS`
-  coverage across the new donors' positive and negative fixtures.
+  seven new pandas donors drive the increase: 21 new
+  `PROBE-TYPE-IS` markers (3 per new donor) + new `PROBE-RESOLVES` /
+  `PROBE-EXPECTS` coverage across the new donors' positive and
+  negative fixtures.
 - **Fixture count: 59 → 83 (+24).** 46 annotated (was 38) + 37
   `probes_negative/` (was 21). Donor count 10 → 17.
 
@@ -128,11 +130,11 @@ The trust suite verifies, on every release:
   D0084 `enumValueMismatch`, and D0090 `deprecatedDataFrameAlias`.
 - **Spark type tracking** through transformations, scoped to D0081
   via the `PROBE-TYPE-IS` synth-shape path (shipped v1.2), with
-  raw-mutation coverage on D0080 / D0082 until follow-up synth
-  shapes ship.
+  raw-mutation coverage on D0080 `returnTypeMismatch` and D0082
+  `crossTypeComparison` until follow-up synth shapes ship.
 - **Pandas type tracking** through dispatched chains (new in v1.4)
   on `PandasFrame[X]`, scoped to D0081 via the assign-arithmetic
-  synth — 39 markers across 7 donors.
+  synth — 21 markers across 7 new donors (3 per donor).
 
 ### Deferred (v1.5+ trackers)
 

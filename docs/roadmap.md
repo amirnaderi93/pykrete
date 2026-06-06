@@ -48,8 +48,9 @@ the `D0090 deprecatedDataFrameAlias` warning that nudges existing
 pykrete-tests (scikit-learn, statsmodels, pandera, Great Expectations,
 prophet, seaborn, yfinance — 3 direct-dispatch + 4 canonical-fixture-only),
 bringing pandas-coverage donor count from 3 to 10; positive
-`PROBE-TYPE-IS` coverage on `PandasFrame[X]` (39 markers across the 7 new
-donors); and three checker bug closures (registry-call §10 widening,
+`PROBE-TYPE-IS` coverage on `PandasFrame[X]` (21 markers across the 7 new
+donors — 3 per donor, exactly meeting the v1.4 spec §1 floor); and three
+checker bug closures (registry-call §10 widening,
 `inherited_dialect` walrus receivers, `.transform(helper)` dialect
 preservation) that close silent-pass paths surfaced by v1.3 audits.
 `pykrete.json` config-discovery now walks from the input file's parent
@@ -250,8 +251,8 @@ and the `D0090` deprecation that nudges callers off the legacy
 `DataFrame[X]` alias. v1.4 shipped pandas type-tracking on
 `PandasFrame[X]` via the `PROBE-TYPE-IS` synth
 (`{df}.assign(__probe={df}["x"] + 1)` — a dispatched op so off-claim
-numeric dtypes fall through to D0081), seven new pandas donors with 39
-TYPE-IS markers, and three PRE-EXISTING silent-pass checker bug
+numeric dtypes fall through to D0081), seven new pandas donors with 21
+TYPE-IS markers (3 per donor), and three PRE-EXISTING silent-pass checker bug
 closures (registry-call args, walrus receivers, `.transform` dialect
 preservation).
 

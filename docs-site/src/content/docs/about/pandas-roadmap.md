@@ -3,7 +3,7 @@ title: Pandas roadmap
 description: The pandas-specific direction for pykrete — where v1.3 / v1.4 landed, where v1.5+ is going, what v2.0 locks in.
 ---
 
-This page tracks the pandas-specific direction for pykrete. The umbrella [roadmap](/pykrete/about/roadmap/) covers the project as a whole; this page is the pandas-focused complement.
+This page tracks the pandas-specific direction for pykrete. The umbrella [roadmap](/about/roadmap/) covers the project as a whole; this page is the pandas-focused complement.
 
 ## Where we are (v1.4.0)
 
@@ -21,17 +21,17 @@ This page tracks the pandas-specific direction for pykrete. The umbrella [roadma
 
 **§10 widening**: bare `df["typo"]` outside method-call contexts fires `D0030` on both `SparkFrame[X]` and `PandasFrame[X]`. Comprehension `elt` / `ifs`, unrecognized-call arg positions, registry-tracked call args (v1.4 widening), and Spark subscript-assign LHS are all covered. Walrus receivers (`(pdf := build()).rename(...)`) inherit the assigned-value's dialect (v1.4 fix); `.transform(helper)` threads the receiver's dialect into the helper's body inference (v1.4 fix).
 
-**Type tracking (new in v1.4)**: `PROBE-TYPE-IS` on `PandasFrame[X]` is the production-readiness gate. The synth wraps `{df}.assign(__probe={df}["x"] + 1)` (a dispatched pandas op) so off-claim numeric dtype claims fall through to D0081 `nonNumericArithmetic`. 39 markers across the 7 new v1.4 pandas donors (≥5 per donor; spec floor was ≥3 / ≥21 total).
+**Type tracking (new in v1.4)**: `PROBE-TYPE-IS` on `PandasFrame[X]` is the production-readiness gate. The synth wraps `{df}.assign(__probe={df}["x"] + 1)` (a dispatched pandas op) so off-claim numeric dtype claims fall through to D0081 `nonNumericArithmetic`. 21 markers across the 7 new v1.4 pandas donors (3 per donor, exactly meeting the v1.4 spec §1 floor of ≥3 per donor / ≥21 total).
 
 **Diagnostic dispatch**: every D-code site (D0020 / D0021 / D0030 / D0051 / D0060 / D0081 / D0082 / D0084 / D0090 + `.cast(…)`) renders the user's actual dialect prefix — no silent relabeling.
 
-**Cross-codebase verification** (see [Real-codebase tests](/pykrete/about/pykrete-tests/) for the matrix):
+**Cross-codebase verification** (see [Real-codebase tests](/about/pykrete-tests/) for the matrix):
 
 - 10 of 17 donors carry annotated `PandasFrame[X]` fixtures with paired `probes_negative/` counterparts.
 - **3 hybrid** carry-overs from v1.3 (MLflow, Feast, iceberg-python).
 - **3 direct-dispatch** (prophet, seaborn, yfinance) — pykrete checks actual upstream library code where dispatched-shape recognizers match real call sites.
 - **4 canonical-fixture-only** (scikit-learn, statsmodels, pandera, Great Expectations) — pykrete checks synthesized user-pattern examples inspired by each library's API, since the library code itself operates above raw pandas dispatch (numpy arrays, metric domains).
-- 39 positive `PROBE-TYPE-IS` markers, mix of string / binary atomic families. Temporal and numeric subtype families are correctly excluded from the dispatch path the synth uses (the synth is gated on arithmetic-supported types so the marker is falsifiable; numeric subtypes are out of scope per v1.4 §10 deferral).
+- 21 positive `PROBE-TYPE-IS` markers (3 per new donor), mix of string / binary atomic families. Temporal and numeric subtype families are correctly excluded from the dispatch path the synth uses (the synth is gated on arithmetic-supported types so the marker is falsifiable; numeric subtypes are out of scope per v1.4 §10 deferral).
 
 ## v1.5+ horizons (committed but unscheduled)
 
@@ -62,6 +62,6 @@ This page tracks the pandas-specific direction for pykrete. The umbrella [roadma
 | Version | Pandas claim | Verifiable? |
 |---|---|---|
 | v1.3.0 | "check-site coverage for the six pandas dispatched operations" | yes — 19 probes across 3 donors |
-| v1.4.0 | "check-site coverage + type-tracking across the dominant pandas stack — 10 donors, 39 `PROBE-TYPE-IS` markers, three checker bug closures" | yes — 223 probes total across 17 donors |
+| v1.4.0 | "check-site coverage + type-tracking across the dominant pandas stack — 10 donors, 21 new pandas `PROBE-TYPE-IS` markers (3 per new donor), three checker bug closures" | yes — 223 probes total across 17 donors |
 | v1.5.0 (target) | + "cross-dialect handoff tracking + `.query` / `.eval` string-fragment DSLs" | TBD per spec |
 | v2.0.0 (target) | canonical `SparkFrame[X]` / `PandasFrame[X]` only; deprecated alias removed | tag-time grep against repo |
