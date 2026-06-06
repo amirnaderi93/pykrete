@@ -51,6 +51,13 @@ The v1.3 → v1.4 cadence parallels v1.1 → v1.2 on the Spark side: check-site 
 
 For the verification posture and per-donor matrix, see [Real-codebase tests](/about/pykrete-tests/) and [Production readiness → Real-codebase testing](/about/production-readiness/#real-codebase-testing). For the full pandas direction across v1.5+ and v2.0, see [Pandas roadmap](/about/pandas-roadmap/).
 
+### Known limitations (v1.5 trackers)
+
+Two pandas gaps remain open from v1.3 / v1.4 and are tracked for v1.5:
+
+- **`.head()` / `.tail()` / `.first()` on `PandasFrame[X]` end the chain.** These three methods are recognized as Spark terminal methods (chain dies), regardless of the dialect tag on the receiver. In pandas they return a `DataFrame` and are chainable (`pdf.head(10).merge(other, on="id")` is canonical), so typos in operations downstream of pandas `.head()` / `.tail()` / `.first()` currently pass silently. v1.5 dialect-gates the terminal classification.
+- **`df.loc[:, "col"]` is not a recognized column-access shape.** The pandas-support spec table previously listed `.loc[:, "status"]` as in scope for v1.3, but no `.loc` recognizer ships — typos in the slice key are silently accepted. Recognizing `.loc[:, "col"]` as a typed column access lands in v1.5; the spec table has been corrected in the meantime.
+
 ## Next up
 
 ### v1.5+ — pandas breadth + cross-dialect handoffs

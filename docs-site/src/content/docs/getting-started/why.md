@@ -52,6 +52,6 @@ It **isn't** a runtime validator, a query planner, or a replacement for tests. I
 
 ## Where it's going
 
-PySpark is feature-complete; pandas check-site coverage shipped in v1.3 (column-reference recognition, the six dispatched operations, and the D0090 deprecation). Pandas type-tracking probe parity follows in v1.4, then polars. The [roadmap](/pykrete/about/roadmap/) has the detail.
+PySpark is feature-complete; pandas check-site coverage shipped in v1.3 (column-reference recognition, the six dispatched operations, and the D0090 deprecation), with positive type-tracking probes shipped in v1.4. Polars is next. The [roadmap](/pykrete/about/roadmap/) has the detail.
 
 Ready to try it? [Install](/pykrete/getting-started/install/) takes a minute; the [quickstart](/pykrete/getting-started/quickstart/) gets a real function under checking in five.

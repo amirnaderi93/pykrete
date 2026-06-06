@@ -1274,6 +1274,18 @@ Rationale:
 
 #### Annotation-shape matching
 
+> **v1.4 update.** This section, written for v1.2, describes the
+> recognizer as matching `DataFrame[X]` only. PR-A of the v1.4 cycle
+> widened `_first_dataframe_param` to also match the canonical
+> `SparkFrame[X]` and `PandasFrame[X]` annotation forms introduced in
+> v1.3. The first-wins ordering, generic-wrapper / string-forward-ref /
+> type-alias / bare-name / variadic carve-outs, and probesSchemaVersion
+> lock-in below all apply unchanged to the widened recognizer; read
+> every `DataFrame[X]` below as "any of `DataFrame[X]` /
+> `SparkFrame[X]` / `PandasFrame[X]`". The widening is what made
+> `PROBE-TYPE-IS` on `PandasFrame[X]` parameters fire — closing
+> pykrete-tests#14 for v1.4.
+
 The first-wins walk inspects each parameter's annotation AST and
 binds only if the annotation is a direct `DataFrame[Schema]`
 subscript (bare `DataFrame` name or fully-qualified
