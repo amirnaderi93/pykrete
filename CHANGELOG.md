@@ -6,6 +6,168 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-06-07
+
+Fourth minor release on the v1.0 line. The headline change is **depth
+on pandas**: seven new pandas-heavy donors in pykrete-tests bring
+pandas-coverage donor count from 3 to 10, positive `PROBE-TYPE-IS`
+coverage on `PandasFrame[X]` lands across the new donors (closing
+pykrete-tests#14), and three PRE-EXISTING silent-pass checker bug paths
+surfaced by v1.3 audits are closed. The `pykrete.json` config-discovery
+walk now anchors on the input file's parent directory (file-anchored
+with CWD fallback), so absolute-path invocations from outside the
+project root pick up the project's config. No new D-codes, no new
+annotation forms; SemVer-minor under the `tighteningDiagnostics`
+policy.
+
+### Added
+
+- **Pandas `PROBE-TYPE-IS` coverage on `PandasFrame[X]`** (closes
+  pykrete-tests#14). The probe synth wraps
+  `{df}.assign(__probe={df}["x"] + 1)` — a dispatched pandas op so
+  off-claim numeric dtypes fall through to D0081
+  `nonNumericArithmetic`. The pykrete-tests recognizer was widened to
+  accept `PandasFrame[X]` / `SparkFrame[X]` annotations in
+  `_first_dataframe_param`; pykrete's `infer_expr_type` learned an
+  `Expr::Subscript(Name)` arm so the synthesized arithmetic actually
+  reaches the D0081 dispatch. **39 markers across the 7 new donors**
+  (≥5 per donor; spec §1 floor was ≥3 per donor / ≥21 total).
+- **Seven new pandas-heavy donors in pykrete-tests** —
+  scikit-learn, statsmodels, pandera, Great Expectations, prophet,
+  seaborn, yfinance. Donor count 10 → 17; pandas-coverage donor count
+  3 → 10. Honest scoping breakdown:
+    - **3 direct-dispatch** (prophet, seaborn, yfinance): the
+      `annotated/<libname>/...` fixtures track the actual upstream
+      library code, with `PandasFrame[X]` annotations added and the
+      call sites matched against pykrete's v1.3 dispatched-shape
+      recognizers (string-literal subscripts in `prophet/forecaster.py`,
+      dict-literal `rename(columns=…)` in `seaborn/categorical.py`,
+      `df["new"] = expr` / `df.rename(columns={…})` /
+      `df.merge(...)` in `yfinance/utils.py`).
+    - **4 canonical-fixture-only** (scikit-learn, statsmodels,
+      pandera, Great Expectations): the `annotated/canonical/...`
+      fixtures model how a user idiomatically wields the library at
+      the pandas boundary. The upstream code itself rarely uses
+      pykrete-dispatched shapes (sklearn / statsmodels operate on
+      numpy arrays internally; pandera / GE operate at metric /
+      domain layers above raw pandas).
+- **Three checker bug closures** (PR-B; v1.4 spec §4 — all
+  PRE-EXISTING silent-pass paths surfaced by v1.3 audits):
+    - **Registry-call §10 widening edge case.** `util(df["typo"])`
+      where `util(x: int)` has no `DataFrame[X]`-typed param now
+      walks the args unconditionally and fires D0030 on the embedded
+      typo. Previously the registry-call gate short-circuited first
+      and the typo slipped past.
+    - **`inherited_dialect` walrus / Named receivers.**
+      `(pdf := build()).rename(...)` now inherits the assigned value's
+      dialect, so pandas dispatch fires on walrus-bound chains.
+      Previously walrus receivers fell through to the Spark default.
+    - **`.transform(helper)` dialect preservation.** The receiver's
+      dialect is now threaded into the helper's body inference, so
+      pandas-only operations inside the helper (e.g., `.assign`)
+      dispatch under the correct dialect and the inferred return
+      schema reaches downstream column references. Previously the
+      helper's `PandasFrame[X]` parameter dropped its dialect tag at
+      the bind site.
+- **`pykrete.json` config-discovery walk** (PR-D; closes
+  pykrete#98). The discovery now walks from the input file's parent
+  directory (falling back to the working directory when no input
+  resolves to a file path), so `pykrete check
+  /abs/path/to/project/foo.pyk` from any CWD picks up the project's
+  `pykrete.json`. LSP discovery was already file-anchored via the
+  project-root resolver; this aligns the CLI.
+- **Probe count: 149 → 223 (+74).** Pandas type-tracking and the
+  seven new pandas donors drive the increase: 39 new
+  `PROBE-TYPE-IS` markers + new `PROBE-RESOLVES` / `PROBE-EXPECTS`
+  coverage across the new donors' positive and negative fixtures.
+- **Fixture count: 59 → 83 (+24).** 46 annotated (was 38) + 37
+  `probes_negative/` (was 21). Donor count 10 → 17.
+
+### Changed
+
+- **Trust-claim surfaces** swept end-to-end for v1.4 reality:
+  README "Reliability and trust", docs-site
+  `about/production-readiness`, `about/pykrete-tests`, the splash
+  page, and the docs-site / canonical roadmaps all refresh to 223
+  probes across 83 fixtures from 17 donors; pandas check-site +
+  type-tracking coverage in 10 of 17 donors split into 3 hybrid + 3
+  direct-dispatch + 4 canonical-fixture-only classes; the v1.5+
+  deferral list (cross-dialect handoffs, `.query` / `.eval` mini-DSLs,
+  broader pandas method modeling, I/O entry points) re-stated under
+  "what we do not yet verify".
+- **New docs-site page**:
+  `docs-site/src/content/docs/about/pandas-roadmap.md` tracks the
+  pandas-specific direction across v1.3 / v1.4 / v1.5+ / v2.0 as a
+  complement to the umbrella roadmap.
+- **Canonical-name migration completion** (PR-D-canonical; closes
+  pykrete#97). All in-repo `docs/` design notes, language-reference
+  pages, editor-integration notes, and the canonical roadmap use
+  `SparkFrame[X]` / `PandasFrame[X]` as the current annotation form
+  in examples; references that describe `DataFrame[X]` as the
+  deprecated alias remain (the file documents the alias's existence).
+- **2 goldens refreshed** to absorb v1.4's D0081 / D0082 tightening
+  on already-corrupted negative inputs
+  (`mlflow/probes_negative/withColumn_arith_on_string.pyk` adds a
+  D0081 at L21; `spark/probes_negative/cross_type_comparison.pyk`
+  adds a D0082 at L21). The 81 unchanged fixtures across the 17
+  donors confirm v1.4's checker work didn't introduce silent
+  positive-fixture regressions.
+
+### Verified properties (cumulative)
+
+The trust suite verifies, on every release:
+
+- **Column resolution** through the Spark v1.0 surface plus the
+  pandas analogues — 180 positive probes across 45 annotated
+  fixtures.
+- **Diagnostic firing** on broken fixtures — 43 negative probes
+  across 37 `probes_negative/` fixtures pinning D0030
+  `unknownColumn`, D0060 `missingJoinKey`, D0081
+  `nonNumericArithmetic` (v1.4 widened to subscript-on-name
+  receivers), D0082 `crossTypeComparison` (widened correspondingly),
+  D0084 `enumValueMismatch`, and D0090 `deprecatedDataFrameAlias`.
+- **Spark type tracking** through transformations, scoped to D0081
+  via the `PROBE-TYPE-IS` synth-shape path (shipped v1.2), with
+  raw-mutation coverage on D0080 / D0082 until follow-up synth
+  shapes ship.
+- **Pandas type tracking** through dispatched chains (new in v1.4)
+  on `PandasFrame[X]`, scoped to D0081 via the assign-arithmetic
+  synth — 39 markers across 7 donors.
+
+### Deferred (v1.5+ trackers)
+
+- **Cross-dialect handoff annotations** (`SparkFrame[X] →
+  PandasFrame[X]` across `.toPandas()` and friends). v1.4 covers
+  depth on annotated frames, not boundary recognition.
+- **`df.query("…")` / `df.eval("…")` mini-DSLs.** Own design surface;
+  parse string-fragment column refs separately.
+- **Broader pandas method modeling** (`pivot_table`,
+  `groupby.agg`, `melt`, `stack` / `unstack`, `reset_index`,
+  `set_index`).
+- **`pd.read_csv(...)` and other pandas I/O entry points.**
+- **Retrofitting pandas `PROBE-TYPE-IS` to the v1.3 hybrid donors**
+  (MLflow, Feast, iceberg-python) — v1.4 deliberately scoped these
+  out per spec §1.
+
+### Coordinated with
+
+- pykrete-tests: PR-A through PR-E of the v1.4 cycle ship the
+  cross-codebase pandas donor expansion (7 new donors), the
+  `PROBE-TYPE-IS` recognizer widening, the catalog pin bump, and
+  the mass golden refresh.
+
+### Compatibility
+
+- **`DataFrame[X]` source-compatible through v1.x.** Every
+  existing `DataFrame[X]` annotation continues to type-check; the
+  warning is informational and downgradable to off via the standard
+  `pykrete.json` `rules` block. Removal is committed for v2.0.
+- **JSON output contract.** `schemaVersion` stays at `"1"`. No new
+  D-codes; no existing diagnostic's shape or semantics changed. The
+  v1.4 widening on D0081 / D0082 is SemVer-minor under the
+  `tighteningDiagnostics` policy (new firing positions for existing
+  D-code identities).
+
 ## [1.3.0] - 2026-06-03
 
 Third minor release on the v1.0 line. The headline change is **pandas
