@@ -107,6 +107,7 @@ pub(super) fn report_expr_type_errors<'a>(
     expr: &Expr,
     schema: &SchemaView<'a>,
     tcx: TypeCtx<'a>,
+    body: &BodyContext<'a>,
     source: &str,
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
@@ -121,8 +122,8 @@ pub(super) fn report_expr_type_errors<'a>(
                 // constraint) only updates `type_family` itself, not
                 // every operator filter.
                 let bad = [
-                    infer_expr_type(&b.left, schema, tcx),
-                    infer_expr_type(&b.right, schema, tcx),
+                    infer_expr_type(&b.left, schema, tcx, body),
+                    infer_expr_type(&b.right, schema, tcx, body),
                 ]
                 .into_iter()
                 .flatten()
@@ -144,15 +145,15 @@ pub(super) fn report_expr_type_errors<'a>(
                     );
                 }
             }
-            report_expr_type_errors(&b.left, schema, tcx, source, line_index, diagnostics);
-            report_expr_type_errors(&b.right, schema, tcx, source, line_index, diagnostics);
+            report_expr_type_errors(&b.left, schema, tcx, body, source, line_index, diagnostics);
+            report_expr_type_errors(&b.right, schema, tcx, body, source, line_index, diagnostics);
         }
         Expr::Compare(c) => {
             let mut left = c.left.as_ref();
             for (op, right) in c.ops.iter().zip(&c.comparators) {
                 if is_value_comparison(*op) {
-                    let lt = infer_expr_type(left, schema, tcx);
-                    let rt = infer_expr_type(right, schema, tcx);
+                    let lt = infer_expr_type(left, schema, tcx, body);
+                    let rt = infer_expr_type(right, schema, tcx, body);
                     if let (Some(lt), Some(rt)) = (lt.as_ref(), rt.as_ref())
                         && !comparable(lt, rt)
                     {
@@ -177,9 +178,9 @@ pub(super) fn report_expr_type_errors<'a>(
                 }
                 left = right;
             }
-            report_expr_type_errors(&c.left, schema, tcx, source, line_index, diagnostics);
+            report_expr_type_errors(&c.left, schema, tcx, body, source, line_index, diagnostics);
             for cmp in &c.comparators {
-                report_expr_type_errors(cmp, schema, tcx, source, line_index, diagnostics);
+                report_expr_type_errors(cmp, schema, tcx, body, source, line_index, diagnostics);
             }
         }
         Expr::Call(call) => {
@@ -194,7 +195,7 @@ pub(super) fn report_expr_type_errors<'a>(
                     .args
                     .first()
                     .and_then(Expr::as_string_literal_expr)
-                && let Some(recv_ty) = infer_expr_type(&attr.value, schema, tcx)
+                && let Some(recv_ty) = infer_expr_type(&attr.value, schema, tcx, body)
             {
                 report_get_field_typo(&recv_ty, lit, source, line_index, diagnostics);
             }
@@ -231,7 +232,7 @@ pub(super) fn report_expr_type_errors<'a>(
             // a genuine footgun).
             if let Some(attr) = call.func.as_attribute_expr()
                 && attr.attr.id.as_str() == "dropFields"
-                && let Some(recv_ty) = infer_expr_type(&attr.value, schema, tcx)
+                && let Some(recv_ty) = infer_expr_type(&attr.value, schema, tcx, body)
             {
                 for arg in &call.arguments.args {
                     if let Some(lit) = arg.as_string_literal_expr() {
@@ -279,46 +280,102 @@ pub(super) fn report_expr_type_errors<'a>(
             // have non-set-equal vocabularies — spec Q9 mandates D0040
             // here, the same code the schema-merge surface uses for the
             // Merge[A, B] shared-column enum mismatch.
-            report_branch_form_enum_conflicts(expr, schema, tcx, source, line_index, diagnostics);
-            report_expr_type_errors(&call.func, schema, tcx, source, line_index, diagnostics);
+            report_branch_form_enum_conflicts(
+                expr,
+                schema,
+                tcx,
+                body,
+                source,
+                line_index,
+                diagnostics,
+            );
+            report_expr_type_errors(
+                &call.func,
+                schema,
+                tcx,
+                body,
+                source,
+                line_index,
+                diagnostics,
+            );
             for arg in &call.arguments.args {
-                report_expr_type_errors(arg, schema, tcx, source, line_index, diagnostics);
+                report_expr_type_errors(arg, schema, tcx, body, source, line_index, diagnostics);
             }
             for kw in &call.arguments.keywords {
-                report_expr_type_errors(&kw.value, schema, tcx, source, line_index, diagnostics);
+                report_expr_type_errors(
+                    &kw.value,
+                    schema,
+                    tcx,
+                    body,
+                    source,
+                    line_index,
+                    diagnostics,
+                );
             }
         }
         Expr::Attribute(a) => {
-            report_expr_type_errors(&a.value, schema, tcx, source, line_index, diagnostics);
+            report_expr_type_errors(&a.value, schema, tcx, body, source, line_index, diagnostics);
         }
         Expr::UnaryOp(u) => {
-            report_expr_type_errors(&u.operand, schema, tcx, source, line_index, diagnostics);
+            report_expr_type_errors(
+                &u.operand,
+                schema,
+                tcx,
+                body,
+                source,
+                line_index,
+                diagnostics,
+            );
         }
         Expr::BoolOp(b) => {
             for v in &b.values {
-                report_expr_type_errors(v, schema, tcx, source, line_index, diagnostics);
+                report_expr_type_errors(v, schema, tcx, body, source, line_index, diagnostics);
             }
         }
         Expr::If(if_exp) => {
-            report_expr_type_errors(&if_exp.test, schema, tcx, source, line_index, diagnostics);
-            report_expr_type_errors(&if_exp.body, schema, tcx, source, line_index, diagnostics);
-            report_expr_type_errors(&if_exp.orelse, schema, tcx, source, line_index, diagnostics);
+            report_expr_type_errors(
+                &if_exp.test,
+                schema,
+                tcx,
+                body,
+                source,
+                line_index,
+                diagnostics,
+            );
+            report_expr_type_errors(
+                &if_exp.body,
+                schema,
+                tcx,
+                body,
+                source,
+                line_index,
+                diagnostics,
+            );
+            report_expr_type_errors(
+                &if_exp.orelse,
+                schema,
+                tcx,
+                body,
+                source,
+                line_index,
+                diagnostics,
+            );
         }
         Expr::Tuple(t) => {
             for e in &t.elts {
-                report_expr_type_errors(e, schema, tcx, source, line_index, diagnostics);
+                report_expr_type_errors(e, schema, tcx, body, source, line_index, diagnostics);
             }
         }
         Expr::List(l) => {
             for e in &l.elts {
-                report_expr_type_errors(e, schema, tcx, source, line_index, diagnostics);
+                report_expr_type_errors(e, schema, tcx, body, source, line_index, diagnostics);
             }
         }
         Expr::Subscript(s) => {
-            report_expr_type_errors(&s.value, schema, tcx, source, line_index, diagnostics);
+            report_expr_type_errors(&s.value, schema, tcx, body, source, line_index, diagnostics);
         }
         Expr::Starred(s) => {
-            report_expr_type_errors(&s.value, schema, tcx, source, line_index, diagnostics);
+            report_expr_type_errors(&s.value, schema, tcx, body, source, line_index, diagnostics);
         }
         _ => {}
     }
@@ -395,18 +452,18 @@ pub(super) fn apply_column_method<'a>(
                     fields.extend(recv.typed_fields(tcx.schemas));
                     continue;
                 }
-                if let Some(pair) = posexplode_fields(arg, recv, tcx) {
+                if let Some(pair) = posexplode_fields(arg, recv, tcx, ctx) {
                     fields.extend(pair);
                     continue;
                 }
-                if let Some(pair) = explode_map_aliased_fields(arg, recv, tcx) {
+                if let Some(pair) = explode_map_aliased_fields(arg, recv, tcx, ctx) {
                     fields.extend(pair);
                     continue;
                 }
                 if let Some(name) = select_output_name(arg, Some(ctx)) {
                     fields.push(DerivedField {
                         name,
-                        ty: select_arg_type(arg, recv, tcx),
+                        ty: select_arg_type(arg, recv, tcx, ctx),
                     });
                 }
             }
@@ -444,7 +501,7 @@ pub(super) fn apply_column_method<'a>(
                 .arguments
                 .args
                 .get(1)
-                .and_then(|v| infer_expr_type(v, recv, tcx));
+                .and_then(|v| infer_expr_type(v, recv, tcx, ctx));
             let mut fields: Vec<DerivedField<'a>> = recv.typed_fields(tcx.schemas);
             if let Some(existing) = fields.iter_mut().find(|f| f.name == new_name) {
                 existing.ty = ty;
@@ -900,24 +957,33 @@ pub(super) fn select_output_name<'a>(
 /// (`data.map_col`, `data["map_col"]`). The attribute form
 /// (`data.map_col`) is common in real PySpark code but `infer_expr_type`
 /// doesn't bottom it out to the receiver field, so this helper steps in.
-/// (`infer_expr_type` does handle the subscript form natively as of
-/// v1.4; the local arm below is kept for symmetry and because it does
-/// not require `tcx` for the lookup.)
+/// The attribute / subscript fallbacks are gated on `body.lookup(name)`
+/// — same discriminator as the D0030 sibling arms — so a plain Python
+/// `bag.x` / `bag["x"]` doesn't false-resolve through `recv`.
 fn explode_map_arg_type<'a>(
     arg: &Expr,
     recv: &SchemaView<'a>,
     tcx: TypeCtx<'a>,
+    body: &BodyContext<'a>,
 ) -> Option<ColumnType> {
-    if let Some(ty) = select_arg_type(arg, recv, tcx) {
+    if let Some(ty) = select_arg_type(arg, recv, tcx, body) {
         return Some(ty);
     }
+    // The attribute and subscript fallbacks below mirror the D0030
+    // sibling arms in `col_refs.rs` (and the v1.4 PR-F1-gated arm in
+    // `column_exprs::infer_expr_type`): the receiver Name must be a
+    // DataFrame binding in scope before its `.X` / `["X"]` access is
+    // resolved against `recv`. Otherwise a plain Python `bag.x` /
+    // `bag["x"]` would silently type against the unrelated frame.
     if let Some(attr) = arg.as_attribute_expr()
-        && attr.value.is_name_expr()
+        && let Some(name) = attr.value.as_name_expr()
+        && body.lookup(name.id.as_str()).is_some()
     {
         return recv.field_type(attr.attr.id.as_str(), tcx.schemas);
     }
     if let Some(sub) = arg.as_subscript_expr()
-        && sub.value.is_name_expr()
+        && let Some(name) = sub.value.as_name_expr()
+        && body.lookup(name.id.as_str()).is_some()
         && let Some(s) = sub.slice.as_string_literal_expr()
     {
         return recv.field_type(s.value.to_str(), tcx.schemas);
@@ -935,6 +1001,7 @@ pub(super) fn explode_map_aliased_fields<'a>(
     arg: &'a Expr,
     recv: &SchemaView<'a>,
     tcx: TypeCtx<'a>,
+    body: &BodyContext<'a>,
 ) -> Option<Vec<DerivedField<'a>>> {
     let outer = arg.as_call_expr()?;
     let outer_attr = outer.func.as_attribute_expr()?;
@@ -964,7 +1031,7 @@ pub(super) fn explode_map_aliased_fields<'a>(
         return None;
     }
     let map_arg = inner.arguments.args.first()?;
-    let map_ty = explode_map_arg_type(map_arg, recv, tcx)?;
+    let map_ty = explode_map_arg_type(map_arg, recv, tcx, body)?;
     // Peel `Optional[Map<...>]` so the outer-explode nullability
     // wrapper doesn't hide the underlying map.
     let base = match &map_ty {
@@ -1001,6 +1068,7 @@ pub(super) fn posexplode_fields<'a>(
     arg: &Expr,
     recv: &SchemaView<'a>,
     tcx: TypeCtx<'a>,
+    body: &BodyContext<'a>,
 ) -> Option<Vec<DerivedField<'a>>> {
     let call = arg.as_call_expr()?;
     let fname = match call.func.as_ref() {
@@ -1015,7 +1083,7 @@ pub(super) fn posexplode_fields<'a>(
         .arguments
         .args
         .first()
-        .and_then(|a| select_arg_type(a, recv, tcx));
+        .and_then(|a| select_arg_type(a, recv, tcx, body));
     let elem_ty = match first_arg {
         Some(ColumnType::Array(elem)) => elem.map(|b| *b),
         _ => None,

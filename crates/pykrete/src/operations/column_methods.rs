@@ -42,7 +42,15 @@ pub(super) fn check_column_method_args<'a>(
         // `F.expr("…")` anywhere in the argument carries a SQL fragment;
         // its identifiers are checked against the same schema.
         report_expr_sql_refs(arg, schema, source, line_index, diagnostics);
-        report_expr_type_errors(arg, schema, ctx.type_ctx(), source, line_index, diagnostics);
+        report_expr_type_errors(
+            arg,
+            schema,
+            ctx.type_ctx(),
+            ctx,
+            source,
+            line_index,
+            diagnostics,
+        );
         // Chained Column-on-Column accesses (`df.r.X`, `df["r"].X`,
         // `df.r["X"]`, `df["r"]["X"]`) that drill into a nested struct
         // column — checked separately because they don't reduce to a
@@ -346,11 +354,19 @@ where
     let mut fields: Vec<DerivedField<'a>> = recv.typed_fields(ctx.schemas());
     let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
     for (name, value) in pairs {
-        let ty = infer_expr_type(value, recv, ctx.type_ctx());
+        let ty = infer_expr_type(value, recv, ctx.type_ctx(), ctx);
         add_or_replace_column(&mut fields, name, ty);
         collect_col_refs(value, ctx, &mut refs);
         report_expr_sql_refs(value, recv, source, line_index, diagnostics);
-        report_expr_type_errors(value, recv, ctx.type_ctx(), source, line_index, diagnostics);
+        report_expr_type_errors(
+            value,
+            recv,
+            ctx.type_ctx(),
+            ctx,
+            source,
+            line_index,
+            diagnostics,
+        );
     }
     report_column_refs(&refs, recv, ctx, source, line_index, diagnostics);
     SchemaView::Derived(fields)

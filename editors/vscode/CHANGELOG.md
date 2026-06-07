@@ -1,5 +1,16 @@
 # Changelog
 
+
+## 0.2.47
+
+Tracks the v1.4 PR-F1 pykrete checker fix — the Subscript-on-Name arm
+in `infer_expr_type` (added in PR-A) is now gated on the receiver
+being a DataFrame binding, mirroring the D0030 sibling arm in
+`col_refs.rs`. Before the gate, a plain Python `bag = {"x": 1};
+col("name") == bag["x"]` falsely fired D0082 `crossTypeComparison`
+because `bag["x"]` was silently typed against the frame's `x` field.
+Architecture-audit blocker B1 from the v1.4 pre-tag re-audit. No new
+D-codes, no new annotation forms.
 ## 0.2.46
 
 Tracks the v1.4.0 pykrete release. The bundled `pykrete-lsp` is

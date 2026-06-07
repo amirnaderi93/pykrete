@@ -1,5 +1,5 @@
 use super::col_refs::col_reference;
-use super::context::TypeCtx;
+use super::context::{BodyContext, TypeCtx};
 use super::strict_operators::select_output_name;
 
 use ruff_python_ast::{Expr, ExprCall, Number};
@@ -47,6 +47,7 @@ pub(super) fn infer_expr_type<'a>(
     expr: &Expr,
     schema: &SchemaView<'a>,
     tcx: TypeCtx<'a>,
+    body: &BodyContext<'a>,
 ) -> Option<ColumnType> {
     // `col("x")` / `column("x")` — the column's declared/inferred type.
     if let Some((name, _)) = col_reference(expr) {
@@ -54,13 +55,16 @@ pub(super) fn infer_expr_type<'a>(
     }
     // `df["x"]` (Subscript-on-Name, string-literal slice) — the pandas
     // scalar column-ref idiom. v1.4 spec §3c fork (a): treat the
-    // subscript as a column reference and look the name up on `schema`,
-    // mirroring `col("x")` above. The receiver's identity isn't
-    // verified (parallel to `col`'s shape-only contract). Other
-    // receiver shapes (`Expr::Attribute`, `Expr::Call`, nested
-    // `Expr::Subscript`) and non-literal slices fall through.
+    // subscript as a column reference and look the name up on `schema`.
+    // Gated on the receiver Name being a DataFrame-bound binding in the
+    // current body (mirrors the D0030 sibling arm in `col_refs.rs`); a
+    // plain Python `bag["k"]` against a dict/list local has no DF
+    // binding and falls through, so D0081 / D0082 don't false-fire on
+    // it. Other receiver shapes (`Expr::Attribute`, `Expr::Call`,
+    // nested `Expr::Subscript`) and non-literal slices fall through.
     if let Expr::Subscript(sub) = expr
-        && sub.value.is_name_expr()
+        && let Some(name) = sub.value.as_name_expr()
+        && body.lookup(name.id.as_str()).is_some()
         && let Some(lit) = sub.slice.as_string_literal_expr()
     {
         return schema.field_type(lit.value.to_str(), tcx.schemas);
@@ -73,7 +77,7 @@ pub(super) fn infer_expr_type<'a>(
                     // `<windowed>.over(w)` likewise carries the windowed
                     // expression's type through.
                     "alias" | "name" | "over" => {
-                        return infer_expr_type(&attr.value, schema, tcx);
+                        return infer_expr_type(&attr.value, schema, tcx, body);
                     }
                     // `<expr>.cast("int")` / `.cast(IntegerType())`.
                     // A cast carries nullability through: a nullable
@@ -86,7 +90,7 @@ pub(super) fn infer_expr_type<'a>(
                             .first()
                             .and_then(crate::registry::spark_type_from_expr)?;
                         let nullable = expr_is_null_literal(&attr.value)
-                            || infer_expr_type(&attr.value, schema, tcx)
+                            || infer_expr_type(&attr.value, schema, tcx, body)
                                 .is_some_and(|t| t.is_nullable());
                         return Some(if nullable {
                             ColumnType::Nullable(Box::new(target))
@@ -111,7 +115,7 @@ pub(super) fn infer_expr_type<'a>(
                     // string literal (computed access), staying
                     // permissive.
                     "getField" => {
-                        let recv_ty = infer_expr_type(&attr.value, schema, tcx)?;
+                        let recv_ty = infer_expr_type(&attr.value, schema, tcx, body)?;
                         let field_name = call
                             .arguments
                             .args
@@ -125,7 +129,7 @@ pub(super) fn infer_expr_type<'a>(
                     // `<map-col>.getItem("k")` → value type. Index /
                     // key shape doesn't matter to the result type.
                     "getItem" => {
-                        let recv_ty = infer_expr_type(&attr.value, schema, tcx)?;
+                        let recv_ty = infer_expr_type(&attr.value, schema, tcx, body)?;
                         return collection_element_type(&recv_ty);
                     }
                     // `<struct-col>.withField("name", expr)` returns a
@@ -135,7 +139,7 @@ pub(super) fn infer_expr_type<'a>(
                     // is how PySpark code threads a new field into a
                     // nested struct without losing the rest.
                     "withField" => {
-                        let recv_ty = infer_expr_type(&attr.value, schema, tcx)?;
+                        let recv_ty = infer_expr_type(&attr.value, schema, tcx, body)?;
                         let field_name = call
                             .arguments
                             .args
@@ -147,7 +151,7 @@ pub(super) fn infer_expr_type<'a>(
                             .arguments
                             .args
                             .get(1)
-                            .and_then(|v| infer_expr_type(v, schema, tcx));
+                            .and_then(|v| infer_expr_type(v, schema, tcx, body));
                         return Some(struct_with_field(&recv_ty, field_name, value_ty));
                     }
                     // `<struct-col>.dropFields("a", "b", …)` returns a
@@ -156,7 +160,7 @@ pub(super) fn infer_expr_type<'a>(
                     // can't verify them and falls back to returning the
                     // receiver's struct unchanged.
                     "dropFields" => {
-                        let recv_ty = infer_expr_type(&attr.value, schema, tcx)?;
+                        let recv_ty = infer_expr_type(&attr.value, schema, tcx, body)?;
                         let drop: Vec<&str> = call
                             .arguments
                             .args
@@ -175,8 +179,14 @@ pub(super) fn infer_expr_type<'a>(
                             .arguments
                             .args
                             .first()
-                            .and_then(|a| infer_expr_type(a, schema, tcx));
-                        return when_chain_result_type(&attr.value, Some(else_ty), schema, tcx);
+                            .and_then(|a| infer_expr_type(a, schema, tcx, body));
+                        return when_chain_result_type(
+                            &attr.value,
+                            Some(else_ty),
+                            schema,
+                            tcx,
+                            body,
+                        );
                     }
                     // A `.when(...)` chained on an earlier `when` — model
                     // it identically to a fresh `F.when(...)` chain that
@@ -184,7 +194,7 @@ pub(super) fn infer_expr_type<'a>(
                     // Standalone `F.when(p, v)` falls into the `Name` /
                     // `Attribute` arm below.
                     "when" if is_when_chain(&attr.value) => {
-                        return when_chain_result_type(expr, None, schema, tcx);
+                        return when_chain_result_type(expr, None, schema, tcx, body);
                     }
                     _ => {}
                 }
@@ -202,15 +212,15 @@ pub(super) fn infer_expr_type<'a>(
             // result is Nullable(common-type-of-value-branches) because
             // unmatched rows produce null.
             if fname == "when" {
-                return when_chain_result_type(expr, None, schema, tcx);
+                return when_chain_result_type(expr, None, schema, tcx, body);
             }
             // `F.struct(...)` / `F.named_struct("k1", v1, ...)` — build a
             // struct type from the args' inferred names and types.
             if fname == "struct" {
-                return Some(infer_struct_type(call, schema, tcx));
+                return Some(infer_struct_type(call, schema, tcx, body));
             }
             if fname == "named_struct" {
-                return infer_named_struct_type(call, schema, tcx);
+                return infer_named_struct_type(call, schema, tcx, body);
             }
             // A call to a user-defined UDF — its declared return type.
             if let Some(udf_ty) = tcx.registry.find_udf(fname) {
@@ -225,7 +235,7 @@ pub(super) fn infer_expr_type<'a>(
                 fname,
                 "transform" | "filter" | "aggregate" | "exists" | "forall"
             ) {
-                return array_hof_result_type(fname, call, schema, tcx);
+                return array_hof_result_type(fname, call, schema, tcx, body);
             }
             // Branch-form null-coalescing (`coalesce` / `nvl` /
             // `ifnull`) — Q9 output preservation. All branches'
@@ -237,7 +247,7 @@ pub(super) fn infer_expr_type<'a>(
             // `coalesce_branch_result` returns the carried-through
             // type or falls back to the first-arg behaviour.
             if matches!(fname, "coalesce" | "nvl" | "ifnull") {
-                return coalesce_branch_result(call, schema, tcx);
+                return coalesce_branch_result(call, schema, tcx, body);
             }
             // Any other recognized `pyspark.sql.functions` call — look its
             // result type up in the catalog, resolving the first argument
@@ -246,7 +256,7 @@ pub(super) fn infer_expr_type<'a>(
                 .arguments
                 .args
                 .first()
-                .and_then(|a| select_arg_type(a, schema, tcx));
+                .and_then(|a| select_arg_type(a, schema, tcx, body));
             function_result_type(fname, first_arg)
         }
         // A bare Python literal in column position acts as `lit(...)`.
@@ -262,11 +272,12 @@ pub(super) fn select_arg_type<'a>(
     arg: &Expr,
     recv: &SchemaView<'a>,
     tcx: TypeCtx<'a>,
+    body: &BodyContext<'a>,
 ) -> Option<ColumnType> {
     if let Some(s) = arg.as_string_literal_expr() {
         return recv.field_type(s.value.to_str(), tcx.schemas);
     }
-    infer_expr_type(arg, recv, tcx)
+    infer_expr_type(arg, recv, tcx, body)
 }
 
 /// The result [`ColumnType`] of a `pyspark.sql.functions` call, given
@@ -449,12 +460,13 @@ fn lambda_body_type<'a>(
     arg: Option<&Expr>,
     schema: &SchemaView<'a>,
     tcx: TypeCtx<'a>,
+    body: &BodyContext<'a>,
 ) -> Option<ColumnType> {
     let lam = arg?.as_lambda_expr()?;
     // A `col("y")` against the surrounding schema, or a bare Python
     // literal. References to the lambda parameter aren't traced —
     // pykrete doesn't bind lambda params yet.
-    infer_expr_type(&lam.body, schema, tcx)
+    infer_expr_type(&lam.body, schema, tcx, body)
 }
 
 /// The result [`ColumnType`] of an array higher-order function:
@@ -471,6 +483,7 @@ fn array_hof_result_type<'a>(
     call: &ExprCall,
     schema: &SchemaView<'a>,
     tcx: TypeCtx<'a>,
+    body: &BodyContext<'a>,
 ) -> Option<ColumnType> {
     use ColumnType::{Array, Bool};
     match name {
@@ -482,7 +495,7 @@ fn array_hof_result_type<'a>(
                 .arguments
                 .args
                 .first()
-                .and_then(|a| select_arg_type(a, schema, tcx));
+                .and_then(|a| select_arg_type(a, schema, tcx, body));
             match input_ty {
                 Some(arr @ Array(_)) => Some(arr),
                 _ => Some(Array(None)),
@@ -490,18 +503,18 @@ fn array_hof_result_type<'a>(
         }
         // `F.transform(col, fn)` → array of fn's return type.
         "transform" => {
-            let body_ty = lambda_body_type(call.arguments.args.get(1), schema, tcx);
+            let body_ty = lambda_body_type(call.arguments.args.get(1), schema, tcx, body);
             Some(Array(body_ty.map(Box::new)))
         }
         // `F.aggregate(col, zero, fn, [finish])` → fn's return type
         // (or `finish`'s if provided). The arg layout is fixed:
         // index 2 is the merge lambda, index 3 the optional finalizer.
         "aggregate" => {
-            let finish_ty = lambda_body_type(call.arguments.args.get(3), schema, tcx);
+            let finish_ty = lambda_body_type(call.arguments.args.get(3), schema, tcx, body);
             if finish_ty.is_some() {
                 return finish_ty;
             }
-            lambda_body_type(call.arguments.args.get(2), schema, tcx)
+            lambda_body_type(call.arguments.args.get(2), schema, tcx, body)
         }
         _ => None,
     }
@@ -552,6 +565,7 @@ fn when_chain_result_type<'a>(
     else_ty: Option<Option<ColumnType>>,
     schema: &SchemaView<'a>,
     tcx: TypeCtx<'a>,
+    body: &BodyContext<'a>,
 ) -> Option<ColumnType> {
     let mut branch_types: Vec<Option<ColumnType>> = Vec::new();
     let no_otherwise = else_ty.is_none();
@@ -573,7 +587,7 @@ fn when_chain_result_type<'a>(
             .arguments
             .args
             .get(1)
-            .and_then(|v| infer_expr_type(v, schema, tcx));
+            .and_then(|v| infer_expr_type(v, schema, tcx, body));
         branch_types.push(value_ty);
         // `.when(p, v)` chained on an earlier `.when(...)` — peel one
         // layer and keep walking. A `Name("when")` callee (bare `when`)
@@ -701,7 +715,12 @@ fn widen_pair(a: &ColumnType, b: &ColumnType) -> Option<ColumnType> {
 /// Spark's positional convention — `col1`, `col2`, … (1-indexed) — so a
 /// downstream `.getField("col1")` resolves cleanly and we never mint a
 /// bogus empty-name field that `.getField("")` could match against.
-fn infer_struct_type<'a>(call: &ExprCall, schema: &SchemaView<'a>, tcx: TypeCtx<'a>) -> ColumnType {
+fn infer_struct_type<'a>(
+    call: &ExprCall,
+    schema: &SchemaView<'a>,
+    tcx: TypeCtx<'a>,
+    body: &BodyContext<'a>,
+) -> ColumnType {
     let fields: Vec<StructField> = call
         .arguments
         .args
@@ -711,7 +730,7 @@ fn infer_struct_type<'a>(call: &ExprCall, schema: &SchemaView<'a>, tcx: TypeCtx<
             let name = select_output_name(arg, None)
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| format!("col{}", i + 1));
-            let ty = select_arg_type(arg, schema, tcx);
+            let ty = select_arg_type(arg, schema, tcx, body);
             StructField { name, ty }
         })
         .collect();
@@ -728,6 +747,7 @@ fn infer_named_struct_type<'a>(
     call: &ExprCall,
     schema: &SchemaView<'a>,
     tcx: TypeCtx<'a>,
+    body: &BodyContext<'a>,
 ) -> Option<ColumnType> {
     let mut fields: Vec<StructField> = Vec::new();
     let mut iter = call.arguments.args.iter();
@@ -738,7 +758,7 @@ fn infer_named_struct_type<'a>(
             .to_str()
             .to_string();
         let value_arg = iter.next()?;
-        let ty = select_arg_type(value_arg, schema, tcx);
+        let ty = select_arg_type(value_arg, schema, tcx, body);
         fields.push(StructField { name, ty });
     }
     Some(ColumnType::Struct(fields))
@@ -899,12 +919,13 @@ pub(super) fn coalesce_branch_result<'a>(
     call: &ExprCall,
     schema: &SchemaView<'a>,
     tcx: TypeCtx<'a>,
+    body: &BodyContext<'a>,
 ) -> Option<ColumnType> {
     let branch_types: Vec<Option<ColumnType>> = call
         .arguments
         .args
         .iter()
-        .map(|a| select_arg_type(a, schema, tcx))
+        .map(|a| select_arg_type(a, schema, tcx, body))
         .collect();
     let mut iter = branch_types.iter().flatten();
     let first = iter.next()?.base().clone();
@@ -954,6 +975,7 @@ pub(super) fn report_branch_form_enum_conflicts<'a>(
     expr: &Expr,
     schema: &SchemaView<'a>,
     tcx: TypeCtx<'a>,
+    body: &BodyContext<'a>,
     source: &str,
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
@@ -970,10 +992,10 @@ pub(super) fn report_branch_form_enum_conflicts<'a>(
         call.arguments
             .args
             .iter()
-            .map(|a| select_arg_type(a, schema, tcx))
+            .map(|a| select_arg_type(a, schema, tcx, body))
             .collect()
     } else if fname == "when" || (fname == "otherwise" && is_when_chain_attr_value(call)) {
-        collect_when_chain_branch_types(expr, schema, tcx)
+        collect_when_chain_branch_types(expr, schema, tcx, body)
     } else {
         return;
     };
@@ -998,6 +1020,7 @@ fn collect_when_chain_branch_types<'a>(
     chain: &Expr,
     schema: &SchemaView<'a>,
     tcx: TypeCtx<'a>,
+    body: &BodyContext<'a>,
 ) -> Vec<Option<ColumnType>> {
     let mut out: Vec<Option<ColumnType>> = Vec::new();
     let mut cursor = chain;
@@ -1012,7 +1035,7 @@ fn collect_when_chain_branch_types<'a>(
         };
         if fname == "otherwise" {
             if let Some(arg) = call.arguments.args.first() {
-                out.push(infer_expr_type(arg, schema, tcx));
+                out.push(infer_expr_type(arg, schema, tcx, body));
             }
             let Some(attr) = call.func.as_attribute_expr() else {
                 return out;
@@ -1024,7 +1047,7 @@ fn collect_when_chain_branch_types<'a>(
             return out;
         }
         if let Some(v) = call.arguments.args.get(1) {
-            out.push(infer_expr_type(v, schema, tcx));
+            out.push(infer_expr_type(v, schema, tcx, body));
         }
         if let Some(attr) = call.func.as_attribute_expr() {
             cursor = &attr.value;
