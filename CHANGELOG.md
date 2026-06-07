@@ -150,6 +150,21 @@ The trust suite verifies, on every release:
 - **Retrofitting pandas `PROBE-TYPE-IS` to the v1.3 hybrid donors**
   (MLflow, Feast, iceberg-python) — v1.4 deliberately scoped these
   out per spec §1.
+- **Pandas `.head()` / `.tail()` / `.first()` classified as terminal
+  regardless of dialect.** `shapes.rs` recognizes these three as Spark
+  terminal methods (chain dies, no further dispatch); the same
+  classification fires when the receiver is `PandasFrame[X]`. In
+  pandas these methods return a `DataFrame` and are chainable
+  (`pdf.head(10).merge(other, on="id")` is canonical). v1.4 leaves
+  this as a known gap: typos in operations downstream of pandas
+  `.head()` / `.tail()` / `.first()` silently pass. v1.5 dialect-gates
+  the terminal classification so pandas chains keep tracking.
+- **`df.loc[:, "col"]` not yet a column-access shape.** The
+  pandas-support spec table listed `.loc[:, "status"]` as in scope for
+  v1.3, but no `.loc` recognizer was implemented — typos in the slice
+  key were silently accepted. The spec table has been corrected to
+  reflect the implementation (v1.5 tracked); recognizing
+  `.loc[:, "col"]` as a typed column access lands in v1.5.
 
 ### Coordinated with
 

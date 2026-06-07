@@ -37,7 +37,7 @@ pandas:
 |---|---|---|
 | `df["status"]` column access against declared schema | Yes | column ref is a literal, schema is known |
 | `df.status` column access against declared schema | Yes | same |
-| `df.loc[:, "status"]` column access | Yes | literal slice key |
+| `df.loc[:, "status"]` column access | No (v1.5 tracked) | listed Yes pre-v1.4; not implemented; see [roadmap](../roadmap.md) |
 | `df.drop(columns=["status"])` schema transform | Yes | mirrors Spark `.drop("status")` |
 | `df.rename(columns={"old": "new"})` | Yes | literal rename map |
 | `df.merge(other, on="key")` | Yes | mirrors Spark `.join` |
