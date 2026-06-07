@@ -1,6 +1,7 @@
 # Changelog
 
-## 0.2.46
+
+## 0.2.47
 
 Tracks the v1.4 PR-F1 pykrete checker fix — the Subscript-on-Name arm
 in `infer_expr_type` (added in PR-A) is now gated on the receiver
@@ -10,6 +11,18 @@ col("name") == bag["x"]` falsely fired D0082 `crossTypeComparison`
 because `bag["x"]` was silently typed against the frame's `x` field.
 Architecture-audit blocker B1 from the v1.4 pre-tag re-audit. No new
 D-codes, no new annotation forms.
+## 0.2.46
+
+Tracks the v1.4.0 pykrete release. The bundled `pykrete-lsp` is
+bit-identical to v0.2.43–0.2.45 — every checker change in the v1.4
+cycle (PR-A Subscript-on-Name `infer_expr_type` arm, PR-B's three
+bug closures, PR-D's config-discovery + canonical-name + D0090
+spec amendment) already shipped to users via the 0.2.43 / 0.2.44 /
+0.2.45 extension releases. This bump tracks the v1.4.0 tag and the
+trust-claim migration across the docs surface (pandas-coverage
+donor count 3 → 10 in pykrete-tests, with the new donors split
+into 3 direct-dispatch + 4 canonical-fixture-only + 3 hybrid
+classes). No new D-codes, no new annotation forms.
 
 ## 0.2.45
 

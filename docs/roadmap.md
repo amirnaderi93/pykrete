@@ -44,6 +44,19 @@ dispatched operations (`df[col_list]` / `df[mask]` / `df["new"] = expr` /
 the `D0090 deprecatedDataFrameAlias` warning that nudges existing
 `DataFrame[X]` users toward the dialect-specific spellings.
 
+**Pandas depth shipped in v1.4**: seven new pandas-heavy donors in
+pykrete-tests (scikit-learn, statsmodels, pandera, Great Expectations,
+prophet, seaborn, yfinance — 3 direct-dispatch + 4 canonical-fixture-only),
+bringing pandas-coverage donor count from 3 to 10; positive
+`PROBE-TYPE-IS` coverage on `PandasFrame[X]` (21 markers across the 7 new
+donors — 3 per donor, exactly meeting the v1.4 spec §1 floor); and three
+checker bug closures (registry-call §10 widening,
+`inherited_dialect` walrus receivers, `.transform(helper)` dialect
+preservation) that close silent-pass paths surfaced by v1.3 audits.
+`pykrete.json` config-discovery now walks from the input file's parent
+directory (file-anchored, falling back to CWD) so absolute-path
+invocations from outside the project root pick up the config.
+
 ## PyCharm support
 
 A JetBrains integration via PyCharm's LSP client. Deferred until after
@@ -224,19 +237,24 @@ value carries a schema, methods narrow or widen it, column names must
 exist when referenced.
 
 Priority: **PySpark (done) → pandas check-site (done, v1.3) → pandas
-type-tracking (v1.4) → polars** → others (DuckDB, Dask, …).
+depth + type-tracking (done, v1.4) → cross-dialect handoffs + `.query` /
+`.eval` mini-DSLs (v1.5+) → polars** → others (DuckDB, Dask, …).
 
 The core type model — `SparkFrame[Schema]` / `PandasFrame[Schema]` /
 `DataFrame[Schema]`, the `Schema` class, column checks, return-type
 validation — generalizes. The library-specific layer is method dispatch
 (`raw.select(col("x"))` vs `raw[["x"]]` vs `raw.select(pl.col("x"))`).
-v1.3 ships the per-annotation dispatch (`SparkFrame[X]` recognizes Spark
-shapes, `PandasFrame[X]` recognizes pandas shapes — `df[col_list]` /
-`df[mask]` / `df["new"] = expr` / `df.drop` / `df.merge` / `df.rename`)
+v1.3 shipped the per-annotation dispatch (`SparkFrame[X]` recognizes
+Spark shapes, `PandasFrame[X]` recognizes pandas shapes — `df[col_list]`
+/ `df[mask]` / `df["new"] = expr` / `df.drop` / `df.merge` / `df.rename`)
 and the `D0090` deprecation that nudges callers off the legacy
-`DataFrame[X]` alias. Positive type-tracking verification for pandas via
-`PROBE-TYPE-IS` lands in v1.4 — see
-[pykrete-tests#14](https://github.com/amirnaderi93/pykrete-tests/issues/14).
+`DataFrame[X]` alias. v1.4 shipped pandas type-tracking on
+`PandasFrame[X]` via the `PROBE-TYPE-IS` synth
+(`{df}.assign(__probe={df}["x"] + 1)` — a dispatched op so off-claim
+numeric dtypes fall through to D0081), seven new pandas donors with 21
+TYPE-IS markers (3 per donor), and three PRE-EXISTING silent-pass checker bug
+closures (registry-call args, walrus receivers, `.transform` dialect
+preservation).
 
 ### Forking `ty`
 

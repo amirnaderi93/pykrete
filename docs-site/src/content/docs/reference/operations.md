@@ -402,9 +402,9 @@ These are methods on a `Column` expression rather than `F.*` calls. The headline
 | `Window.rowsBetween` / `rangeBetween` | unmodeled | No column refs to check. |
 | `Window.unboundedPreceding` / `unboundedFollowing` / `currentRow` | unmodeled | Constants. |
 
-## Pandas dispatch (v1.3)
+## Pandas dispatch
 
-v1.3 adds a pandas check-site dialect alongside the PySpark surface above. Annotate a parameter with `PandasFrame[Schema]` and pykrete switches to the pandas operation shapes — same column-reference checking, different syntax.
+Added in v1.3 (column-reference recognition) and completed in v1.4 (positive type-tracking parity), pykrete supports a pandas check-site dialect alongside the PySpark surface above. Annotate a parameter with `PandasFrame[Schema]` and pykrete switches to the pandas operation shapes — same column-reference checking, different syntax.
 
 ```python
 import pandas as pd
@@ -451,9 +451,9 @@ def annotate(sales: PandasFrame[Sale]) -> pd.DataFrame:
     return sales[["region", "total"]]                        # checked against widened shape
 ```
 
-### What pandas check-site coverage means in v1.3
+### What pandas check-site coverage means
 
-v1.3 ships **column-reference recognition** for pandas — the six dispatched operations above plus the D0090 deprecation. Positive **type-tracking** verification for pandas (the `PROBE-TYPE-IS` parity that PySpark got in v1.2) lands in v1.4; see [pykrete-tests#14](https://github.com/amirnaderi93/pykrete-tests/issues/14).
+v1.3 shipped **column-reference recognition** for pandas — the six dispatched operations above plus the D0090 deprecation. Positive **type-tracking** verification for pandas (the `PROBE-TYPE-IS` parity that PySpark got in v1.2) shipped in v1.4; the [pykrete-tests#14](https://github.com/amirnaderi93/pykrete-tests/issues/14) tracker closed with that release.
 
 For the PySpark-only operations on this page (joins / aggregations / windows / IO), `PandasFrame[X]` chains fall back to **opaque** — pykrete doesn't model pandas's `groupby` / `agg` / `read_parquet` / window surface yet. Re-anchor with `.cast(PandasFrame[X])` when needed.
 
@@ -462,7 +462,7 @@ For the PySpark-only operations on this page (joins / aggregations / windows / I
 Some of the surface is intentionally outside pykrete's reach. These aren't gaps to fill — they're runtime concerns, not schema concerns:
 
 - **Structured streaming** (`readStream`, `writeStream`, `isStreaming`). pykrete is a static checker against declared schemas; streaming state is a runtime construct.
-- **Pandas-on-Spark and Arrow conversions** (`toPandas`, `toArrow`, `mapInPandas`, `pandas_api`, ...). The result isn't a Spark dataframe anymore; pandas check-site coverage shipped in v1.3 as its own typed surface (`PandasFrame[X]`) — see the [Pandas dispatch (v1.3)](#pandas-dispatch-v13) section above; polars is next on the [roadmap](/pykrete/about/roadmap/).
+- **Pandas-on-Spark and Arrow conversions** (`toPandas`, `toArrow`, `mapInPandas`, `pandas_api`, ...). The result isn't a Spark dataframe anymore; pandas check-site coverage shipped in v1.3 as its own typed surface (`PandasFrame[X]`) — see the [Pandas dispatch](#pandas-dispatch) section above; polars is next on the [roadmap](/pykrete/about/roadmap/).
 - **RDD-level operations** (`rdd`, `mapPartitions`, `foreach`). These drop below the dataframe abstraction by design.
 - **Runtime introspection** (`describe`, `summary`, `stat.*`). These return shape-of-data summaries, not schemas.
 - **UDF internals**. The decorator's return type is honored, but the body is opaque.

@@ -39,13 +39,33 @@ For the full list of every shipped feature with diagnostics, see the [Operations
 
 Six pandas operations dispatch through dialect-specific check sites: column selection (`df[col_list]`), boolean-mask filtering (`df[mask]`), assignment (`df["new"] = expr`), `df.drop`, `df.merge`, and `df.rename`. The bare-subscript widening rule also fires `D0030` on bare `df["typo"]` subscripts in non-method contexts on both `SparkFrame[X]` and `PandasFrame[X]`. Cross-codebase pandas fixtures land for mlflow, feast, and iceberg-python.
 
-See [Production readiness → Real-codebase testing](/pykrete/about/production-readiness/#real-codebase-testing) for the per-release verification posture.
+## Shipped in v1.4 — depth on pandas
+
+The v1.3 → v1.4 cadence parallels v1.1 → v1.2 on the Spark side: check-site coverage first, type-tracking and donor breadth next.
+
+- **7 new pandas-heavy donors** in pykrete-tests — scikit-learn, statsmodels, pandera, Great Expectations, prophet, seaborn, yfinance — bringing pandas-coverage donor count from 3 to 10. Honest scoping breakdown (see [Real-codebase tests](/about/pykrete-tests/) for the per-donor detail): 3 direct-dispatch (prophet, seaborn, yfinance) against actual upstream library code where pykrete's dispatched-shape recognizers match; 4 canonical-fixture-only (sklearn, statsmodels, pandera, GE) modeling user-pattern fixtures where the upstream code operates above raw pandas dispatch.
+- **Pandas type-tracking via `PROBE-TYPE-IS`** (closes [pykrete-tests#14](https://github.com/amirnaderi93/pykrete-tests/issues/14)). The synth wraps `{df}.assign(__probe={df}["x"] + 1)` so off-claim numeric dtype claims on `PandasFrame[X]` parameters fall through to D0081. 21 markers across the 7 new donors (3 per donor, exactly meeting the v1.4 spec §1 floor).
+- **Three checker bug closures** (PRE-EXISTING silent-pass paths surfaced by v1.3 audits): registry-call args walk unconditionally so `util(df["typo"])` fires D0030; `inherited_dialect` walks walrus receivers so `(pdf := build()).rename(...)` inherits the assigned-value's dialect; `.transform(helper)` threads the receiver's dialect into the helper's body inference. SemVer-minor under the `tighteningDiagnostics` policy.
+- **Config-discovery walk fix**: `pykrete.json` discovery anchors on the input file's parent directory (falling back to CWD when no input resolves to a file), so `pykrete check /abs/path/to/foo.pyk` from any CWD picks up the project's config.
+- **Canonical-name migration completion** across docs / design notes / examples for `SparkFrame[X]` vs the deprecated `DataFrame[X]` alias.
+
+For the verification posture and per-donor matrix, see [Real-codebase tests](/about/pykrete-tests/) and [Production readiness → Real-codebase testing](/about/production-readiness/#real-codebase-testing). For the full pandas direction across v1.5+ and v2.0, see [Pandas roadmap](/about/pandas-roadmap/).
+
+### Known limitations (v1.5 trackers)
+
+Two pandas gaps remain open from v1.3 / v1.4 and are tracked for v1.5:
+
+- **`.head()` / `.tail()` / `.first()` on `PandasFrame[X]` end the chain.** These three methods are recognized as Spark terminal methods (chain dies), regardless of the dialect tag on the receiver. In pandas they return a `DataFrame` and are chainable (`pdf.head(10).merge(other, on="id")` is canonical), so typos in operations downstream of pandas `.head()` / `.tail()` / `.first()` currently pass silently. v1.5 dialect-gates the terminal classification.
+- **`df.loc[:, "col"]` is not a recognized column-access shape.** The pandas-support spec table previously listed `.loc[:, "status"]` as in scope for v1.3, but no `.loc` recognizer ships — typos in the slice key are silently accepted. Recognizing `.loc[:, "col"]` as a typed column access lands in v1.5; the spec table has been corrected in the meantime.
 
 ## Next up
 
-### v1.4 — pandas type-tracking via `PROBE-TYPE-IS`
+### v1.5+ — pandas breadth + cross-dialect handoffs
 
-v1.3 ships pandas **check-site coverage**; positive **type-tracking** verification on `PandasFrame[X]` via the `PROBE-TYPE-IS` synthesizer lands in v1.4. This parallels the v1.1 → v1.2 cadence on the Spark side, where column tracking arrived first and type tracking followed once the synth shapes were proven. Tracker: [pykrete-tests#14](https://github.com/amirnaderi93/pykrete-tests/issues/14).
+- **Cross-dialect handoff annotations**: `.toPandas()` / `.toSpark()` / `pd.DataFrame.from_records(...)` schema propagation. Today these are opaque; v1.5 makes the dialect transition trackable.
+- **`df.query("…")` / `df.eval("…")` mini-DSLs**: parse string-fragment column refs the way pykrete parses `selectExpr` SQL today. High signal for production pandas code.
+- **Broader pandas method modeling**: `df.pivot_table`, `df.groupby(...).agg(...)`, `df.melt`, `df.stack` / `df.unstack`, `df.reset_index`, `df.set_index`. Currently fall through to opaque.
+- **`pd.read_csv(...)` and other pandas I/O entry points**.
 
 ### Window-key type tracking
 
@@ -59,7 +79,7 @@ Tracks the type of a Column through chains like `df["a"].cast("int").alias("x")`
 
 ### Multi-dataframe support
 
-After pandas, polars next. The dispatch model lets new libraries plug in without churning the schema model.
+After pandas depth, polars next. The dispatch model lets new libraries plug in without churning the schema model.
 
 ### Forking `ty`
 
