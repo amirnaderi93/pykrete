@@ -1190,6 +1190,7 @@ fn check_observe_args<'a>(
             arg,
             receiver,
             ctx.type_ctx(),
+            ctx,
             source,
             line_index,
             diagnostics,
@@ -2183,11 +2184,12 @@ fn handle_agg<'a>(
             arg,
             &underlying,
             ctx.type_ctx(),
+            ctx,
             source,
             line_index,
             diagnostics,
         );
-        if let Some(pair) = posexplode_fields(arg, &underlying, ctx.type_ctx()) {
+        if let Some(pair) = posexplode_fields(arg, &underlying, ctx.type_ctx(), ctx) {
             for f in pair {
                 if !fields.iter().any(|existing| existing.name == f.name) {
                     fields.push(f);
@@ -2195,7 +2197,7 @@ fn handle_agg<'a>(
             }
             continue;
         }
-        if let Some(pair) = explode_map_aliased_fields(arg, &underlying, ctx.type_ctx()) {
+        if let Some(pair) = explode_map_aliased_fields(arg, &underlying, ctx.type_ctx(), ctx) {
             for f in pair {
                 if !fields.iter().any(|existing| existing.name == f.name) {
                     fields.push(f);
@@ -2208,7 +2210,7 @@ fn handle_agg<'a>(
         {
             fields.push(DerivedField {
                 name,
-                ty: select_arg_type(arg, &underlying, ctx.type_ctx()),
+                ty: select_arg_type(arg, &underlying, ctx.type_ctx(), ctx),
             });
         }
     }

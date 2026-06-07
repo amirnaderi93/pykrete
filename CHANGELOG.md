@@ -6,6 +6,24 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **D0081 / D0082 no longer false-fire on plain Python `bag["k"]`
+  subscripts inside frame expressions.** The v1.4 PR-A
+  Subscript-on-Name arm in `infer_expr_type` was ungated: any
+  `<name>["literal"]` whose slice was a string literal silently
+  resolved against the surrounding frame's schema, regardless of
+  whether `<name>` was a DataFrame binding. A local
+  `bag = {"order_id": 1}; col("name") == bag["order_id"]` typed
+  `bag["order_id"]` as `int` (against `Orders.order_id`) and fired
+  `D0082 crossTypeComparison` between `string` and the synthetic
+  `int`. The arm now gates on `body.lookup(name).is_some()` —
+  mirroring the D0030 sibling arm in `col_refs.rs` — so a non-frame
+  name falls through and the dict/list subscript stays `None`-typed.
+  `df["col"]` on a DataFrame-bound `df` continues to resolve as
+  before. Architecture-audit blocker B1; tracked in the v1.4 pre-tag
+  re-audit.
+
 ## [1.3.0] - 2026-06-03
 
 Third minor release on the v1.0 line. The headline change is **pandas

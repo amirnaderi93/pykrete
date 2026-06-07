@@ -210,7 +210,8 @@ fn walk_stmt<'a>(
                         line_index,
                         diagnostics,
                     );
-                    let ty = super::column_exprs::infer_expr_type(&a.value, &recv, ctx.type_ctx());
+                    let ty =
+                        super::column_exprs::infer_expr_type(&a.value, &recv, ctx.type_ctx(), ctx);
                     let mut fields = recv.typed_fields(ctx.schemas());
                     super::column_methods::add_or_replace_column(&mut fields, col_name, ty);
                     let extended = SchemaView::Derived(fields);
