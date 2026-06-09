@@ -21,6 +21,7 @@
 //!    propagating bindings on `x = …` assignments, and validating the
 //!    `return` value against the declared return type.
 
+pub mod alias_report;
 pub mod completion;
 pub mod config;
 pub mod dataframe;
@@ -37,6 +38,7 @@ pub mod transpiler;
 pub mod types;
 pub mod walk;
 
+pub use alias_report::{AliasSite, collect_alias_sites, render_alias_report_json};
 pub use completion::{CompletionItem, CompletionItemKind, completions};
 pub use config::Config;
 pub use hover::{HoverInfo, hover};

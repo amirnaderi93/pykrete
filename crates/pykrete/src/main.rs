@@ -38,11 +38,16 @@ Options:
                            function signature (default: summary line only).
         --format <FORMAT>  Output format: 'text' (default, human-readable)
                            or 'json' (machine-readable on stdout).
+        --report-aliases   Emit a JSON inventory of every deprecated
+                           'DataFrame[X]' annotation site (planning aid
+                           for the v2.0 alias removal); suppresses normal
+                           diagnostic output and always exits 0.
     -h, --help             Show this help and exit.
 
 Example:
     pykrete check examples/orders.pyk
     pykrete check --format json examples/orders.pyk
+    pykrete check --report-aliases src/
 ";
 
 const TRANSPILE_HELP: &str = "\
@@ -96,13 +101,20 @@ enum OutputFormat {
     Json,
 }
 
-/// Parse `check`'s flags and arguments. Returns the verbose flag, the
-/// output format, and the list of path arguments, or an error message if
-/// a flag is unrecognized. Caller is expected to have already short-
-/// circuited on `-h` / `--help`.
-fn parse_check_args(args: &[String]) -> Result<(bool, OutputFormat, Vec<String>), String> {
+/// Parse `check`'s flags and arguments. Returns the parsed configuration
+/// or an error message if a flag is unrecognized. Caller is expected to
+/// have already short-circuited on `-h` / `--help`.
+struct CheckArgs {
+    verbose: bool,
+    format: OutputFormat,
+    report_aliases: bool,
+    paths: Vec<String>,
+}
+
+fn parse_check_args(args: &[String]) -> Result<CheckArgs, String> {
     let mut verbose = false;
     let mut format = OutputFormat::Text;
+    let mut report_aliases = false;
     let mut paths: Vec<String> = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -120,6 +132,7 @@ fn parse_check_args(args: &[String]) -> Result<(bool, OutputFormat, Vec<String>)
                 let value = &s["--format=".len()..];
                 format = parse_format(value)?;
             }
+            "--report-aliases" => report_aliases = true,
             s if s.starts_with('-') => {
                 return Err(format!("unknown option '{s}'; see `pykrete check --help`"));
             }
@@ -127,7 +140,12 @@ fn parse_check_args(args: &[String]) -> Result<(bool, OutputFormat, Vec<String>)
         }
         i += 1;
     }
-    Ok((verbose, format, paths))
+    Ok(CheckArgs {
+        verbose,
+        format,
+        report_aliases,
+        paths,
+    })
 }
 
 fn parse_format(value: &str) -> Result<OutputFormat, String> {
@@ -148,7 +166,12 @@ fn run_check(args: &[String]) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let (verbose, format, paths) = match parse_check_args(args) {
+    let CheckArgs {
+        verbose,
+        format,
+        report_aliases,
+        paths,
+    } = match parse_check_args(args) {
         Ok(v) => v,
         Err(msg) => {
             eprintln!("{msg}");
@@ -190,6 +213,17 @@ fn run_check(args: &[String]) -> ExitCode {
                 return ExitCode::from(2);
             }
         }
+    }
+
+    // `--report-aliases` is invocation-only: report the alias inventory
+    // and skip the normal diagnostic pipeline entirely. Exit code is 0
+    // even when records are emitted — this is informational, not a
+    // diagnostic. v1.5 PR-D spec §5.1.
+    if report_aliases {
+        let sites = pykrete::collect_alias_sites(&sources);
+        let rendered = pykrete::render_alias_report_json(&sites);
+        println!("{rendered}");
+        return ExitCode::SUCCESS;
     }
 
     let mut project = pykrete::check_project_with_mode(&sources, config.check_mode());
