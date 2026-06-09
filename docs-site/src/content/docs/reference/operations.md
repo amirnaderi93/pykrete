@@ -440,8 +440,8 @@ A typo anywhere — `sales["amunt"]`, `sales[["regoin", "amount"]]` — fires `u
 PySpark recognizes `.head()`, `.tail()`, and `.first()` as chain-ending terminals (they return a `Row` or `None`, not a `DataFrame`). In pandas, the same three names return a sliced `DataFrame` — `pdf.head(10).merge(other, on="id")` is canonical pandas code. v1.5 dialect-gates the classification: pandas receivers (`PandasFrame[X]`) pass through unchanged, Spark receivers stay terminals. Pandas `count()` deliberately stays terminal (it returns a per-column Series).
 
 ```python
-def first_n(orders: PandasFrame[Order]) -> pd.DataFrame:
-    return orders.head(100).merge(other, on="id")   # 'id' checked against Order
+def first_n(orders: PandasFrame[Order], other: PandasFrame[OtherSchema]) -> pd.DataFrame:
+    return orders.head(100).merge(other, on="id")   # 'id' checked against Order and OtherSchema
 ```
 
 ### `.loc[:, "col"]` literal-form (v1.5)

@@ -221,11 +221,13 @@ Every `DataFrame` annotation fires — parameter, return, and any `.cast(DataFra
 
 **Why dispatch matters.** v1.3 dispatches the six pandas operations — `df[col_list]` / `df[mask]` / `df["new"] = expr` / `df.drop` / `df.merge` / `df.rename` — based on which annotation the dataframe carries. A `PandasFrame[Sale]` parameter recognizes `sales[["region", "amount"]]` as a column-list select; a `SparkFrame[Sale]` parameter would flag the same code as a column-name typo (Spark doesn't subscript with a list). The dialect-specific annotation lets the check site say what it means. v1.5 extends dispatch across the dialect boundary: `df.toPandas()` re-tags `SparkFrame[X]` to `PandasFrame[X]`, and `spark.createDataFrame(pdf)` re-tags back when a schema source is present, so chains spanning both dialects stay checked.
 
-**Sizing the migration.** `pykrete check --report-aliases` (v1.5+) emits a structured JSON envelope listing every `DataFrame[X]` annotation site in analyzed user code (function signatures, variable annotations, return types, cast targets) with its resolved dialect (`spark` or `pandas`) and the suggested replacement (`SparkFrame[X]` or `PandasFrame[X]`). The envelope carries its own `aliasReportVersion: "1"` so the report format can evolve independently of the diagnostic JSON contract. Pipe the report to your own tooling to quantify the v2.0 migration scope before v1.6's `pykrete migrate` ships.
+**Sizing the migration.** `pykrete check --report-aliases` (v1.5+) emits a structured JSON envelope listing every `DataFrame[X]` annotation site in analyzed user code (function signatures, variable annotations, return types, cast targets) with its resolved dialect and suggested replacement. v1.5 reports every site as `spark` / `SparkFrame[X]`; v1.6 introduces call-graph dialect adjudication that distinguishes `spark` / `pandas` / ambiguous. The envelope carries its own `aliasReportVersion: "1"` so the report format can evolve independently of the diagnostic JSON contract. Pipe the report to your own tooling to quantify the v2.0 migration scope before v1.6's `pykrete migrate` ships.
 
 ```bash
 pykrete check --report-aliases src/ > aliases.json
 ```
+
+The flag is invocation-only: it suppresses normal diagnostic output and always exits 0, since the report is informational rather than a diagnostic.
 
 **Fix.** Rename `DataFrame[X]` to `SparkFrame[X]` for PySpark code or `PandasFrame[X]` for pandas code. The import path (`pyspark.sql.DataFrame` vs `pandas.DataFrame`) is unchanged; only the pykrete annotation slot is renamed.
 

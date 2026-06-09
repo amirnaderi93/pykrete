@@ -7,7 +7,7 @@ This page tracks the pandas-specific direction for pykrete. The umbrella [roadma
 
 ## Where we are (v1.5.0)
 
-**Annotation surface**: `PandasFrame[X]` is a canonical parser-level peer of `SparkFrame[X]`. Same `Pick[…]` / `Omit[…]` / `Merge[…]` derived-schema operators. `DataFrame[X]` is a deprecated alias (warning `D0090`, removed in v2.0). v1.5 ships `pykrete check --report-aliases` — a JSON envelope listing every `DataFrame[X]` annotation site with its resolved dialect (`spark` or `pandas`) and the suggested replacement — so projects can quantify the v2.0 migration scope before v1.6's `pykrete migrate` ships. The envelope carries its own `aliasReportVersion: "1"` so the report format can evolve independently of the diagnostic JSON contract.
+**Annotation surface**: `PandasFrame[X]` is a canonical parser-level peer of `SparkFrame[X]`. Same `Pick[…]` / `Omit[…]` / `Merge[…]` derived-schema operators. `DataFrame[X]` is a deprecated alias (warning `D0090`, removed in v2.0). v1.5 ships `pykrete check --report-aliases` — a JSON envelope listing every `DataFrame[X]` annotation site with its resolved dialect and suggested replacement — so projects can quantify the v2.0 migration scope before v1.6's `pykrete migrate` ships. v1.5 reports every site as `spark` / `SparkFrame[X]`; v1.6 introduces call-graph dialect adjudication that distinguishes `spark` / `pandas` / ambiguous. The envelope carries its own `aliasReportVersion: "1"` so the report format can evolve independently of the diagnostic JSON contract.
 
 **Cross-dialect handoff (new in v1.5)**:
 
@@ -72,6 +72,6 @@ This page tracks the pandas-specific direction for pykrete. The umbrella [roadma
 |---|---|---|
 | v1.3.0 | "check-site coverage for the six pandas dispatched operations" | yes — 19 probes across 3 donors |
 | v1.4.0 | "check-site coverage + type-tracking across the dominant pandas stack — 10 donors, 21 new pandas `PROBE-TYPE-IS` markers (3 per new donor), three checker bug closures" | yes — 223 probes total across 17 donors |
-| v1.5.0 | "cross-dialect handoff (Spark↔pandas), `.loc[:, "col"]` literal-form, dialect-gated `.head`/`.tail`/`.first`, `--report-aliases` JSON envelope" | yes — 227 probes total across 17 donors |
+| v1.5.0 | "cross-dialect handoff (Spark↔pandas), `.loc[:, "col"]` literal-form, dialect-gated `.head`/`.tail`/`.first`, `--report-aliases` JSON envelope" | yes — 233 probes total across 17 donors |
 | v1.6.0 (target) | + "`pykrete migrate` auto-rewriter + D0090 strict-mode escalation (paired); plus pandas reshape or `.query` / `.eval` string-fragment DSLs (committee scoping)" | TBD per spec |
 | v2.0.0 (target) | canonical `SparkFrame[X]` / `PandasFrame[X]` only; deprecated alias removed | tag-time grep against repo |
