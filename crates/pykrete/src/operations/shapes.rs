@@ -5,6 +5,8 @@
 
 use ruff_python_ast::{Expr, ExprCall};
 
+use crate::dataframe::Dialect;
+
 #[derive(Debug, Clone, Copy)]
 pub(super) enum ArgRole {
     ColumnName,
@@ -82,7 +84,25 @@ pub(super) fn two_df_method(method: &str) -> Option<TwoDfMethod> {
 ///
 /// Today the behavior is the same as falling through: return `None`
 /// so the chain dies cleanly. No new diagnostic.
-pub(super) fn is_terminal_method(method: &str) -> bool {
+///
+/// v1.5 PR-A3 dialect-gates `head`/`tail`/`first`: on a pandas receiver
+/// they return a (row-sliced) DataFrame, NOT a terminal value. The
+/// caller routes pandas-receiver-headed `head`/`tail`/`first` to a
+/// pass-through arm (`PandasFrame[X]` → `PandasFrame[X]`) so a follow-up
+/// `pdf.head().assign(...)` still sees the schema. Spec §2.3.
+///
+/// Sibling-arm classification within the terminal table:
+/// - `head`/`tail`/`first` — dialect-gated here (Spark-only terminal).
+/// - `count` — stays terminal on both dialects (pandas returns a Series
+///   of per-column counts; Series tracking is out of v1.5 scope).
+/// - `collect`/`show`/`printSchema`/`explain` — Spark-only methods; on
+///   a pandas receiver they fall through to Unknown, which the same
+///   `true` return achieves (the chain dies). No behavior change.
+/// - `take` — exists on both but deferred to v1.6.
+pub(super) fn is_terminal_method(method: &str, dialect: Option<Dialect>) -> bool {
+    if matches!(dialect, Some(Dialect::Pandas)) && matches!(method, "head" | "tail" | "first") {
+        return false;
+    }
     matches!(
         method,
         // → long
