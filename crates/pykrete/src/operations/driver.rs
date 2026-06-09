@@ -129,12 +129,56 @@ pub(crate) fn inherited_dialect<'a>(
             Expr::Named(named) => cursor = &named.value,
             Expr::Call(c) => {
                 let attr = c.func.as_attribute_expr()?;
+                // v1.5 PR-A2 — `<X>.createDataFrame(...)` flips the inherited
+                // dialect to Spark when one of the spec §2.2 schema-source
+                // gates fires (`schema=` kwarg with a Spark-tagged frame
+                // binding, or a positional first arg with a Pandas-tagged
+                // frame). Without this override, walking down to `<X>` would
+                // miss the handoff — `spark` itself has no dialect tag, but
+                // the call's result is `SparkFrame[X]` by spec.
+                if attr.attr.id.as_str() == "createDataFrame"
+                    && createdataframe_handoff_dialect(c, ctx).is_some()
+                {
+                    return Some(crate::dataframe::Dialect::Spark);
+                }
                 cursor = &attr.value;
             }
             Expr::Attribute(a) => cursor = &a.value,
             _ => return None,
         }
     }
+}
+
+/// Whether `call` is a `<X>.createDataFrame(...)` that satisfies one of
+/// the spec §2.2 schema-source gates (`schema=` Spark-tagged kwarg or
+/// positional Pandas-tagged arg). Used inside [`inherited_dialect`] so
+/// the handoff at `analyze_method_call_inner` lines up with the dialect
+/// propagated to the LHS at the bind_df callsite. The check is
+/// structural-by-dialect, not by view existence, to keep this side of
+/// the loop cheap (no analyze_expr descent into argument subtrees here).
+///
+/// **Keep in sync** with `createdataframe_handoff_view` (`expr.rs`):
+/// any change to the gate-set (the (a)/(b) conditions) must update both
+/// helpers. They are deliberately separate so the dialect path stays
+/// cheap (no view resolution), but the gate logic must agree exactly.
+fn createdataframe_handoff_dialect<'a>(
+    call: &ruff_python_ast::ExprCall,
+    ctx: &BodyContext<'a>,
+) -> Option<crate::dataframe::Dialect> {
+    if let Some(kw) = call
+        .arguments
+        .keywords
+        .iter()
+        .find(|k| k.arg.as_ref().is_some_and(|n| n.id.as_str() == "schema"))
+        && inherited_dialect(&kw.value, ctx) == Some(crate::dataframe::Dialect::Spark)
+    {
+        return Some(crate::dataframe::Dialect::Spark);
+    }
+    let arg = call.arguments.args.first()?;
+    if inherited_dialect(arg, ctx) == Some(crate::dataframe::Dialect::Pandas) {
+        return Some(crate::dataframe::Dialect::Spark);
+    }
+    None
 }
 
 fn walk_stmt<'a>(

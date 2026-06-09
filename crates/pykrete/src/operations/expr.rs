@@ -478,6 +478,47 @@ fn pandas_list_kwarg<'a>(call: &'a ExprCall, name: &str) -> Option<&'a ruff_pyth
     kw.value.as_list_expr()
 }
 
+/// v1.5 PR-A2 — resolve a `<X>.createDataFrame(...)` call's schema-source
+/// per spec §2.2. Returns `Some(view)` only when one of two gates fires
+/// (the call's result is `SparkFrame[X]`); returns `None` when neither
+/// gate is present (fall through to Unknown). Receiver shape is NOT a
+/// gate — see the "Why not mirror `spark.read.<format>`" paragraph in
+/// the spec for why structural matching on `<X>` is unsafe here.
+///
+/// Gate (a) — `schema=` kwarg resolves to a Spark-tagged frame binding.
+/// Gate (b) — first positional arg resolves to a Pandas-tagged frame.
+///
+/// Dialect lookup runs FIRST (cheap, no diagnostic side effects); only
+/// when a gate matches does the helper call [`analyze_expr`] to resolve
+/// the schema view. This avoids double-walking args via the §10 fallback
+/// at the [`analyze_expr`] Call-arm when neither gate fires.
+///
+/// **Keep in sync** with `createdataframe_handoff_dialect` (`driver.rs`):
+/// any change to the gate-set must update both helpers (the dialect-side
+/// helper stays cheap, but the gate logic must agree exactly).
+fn createdataframe_handoff_view<'a>(
+    call: &'a ExprCall,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<SchemaView<'a>> {
+    if let Some(kw) = call
+        .arguments
+        .keywords
+        .iter()
+        .find(|k| k.arg.as_ref().is_some_and(|n| n.id.as_str() == "schema"))
+        && inherited_dialect(&kw.value, ctx) == Some(Dialect::Spark)
+    {
+        return analyze_expr(&kw.value, ctx, source, line_index, diagnostics);
+    }
+    let arg = call.arguments.args.first()?;
+    if inherited_dialect(arg, ctx) == Some(Dialect::Pandas) {
+        return analyze_expr(arg, ctx, source, line_index, diagnostics);
+    }
+    None
+}
+
 pub(super) fn analyze_method_call<'a>(
     call: &'a ExprCall,
     ctx: &BodyContext<'a>,
@@ -639,6 +680,21 @@ fn analyze_method_call_inner<'a>(
     // variable annotation.
     if is_spark_opaque_source_call(call) {
         return None;
+    }
+
+    // v1.5 PR-A2 — `<sess>.createDataFrame(pdf_or_rows, schema=...)` dialect
+    // handoff. The result is `SparkFrame[X]` only when one of two
+    // schema-sources is present (spec §2.2): a `schema=` kwarg whose value
+    // resolves through binding lookup to a Spark-tagged frame, or a
+    // positional first arg that resolves to a Pandas-tagged frame. Receiver
+    // shape is NOT a gate — structural matching like `is_spark_opaque_source_call`
+    // does is unsafe here because PR-A2 returns a TAG (not Unknown), so a
+    // `not_spark.createDataFrame(pdf)` with no schema source would be
+    // mis-tagged as Spark. See spec §2.2 "Why not mirror `spark.read.<format>`".
+    if method == "createDataFrame"
+        && let Some(view) = createdataframe_handoff_view(call, ctx, source, line_index, diagnostics)
+    {
+        return Some(view);
     }
 
     // `F.broadcast(df)` (or any `<X>.broadcast(df)`) — a join hint that
