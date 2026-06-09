@@ -90,9 +90,13 @@ def f(spark: SparkSession, rows: list, schema_var: SparkFrame[Sales]):
 // - Correct flip (sdf = SparkFrame[Sales]): .head() is a Spark terminal,
 //   chain dies, schema dropped; .assign(amount=col("nonexistent")) has
 //   no schema to check → no D0030.
-// - Broken flip (sdf stays PandasFrame[Sales], inheriting from pdf):
-//   .head() is a Pandas pass-through (per PR-A3 gate), schema preserved;
-//   .assign(amount=col("nonexistent")) checks against Sales → D0030 fires.
+// - Broken flip (sdf has dialect=None, schema=Sales): if the
+//   inherited_dialect Call-arm override at driver.rs:139 were reverted,
+//   the cursor would walk past the Call into `spark` (a Name with no
+//   dialect), returning None — NOT Pandas. .head() with dialect=None
+//   is not Spark-terminal (gate requires Spark dialect explicitly) and
+//   falls through to the schema-preserving pass-through; .assign with
+//   col("nonexistent") then checks against Sales schema → D0030 fires.
 //
 // assert_does_not_have_code distinguishes correct flip vs stayed-Pandas.
 // ---------------------------------------------------------------------------
