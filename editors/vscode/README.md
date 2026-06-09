@@ -26,6 +26,8 @@ pykrete is a strict superset of Python that adds a type layer for dataframes. Th
 
 **Hover to see a schema.** Hover a `SparkFrame[…]` or `PandasFrame[…]` parameter and see its columns without leaving the file. Go-to-definition jumps to the schema declaration. (`DataFrame[…]` is a deprecated alias for `SparkFrame[…]` and renders the same hover.)
 
+**Cross-dialect handoff (new in v1.5).** `df.toPandas()` re-tags `SparkFrame[X]` to `PandasFrame[X]`, so a downstream `pdf["typo"]` still gets the squiggle. `spark.createDataFrame(pdf)` re-tags back when a `schema=` keyword or a typed call-arg resolves to a known schema. Pandas `.head(10).merge(...)` keeps tracking (dialect-gated terminals), and `pdf.loc[:, "col"]` literal-form lands too.
+
 **Autocomplete for column names.** Type a column name in a string argument and pykrete completes the ones that actually exist on the dataframe in scope.
 
 **Quick-fixes.** When pykrete flags an unknown column with a *did you mean* suggestion, the lightbulb action swaps in the closest matching name.

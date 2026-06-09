@@ -197,3 +197,31 @@ def f(spark: SparkSession, pdf: PandasFrame[Sales], schema_var):
     );
     assert_has_code(&result, "D0030");
 }
+
+// ---------------------------------------------------------------------------
+// V15A2_round_trip_topandas_then_createdataframe_re_tags_as_spark:
+//
+// Spec §2.2 line 133-134 mandates this regression guard:
+// `spark.createDataFrame(df.toPandas())` must re-tag PR-A1's inferred
+// `PandasFrame[Orders]` back to `SparkFrame[Orders]` end-to-end. The
+// inner `df.toPandas()` resolves through PR-A1's recursive
+// `infer_expr_type` walk to `PandasFrame[Orders]`; PR-A2's gate (b)
+// then re-tags the call result to `SparkFrame[Orders]`. A chained
+// `.select("nonexistent")` fires D0030 — proves the schema view rode
+// the full round-trip.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn V15A2_round_trip_topandas_then_createdataframe_re_tags_as_spark() {
+    let result = check_strict(
+        r#"
+class Orders(Schema):
+    id: int
+
+def f(sdf: SparkFrame[Orders], spark: SparkSession):
+    sdf2 = spark.createDataFrame(sdf.toPandas())
+    return sdf2.select("nonexistent")
+"#,
+    );
+    assert_has_code(&result, "D0030");
+}
