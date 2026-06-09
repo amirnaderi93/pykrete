@@ -62,8 +62,12 @@ pub(crate) use context::{BodyContext, CallResultTrace, ColumnRefTrace, LocalBind
 pub(crate) use driver::check_function_body;
 
 // Exposed to the integration-test crate that pins the synthetic-name pool's
-// growth invariant — see `tests/groupby_aggregates.rs`.
-pub use context::synthetic_pool_len;
+// growth invariant — see `tests/groupby_aggregates.rs` and
+// `tests/v15_pr_e_pool_softcap.rs`.
+pub use context::{
+    intern_synthetic_for_test, pool_full_warned_for_test, reset_synthetic_pool_for_test,
+    synthetic_pool_len, synthetic_pool_sentinel,
+};
 
 #[cfg(test)]
 mod tests {

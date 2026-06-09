@@ -4,6 +4,7 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use ruff_python_ast::{Expr, StmtFunctionDef};
@@ -33,10 +34,39 @@ fn synthetic_name_pool() -> &'static Mutex<HashSet<&'static str>> {
     POOL.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
+/// Soft cap on the synthetic-name pool. Pre-adoption framing: graceful
+/// degradation over correctness theater — once the pool hits this size,
+/// further inserts saturate to `SYNTHETIC_POOL_SENTINEL` instead of
+/// growing unbounded (`Box::leak` would otherwise hold every distinct
+/// name for the process lifetime). v1.5 PR-E.
+pub(crate) const SYNTHETIC_POOL_CAP: usize = 10_000;
+
+/// Returned in place of a freshly-leaked `&'static str` once the pool
+/// is full. Downstream code keeps working (the string is non-empty and
+/// stable); callers that pattern-match on it can detect the saturated
+/// state. Note: derived-field dedup at `expr.rs:fields.iter().any(...)`
+/// will accept the first sentinel-named field and silently drop
+/// subsequent post-cap fields — the documented degradation.
+pub(crate) const SYNTHETIC_POOL_SENTINEL: &str = "__pykrete_pool_full__";
+
+static POOL_FULL_WARNED: AtomicBool = AtomicBool::new(false);
+
 fn intern_synthetic_global(name: String) -> &'static str {
+    intern_synthetic_with_cap(name, SYNTHETIC_POOL_CAP)
+}
+
+fn intern_synthetic_with_cap(name: String, cap: usize) -> &'static str {
     let mut pool = synthetic_name_pool().lock().expect("pool mutex poisoned");
     if let Some(existing) = pool.get(name.as_str()) {
         return existing;
+    }
+    if pool.len() >= cap {
+        if !POOL_FULL_WARNED.swap(true, Ordering::SeqCst) {
+            eprintln!(
+                "pykrete: synthetic pool reached cap {cap}, further synthetics will not be pooled"
+            );
+        }
+        return SYNTHETIC_POOL_SENTINEL;
     }
     let leaked: &'static str = Box::leak(name.into_boxed_str());
     pool.insert(leaked);
@@ -52,6 +82,41 @@ pub fn synthetic_pool_len() -> usize {
         .lock()
         .expect("pool mutex poisoned")
         .len()
+}
+
+/// Test-only: intern with a custom cap so the soft-cap behavior can be
+/// exercised without filling the production pool to 10k. Operates on
+/// the same global pool; tests that use this MUST reset the pool +
+/// warned-flag via [`reset_synthetic_pool_for_test`] before/after.
+#[doc(hidden)]
+pub fn intern_synthetic_for_test(name: String, cap: usize) -> &'static str {
+    intern_synthetic_with_cap(name, cap)
+}
+
+/// Test-only: clear the pool and the one-shot warned-flag so tests
+/// start from a known state. The leaked entries themselves are NOT
+/// reclaimed (that's the whole point of `Box::leak`); only the HashSet
+/// bookkeeping is cleared, so re-interning the same name post-reset
+/// will leak a fresh copy.
+#[doc(hidden)]
+pub fn reset_synthetic_pool_for_test() {
+    synthetic_name_pool()
+        .lock()
+        .expect("pool mutex poisoned")
+        .clear();
+    POOL_FULL_WARNED.store(false, Ordering::SeqCst);
+}
+
+/// Test-only: whether the one-shot pool-full warning has fired.
+#[doc(hidden)]
+pub fn pool_full_warned_for_test() -> bool {
+    POOL_FULL_WARNED.load(Ordering::SeqCst)
+}
+
+/// Test-only: the sentinel string returned by saturated inserts.
+#[doc(hidden)]
+pub fn synthetic_pool_sentinel() -> &'static str {
+    SYNTHETIC_POOL_SENTINEL
 }
 
 // ---------------------------------------------------------------------------
