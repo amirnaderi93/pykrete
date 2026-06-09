@@ -824,6 +824,20 @@ fn analyze_method_call_inner<'a>(
         return Some(receiver);
     }
 
+    // v1.5 PR-A1 — `.toPandas()` dialect handoff. `SparkFrame[X]` →
+    // `PandasFrame[X]`: schema preserved, dialect flipped. The dialect
+    // flip itself happens in `inherited_dialect` (driver.rs) so chain
+    // receivers (`df.toPandas().rename(...)`) and rebind sites
+    // (`pdf = df.toPandas()`) both see Pandas downstream; this arm
+    // preserves the schema by returning the receiver unchanged.
+    // Kwargs (`df.toPandas(arrow=True)`) are ignored — propagation is
+    // the same shape. Gated on `receiver_is_spark_inherited`: a
+    // pandas-tagged or opaque receiver falls through to the existing
+    // `*handled = false; None` path.
+    if method == "toPandas" && receiver_is_spark_inherited {
+        return Some(receiver);
+    }
+
     // Several methods take a `subset=` of column names — check it
     // uniformly, before the per-method dispatch.
     if matches!(

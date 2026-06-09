@@ -141,6 +141,16 @@ pub(crate) fn inherited_dialect<'a>(
                 {
                     return Some(crate::dataframe::Dialect::Spark);
                 }
+                // v1.5 PR-A1 — `.toPandas()` flips the inherited dialect
+                // Spark → Pandas while the schema parameter is preserved
+                // by the schema-pass-through arm in `analyze_method_call_inner`.
+                // Pandas receivers, Unknown receivers, and non-DataFrame
+                // receivers fall through unchanged.
+                if attr.attr.id.as_str() == "toPandas"
+                    && inherited_dialect(&attr.value, ctx) == Some(crate::dataframe::Dialect::Spark)
+                {
+                    return Some(crate::dataframe::Dialect::Pandas);
+                }
                 cursor = &attr.value;
             }
             Expr::Attribute(a) => cursor = &a.value,
