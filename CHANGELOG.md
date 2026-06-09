@@ -26,7 +26,7 @@ Fifth minor release on the v1.0 line. The headline change is **cross-dialect han
 
 ### Changed
 
-- **Trust-claim surfaces** swept end-to-end for v1.5 reality: README "Reliability and trust", docs-site `about/production-readiness`, `about/pykrete-tests`, the splash page, the docs-site roadmap, the canonical roadmap, and the pandas-roadmap all refresh to **233 probes across 93 fixtures from 17 donors** (cross-dialect handoff added to the "what we verify" list; the pykrete-tests v1.5 cycle ships incremental probe coverage on top of the v1.4 baseline of 223 probes / 83 fixtures).
+- **Trust-claim surfaces** swept end-to-end for v1.5 reality: README "Reliability and trust", docs-site `about/production-readiness`, `about/pykrete-tests`, the splash page, the docs-site roadmap, the canonical roadmap, and the pandas-roadmap all refresh to **235 probes across 94 fixtures from 17 donors** (cross-dialect handoff added to the "what we verify" list; the pykrete-tests v1.5 cycle ships incremental probe coverage on top of the v1.4 baseline of 223 probes / 83 fixtures).
 - **Pandas roadmap** updated: cross-dialect handoff moves from "v1.5+ horizon" to "shipped"; `.loc[:, "col"]` literal-form moves to shipped; `.loc` non-literal forms (boolean mask, column range), `pdf.iloc[...]`, broader pandas reshape, and the `pykrete migrate` binary are tracked for v1.6.
 - **Diagnostics ref** D0090 entry: notes that v1.6 will pair the alias-escalation to error under strict mode with the `pykrete migrate` auto-rewriter shipping in the same release, so the migration is atomic with the breaking-change signal. Severity stays at `warning` everywhere in v1.5.
 - **Operations ref** updated: `.toPandas` moves from `opaque` to `modeled` (re-tags to `PandasFrame[X]`); pandas section adds `.head` / `.tail` / `.first` as pass-through on `PandasFrame[X]`, `.loc[:, "col"]` as `column-check only` with the literal-form gate documented; `spark.createDataFrame(pdf)` documented as re-tagging back to Spark when a schema source is present.
@@ -36,8 +36,8 @@ Fifth minor release on the v1.0 line. The headline change is **cross-dialect han
 
 The trust suite verifies, on every release:
 
-- **Column resolution** through the Spark v1.0 surface plus the pandas analogues — 180 positive probes across 45 of 46 annotated fixtures.
-- **Diagnostic firing** on broken fixtures — 53 negative probes across 47 `probes_negative/` fixtures pinning D0030 `unknownColumn`, D0060 `missingJoinKey`, D0081 `nonNumericArithmetic`, D0082 `crossTypeComparison`, D0084 `enumValueMismatch`, and D0090 `deprecatedDataFrameAlias`.
+- **Column resolution** through the Spark v1.0 surface plus the pandas analogues — 181 positive probes across 45 of 46 annotated fixtures.
+- **Diagnostic firing** on broken fixtures — 54 negative probes across 48 `probes_negative/` fixtures pinning D0030 `unknownColumn`, D0060 `missingJoinKey`, D0081 `nonNumericArithmetic`, D0082 `crossTypeComparison`, D0084 `enumValueMismatch`, and D0090 `deprecatedDataFrameAlias`.
 - **Spark type tracking** through transformations, scoped to D0081 via the `PROBE-TYPE-IS` synth-shape path (shipped v1.2), with raw-mutation coverage on D0080 `returnTypeMismatch` and D0082 `crossTypeComparison` until follow-up synth shapes ship.
 - **Pandas type tracking** through dispatched chains (shipped v1.4) on `PandasFrame[X]`, scoped to D0081 via the assign-arithmetic synth — 24 `PROBE-TYPE-IS` markers across 10 of the 17 donors — the v1.2 Spark side and the v1.4 pandas side.
 
@@ -56,7 +56,7 @@ The trust suite verifies, on every release:
 
 ### Coordinated with
 
-- pykrete-tests: PR-G of the v1.5 cycle [shipped](https://github.com/amirnaderi93/pykrete-tests/pull/23) dbt-spark + python-deequ negative coverage (closes the v1.1 retro rule that cross-codebase tests must verify correctness, not just absence of false positives). The pykrete-tests catalog is pinned to pykrete `6a763b2739ab8db3f0074511dcc945c7ad41bd52` (current main with all v1.5 PRs), and the cycle now totals 93 fixtures / 233 probes / 53 negative-probes.
+- pykrete-tests: PR-G of the v1.5 cycle [shipped](https://github.com/amirnaderi93/pykrete-tests/pull/23) dbt-spark + python-deequ negative coverage (closes the v1.1 retro rule that cross-codebase tests must verify correctness, not just absence of false positives). The pykrete-tests catalog is pinned to pykrete `6a763b2739ab8db3f0074511dcc945c7ad41bd52` (current main with all v1.5 PRs), and the cycle now totals 94 fixtures / 235 probes / 54 negative-probes (PR-G adds dbt-spark + python-deequ; a follow-up [pykrete-tests #24](https://github.com/amirnaderi93/pykrete-tests/pull/24) adds the first PR-C `.loc[:, "col"]` cross-codebase probes on yfinance).
 
 ### Compatibility
 

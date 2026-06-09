@@ -72,6 +72,6 @@ This page tracks the pandas-specific direction for pykrete. The umbrella [roadma
 |---|---|---|
 | v1.3.0 | "check-site coverage for the six pandas dispatched operations" | yes — 19 probes across 3 donors |
 | v1.4.0 | "check-site coverage + type-tracking across the dominant pandas stack — 10 donors, 21 new pandas `PROBE-TYPE-IS` markers (3 per new donor), three checker bug closures" | yes — 223 probes total across 17 donors |
-| v1.5.0 | "cross-dialect handoff (Spark↔pandas), `.loc[:, "col"]` literal-form, dialect-gated `.head`/`.tail`/`.first`, `--report-aliases` JSON envelope" | yes — 233 probes total across 17 donors |
+| v1.5.0 | "cross-dialect handoff (Spark↔pandas), `.loc[:, "col"]` literal-form, dialect-gated `.head`/`.tail`/`.first`, `--report-aliases` JSON envelope" | yes — 235 probes total across 17 donors |
 | v1.6.0 (target) | + "`pykrete migrate` auto-rewriter + D0090 strict-mode escalation (paired); plus pandas reshape or `.query` / `.eval` string-fragment DSLs (committee scoping)" | TBD per spec |
 | v2.0.0 (target) | canonical `SparkFrame[X]` / `PandasFrame[X]` only; deprecated alias removed | tag-time grep against repo |
