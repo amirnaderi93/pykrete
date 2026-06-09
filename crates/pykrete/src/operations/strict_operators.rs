@@ -478,7 +478,7 @@ pub(super) fn apply_column_method<'a>(
                 .arguments
                 .args
                 .iter()
-                .filter_map(column_name_arg)
+                .filter_map(|a| column_name_arg(a, Some(ctx)))
                 .collect();
             let remaining: Vec<DerivedField<'a>> = recv
                 .typed_fields(tcx.schemas)
@@ -548,7 +548,7 @@ pub(super) fn apply_column_method<'a>(
             // subtotal rows they emit — irrelevant to the column schema.
             let mut keys: Vec<&'a str> = Vec::new();
             for arg in &call.arguments.args {
-                if let Some(name) = column_name_arg(arg) {
+                if let Some(name) = column_name_arg(arg, Some(ctx)) {
                     keys.push(name);
                 }
             }
@@ -1100,7 +1100,7 @@ pub(super) fn posexplode_fields<'a>(
     ])
 }
 
-fn column_name_arg(arg: &Expr) -> Option<&str> {
+fn column_name_arg<'a>(arg: &'a Expr, ctx: Option<&BodyContext<'_>>) -> Option<&'a str> {
     if let Some(s) = arg.as_string_literal_expr() {
         return Some(s.value.to_str());
     }
@@ -1113,19 +1113,23 @@ fn column_name_arg(arg: &Expr) -> Option<&str> {
     // idiomatic. The key is the attribute name; which DataFrame it came
     // from is irrelevant to the resulting column. Restricted to a bare
     // `Name` base so a called `F.func(...)` or a chained `a.b.c` can't be
-    // mistaken for a column reference.
+    // mistaken for a column reference. Gate on the receiver being a
+    // DataFrame binding in scope (mirrors PR-F1 in `select_output_name`)
+    // so a plain Python `bag.x` doesn't get harvested as a drop / group
+    // key against the receiver's schema.
     if let Some(attr) = arg.as_attribute_expr()
-        && attr.value.is_name_expr()
+        && let Some(name) = attr.value.as_name_expr()
+        && ctx.is_none_or(|c| c.lookup(name.id.as_str()).is_some())
     {
         return Some(attr.attr.id.as_str());
     }
     // `df["colname"]` subscript — sibling of the attribute form above.
-    // Same rationale: `drop(df["col"])`, `groupBy(df["key"], ...)` accept
-    // Column objects. Restricted to `df["literal"]` (bare-name receiver,
-    // string-literal slice).
+    // Same rationale and same ctx-gate so `helper["col"]` doesn't sneak
+    // through as a column name on a non-DataFrame receiver.
     if let Some(sub) = arg.as_subscript_expr()
-        && sub.value.is_name_expr()
+        && let Some(name) = sub.value.as_name_expr()
         && let Some(s) = sub.slice.as_string_literal_expr()
+        && ctx.is_none_or(|c| c.lookup(name.id.as_str()).is_some())
     {
         return Some(s.value.to_str());
     }
