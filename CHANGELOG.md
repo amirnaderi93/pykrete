@@ -55,7 +55,7 @@ The trust suite verifies, on every release:
 
 ### Coordinated with
 
-- pykrete-tests: PR-G of the v1.5 cycle ships dbt-spark + python-deequ negative coverage on pykrete-tests (closes the v1.1 retro rule that cross-codebase tests must verify correctness, not just absence of false positives). PR-G runs parallel to the pykrete-side cycle and is non-blocking for the v1.5 tag; it lands separately on pykrete-tests's release line.
+- pykrete-tests: PR-G of the v1.5 cycle [shipped](https://github.com/amirnaderi93/pykrete-tests/pull/23) dbt-spark + python-deequ negative coverage (closes the v1.1 retro rule that cross-codebase tests must verify correctness, not just absence of false positives). The pykrete-tests catalog is pinned to pykrete `6a763b2739ab8db3f0074511dcc945c7ad41bd52` (current main with all v1.5 PRs), and the cycle now totals 93 fixtures / 233 probes / 53 negative-probes.
 
 ### Compatibility
 
