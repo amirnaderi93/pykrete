@@ -274,11 +274,11 @@ Structured streaming is a runtime concern — pykrete is a static schema checker
 
 ## Pandas-on-Spark / Arrow interop
 
-These cross out of the dataframe world. Their results genuinely aren't dataframes (pandas Series, Arrow tables, UDF outputs), so pykrete returns an opaque type rather than guess.
+Most of these cross out of the dataframe world (Arrow tables, UDF outputs, RDD ops), so pykrete returns an opaque type rather than guess. `.toPandas()` is the exception — v1.5 re-tags it as a dialect transition.
 
 | Method | Status | Notes |
 | --- | --- | --- |
-| `toPandas` | opaque | Result is a pandas frame. |
+| `toPandas` | modeled | v1.5+. `SparkFrame[X]` → `PandasFrame[X]` — the chain keeps tracking on the pandas side. Receiver must be DataFrame-bound and Spark-dialect; non-DataFrame helpers and Unknown receivers fall through. `arrow=True` and other kwargs are ignored, not gated. |
 | `toArrow` | opaque | Result is an Arrow table. |
 | `to_pandas_on_spark` | opaque | |
 | `pandas_api` | opaque | |
@@ -287,6 +287,16 @@ These cross out of the dataframe world. Their results genuinely aren't dataframe
 | `mapInArrow` | opaque | UDF-shaped. |
 | `mapPartitions` | opaque | RDD-level. |
 | `foreach` / `foreachPartition` | unmodeled | Terminal. |
+
+### `spark.createDataFrame(pdf)` — the pandas → Spark direction
+
+The reverse handoff lives on the `SparkSession`, not the dataframe. `spark.createDataFrame(pdf)` re-tags `PandasFrame[Y]` back to `SparkFrame[Y]` when either (a) a `schema=` keyword argument resolves through a typed binding to `DataFrame[X]` / `SparkFrame[X]`, or (b) the call-arg expression types as `PandasFrame[Y]` via the recursive resolver. With neither schema source present, the call falls through to Unknown — pykrete won't auto-infer a schema from raw values. The round-trip `spark.createDataFrame(df.toPandas())` preserves the tag through the `.toPandas` arm above.
+
+```python
+def round_trip(sales: SparkFrame[Sale], spark) -> SparkFrame[Sale]:
+    pdf = sales.toPandas()                    # pdf is PandasFrame[Sale]
+    return spark.createDataFrame(pdf)         # back to SparkFrame[Sale]
+```
 
 ## Other (na, stat, transform, terminals)
 
@@ -311,7 +321,8 @@ def with_defaults(sales: SparkFrame[Sale]) -> DataFrame:
 | `replace` | pass-through | Value-substitution; schema unchanged. |
 | `transform` | modeled | `fn` argument resolved; input + output checked. |
 | `count` | modeled | Recognized terminal (returns `long`). |
-| `collect` / `first` / `head` / `take` / `tail` | modeled | Recognized terminals. |
+| `collect` / `take` | modeled | Recognized terminals on either dialect (`take` rare on pandas). |
+| `first` / `head` / `tail` | modeled | v1.5+. Spark receivers: recognized terminals. Pandas receivers: pass-through (chain keeps tracking on `PandasFrame[X]`). |
 | `show` | modeled | Recognized terminal (returns None). |
 | `stat.crosstab` / `freqItems` / `approxQuantile` / `corr` / `cov` | unmodeled | |
 | `summary` | opaque | Returns a statistics table whose schema depends on the receiver's numeric subset. Re-anchor with `.cast(SparkFrame[X])`. |
@@ -321,7 +332,7 @@ def with_defaults(sales: SparkFrame[Sale]) -> DataFrame:
 | `sameSemantics` / `semanticHash` | unmodeled | |
 | `rdd` | opaque | RDD-level. |
 
-Terminal methods — `count`, `collect`, `first`, `head`, `take`, `tail`, `show`, `printSchema`, `explain` — are recognized as "the chain ends here". They return scalars, lists, or `None`, not dataframes.
+Terminal methods on Spark receivers — `count`, `collect`, `first`, `head`, `take`, `tail`, `show`, `printSchema`, `explain` — are recognized as "the chain ends here". They return scalars, lists, `Row`, or `None`, not dataframes. On pandas receivers, `first`, `head`, and `tail` are pass-through (they return a `DataFrame`); `count` deliberately stays terminal (it returns a per-column Series).
 
 ## Column functions (`F.*`)
 
@@ -424,6 +435,19 @@ def revenue(sales: PandasFrame[Sale]) -> pd.DataFrame:
 
 A typo anywhere — `sales["amunt"]`, `sales[["regoin", "amount"]]` — fires `unknownColumn` against `Sale` the same way PySpark column refs do. The dialect is the only thing that changes; the diagnostic story is identical.
 
+### Dialect-gated `.head` / `.tail` / `.first`
+
+PySpark recognizes `.head()`, `.tail()`, and `.first()` as chain-ending terminals (they return a `Row` or `None`, not a `DataFrame`). In pandas, the same three names return a sliced `DataFrame` — `pdf.head(10).merge(other, on="id")` is canonical pandas code. v1.5 dialect-gates the classification: pandas receivers (`PandasFrame[X]`) pass through unchanged, Spark receivers stay terminals. Pandas `count()` deliberately stays terminal (it returns a per-column Series).
+
+```python
+def first_n(orders: PandasFrame[Order]) -> pd.DataFrame:
+    return orders.head(100).merge(other, on="id")   # 'id' checked against Order
+```
+
+### `.loc[:, "col"]` literal-form (v1.5)
+
+`pdf.loc[:, "col"]` resolves the string-literal column against `PandasFrame[X]`'s schema, firing D0030 on a typo with a *did you mean*. Only the literal form lands in v1.5; variable column keys (`pdf.loc[:, col_var]`), boolean-mask row keys (`pdf.loc[mask, "col"]`), column-range slicing (`pdf.loc[:, "a":"b"]`), and `pdf.iloc[...]` fall through to Unknown and are deferred to v1.6 paired with broader pandas reshape.
+
 ### Six dispatched operations
 
 These are the operations that read or write *via the dataframe itself*, not via a method call — Spark and pandas spell them differently, so v1.3 dispatches them on the annotation:
@@ -462,7 +486,7 @@ For the PySpark-only operations on this page (joins / aggregations / windows / I
 Some of the surface is intentionally outside pykrete's reach. These aren't gaps to fill — they're runtime concerns, not schema concerns:
 
 - **Structured streaming** (`readStream`, `writeStream`, `isStreaming`). pykrete is a static checker against declared schemas; streaming state is a runtime construct.
-- **Pandas-on-Spark and Arrow conversions** (`toPandas`, `toArrow`, `mapInPandas`, `pandas_api`, ...). The result isn't a Spark dataframe anymore; pandas check-site coverage shipped in v1.3 as its own typed surface (`PandasFrame[X]`) — see the [Pandas dispatch](#pandas-dispatch) section above; polars is next on the [roadmap](/pykrete/about/roadmap/).
+- **Arrow conversions, pandas-on-Spark, and UDF-shaped pandas interop** (`toArrow`, `mapInPandas`, `applyInPandas`, `mapInArrow`, `pandas_api`, ...). The result isn't a vanilla dataframe anymore. pandas check-site coverage shipped in v1.3 as its own typed surface (`PandasFrame[X]`) — see the [Pandas dispatch](#pandas-dispatch) section above. v1.5 adds the `.toPandas()` and `spark.createDataFrame(pdf)` cross-dialect handoff (re-tagging `SparkFrame[X]` ↔ `PandasFrame[X]` at those two seams); polars is next on the [roadmap](/pykrete/about/roadmap/).
 - **RDD-level operations** (`rdd`, `mapPartitions`, `foreach`). These drop below the dataframe abstraction by design.
 - **Runtime introspection** (`describe`, `summary`, `stat.*`). These return shape-of-data summaries, not schemas.
 - **UDF internals**. The decorator's return type is honored, but the body is opaque.

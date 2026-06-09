@@ -57,6 +57,25 @@ preservation) that close silent-pass paths surfaced by v1.3 audits.
 directory (file-anchored, falling back to CWD) so absolute-path
 invocations from outside the project root pick up the config.
 
+**Cross-dialect handoff shipped in v1.5**: `df.toPandas()` re-tags
+`SparkFrame[X]` to `PandasFrame[X]`; `spark.createDataFrame(pdf)`
+re-tags `PandasFrame[Y]` back to `SparkFrame[Y]` when a `schema=`
+keyword argument or a typed call-arg resolves to a known schema; the
+round-trip path (`spark.createDataFrame(df.toPandas())`) preserves the
+tag end-to-end. Pandas `.head()` / `.tail()` / `.first()` are
+dialect-gated as Spark-only terminals so chains downstream of
+`pdf.head(10).merge(other, on="id")` keep tracking. The v1.3 promise
+of `.loc[:, "col"]` literal-form lands. Two PR-F1-class sibling gates
+close (`column_name_arg` ungated arms + `collect_col_refs`
+cross-DataFrame routing leak). A new `pykrete check --report-aliases`
+flag emits a structured JSON envelope of every `DataFrame[X]`
+annotation site with its resolved dialect, so projects can quantify
+the v2.0 migration scope before v1.6's `pykrete migrate` ships. The
+LSP synthetic-pool gets a soft cap with one-shot warning and
+saturation sentinel, closing the v1.4 architecture-audit I4 finding.
+D0090 stays at warning everywhere in v1.5; the severity escalation
+lands in v1.6 paired atomically with `pykrete migrate`.
+
 ## PyCharm support
 
 A JetBrains integration via PyCharm's LSP client. Deferred until after
@@ -237,8 +256,10 @@ value carries a schema, methods narrow or widen it, column names must
 exist when referenced.
 
 Priority: **PySpark (done) → pandas check-site (done, v1.3) → pandas
-depth + type-tracking (done, v1.4) → cross-dialect handoffs + `.query` /
-`.eval` mini-DSLs (v1.5+) → polars** → others (DuckDB, Dask, …).
+depth + type-tracking (done, v1.4) → cross-dialect handoffs +
+deferred-promise closure (done, v1.5) → `pykrete migrate` paired with
+D0090 strict-mode escalation, plus pandas reshape or `.query` / `.eval`
+mini-DSLs (v1.6) → polars** → others (DuckDB, Dask, …).
 
 The core type model — `SparkFrame[Schema]` / `PandasFrame[Schema]` /
 `DataFrame[Schema]`, the `Schema` class, column checks, return-type
@@ -254,7 +275,14 @@ and the `D0090` deprecation that nudges callers off the legacy
 numeric dtypes fall through to D0081), seven new pandas donors with 21
 TYPE-IS markers (3 per donor), and three PRE-EXISTING silent-pass checker bug
 closures (registry-call args, walrus receivers, `.transform` dialect
-preservation).
+preservation). v1.5 shipped cross-dialect handoff (`.toPandas()` →
+`PandasFrame[X]`; `spark.createDataFrame(pdf)` → `SparkFrame[Y]` when a
+schema source is present), the v1.3 promise of `.loc[:, "col"]`
+literal-form, dialect-gated `.head` / `.tail` / `.first` for pandas
+chains, two PR-F1-class sibling gates (`column_name_arg` ungated arms +
+`collect_col_refs` cross-DataFrame routing), the `--report-aliases` JSON
+envelope for v2.0 migration sizing, and the synthetic-pool soft cap
+that closes the v1.4 architecture-audit I4 finding.
 
 ### Forking `ty`
 

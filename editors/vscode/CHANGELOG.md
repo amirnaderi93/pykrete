@@ -1,6 +1,32 @@
 # Changelog
 
 
+## 0.3.0
+
+Tracks the v1.5.0 pykrete release — cross-dialect handoff between
+Spark and pandas, plus deferred-promise closure. The bundled
+`pykrete-lsp` now re-tags `SparkFrame[X]` to `PandasFrame[X]` across
+`df.toPandas()`, re-tags `PandasFrame[Y]` back to `SparkFrame[Y]`
+across `spark.createDataFrame(pdf)` when a `schema=` argument or a
+typed call-arg resolves to a known schema, and the round-trip
+`spark.createDataFrame(df.toPandas())` preserves the tag end-to-end.
+Pandas `.head()` / `.tail()` / `.first()` are dialect-gated as
+Spark-only terminals so pandas chains downstream of them keep
+tracking; the v1.3 promise of `.loc[:, "col"]` literal-form lands;
+two PR-F1-class sibling gates close (`column_name_arg` ungated arms +
+`collect_col_refs` cross-DataFrame routing). The CLI gains a new
+`pykrete check --report-aliases` flag that emits a JSON envelope of
+every `DataFrame[X]` annotation site with its resolved dialect — so
+projects can size the v2.0 migration scope before v1.6's
+`pykrete migrate` ships. The LSP synthetic-pool gets a soft cap with
+one-shot warning and saturation sentinel, closing the v1.4
+architecture-audit I4 finding (the language server keeps running on
+adversarial input instead of unbounded `Box::leak` growth). No new
+D-codes, no new annotation forms; SemVer-minor under the
+`tighteningDiagnostics` policy. Version bump aligns the extension
+with the v1.5.0 cycle-close per the version-guard contract. See the
+[main CHANGELOG](../../CHANGELOG.md#150---2026-06-09) for details.
+
 ## 0.2.47
 
 Tracks the v1.4 PR-F1 pykrete checker fix — the Subscript-on-Name arm
