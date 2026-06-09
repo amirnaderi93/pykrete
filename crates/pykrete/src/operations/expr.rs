@@ -242,6 +242,23 @@ pub(super) fn analyze_expr<'a>(
             {
                 report_subscript_col_refs(&s.slice, &view, ctx, source, line_index, diagnostics);
                 subscript_list_projection(&s.slice, &view, ctx)
+            } else if let Some((name, col_lit)) = loc_literal_subscript(s)
+                && ctx.lookup_dialect(name.id.as_str()) == Some(Dialect::Pandas)
+                && let Some(view) = ctx.lookup(name.id.as_str())
+            {
+                // v1.5 PR-C — `pdf.loc[:, "col"]` literal column projection.
+                // Spec §4 promises D0030 on a typo in the column literal
+                // against the pandas-tagged receiver's schema. Sibling to
+                // piece (b) above: same D0030 path, narrower receiver shape
+                // (`<Name>.loc` with a `(:, "literal")` tuple slice). Gated
+                // to `Dialect::Pandas` because `.loc` doesn't exist on
+                // Spark — a SparkFrame receiver falls through unchanged.
+                // Non-literal column indexers (list-of-strings, slice,
+                // callable, boolean-mask rows) are out of scope for v1.5
+                // and deliberately fall through here.
+                let refs = vec![(None, col_lit.value.to_str(), col_lit.range())];
+                report_column_refs(&refs, &view, ctx, source, line_index, diagnostics);
+                None
             } else {
                 None
             };
@@ -394,6 +411,36 @@ fn subscript_list_projection<'a>(
         })
         .collect();
     Some(SchemaView::Derived(fields))
+}
+
+/// v1.5 PR-C — `<Name>.loc[:, "col"]` literal-form match. Returns the
+/// receiver `Name` and the column-name string literal when the subscript
+/// has exactly this shape: receiver is `<Name>.loc` (Attribute on Name)
+/// and slice is a 2-tuple of a bare `:` slice and a string literal. Every
+/// other shape (boolean-mask rows, integer/label rows, list-of-strings
+/// columns, slice columns, callable, variable) is v1.6+ scope and
+/// returns `None` here.
+pub(super) fn loc_literal_subscript(
+    sub: &ruff_python_ast::ExprSubscript,
+) -> Option<(
+    &ruff_python_ast::ExprName,
+    &ruff_python_ast::ExprStringLiteral,
+)> {
+    let attr = sub.value.as_attribute_expr()?;
+    if attr.attr.id.as_str() != "loc" {
+        return None;
+    }
+    let name = attr.value.as_name_expr()?;
+    let tup = sub.slice.as_tuple_expr()?;
+    if tup.elts.len() != 2 {
+        return None;
+    }
+    let slice = tup.elts[0].as_slice_expr()?;
+    if slice.lower.is_some() || slice.upper.is_some() || slice.step.is_some() {
+        return None;
+    }
+    let lit = tup.elts[1].as_string_literal_expr()?;
+    Some((name, lit))
 }
 
 /// Walk a comprehension expression — generator iters, ifs, and the
