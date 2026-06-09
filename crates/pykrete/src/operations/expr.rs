@@ -756,8 +756,16 @@ fn analyze_method_call_inner<'a>(
     // TODO(chain-after-terminal): once an informational/hint channel
     // exists, flag a method call chained after one of these — almost
     // always a bug.
-    if is_terminal_method(method) {
+    if is_terminal_method(method, receiver_dialect) {
         return None;
+    }
+    // v1.5 PR-A3: `head`/`tail`/`first` on a pandas receiver are NOT
+    // terminals — they return a row-sliced DataFrame. The terminal
+    // recognizer above already dialect-gates and returns false here;
+    // route the chain to the pass-through arm so a follow-up
+    // `pdf.head().assign(...)` still sees the schema. Spec §2.3.
+    if receiver_is_pandas_inherited && matches!(method, "head" | "tail" | "first") {
+        return Some(receiver);
     }
 
     // Several methods take a `subset=` of column names — check it
