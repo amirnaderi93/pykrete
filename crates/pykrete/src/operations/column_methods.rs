@@ -35,7 +35,7 @@ pub(super) fn check_column_method_args<'a>(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let mut string_refs: Vec<(&'a str, TextRange)> = Vec::new();
-    let mut column_refs: Vec<(&'a str, TextRange)> = Vec::new();
+    let mut column_refs: Vec<(Option<&'a str>, &'a str, TextRange)> = Vec::new();
     for (i, arg) in call.arguments.args.iter().enumerate() {
         let role = role_at(shape, i);
         collect_arg_column_refs_split(arg, role, ctx, &mut string_refs, &mut column_refs);
@@ -65,7 +65,10 @@ pub(super) fn check_column_method_args<'a>(
         record_column_refs_tolerating_missing(&string_refs, schema, ctx);
         report_column_refs(&column_refs, schema, ctx, source, line_index, diagnostics);
     } else {
-        let mut all = string_refs;
+        let mut all: Vec<(Option<&'a str>, &'a str, TextRange)> = string_refs
+            .into_iter()
+            .map(|(name, range)| (None, name, range))
+            .collect();
         all.extend(column_refs);
         report_column_refs(&all, schema, ctx, source, line_index, diagnostics);
     }
@@ -352,7 +355,7 @@ where
     I: IntoIterator<Item = (&'a str, &'a Expr)>,
 {
     let mut fields: Vec<DerivedField<'a>> = recv.typed_fields(ctx.schemas());
-    let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
+    let mut refs: Vec<(Option<&'a str>, &'a str, TextRange)> = Vec::new();
     for (name, value) in pairs {
         let ty = infer_expr_type(value, recv, ctx.type_ctx(), ctx);
         add_or_replace_column(&mut fields, name, ty);
@@ -485,11 +488,11 @@ pub(super) fn apply_pandas_drop_columns<'a>(
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> SchemaView<'a> {
-    let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
+    let mut refs: Vec<(Option<&'a str>, &'a str, TextRange)> = Vec::new();
     let mut drop_set: HashSet<&str> = HashSet::new();
     for elt in &list.elts {
         if let Some(lit) = elt.as_string_literal_expr() {
-            refs.push((lit.value.to_str(), lit.range()));
+            refs.push((None, lit.value.to_str(), lit.range()));
             drop_set.insert(lit.value.to_str());
         }
     }
@@ -548,10 +551,11 @@ pub(super) fn apply_melt<'a>(
         };
 
     // Validate ids + (if present) values column refs against the receiver.
-    let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
-    refs.extend(ids.iter().copied());
+    // ids/values are string-literal-form refs (no receiver-Name) — None.
+    let mut refs: Vec<(Option<&'a str>, &'a str, TextRange)> = Vec::new();
+    refs.extend(ids.iter().map(|&(n, r)| (None, n, r)));
     if let Some(ref vs) = values {
-        refs.extend(vs.iter().copied());
+        refs.extend(vs.iter().map(|&(n, r)| (None, n, r)));
     }
     report_column_refs(&refs, recv, ctx, source, line_index, diagnostics);
 
@@ -826,7 +830,7 @@ pub(super) fn check_fillna_dict_keys<'a>(
     let Some(dict) = arg.as_dict_expr() else {
         return;
     };
-    let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
+    let mut refs: Vec<(Option<&'a str>, &'a str, TextRange)> = Vec::new();
     for item in &dict.items {
         let Some(key) = item.key.as_ref() else {
             continue;
@@ -834,7 +838,7 @@ pub(super) fn check_fillna_dict_keys<'a>(
         let Some(s) = key.as_string_literal_expr() else {
             continue;
         };
-        refs.push((s.value.to_str(), s.range()));
+        refs.push((None, s.value.to_str(), s.range()));
         let column = s.value.to_str();
         if let Some(ty) = schema.field_type(column, ctx.schemas())
             && let Some(vocab) = enum_vocab(&ty)
@@ -979,20 +983,20 @@ pub(super) fn check_subset_kwarg<'a>(
     else {
         return;
     };
-    let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
+    let mut refs: Vec<(Option<&'a str>, &'a str, TextRange)> = Vec::new();
     match &kw.value {
-        Expr::StringLiteral(s) => refs.push((s.value.to_str(), s.range())),
+        Expr::StringLiteral(s) => refs.push((None, s.value.to_str(), s.range())),
         Expr::List(l) => {
             for elt in &l.elts {
                 if let Some(s) = elt.as_string_literal_expr() {
-                    refs.push((s.value.to_str(), s.range()));
+                    refs.push((None, s.value.to_str(), s.range()));
                 }
             }
         }
         Expr::Tuple(t) => {
             for elt in &t.elts {
                 if let Some(s) = elt.as_string_literal_expr() {
-                    refs.push((s.value.to_str(), s.range()));
+                    refs.push((None, s.value.to_str(), s.range()));
                 }
             }
         }
@@ -1006,14 +1010,21 @@ pub(super) fn check_subset_kwarg<'a>(
 /// "did you mean" suggestion) for any that doesn't resolve. The shared
 /// tail of every `col(...)`-style column-existence check.
 pub(super) fn report_column_refs<'a>(
-    refs: &[(&'a str, TextRange)],
+    refs: &[(Option<&'a str>, &'a str, TextRange)],
     schema: &SchemaView<'a>,
     ctx: &BodyContext<'a>,
     source: &str,
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    for &(col_name, col_range) in refs {
+    for &(receiver_name, col_name, col_range) in refs {
+        // I1 fix (v1.5 §3.1): when the col-ref came from `<recv>.X` or
+        // `<recv>["X"]` (receiver-Name captured at the leaf), route the
+        // schema lookup to `<recv>`'s own schema rather than the
+        // surrounding chain's. `df.select(df_other["col"])` then checks
+        // `col` on `df_other`, closing the cross-DataFrame leak.
+        let receiver_schema = receiver_name.and_then(|n| ctx.lookup(n));
+        let active = receiver_schema.as_ref().unwrap_or(schema);
         // Receiver-first disambiguation: if the receiver schema can
         // resolve this dotted path (e.g. `addr.city` on a `Customer`
         // with `addr: Addr`), trust the nested-struct interpretation
@@ -1026,19 +1037,19 @@ pub(super) fn report_column_refs<'a>(
         // still works — `L` isn't a field of the aliased df itself).
         if split_qualified(col_name).is_some()
             && matches!(
-                resolve_path(schema, col_name, ctx.schemas()),
+                resolve_path(active, col_name, ctx.schemas()),
                 FieldPathResult::Resolved
             )
         {
-            ctx.record_column_ref(col_range, col_name, schema.clone());
+            ctx.record_column_ref(col_range, col_name, active.clone());
             continue;
         }
         if try_resolve_alias_ref(col_name, col_range, ctx, source, line_index, diagnostics) {
             continue;
         }
-        ctx.record_column_ref(col_range, col_name, schema.clone());
+        ctx.record_column_ref(col_range, col_name, active.clone());
         if let FieldPathResult::Missing { field, on } =
-            resolve_path(schema, col_name, ctx.schemas())
+            resolve_path(active, col_name, ctx.schemas())
         {
             let suggestion = on.as_ref().and_then(|v| suggest_field_name(field, v));
             let on_phrase = on

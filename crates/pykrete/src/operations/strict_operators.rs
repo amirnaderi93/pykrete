@@ -1148,7 +1148,7 @@ pub(super) fn collect_arg_column_refs_split<'a>(
     role: ArgRole,
     ctx: &BodyContext<'a>,
     string_out: &mut Vec<(&'a str, TextRange)>,
-    column_out: &mut Vec<(&'a str, TextRange)>,
+    column_out: &mut Vec<(Option<&'a str>, &'a str, TextRange)>,
 ) {
     match role {
         ArgRole::NewName => {}

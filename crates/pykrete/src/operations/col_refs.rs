@@ -254,17 +254,18 @@ const ARRAY_HOF_FUNCTIONS: &[&str] = &["transform", "filter", "aggregate", "exis
 pub(super) fn collect_col_refs<'a>(
     expr: &'a Expr,
     ctx: &BodyContext<'a>,
-    out: &mut Vec<(&'a str, TextRange)>,
+    out: &mut Vec<(Option<&'a str>, &'a str, TextRange)>,
 ) {
-    if let Some(found) = col_reference(expr) {
-        out.push(found);
+    if let Some((name, range)) = col_reference(expr) {
+        out.push((None, name, range));
         return;
     }
     // `df.X` attribute access — recognized as a column reference to `X`
-    // when `df` is a Name bound to a DataFrame in the current scope. We
-    // ignore which `df` is referenced (Spark would have ambiguity issues
-    // for non-joined references; that's runtime's problem). The column
-    // name `X` is checked against the receiver's schema.
+    // when `df` is a Name bound to a DataFrame in the current scope. The
+    // receiver Name is captured in the first tuple slot so consumers can
+    // route the lookup to THIS df's schema rather than the surrounding
+    // method-chain's (closes the v1.5 I1 cross-DataFrame leak — e.g.
+    // `df.select(df_other.x)` checks `x` on `df_other`, not `df`).
     //
     // Importantly, this filters out things like `F.add_months(...)` —
     // `F` is not in `ctx`, so the attribute is left for the default walker
@@ -273,7 +274,11 @@ pub(super) fn collect_col_refs<'a>(
         && let Some(name) = attr.value.as_name_expr()
         && ctx.lookup(name.id.as_str()).is_some()
     {
-        out.push((attr.attr.id.as_str(), attr.attr.range));
+        out.push((
+            Some(name.id.as_str()),
+            attr.attr.id.as_str(),
+            attr.attr.range,
+        ));
         return;
     }
     // `df["X"]` subscript access — the sibling of `df.X`. Real PySpark code
@@ -282,13 +287,13 @@ pub(super) fn collect_col_refs<'a>(
     // `col("X")`. The receiver name must be bound in the current scope
     // (same ctx discriminator as the attribute arm) and the slice must be
     // a string literal — computed subscripts fall through to the default
-    // walker.
+    // walker. Receiver-Name captured for cross-DataFrame routing as above.
     if let Some(sub) = expr.as_subscript_expr()
         && let Some(name) = sub.value.as_name_expr()
         && ctx.lookup(name.id.as_str()).is_some()
         && let Some(s) = sub.slice.as_string_literal_expr()
     {
-        out.push((s.value.to_str(), s.range()));
+        out.push((Some(name.id.as_str()), s.value.to_str(), s.range()));
         return;
     }
     // Recognize `F.sum("x")` and similar — for the listed function names,
@@ -319,7 +324,7 @@ pub(super) fn collect_col_refs<'a>(
                 for (i, arg) in call.arguments.args.iter().enumerate() {
                     if i == col_idx {
                         if let Some(s) = arg.as_string_literal_expr() {
-                            out.push((s.value.to_str(), s.range()));
+                            out.push((None, s.value.to_str(), s.range()));
                         } else {
                             collect_col_refs(arg, ctx, out);
                         }
@@ -347,7 +352,7 @@ pub(super) fn collect_col_refs<'a>(
         {
             for arg in &call.arguments.args {
                 if let Some(s) = arg.as_string_literal_expr() {
-                    out.push((s.value.to_str(), s.range()));
+                    out.push((None, s.value.to_str(), s.range()));
                 } else {
                     collect_col_refs(arg, ctx, out);
                 }
