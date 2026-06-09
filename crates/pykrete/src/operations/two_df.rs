@@ -262,9 +262,11 @@ fn parse_on_arg<'a>(expr: Option<&'a Expr>, ctx: &BodyContext<'a>) -> JoinOn<'a>
             let Some(s) = elt.as_string_literal_expr() else {
                 // Mixed list (some strings, some Columns): bail out to
                 // "complex expression" rather than half-checking.
-                let mut refs = Vec::new();
-                collect_col_refs(expr, ctx, &mut refs);
-                return JoinOn::Expression(refs);
+                let mut collected = Vec::new();
+                collect_col_refs(expr, ctx, &mut collected);
+                // Join-on consumer reasons against `left + right` union;
+                // it doesn't need per-ref receiver-Name (v1.5 §3.1). Strip.
+                return JoinOn::Expression(collected.into_iter().map(|(_, n, r)| (n, r)).collect());
             };
             keys.push((s.value.to_str(), s.range()));
         }
@@ -274,9 +276,9 @@ fn parse_on_arg<'a>(expr: Option<&'a Expr>, ctx: &BodyContext<'a>) -> JoinOn<'a>
     // them, etc. Walk the expression for every column reference so
     // `check_join_keys` can validate each against the union of both
     // sides.
-    let mut refs = Vec::new();
-    collect_col_refs(expr, ctx, &mut refs);
-    JoinOn::Expression(refs)
+    let mut collected = Vec::new();
+    collect_col_refs(expr, ctx, &mut collected);
+    JoinOn::Expression(collected.into_iter().map(|(_, n, r)| (n, r)).collect())
 }
 
 fn check_join_keys<'a>(

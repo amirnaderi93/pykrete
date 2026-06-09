@@ -340,15 +340,15 @@ pub(super) fn report_subscript_col_refs<'a>(
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
+    let mut refs: Vec<(Option<&'a str>, &'a str, TextRange)> = Vec::new();
     match slice {
         Expr::StringLiteral(lit) => {
-            refs.push((lit.value.to_str(), lit.range()));
+            refs.push((None, lit.value.to_str(), lit.range()));
         }
         Expr::List(list) => {
             for elt in &list.elts {
                 if let Expr::StringLiteral(lit) = elt {
-                    refs.push((lit.value.to_str(), lit.range()));
+                    refs.push((None, lit.value.to_str(), lit.range()));
                 } else {
                     // Mixed shapes (`df[["a", some_var]]`) — drop the
                     // entire list. v1.3 only checks all-literal lists;
@@ -1215,9 +1215,9 @@ fn check_sample_by_args<'a>(
     let Some(first) = call.arguments.args.first() else {
         return;
     };
-    let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
+    let mut refs: Vec<(Option<&'a str>, &'a str, TextRange)> = Vec::new();
     if let Some(lit) = first.as_string_literal_expr() {
-        refs.push((lit.value.to_str(), lit.range()));
+        refs.push((None, lit.value.to_str(), lit.range()));
     } else {
         collect_col_refs(first, ctx, &mut refs);
     }
@@ -1237,10 +1237,10 @@ fn check_describe_args<'a>(
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
+    let mut refs: Vec<(Option<&'a str>, &'a str, TextRange)> = Vec::new();
     for arg in &call.arguments.args {
         if let Some(lit) = arg.as_string_literal_expr() {
-            refs.push((lit.value.to_str(), lit.range()));
+            refs.push((None, lit.value.to_str(), lit.range()));
         } else {
             collect_col_refs(arg, ctx, &mut refs);
         }
@@ -1260,7 +1260,7 @@ fn check_observe_args<'a>(
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
+    let mut refs: Vec<(Option<&'a str>, &'a str, TextRange)> = Vec::new();
     for arg in call.arguments.args.iter().skip(1) {
         collect_col_refs(arg, ctx, &mut refs);
         report_expr_sql_refs(arg, receiver, source, line_index, diagnostics);
@@ -2244,7 +2244,7 @@ fn handle_agg<'a>(
         other => (Vec::new(), other.clone(), false),
     };
 
-    let mut refs: Vec<(&'a str, TextRange)> = Vec::new();
+    let mut refs: Vec<(Option<&'a str>, &'a str, TextRange)> = Vec::new();
     // Group keys keep their type from the underlying schema; aggregate
     // outputs are typed via `select_arg_type` (a plain column ref is
     // typed, an aggregate function result is unknown for now).
