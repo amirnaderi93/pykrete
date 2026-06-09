@@ -207,14 +207,16 @@ def f():
 // schema for ANY dialect would let a subsequent column reference
 // resolve against the pandas schema, silently masking the broken
 // chain. With the spec-compliant gate, the downstream `select`
-// against an Unknown schema yields no D0030 for either the good or
-// the bad name (no schema to consult); we assert the chain dies
-// cleanly by confirming a follow-up positive col-ref does NOT
-// surface a schema-extending behavior. The negative space here is
-// the absence of pandas dispatch on a Pandas→Pandas `.toPandas()`
-// call, which we test by checking that `.rename` after it does NOT
-// mutate the schema (the renamed column wouldn't resolve, but the
-// original would).
+// the gate's job is to drop the schema on non-Spark receivers
+// (Pandas → Pandas .toPandas() is idempotent / no-op). We pin the
+// drop by chaining .assign(amount=col("statuss")) after — a typo of
+// "status". If the gate is BROKEN (fires on any receiver), `again`
+// carries the Orders schema through, the col("statuss") lookup
+// fails, and D0030 fires. With a CORRECT gate, `again` has no
+// schema, no col-check runs, no D0030. assert_no_diagnostics
+// distinguishes correct vs broken gate behavior. (Round-1 review
+// strengthening — original test asserted on a no-op program and
+// passed for any gate.)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -227,7 +229,7 @@ class Orders(Schema):
 
 def f(pdf: PandasFrame[Orders]):
     again = pdf.toPandas()
-    return again
+    return again.assign(amount=col("statuss"))
 "#,
     );
     assert_no_diagnostics(&result);
