@@ -53,6 +53,13 @@ def f(df: SparkFrame[Orders]):
 // `.head()` was a blanket terminal, the chain died, and D0030 did NOT
 // fire — silent miss. Vacuity-verified by reverting the gate locally
 // and confirming this test fails (documented in the PR brief).
+//
+// Spec §2.3 illustrated this case with `.head().filter(...)`. We use
+// `.assign(amount=col(...))` instead because `.assign` is pandas-only:
+// it pins not just "chain survives" but "the PandasFrame dialect tag
+// survives through .head()". `.filter` exists on both dialects and
+// would not catch a dialect-tag drop — `.assign` is the stricter
+// guard. (Round-1 review paper-trail.)
 // ---------------------------------------------------------------------------
 
 #[test]
