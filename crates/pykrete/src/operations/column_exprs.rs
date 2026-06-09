@@ -69,6 +69,21 @@ pub(super) fn infer_expr_type<'a>(
     {
         return schema.field_type(lit.value.to_str(), tcx.schemas);
     }
+    // v1.5 PR-C — `pdf.loc[:, "col"]` literal column projection. Same
+    // column-VALUE return as the `df["x"]` arm above (a pandas Series is
+    // a column-scalar; Series tracking is out of v1.5 scope). Gated on
+    // the receiver Name being a DataFrame-bound binding so a plain
+    // Python `bag.loc[:, "k"]` against a non-frame local falls through.
+    // Dialect gating is left to the surrounding D0030-firing path in
+    // `analyze_expr` — here we only carry the column type when the
+    // shape matches. Non-literal column indexers (list, slice, callable,
+    // boolean-mask row) are v1.6+ scope and fall through.
+    if let Expr::Subscript(sub) = expr
+        && let Some((name, col_lit)) = super::expr::loc_literal_subscript(sub)
+        && body.lookup(name.id.as_str()).is_some()
+    {
+        return schema.field_type(col_lit.value.to_str(), tcx.schemas);
+    }
     match expr {
         Expr::Call(call) => {
             if let Some(attr) = call.func.as_attribute_expr() {
