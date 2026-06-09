@@ -492,6 +492,10 @@ fn pandas_list_kwarg<'a>(call: &'a ExprCall, name: &str) -> Option<&'a ruff_pyth
 /// when a gate matches does the helper call [`analyze_expr`] to resolve
 /// the schema view. This avoids double-walking args via the §10 fallback
 /// at the [`analyze_expr`] Call-arm when neither gate fires.
+///
+/// **Keep in sync** with `createdataframe_handoff_dialect` (`driver.rs`):
+/// any change to the gate-set must update both helpers (the dialect-side
+/// helper stays cheap, but the gate logic must agree exactly).
 fn createdataframe_handoff_view<'a>(
     call: &'a ExprCall,
     ctx: &BodyContext<'a>,

@@ -12,9 +12,15 @@
 //! Each test below pins one cell of the gate matrix:
 //! - V15A2_gate_b_pandas_arg_re_tags_as_spark (positive, gate b).
 //! - V15A2_gate_a_schema_kwarg_re_tags_as_spark (positive, gate a).
-//! - V15A2_neither_gate_falls_through_to_unknown (negative-space).
-//! - V15A2_not_spark_receiver_no_gate_falls_through (negative-space —
-//!   the structural-match anti-pattern this PR explicitly avoids).
+//! - V15A2_lhs_dialect_flips_to_spark_via_pr_a3_terminal (positive,
+//!   pins the LHS dialect-tag flip independently of the schema view —
+//!   uses PR-A3's `.head()` Spark-terminal gate as a discriminator).
+//! - V15A2_neither_gate_falls_through_to_unknown (regression-guard —
+//!   passes via dispatcher fall-through pre-PR-A2; locks the negative
+//!   behavior in for any future structural-match arm).
+//! - V15A2_not_spark_receiver_no_gate_falls_through (regression-guard
+//!   for the same — passes pre-PR-A2 via fall-through; pins the no-
+//!   structural-match constraint against future drift).
 //! - V15A2_schema_kwarg_unresolvable_falls_back_to_arg (negative on
 //!   gate a, positive on gate b — gate ordering / fall-back).
 
@@ -73,15 +79,54 @@ def f(spark: SparkSession, rows: list, schema_var: SparkFrame[Sales]):
 }
 
 // ---------------------------------------------------------------------------
+// V15A2_lhs_dialect_flips_to_spark_via_pr_a3_terminal:
+//
+// Pins the LHS dialect-tag flip INDEPENDENTLY of the schema view. The
+// gate-a/b tests above only exercise the schema; they pass whether the
+// LHS is tagged Spark or stays tagged Pandas (since col-existence checks
+// fire on either dialect with Sales schema). This test uses PR-A3's
+// `.head()` Spark-terminal gate as a discriminator:
+//
+// - Correct flip (sdf = SparkFrame[Sales]): .head() is a Spark terminal,
+//   chain dies, schema dropped; .assign(amount=col("nonexistent")) has
+//   no schema to check → no D0030.
+// - Broken flip (sdf stays PandasFrame[Sales], inheriting from pdf):
+//   .head() is a Pandas pass-through (per PR-A3 gate), schema preserved;
+//   .assign(amount=col("nonexistent")) checks against Sales → D0030 fires.
+//
+// assert_does_not_have_code distinguishes correct flip vs stayed-Pandas.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn V15A2_lhs_dialect_flips_to_spark_via_pr_a3_terminal() {
+    let result = check_strict(
+        r#"
+class Sales(Schema):
+    amount: int
+
+def f(spark: SparkSession, pdf: PandasFrame[Sales]):
+    sdf = spark.createDataFrame(pdf)
+    return sdf.head().assign(amount=col("nonexistent"))
+"#,
+    );
+    assert_does_not_have_code(&result, "D0030");
+}
+
+// ---------------------------------------------------------------------------
 // V15A2_neither_gate_falls_through_to_unknown:
 //
 // `pdf` has no `PandasFrame[...]` annotation and there is no `schema=`
 // kwarg. Per spec §2.2 step 3, auto-inference without either source is
 // explicitly OUT for v1.5 — the call result is Unknown. A chained
 // `.select("nonexistent")` against an Unknown receiver does NOT fire
-// D0030 because there is no schema to compare against. This is the
-// load-bearing negative-space test for the "no structural match"
-// constraint.
+// D0030 because there is no schema to compare against.
+//
+// REGRESSION GUARD (not load-bearing today): this test passes both
+// WITH and WITHOUT PR-A2 because pre-PR-A2 createDataFrame falls
+// through every dispatcher arm to Unknown anyway. We keep the test as
+// a future-drift guard — if anyone later adds a structural-match arm
+// to PR-A2's site, this test will fail. The load-bearing positive
+// coverage is in V15A2_gate_a/b/lhs_dialect_flips.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -105,6 +150,10 @@ def f(spark: SparkSession, pdf):
 // does NOT use structural matching on the receiver (which would have
 // mis-tagged this call as Spark, mirroring the `is_spark_opaque_source_call`
 // pattern that the spec explicitly rejected for PR-A2).
+//
+// REGRESSION GUARD (not load-bearing today): same shape as
+// V15A2_neither_gate — pre-PR-A2 fall-through gives the same outcome.
+// Kept to pin the no-structural-match constraint against future drift.
 // ---------------------------------------------------------------------------
 
 #[test]

@@ -156,6 +156,11 @@ pub(crate) fn inherited_dialect<'a>(
 /// propagated to the LHS at the bind_df callsite. The check is
 /// structural-by-dialect, not by view existence, to keep this side of
 /// the loop cheap (no analyze_expr descent into argument subtrees here).
+///
+/// **Keep in sync** with `createdataframe_handoff_view` (`expr.rs`):
+/// any change to the gate-set (the (a)/(b) conditions) must update both
+/// helpers. They are deliberately separate so the dialect path stays
+/// cheap (no view resolution), but the gate logic must agree exactly.
 fn createdataframe_handoff_dialect<'a>(
     call: &ruff_python_ast::ExprCall,
     ctx: &BodyContext<'a>,
