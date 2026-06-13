@@ -863,12 +863,14 @@ fn analyze_method_call_inner<'a>(
     if is_terminal_method(method, receiver_dialect) {
         return None;
     }
-    // v1.5 PR-A3: `head`/`tail`/`first` on a pandas receiver are NOT
-    // terminals — they return a row-sliced DataFrame. The terminal
-    // recognizer above already dialect-gates and returns false here;
-    // route the chain to the pass-through arm so a follow-up
-    // `pdf.head().assign(...)` still sees the schema. Spec §2.3.
-    if receiver_is_pandas_inherited && matches!(method, "head" | "tail" | "first") {
+    // v1.5 PR-A3 / v1.6 PR-A2: `head`/`tail`/`first`/`take` on a pandas
+    // receiver are NOT terminals — they return a row-sliced DataFrame.
+    // The terminal recognizer above already dialect-gates and returns
+    // false here; route the chain to the pass-through arm so a follow-up
+    // `pdf.head().assign(...)` / `pdf.take([0, 2]).assign(...)` still
+    // sees the schema. Spec §2.3 (v1.5 PR-A3) / §3.2 (v1.6 PR-A2 adds
+    // `take`).
+    if receiver_is_pandas_inherited && matches!(method, "head" | "tail" | "first" | "take") {
         return Some(receiver);
     }
 

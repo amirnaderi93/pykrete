@@ -270,14 +270,43 @@ pub(super) fn collect_col_refs<'a>(
     // Importantly, this filters out things like `F.add_months(...)` —
     // `F` is not in `ctx`, so the attribute is left for the default walker
     // to descend into, and `add_months` is not collected.
+    //
+    // v1.6 PR-A2 — `loc`/`iloc` are pandas indexer accessors, NOT column
+    // names. Without this gate, a nested arg like
+    // `pdf.assign(bag=pdf.loc[:, "x"])` walks the subscript-fall-through
+    // into `pdf.loc` (Attribute) and false-fires D0030 on `loc`. The
+    // literal-form `pdf.loc[:, "x"]` arm in `column_exprs.rs:82-88`
+    // handles the inference; this arm needs to skip the accessor names
+    // outright. Spec §3.2.
     if let Some(attr) = expr.as_attribute_expr()
         && let Some(name) = attr.value.as_name_expr()
         && ctx.lookup(name.id.as_str()).is_some()
+        && !matches!(attr.attr.id.as_str(), "loc" | "iloc")
     {
         out.push((
             Some(name.id.as_str()),
             attr.attr.id.as_str(),
             attr.attr.range,
+        ));
+        return;
+    }
+    // `pdf.loc[:, "literal"]` literal-form col-ref recognition (Spec §3.2 —
+    // PR-A2 second seam). The standalone-form arm in `expr.rs:246-262` only
+    // reaches via top-level `analyze_expr`; for nested-arg position like
+    // `pdf.assign(bad=pdf.loc[:, "typo"] + 1)` the col-ref walker enters
+    // here, and without this arm the typo never fires D0030. Uses the
+    // existing `loc_literal_subscript` recognizer at `expr.rs:424` + the
+    // Pandas dialect gate to avoid emitting on Spark frames (which don't
+    // have `.loc`). Sibling of the `df["X"]` arm below.
+    if let Some(sub) = expr.as_subscript_expr()
+        && let Some((name, col_lit)) = super::expr::loc_literal_subscript(sub)
+        && ctx.lookup(name.id.as_str()).is_some()
+        && ctx.lookup_dialect(name.id.as_str()) == Some(crate::dataframe::Dialect::Pandas)
+    {
+        out.push((
+            Some(name.id.as_str()),
+            col_lit.value.to_str(),
+            col_lit.range(),
         ));
         return;
     }
