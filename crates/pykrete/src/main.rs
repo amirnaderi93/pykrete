@@ -749,10 +749,12 @@ fn find_alias_token_end(line: &str, byte_start: usize) -> Option<usize> {
     Some(after)
 }
 
-/// Minimal unified-diff generator. Format mirrors `ruff format --diff`
-/// (3 lines of context, `--- a/path` / `+++ b/path` headers, `@@ -L,N
-/// +L,N @@` hunk headers). Good enough for the skeleton; PR-M2 may
-/// refine if reviewer flags an edge case.
+/// Minimal unified-diff generator for v1.6 PR-M1. Emits one whole-file
+/// hunk (`@@ -1,N +1,M @@`) under `--- a/path` / `+++ b/path` headers,
+/// with every old line as `-` and every new line as `+`; no context
+/// lines. `patch -p1` accepts it. Per-edit LCS hunks with surrounding
+/// context are deferred to PR-M2 once `AliasSite` carries a byte range
+/// (see TODO at `alias_report.rs:30-33`).
 fn unified_diff(path: &str, old: &str, new: &str) -> String {
     let old_lines: Vec<&str> = old.split_inclusive('\n').collect();
     let new_lines: Vec<&str> = new.split_inclusive('\n').collect();
