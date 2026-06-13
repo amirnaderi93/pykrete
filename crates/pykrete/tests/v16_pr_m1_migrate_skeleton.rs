@@ -1,10 +1,10 @@
 //! v1.6 PR-M1 — `pykrete migrate` subcommand skeleton.
 //!
 //! Covers the CLI dispatch + dry-run modes (`--check` / `--diff`).
-//! The actual source rewriter ships in PR-M2; default mode here
-//! prints a deferral notice on stderr and exits 2 (non-zero so
-//! CI gating on `pykrete migrate` does not silently pass during
-//! the M1 → M2 transition).
+//! Default mode is the in-place rewriter, exercised by PR-M2; this
+//! file keeps a smoke test there (`migrate_default_mode_rewrites_in_place`)
+//! and defers exhaustive rewriter-correctness tests to
+//! `v16_pr_m2_rewriter_core.rs`.
 //!
 //! Negative-space tests per v14-rule 4: no-args usage, mutually
 //! exclusive flags, nonexistent file, unknown option.
@@ -148,7 +148,13 @@ def f(s: DataFrame[Sale]) -> DataFrame[Sale]:
         stdout.contains("+++ b/"),
         "diff missing '+++ b/' header: {stdout}"
     );
-    assert!(stdout.contains("@@ "), "diff missing hunk header: {stdout}");
+    // PR-M2: per-edit hunks. The def line is `4` in `original` (1: class,
+    // 2: indent, 3: blank, 4: def). Both aliases on one line collapse
+    // into a single `@@ -4,1 +4,1 @@` hunk.
+    assert!(
+        stdout.contains("@@ -4,1 +4,1 @@"),
+        "diff missing per-edit hunk header for line 4: {stdout}"
+    );
     assert!(
         stdout.contains("-def f(s: DataFrame[Sale]) -> DataFrame[Sale]:"),
         "diff missing minus-line for original signature: {stdout}"
@@ -193,11 +199,12 @@ def f(s: SparkFrame[Sale]) -> SparkFrame[Sale]:
 }
 
 // ---------------------------------------------------------------
-// Default mode: deferral notice + exit 2 (round-2 reviewer caught CI footgun)
+// Default mode: in-place rewrite (PR-M2; smoke test here, full
+// coverage in v16_pr_m2_rewriter_core.rs)
 // ---------------------------------------------------------------
 
 #[test]
-fn migrate_default_mode_exits_nonzero_until_pr_m2_lands() {
+fn migrate_default_mode_rewrites_in_place() {
     let dir = tmpdir("default");
     let pyk = write_fixture(
         &dir,
@@ -211,24 +218,21 @@ fn migrate_default_mode_exits_nonzero_until_pr_m2_lands() {
         .output()
         .expect("run pykrete migrate");
 
-    // Per PR-M1 round-2 reviewer finding: default mode must exit non-zero
-    // so CI gating on `pykrete migrate src/` does not silently pass during
-    // the M1 → M2 transition. Once PR-M2 lands and the rewriter ships, this
-    // test will need updating to assert success on rewrite.
+    assert!(
+        out.status.success(),
+        "default mode should exit 0 once the rewriter ships, got {:?}; stderr={}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("rewrote:"),
+        "stdout should report 'rewrote: <path>': {stdout}"
+    );
+    let after = fs::read_to_string(&pyk).expect("read back");
     assert_eq!(
-        out.status.code(),
-        Some(2),
-        "expected exit 2 from PR-M1 skeleton (CI footgun guard), got {:?}",
-        out.status
-    );
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("in-place rewrite ships in PR-M2"),
-        "stderr missing PR-M2 deferral marker: {stderr}"
-    );
-    assert!(
-        stderr.contains("PR-M2") || stderr.contains("--check") || stderr.contains("--diff"),
-        "stderr should point at PR-M2 or the dry-run flags: {stderr}"
+        after, "def f(s: SparkFrame[Sale]) -> SparkFrame[Sale]:\n    return s\n",
+        "file contents must be rewritten",
     );
 }
 
