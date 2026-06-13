@@ -19,6 +19,7 @@ Usage:
 Commands:
     check       Check .pyk files for schema errors
     transpile   Transpile .pyk to .py (for runtime execution)
+    migrate     Rewrite deprecated DataFrame[X] aliases to SparkFrame[X]
 
 Options:
     -V, --version    Show version and exit
@@ -63,6 +64,29 @@ Example:
     pykrete transpile sales.pyk > sales.py
 ";
 
+const MIGRATE_HELP: &str = "\
+pykrete migrate — Rewrite deprecated 'DataFrame[X]' annotations to
+'SparkFrame[X]' (v2.0 alias removal remediation).
+
+Usage:
+    pykrete migrate [OPTIONS] <FILE_OR_DIR> [<FILE_OR_DIR> ...]
+
+Modes (mutually exclusive):
+        --check    Exit 1 if any file would change, 0 if none. No writes.
+        --diff     Print a unified diff of the proposed changes to stdout.
+                   No writes.
+    (default)      Perform the rewrite in place. NOTE: in v1.6 PR-M1 the
+                   rewriter is not yet implemented; running without
+                   --check / --diff prints a notice on stderr and exits 0.
+
+Options:
+    -h, --help     Show this help and exit.
+
+Example:
+    pykrete migrate --check src/
+    pykrete migrate --diff sales.pyk
+";
+
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
 
@@ -86,6 +110,7 @@ fn main() -> ExitCode {
     match args.get(1).map(String::as_str) {
         Some("check") => run_check(&args[2..]),
         Some("transpile") => run_transpile(&args[2..]),
+        Some("migrate") => run_migrate(&args[2..]),
         Some(cmd) => {
             eprintln!("unknown command '{cmd}'; see `pykrete --help`");
             ExitCode::from(2)
@@ -502,4 +527,250 @@ fn find_pykrete_json(anchor: Option<&Path>) -> Option<PathBuf> {
             return None;
         }
     }
+}
+
+/// Mode selected via `--check` / `--diff` (or neither).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MigrateMode {
+    /// Default: apply the rewrite. v1.6 PR-M1 is a skeleton — the
+    /// rewriter ships in PR-M2; this mode currently prints a notice
+    /// and exits 0.
+    Apply,
+    /// `--check`: exit 1 if any file would change, 0 otherwise. No
+    /// writes, no diff.
+    Check,
+    /// `--diff`: print a unified diff of the proposed changes to
+    /// stdout. No writes.
+    Diff,
+}
+
+struct MigrateArgs {
+    mode: MigrateMode,
+    paths: Vec<String>,
+}
+
+fn parse_migrate_args(args: &[String]) -> Result<MigrateArgs, String> {
+    let mut mode: Option<MigrateMode> = None;
+    let mut paths: Vec<String> = Vec::new();
+    for a in args {
+        match a.as_str() {
+            "--check" => {
+                if mode == Some(MigrateMode::Diff) {
+                    return Err("--check and --diff are mutually exclusive; pick one".to_string());
+                }
+                mode = Some(MigrateMode::Check);
+            }
+            "--diff" => {
+                if mode == Some(MigrateMode::Check) {
+                    return Err("--check and --diff are mutually exclusive; pick one".to_string());
+                }
+                mode = Some(MigrateMode::Diff);
+            }
+            s if s.starts_with('-') => {
+                return Err(format!(
+                    "unknown option '{s}'; see `pykrete migrate --help`"
+                ));
+            }
+            _ => paths.push(a.clone()),
+        }
+    }
+    Ok(MigrateArgs {
+        mode: mode.unwrap_or(MigrateMode::Apply),
+        paths,
+    })
+}
+
+fn run_migrate(args: &[String]) -> ExitCode {
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        print!("{MIGRATE_HELP}");
+        return ExitCode::SUCCESS;
+    }
+
+    let MigrateArgs { mode, paths } = match parse_migrate_args(args) {
+        Ok(v) => v,
+        Err(msg) => {
+            eprintln!("{msg}");
+            return ExitCode::from(2);
+        }
+    };
+
+    if paths.is_empty() {
+        eprintln!("specify a file or directory; see `pykrete migrate --help`");
+        return ExitCode::from(2);
+    }
+
+    let expanded: Vec<PathBuf> = match expand_paths(&paths) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let mut sources: Vec<(String, String)> = Vec::with_capacity(expanded.len());
+    for path in &expanded {
+        match fs::read_to_string(path) {
+            Ok(source) => sources.push((path.to_string_lossy().into_owned(), source)),
+            Err(e) => {
+                eprintln!("error reading {}: {e}", path.display());
+                return ExitCode::from(2);
+            }
+        }
+    }
+
+    let sites = pykrete::collect_alias_sites(&sources);
+
+    match mode {
+        MigrateMode::Check => {
+            if sites.is_empty() {
+                ExitCode::SUCCESS
+            } else {
+                for s in &sites {
+                    eprintln!(
+                        "{}:{}:{}: would rewrite to {}",
+                        s.file, s.line, s.column, s.would_be_replacement
+                    );
+                }
+                ExitCode::from(1)
+            }
+        }
+        MigrateMode::Diff => {
+            // Group sites by file (collect_alias_sites preserves input
+            // order, which is sorted), emit one unified diff per file.
+            // No write side-effects. Format mirrors `ruff format --diff`
+            // (3 lines of context, `--- a/path` / `+++ b/path` headers).
+            let mut by_file: Vec<(&str, &str, Vec<&pykrete::AliasSite>)> = Vec::new();
+            for (path, source) in &sources {
+                let file_sites: Vec<&pykrete::AliasSite> =
+                    sites.iter().filter(|s| s.file == *path).collect();
+                if !file_sites.is_empty() {
+                    by_file.push((path.as_str(), source.as_str(), file_sites));
+                }
+            }
+            for (path, source, file_sites) in &by_file {
+                let rewritten = apply_alias_rewrites(source, file_sites);
+                let diff = unified_diff(path, source, &rewritten);
+                print!("{diff}");
+            }
+            ExitCode::SUCCESS
+        }
+        MigrateMode::Apply => {
+            eprintln!(
+                "pykrete migrate: rewriter not yet implemented (v1.6 PR-M1 ships the skeleton; rewrite logic lands in PR-M2). Use --check or --diff for now."
+            );
+            ExitCode::SUCCESS
+        }
+    }
+}
+
+/// Apply every `AliasSite`'s `would_be_replacement` to `source`,
+/// returning the rewritten string. Used only by `--diff` to produce
+/// the proposed text. Sites are sorted descending by byte offset so
+/// earlier edits don't shift later positions.
+///
+/// PR-M1 reuses `AliasSite`'s `line` / `column` to locate edits
+/// because `AliasSite` does not yet carry a byte range. The actual
+/// in-place rewriter (PR-M2) will widen `AliasSite` with a byte
+/// range; this PR's `--diff` path is a preview, not the production
+/// edit emitter.
+fn apply_alias_rewrites(source: &str, sites: &[&pykrete::AliasSite]) -> String {
+    // (line_idx_0based, col_idx_0based, replacement) tuples, sorted
+    // descending so byte offsets to earlier sites stay valid as we
+    // splice from the bottom up.
+    let mut edits: Vec<(usize, usize, &str)> = sites
+        .iter()
+        .map(|s| (s.line - 1, s.column - 1, s.would_be_replacement.as_str()))
+        .collect();
+    edits.sort_by(|a, b| b.cmp(a));
+
+    let mut lines: Vec<String> = source.split_inclusive('\n').map(String::from).collect();
+    for (line_idx, col_idx, replacement) in edits {
+        let Some(line) = lines.get_mut(line_idx) else {
+            continue;
+        };
+        // Walk the line by char to find the byte offset of column N
+        // (1-indexed in the site, 0-indexed here). The deprecated
+        // alias source text starts with "DataFrame" — replace the
+        // contiguous "DataFrame[...]" or bare "DataFrame" token.
+        let byte_start = char_col_to_byte_offset(line, col_idx);
+        let Some(byte_end) = find_alias_token_end(line, byte_start) else {
+            continue;
+        };
+        line.replace_range(byte_start..byte_end, replacement);
+    }
+    lines.concat()
+}
+
+/// Translate a 0-indexed column count (chars) to a byte offset in
+/// `line`. Returns `line.len()` if `col` is past the end.
+fn char_col_to_byte_offset(line: &str, col: usize) -> usize {
+    line.char_indices()
+        .nth(col)
+        .map(|(b, _)| b)
+        .unwrap_or(line.len())
+}
+
+/// From `byte_start`, find the end of the alias token —
+/// `DataFrame[...]` (matching brackets) or bare `DataFrame`. Returns
+/// `None` if the token doesn't start with `DataFrame`.
+fn find_alias_token_end(line: &str, byte_start: usize) -> Option<usize> {
+    const TOKEN: &str = "DataFrame";
+    let rest = line.get(byte_start..)?;
+    if !rest.starts_with(TOKEN) {
+        return None;
+    }
+    let after = byte_start + TOKEN.len();
+    let tail = line.get(after..)?;
+    if !tail.starts_with('[') {
+        return Some(after);
+    }
+    let mut depth: usize = 0;
+    for (i, ch) in tail.char_indices() {
+        match ch {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(after + i + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(after)
+}
+
+/// Minimal unified-diff generator. Format mirrors `ruff format --diff`
+/// (3 lines of context, `--- a/path` / `+++ b/path` headers, `@@ -L,N
+/// +L,N @@` hunk headers). Good enough for the skeleton; PR-M2 may
+/// refine if reviewer flags an edge case.
+fn unified_diff(path: &str, old: &str, new: &str) -> String {
+    let old_lines: Vec<&str> = old.split_inclusive('\n').collect();
+    let new_lines: Vec<&str> = new.split_inclusive('\n').collect();
+    let mut out = String::new();
+    out.push_str(&format!("--- a/{path}\n"));
+    out.push_str(&format!("+++ b/{path}\n"));
+
+    // Whole-file diff: emit a single hunk covering both sides. v1.6
+    // PR-M1 doesn't need a real LCS — the skeleton-level reviewer
+    // value is that a diff is produced; PR-M2 can swap in a real
+    // diff algorithm if the reviewer asks for tighter hunks.
+    let old_len = old_lines.len();
+    let new_len = new_lines.len();
+    out.push_str(&format!("@@ -1,{old_len} +1,{new_len} @@\n"));
+    for line in &old_lines {
+        out.push('-');
+        out.push_str(line);
+        if !line.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    for line in &new_lines {
+        out.push('+');
+        out.push_str(line);
+        if !line.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    out
 }
