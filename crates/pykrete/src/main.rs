@@ -77,7 +77,8 @@ Modes (mutually exclusive):
                    No writes.
     (default)      Perform the rewrite in place. NOTE: in v1.6 PR-M1 the
                    rewriter is not yet implemented; running without
-                   --check / --diff prints a notice on stderr and exits 0.
+                   --check / --diff prints a deferral notice on stderr
+                   and exits 2. Use --check / --diff or wait for PR-M2.
 
 Options:
     -h, --help     Show this help and exit.
@@ -533,8 +534,9 @@ fn find_pykrete_json(anchor: Option<&Path>) -> Option<PathBuf> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MigrateMode {
     /// Default: apply the rewrite. v1.6 PR-M1 is a skeleton — the
-    /// rewriter ships in PR-M2; this mode currently prints a notice
-    /// and exits 0.
+    /// rewriter ships in PR-M2; this mode currently prints a deferral
+    /// notice and exits 2 (non-zero so CI gating on `pykrete migrate`
+    /// does not silently pass during the M1 → M2 transition).
     Apply,
     /// `--check`: exit 1 if any file would change, 0 otherwise. No
     /// writes, no diff.
@@ -637,8 +639,12 @@ fn run_migrate(args: &[String]) -> ExitCode {
         MigrateMode::Diff => {
             // Group sites by file (collect_alias_sites preserves input
             // order, which is sorted), emit one unified diff per file.
-            // No write side-effects. Format mirrors `ruff format --diff`
-            // (3 lines of context, `--- a/path` / `+++ b/path` headers).
+            // No write side-effects. v1.6 PR-M1 ships minimal unified-diff
+            // format (whole-file `-`/`+` blocks under `--- a/path` / `+++
+            // b/path` headers) — `patch -p1` accepts it. Per-edit LCS
+            // hunks with 3 lines of context are deferred to PR-M2 once
+            // `AliasSite` carries a byte range (see TODO at
+            // alias_report.rs:30-33).
             let mut by_file: Vec<(&str, &str, Vec<&pykrete::AliasSite>)> = Vec::new();
             for (path, source) in &sources {
                 let file_sites: Vec<&pykrete::AliasSite> =

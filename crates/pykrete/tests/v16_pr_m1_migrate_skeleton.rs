@@ -2,7 +2,9 @@
 //!
 //! Covers the CLI dispatch + dry-run modes (`--check` / `--diff`).
 //! The actual source rewriter ships in PR-M2; default mode here
-//! prints a "not yet implemented" notice on stderr and exits 0.
+//! prints a deferral notice on stderr and exits 2 (non-zero so
+//! CI gating on `pykrete migrate` does not silently pass during
+//! the M1 → M2 transition).
 //!
 //! Negative-space tests per v14-rule 4: no-args usage, mutually
 //! exclusive flags, nonexistent file, unknown option.
@@ -191,7 +193,7 @@ def f(s: SparkFrame[Sale]) -> SparkFrame[Sale]:
 }
 
 // ---------------------------------------------------------------
-// Default mode: "not yet implemented" notice, exit 0
+// Default mode: deferral notice + exit 2 (round-2 reviewer caught CI footgun)
 // ---------------------------------------------------------------
 
 #[test]
