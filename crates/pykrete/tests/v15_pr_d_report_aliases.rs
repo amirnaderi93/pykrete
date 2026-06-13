@@ -62,7 +62,7 @@ def f(df: DataFrame[Sales]) -> SparkFrame[Sales]:
     );
     let (exit, v) = run_report(&p);
     assert_eq!(exit, 0, "report-mode must exit 0 even when records emitted");
-    assert_eq!(v["aliasReportVersion"], "1");
+    assert_eq!(v["aliasReportVersion"], "2");
     let aliases = v["aliases"].as_array().expect("aliases array");
     assert_eq!(
         aliases.len(),
@@ -168,7 +168,7 @@ def f(x: int) -> int:
     );
     let (exit, v) = run_report(&p);
     assert_eq!(exit, 0, "exit code 0 with empty report");
-    assert_eq!(v["aliasReportVersion"], "1");
+    assert_eq!(v["aliasReportVersion"], "2");
     let aliases = v["aliases"].as_array().expect("array");
     assert!(aliases.is_empty(), "zero records: {aliases:?}");
 }
@@ -228,7 +228,7 @@ def f(df: DataFrame[Sales]) -> DataFrame[Sales]:
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     let v: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
-    assert_eq!(v["aliasReportVersion"], "1");
+    assert_eq!(v["aliasReportVersion"], "2");
     assert_eq!(v["aliases"].as_array().expect("array").len(), 2);
 }
 

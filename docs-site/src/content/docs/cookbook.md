@@ -205,7 +205,7 @@ def report(refunds: SparkFrame[Refund]) -> DataFrame:
 
 **Goal.** The `DataFrame[X]` alias is deprecated through the v1.x line and removed in v2.0. Replace every site with the dialect-tagged canonical name (`SparkFrame[X]` or `PandasFrame[X]`) before the v2.0 upgrade — or before flipping `"typeCheckingMode": "strict"`, where v1.6+ escalates [`D0090`](/pykrete/reference/diagnostics/#deprecateddataframealias--d0090) to error.
 
-**Step 1 — preview.** `pykrete migrate --check src/` walks every `.pyk` file under `src/`, applies call-graph dialect adjudication to each binding's downstream usage, and prints the file + line of every site that would be rewritten:
+**Step 1 — preview.** `pykrete migrate --check src/` walks every `.pyk` file under `src/`, applies call-graph dialect adjudication to each binding's downstream usage, and prints the file + line of every site that would be rewritten. The walker reads `.pyk` files only — if your project uses `.py` files via the multiplexer integration, copy or rename them to `.pyk` before running `pykrete migrate`:
 
 ```bash
 $ pykrete migrate --check src/

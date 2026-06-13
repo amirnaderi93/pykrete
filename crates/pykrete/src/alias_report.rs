@@ -118,6 +118,14 @@ impl<'a> SourceOrderVisitor<'a> for AliasVisitor<'a> {
 /// after v1.6 PR-M3 adjudication. Branches on the typed `verdict` field;
 /// `None` (pre-adjudication, v1.5 behavior) falls back to `"spark"` per
 /// spec §5.1 ("v1.5 reports every site as `spark`").
+///
+/// `aliasReportVersion` is `"2"` as of v1.6: v1 (v1.5) emitted only
+/// `"spark"` for `resolvedDialect`; v2 (v1.6+) expands the value set to
+/// `{"spark", "pandas", "ambiguous"}`. Per the policy at
+/// `main.rs:336-343` ("changing its meaning: breaking — bump"), the
+/// value-set expansion bumps the envelope version even though the
+/// field name is unchanged. Consumers that switched on `"spark"` only
+/// need to handle the new discriminators.
 pub fn render_alias_report_json(sites: &[AliasSite]) -> String {
     let aliases: Vec<serde_json::Value> = sites
         .iter()
@@ -138,7 +146,7 @@ pub fn render_alias_report_json(sites: &[AliasSite]) -> String {
         })
         .collect();
     let payload = serde_json::json!({
-        "aliasReportVersion": "1",
+        "aliasReportVersion": "2",
         "aliases": aliases,
     });
     serde_json::to_string_pretty(&payload)
@@ -241,7 +249,7 @@ def f(df: DataFrame) -> DataFrame:
         let sites = collect(src);
         let json = render_alias_report_json(&sites);
         let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
-        assert_eq!(v["aliasReportVersion"], "1");
+        assert_eq!(v["aliasReportVersion"], "2");
         let aliases = v["aliases"].as_array().expect("array");
         assert_eq!(aliases.len(), 1);
         assert_eq!(aliases[0]["resolvedDialect"], "spark");
@@ -253,7 +261,7 @@ def f(df: DataFrame) -> DataFrame:
     fn empty_alias_report_still_has_payload_envelope() {
         let json = render_alias_report_json(&[]);
         let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
-        assert_eq!(v["aliasReportVersion"], "1");
+        assert_eq!(v["aliasReportVersion"], "2");
         assert!(v["aliases"].as_array().expect("array").is_empty());
     }
 }

@@ -321,7 +321,8 @@ def with_defaults(sales: SparkFrame[Sale]) -> DataFrame:
 | `replace` | pass-through | Value-substitution; schema unchanged. |
 | `transform` | modeled | `fn` argument resolved; input + output checked. |
 | `count` | modeled | Recognized terminal (returns `long`). |
-| `collect` / `take` | modeled | Recognized terminals on either dialect (`take` rare on pandas). |
+| `collect` | modeled | Recognized terminal on Spark (no pandas equivalent). |
+| `take` | modeled | v1.6+. Spark receivers: recognized terminal. Pandas receivers: pass-through (`pdf.take([0, 2])` returns a row-sliced DataFrame, chain keeps tracking on `PandasFrame[X]`). |
 | `first` / `head` / `tail` | modeled | v1.5+. Spark receivers: recognized terminals. Pandas receivers: pass-through (chain keeps tracking on `PandasFrame[X]`). |
 | `show` | modeled | Recognized terminal (returns None). |
 | `stat.crosstab` / `freqItems` / `approxQuantile` / `corr` / `cov` | unmodeled | |
