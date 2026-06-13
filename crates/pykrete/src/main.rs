@@ -68,6 +68,10 @@ const MIGRATE_HELP: &str = "\
 pykrete migrate — Rewrite deprecated 'DataFrame[X]' annotations to
 'SparkFrame[X]' (v2.0 alias removal remediation).
 
+Walks `.pyk` files only. If your project uses `.py` files via the
+multiplexer integration, copy or rename them to `.pyk` before running
+`pykrete migrate`.
+
 Usage:
     pykrete migrate [OPTIONS] <FILE_OR_DIR> [<FILE_OR_DIR> ...]
 
@@ -422,6 +426,7 @@ fn expand_paths(inputs: &[String]) -> Result<Vec<PathBuf>, String> {
     Ok(out)
 }
 
+// v1.7 backlog: optional `--include-py` flag for multiplexer cohort.
 fn walk_pyk(dir: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;

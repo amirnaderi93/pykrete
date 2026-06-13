@@ -581,3 +581,134 @@ def ambiguous(df: DataFrame[Sale]) -> int:
         "re-run must be a no-op: {after1} vs {after2}"
     );
 }
+
+// ---------------------------------------------------------------
+// PR-G blocker 1 — expanded PANDAS_DISCRIMINATORS
+//
+// Spark-coverage auditor surfaced 11 pandas-only methods that were
+// being misclassified as Spark (no-evidence fallback): `groupby`,
+// `rename`, `query`, `eval`, `astype`, `set_index`, `reset_index`,
+// `value_counts`, `nlargest`, `nsmallest`, `copy`. Each is
+// unambiguously pandas by API contract (Spark uses different names —
+// `withColumnRenamed`, camelCase `groupBy`, `orderBy().limit()`, etc.).
+// ---------------------------------------------------------------
+
+#[test]
+fn expanded_pandas_discriminators_classify_pandas_methods_as_pandas() {
+    let dir = tmpdir("expanded-pandas");
+    let pyk = write_fixture(
+        &dir,
+        "x.pyk",
+        "\
+def a(df: DataFrame[Sale]) -> int:
+    df.groupby('id').size()
+    return 0
+
+
+def b(df: DataFrame[Sale]) -> int:
+    df.rename(columns={'id': 'x'})
+    return 0
+
+
+def c(df: DataFrame[Sale]) -> int:
+    df.query('id > 0')
+    return 0
+
+
+def d(df: DataFrame[Sale]) -> int:
+    df.eval('x = id + 1')
+    return 0
+
+
+def e(df: DataFrame[Sale]) -> int:
+    df.astype({'id': 'int64'})
+    return 0
+
+
+def f(df: DataFrame[Sale]) -> int:
+    df.set_index('id')
+    return 0
+
+
+def g(df: DataFrame[Sale]) -> int:
+    df.reset_index()
+    return 0
+
+
+def h(df: DataFrame[Sale]) -> int:
+    df.value_counts()
+    return 0
+
+
+def i(df: DataFrame[Sale]) -> int:
+    df.nlargest(5, 'id')
+    return 0
+
+
+def j(df: DataFrame[Sale]) -> int:
+    df.nsmallest(5, 'id')
+    return 0
+
+
+def k(df: DataFrame[Sale]) -> int:
+    df.copy()
+    return 0
+",
+    );
+
+    let out = Command::new(bin())
+        .arg("migrate")
+        .arg(&pyk)
+        .output()
+        .expect("run pykrete migrate");
+    assert!(out.status.success());
+
+    let after = fs::read_to_string(&pyk).expect("read back");
+    // Every binding rewrites to PandasFrame[Sale]; no SparkFrame survives.
+    let pandas_count = after.matches("PandasFrame[Sale]").count();
+    assert_eq!(
+        pandas_count, 11,
+        "every one of the 11 new discriminators must classify as pandas: {after}"
+    );
+    assert!(
+        !after.contains("SparkFrame["),
+        "no binding may classify as Spark: {after}"
+    );
+    assert!(
+        !after.contains("DataFrame[Sale]"),
+        "no binding may stay ambiguous: {after}"
+    );
+}
+
+#[test]
+fn camelcase_groupby_still_classifies_as_spark() {
+    // Regression guard for case-sensitivity: Spark's `groupBy` (capital B)
+    // must NOT accidentally collide with the new lowercase `groupby` arm.
+    let dir = tmpdir("groupby-case-sens");
+    let pyk = write_fixture(
+        &dir,
+        "x.pyk",
+        "def f(df: DataFrame[Sale]) -> int:\n    df.groupBy('id').count()\n    return 0\n",
+    );
+
+    let out = Command::new(bin())
+        .arg("migrate")
+        .arg(&pyk)
+        .output()
+        .expect("run pykrete migrate");
+    assert!(out.status.success());
+
+    let after = fs::read_to_string(&pyk).expect("read back");
+    // No Spark discriminator matches `groupBy` in SPARK_DISCRIMINATORS today,
+    // so this still routes through the no-evidence-fallback → Spark. The
+    // load-bearing check is that the lowercase `groupby` pandas arm does
+    // NOT trigger on the camelCase spelling.
+    assert!(
+        after.contains("SparkFrame[Sale]"),
+        "camelCase groupBy must adjudicate to Spark (default), not Pandas: {after}"
+    );
+    assert!(
+        !after.contains("PandasFrame["),
+        "camelCase groupBy must not collapse to Pandas: {after}"
+    );
+}

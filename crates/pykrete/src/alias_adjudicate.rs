@@ -57,6 +57,10 @@ const SPARK_DISCRIMINATORS: &[&str] = &[
 /// Pandas-discriminating method names plus attribute names (`.loc` / `.iloc`).
 /// A `binding.METHOD(...)` or `binding.ATTR` access where the symbol is one
 /// of these tags the binding as Pandas.
+///
+/// Case sensitivity is load-bearing: Spark's analogues are camelCase
+/// (`groupBy`, `withColumnRenamed`) and must not collapse into the
+/// lowercase pandas names (`groupby`, `rename`).
 const PANDAS_DISCRIMINATORS: &[&str] = &[
     "assign",
     "pivot_table",
@@ -71,6 +75,17 @@ const PANDAS_DISCRIMINATORS: &[&str] = &[
     "iloc",
     "iat",
     "at",
+    "groupby",
+    "rename",
+    "query",
+    "eval",
+    "astype",
+    "set_index",
+    "reset_index",
+    "value_counts",
+    "nlargest",
+    "nsmallest",
+    "copy",
 ];
 
 /// Apply call-graph adjudication to every site, in place: update
