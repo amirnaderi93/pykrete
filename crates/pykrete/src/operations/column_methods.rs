@@ -636,7 +636,7 @@ fn melt_arg<'a>(call: &'a ExprCall, kw: &str, pos: usize) -> Option<&'a Expr> {
 /// Parse `[<lit>, <lit>, ...]` (list or tuple) into a vec of
 /// `(name, range)` pairs. Returns `None` if the expression isn't a
 /// homogeneous list/tuple of string literals.
-fn parse_string_list(expr: &Expr) -> Option<Vec<(&str, TextRange)>> {
+pub(super) fn parse_string_list(expr: &Expr) -> Option<Vec<(&str, TextRange)>> {
     let elts: &[Expr] = match expr {
         Expr::List(l) => &l.elts,
         Expr::Tuple(t) => &t.elts,

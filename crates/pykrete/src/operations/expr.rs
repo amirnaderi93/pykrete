@@ -6,7 +6,8 @@ use super::column_methods::{
     apply_melt, apply_pandas_assign, apply_pandas_drop_columns, apply_rename_dict,
     apply_with_columns, apply_with_columns_renamed, check_column_method_args,
     check_fillna_dict_keys, check_pandas_assign_enum_sinks, check_subset_kwarg,
-    check_with_column_enum_sink, check_with_columns_enum_sinks, report_column_refs,
+    check_with_column_enum_sink, check_with_columns_enum_sinks, parse_string_list,
+    report_column_refs,
 };
 use super::context::{BodyContext, MAX_INFER_DEPTH};
 use super::driver::{check_function_body, inherited_dialect};
@@ -535,25 +536,6 @@ fn pandas_kwarg_value<'a>(call: &'a ExprCall, name: &str) -> Option<&'a Expr> {
         .iter()
         .find(|k| k.arg.as_ref().is_some_and(|n| n.id.as_str() == name))
         .map(|k| &k.value)
-}
-
-/// Parse `[<lit>, <lit>, ...]` or `(<lit>, <lit>, ...)` into a vec of
-/// `(name, range)` pairs. Returns `None` if the expression isn't a
-/// homogeneous list/tuple of string literals (mixed → bail). Used by
-/// v1.6 PR-D1 `pivot_table` for the list-form variant of
-/// `index=`/`columns=`/`values=`.
-fn pivot_table_string_list(expr: &Expr) -> Option<Vec<(&str, TextRange)>> {
-    let elts: &[Expr] = match expr {
-        Expr::List(l) => &l.elts,
-        Expr::Tuple(t) => &t.elts,
-        _ => return None,
-    };
-    let mut out = Vec::with_capacity(elts.len());
-    for elt in elts {
-        let s = elt.as_string_literal_expr()?;
-        out.push((s.value.to_str(), s.range()));
-    }
-    Some(out)
 }
 
 /// v1.5 PR-A2 — resolve a `<X>.createDataFrame(...)` call's schema-source
@@ -1151,7 +1133,7 @@ fn analyze_method_call_inner<'a>(
             };
             if let Some(lit) = value.as_string_literal_expr() {
                 refs.push((None, lit.value.to_str(), lit.range()));
-            } else if let Some(list) = pivot_table_string_list(value) {
+            } else if let Some(list) = parse_string_list(value) {
                 refs.extend(list.into_iter().map(|(n, r)| (None, n, r)));
             }
         }
