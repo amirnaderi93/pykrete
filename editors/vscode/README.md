@@ -26,7 +26,9 @@ pykrete is a strict superset of Python that adds a type layer for dataframes. Th
 
 **Hover to see a schema.** Hover a `SparkFrame[…]` or `PandasFrame[…]` parameter and see its columns without leaving the file. Go-to-definition jumps to the schema declaration. (`DataFrame[…]` is a deprecated alias for `SparkFrame[…]` and renders the same hover.)
 
-**Cross-dialect handoff (new in v1.5).** `df.toPandas()` re-tags `SparkFrame[X]` to `PandasFrame[X]`, so a downstream `pdf["typo"]` still gets the squiggle. `spark.createDataFrame(pdf)` re-tags back when a `schema=` keyword or a typed call-arg resolves to a known schema. Pandas `.head(10).merge(...)` keeps tracking (dialect-gated terminals), and `pdf.loc[:, "col"]` literal-form lands too.
+**Cross-dialect handoff (v1.5).** `df.toPandas()` re-tags `SparkFrame[X]` to `PandasFrame[X]`, so a downstream `pdf["typo"]` still gets the squiggle. `spark.createDataFrame(pdf)` re-tags back when a `schema=` keyword or a typed call-arg resolves to a known schema. Pandas `.head(10).merge(...)` keeps tracking (dialect-gated terminals), and `pdf.loc[:, "col"]` literal-form lands too.
+
+**`pykrete migrate` + D0090 strict-mode escalation (new in v1.6).** `pykrete migrate src/` rewrites the deprecated `DataFrame[X]` alias to `SparkFrame[X]` or `PandasFrame[X]` based on call-graph dialect adjudication — each binding's downstream usage is inspected for Spark-only versus pandas-only methods, and mixed-dialect bindings get a `# pykrete: ambiguous` marker for hand review. Paired atomically with D0090 escalating from warning to **error** under `"typeCheckingMode": "strict"` — strict-mode projects get the fix-button in the same release as the breaking-change signal. Pandas `pivot_table(index=, columns=, values=, aggfunc=)` literal-form column checking ships too. v1.6 also closes the `.take()` dialect-gate (`pdf.take([0, 2]).merge(...)` keeps tracking) and the `pdf.loc[mask, "col"]` nested-arg false positive.
 
 **Autocomplete for column names.** Type a column name in a string argument and pykrete completes the ones that actually exist on the dataframe in scope.
 
