@@ -6,7 +6,8 @@ use super::column_methods::{
     apply_melt, apply_pandas_assign, apply_pandas_drop_columns, apply_rename_dict,
     apply_with_columns, apply_with_columns_renamed, check_column_method_args,
     check_fillna_dict_keys, check_pandas_assign_enum_sinks, check_subset_kwarg,
-    check_with_column_enum_sink, check_with_columns_enum_sinks, report_column_refs,
+    check_with_column_enum_sink, check_with_columns_enum_sinks, parse_string_list,
+    report_column_refs,
 };
 use super::context::{BodyContext, MAX_INFER_DEPTH};
 use super::driver::{check_function_body, inherited_dialect};
@@ -523,6 +524,18 @@ fn pandas_list_kwarg<'a>(call: &'a ExprCall, name: &str) -> Option<&'a ruff_pyth
         .iter()
         .find(|k| k.arg.as_ref().is_some_and(|n| n.id.as_str() == name))?;
     kw.value.as_list_expr()
+}
+
+/// Lookup a `name=` kwarg on `call` and return its value expression
+/// without constraining shape. Used by v1.6 PR-D1 `pivot_table` where
+/// each of `index=`/`columns=`/`values=` accepts either a string literal
+/// or a list/tuple of string literals.
+fn pandas_kwarg_value<'a>(call: &'a ExprCall, name: &str) -> Option<&'a Expr> {
+    call.arguments
+        .keywords
+        .iter()
+        .find(|k| k.arg.as_ref().is_some_and(|n| n.id.as_str() == name))
+        .map(|k| &k.value)
 }
 
 /// v1.5 PR-A2 — resolve a `<X>.createDataFrame(...)` call's schema-source
@@ -1101,6 +1114,31 @@ fn analyze_method_call_inner<'a>(
         && pandas_list_kwarg(call, "columns").is_none()
     {
         return Some(receiver);
+    }
+    // v1.6 PR-D1 — `pdf.pivot_table(index=, columns=, values=, aggfunc=)`
+    // literal-form schema check (spec §4). Validates each literal
+    // `index`/`columns`/`values` name against the receiver schema
+    // (D0030). Non-literal arg shapes (variable, computed) fall through
+    // on that arg only; `aggfunc=` is opaque. Spark's `groupBy().pivot()`
+    // arm at `:976-1015` is NOT reused — its predicate is
+    // `SchemaView::Grouped` (`:984-987`), incompatible with pandas's
+    // DataFrame receiver. Output is Unknown (None) for v1.6; users
+    // re-anchor with `.cast(DataFrame[NewSchema])` for continued tracking
+    // (v1.7 will extend to synthesized output schema).
+    if receiver_is_pandas_inherited && method == "pivot_table" {
+        let mut refs: Vec<(Option<&'a str>, &'a str, TextRange)> = Vec::new();
+        for kw_name in ["index", "columns", "values"] {
+            let Some(value) = pandas_kwarg_value(call, kw_name) else {
+                continue;
+            };
+            if let Some(lit) = value.as_string_literal_expr() {
+                refs.push((None, lit.value.to_str(), lit.range()));
+            } else if let Some(list) = parse_string_list(value) {
+                refs.extend(list.into_iter().map(|(n, r)| (None, n, r)));
+            }
+        }
+        report_column_refs(&refs, &receiver, ctx, source, line_index, diagnostics);
+        return None;
     }
     if matches!(method, "melt" | "unpivot") {
         return Some(apply_melt(
