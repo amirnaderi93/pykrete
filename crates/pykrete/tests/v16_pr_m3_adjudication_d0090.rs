@@ -515,11 +515,69 @@ def ambiguous(df: DataFrame[Sale]) -> int:
             .matches("deprecatedDataFrameAlias")
             .count()
             .saturating_sub(combined.matches("D0090").count());
-    // ambiguous() has param + return-shape DataFrame[Sale] sites → ≥2 D0090
-    // (compiler-side may dedupe per binding-site, so just assert >= 1
-    // diagnostic on the ambiguous function — not on the rewritten ones).
-    assert!(
-        d0090_count >= 1,
-        "expected at least one D0090 from ambiguous site, combined={combined}"
+    // ambiguous() has exactly ONE DataFrame[Sale] site (the `df` param —
+    // the return type is `int`). The spark_only / pandas_only functions
+    // were rewritten in place, so they MUST NOT emit D0090. Round-2
+    // reviewer (minor): the prior `>= 1` assertion would have silently
+    // accepted a regression where D0090 also leaked onto the rewritten
+    // sites.
+    assert_eq!(
+        d0090_count, 1,
+        "expected exactly one D0090 (on ambiguous(df)), combined={combined}"
+    );
+}
+
+#[test]
+fn migrate_rerun_on_unresolved_ambiguous_does_not_stack_markers() {
+    // Round-2 reviewer (important): `inject_ambiguous_markers`'
+    // docstring promised idempotency. The round-2 audit reproduced
+    // double-stacked markers by running `migrate` twice on the same
+    // file. This regression test pins the contract: re-running migrate
+    // on a file with an unresolved ambiguous site keeps the marker
+    // count at exactly 1.
+    let dir = tmpdir("rerun_idempotent");
+    let pyk = write_fixture(
+        &dir,
+        "x.pyk",
+        "\
+class Sale(Schema):
+    region: string
+
+
+def ambiguous(df: DataFrame[Sale]) -> int:
+    a = df.withColumn('x', 1)
+    b = df.assign(x=1)
+    return 0
+",
+    );
+
+    let run1 = Command::new(bin())
+        .arg("migrate")
+        .arg(&pyk)
+        .output()
+        .expect("run pykrete migrate (1)");
+    assert!(run1.status.success(), "run1 failed: {run1:?}");
+    let after1 = fs::read_to_string(&pyk).expect("read after run 1");
+    assert_eq!(
+        after1.matches("# pykrete: ambiguous").count(),
+        1,
+        "first run should insert exactly one marker: {after1}"
+    );
+
+    let run2 = Command::new(bin())
+        .arg("migrate")
+        .arg(&pyk)
+        .output()
+        .expect("run pykrete migrate (2)");
+    assert!(run2.status.success(), "run2 failed: {run2:?}");
+    let after2 = fs::read_to_string(&pyk).expect("read after run 2");
+    assert_eq!(
+        after2.matches("# pykrete: ambiguous").count(),
+        1,
+        "re-run must NOT double-stack the marker: {after2}"
+    );
+    assert_eq!(
+        after1, after2,
+        "re-run must be a no-op: {after1} vs {after2}"
     );
 }

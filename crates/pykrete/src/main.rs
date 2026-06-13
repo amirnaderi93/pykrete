@@ -781,7 +781,10 @@ fn apply_alias_rewrites_with_ambiguous(
 /// For each ambiguous offset (positions in the ORIGINAL source), insert
 /// `# pykrete: ambiguous` on the line above. Inserts in descending line
 /// order so earlier inserts don't shift later line offsets. One marker
-/// per distinct line; if a line is already preceded by one, no duplicate.
+/// per distinct line, and idempotent across re-runs: if the line above
+/// the target already trims to `# pykrete: ambiguous`, skip — so running
+/// `pykrete migrate` twice on a file with unresolved ambiguous sites
+/// does not double-stack markers.
 fn inject_ambiguous_markers(
     rewritten: &str,
     original_source: &str,
@@ -807,6 +810,18 @@ fn inject_ambiguous_markers(
         .collect();
     let mut out = rewritten.to_string();
     for line_idx in line_indices.into_iter().rev() {
+        // Idempotency: if the preceding line already trims to the marker
+        // comment, skip. Round-2 reviewer (important): the docstring
+        // promised this; the impl did not. Re-runs on an unresolved file
+        // used to stack duplicate markers.
+        if line_idx > 0 {
+            let prev_start = line_starts.get(line_idx - 1).copied().unwrap_or(0);
+            let prev_end = line_starts.get(line_idx).copied().unwrap_or(out.len());
+            let prev_line = &out[prev_start..prev_end];
+            if prev_line.trim() == "# pykrete: ambiguous" {
+                continue;
+            }
+        }
         let start = line_starts.get(line_idx).copied().unwrap_or(out.len());
         let end = line_starts.get(line_idx + 1).copied().unwrap_or(out.len());
         let line_text = &out[start..end];
