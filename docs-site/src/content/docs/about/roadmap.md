@@ -49,7 +49,7 @@ The v1.3 → v1.4 cadence parallels v1.1 → v1.2 on the Spark side: check-site 
 - **Config-discovery walk fix**: `pykrete.json` discovery anchors on the input file's parent directory (falling back to CWD when no input resolves to a file), so `pykrete check /abs/path/to/foo.pyk` from any CWD picks up the project's config.
 - **Canonical-name migration completion** across docs / design notes / examples for `SparkFrame[X]` vs the deprecated `DataFrame[X]` alias.
 
-For the verification posture and per-donor matrix, see [Real-codebase tests](/about/pykrete-tests/) and [Production readiness → Real-codebase testing](/about/production-readiness/#real-codebase-testing). For the full pandas direction across v1.6+ and v2.0, see [Pandas roadmap](/about/pandas-roadmap/).
+For the verification posture and per-donor matrix, see [Real-codebase tests](/about/pykrete-tests/) and [Production readiness → Real-codebase testing](/about/production-readiness/#real-codebase-testing). For the full pandas direction across v1.7+ and v2.0, see [Pandas roadmap](/about/pandas-roadmap/).
 
 ## Shipped in v1.5 — cross-dialect handoff + deferred-promise closure
 
@@ -58,26 +58,42 @@ The v1.5 cycle's headline is **cross-dialect handoff**: pykrete now tracks schem
 - **`.toPandas()` re-tags `SparkFrame[X]` to `PandasFrame[X]`** (PR-A1), so a downstream `pdf["typo"]` chain fires D0030 against `X`. Inline subexpression receivers (`df.filter(...).toPandas()`) resolve through the same recursive `infer_expr_type` walk Spark chains already use.
 - **`spark.createDataFrame(pdf)` re-tags `PandasFrame[Y]` back to `SparkFrame[Y]`** (PR-A2) when either a `schema=` keyword argument resolves through a typed binding, or the call-arg expression types as `PandasFrame[Y]`. With neither present, the call falls through to Unknown — no auto-inference from raw values. The round-trip `spark.createDataFrame(df.toPandas())` preserves the tag end-to-end.
 - **`.head()` / `.tail()` / `.first()` dialect-gated** (PR-A3): pandas receivers pass through (`PandasFrame[X]` → `PandasFrame[X]`), Spark receivers stay terminals. `pdf.head(10).merge(other, on="id")` keeps tracking.
-- **`.loc[:, "col"]` literal-form lands** (PR-C). Variable column keys, boolean-mask row keys, column-range slicing, and `.iloc[...]` fall through to Unknown — deferred to v1.6 paired with broader pandas reshape.
+- **`.loc[:, "col"]` literal-form lands** (PR-C). Variable column keys, boolean-mask row keys, column-range slicing, and `.iloc[...]` fall through to Unknown — deferred to v1.7 paired with broader pandas reshape (v1.6 closed the `pdf.loc[mask, "col"]` D0030 FP on the row-mask side).
 - **Two PR-F1-class sibling gates close** (PR-B1 + PR-B2). `column_name_arg`'s attribute + subscript arms now gate on the receiver being a DataFrame binding; `collect_col_refs` threads the receiver name through to schema-lookup callers so cross-DataFrame subscript routing lands on the correct schema.
-- **`pykrete check --report-aliases`** (PR-D): new invocation-only flag emits a structured JSON envelope listing every `DataFrame[X]` annotation site with its resolved dialect and suggested replacement. v1.5 reports every site as `spark` / `SparkFrame[X]`; v1.6 introduces call-graph dialect adjudication that distinguishes `spark` / `pandas` / ambiguous. Does not rewrite source — projects pipe the report to their own tooling to size the v2.0 migration scope before `pykrete migrate` ships. The envelope carries its own `aliasReportVersion: "1"` so the report format can evolve independently of the diagnostic JSON contract.
+- **`pykrete check --report-aliases`** (PR-D): new invocation-only flag emits a structured JSON envelope listing every `DataFrame[X]` annotation site with its resolved dialect and suggested replacement. v1.5 reported every site as `spark` / `SparkFrame[X]`; v1.6 lit the call-graph dialect adjudicator into the same envelope so the field now distinguishes `spark` / `pandas` / ambiguous. Does not rewrite source — projects pipe the report to their own tooling to size the v2.0 migration scope (v1.6 ships `pykrete migrate` for the rewrite step). The envelope carries its own `aliasReportVersion: "1"` so the report format can evolve independently of the diagnostic JSON contract.
 - **Synthetic-pool soft cap with warn-and-saturate sentinel** (PR-E): closes the v1.4 architecture-audit I4 finding. The LSP keeps running on adversarial input instead of unbounded `Box::leak` growth.
 
-D0090 stays at `warning` everywhere in v1.5; the severity escalation lands in v1.6 paired atomically with `pykrete migrate` so strict-mode users get a fix-button at the same release as the breaking-change signal.
+D0090 stayed at `warning` everywhere in v1.5; the severity escalation under strict mode landed in v1.6 paired atomically with `pykrete migrate` so strict-mode users get a fix-button at the same release as the breaking-change signal.
 
-For the verification posture and per-donor matrix, see [Real-codebase tests](/about/pykrete-tests/) and [Production readiness → Real-codebase testing](/about/production-readiness/#real-codebase-testing). For the full pandas direction across v1.6+ and v2.0, see [Pandas roadmap](/about/pandas-roadmap/).
+For the verification posture and per-donor matrix, see [Real-codebase tests](/about/pykrete-tests/) and [Production readiness → Real-codebase testing](/about/production-readiness/#real-codebase-testing). For the full pandas direction across v1.7+ and v2.0, see [Pandas roadmap](/about/pandas-roadmap/).
+
+## Shipped in v1.6 — `pykrete migrate` + D0090 strict-mode escalation + pandas `pivot_table`
+
+The v1.6 cycle's headline is **`pykrete migrate`**: the auto-rewriter binary for `DataFrame[X]` → `SparkFrame[X]` / `PandasFrame[X]`, paired atomically with `D0090 deprecatedDataFrameAlias` strict-mode escalation so strict-mode users on green v1.4.x/v1.5.x CI aren't stranded.
+
+- **`pykrete migrate` CLI** (PR-M1 + PR-M2 + PR-M3). Three modes: `pykrete migrate src/` rewrites in place; `pykrete migrate --check src/` previews per-site verdicts to **stdout** (pipe-friendly) and exits 1 if any site needs attention or is ambiguous, 0 otherwise — drop it into CI to gate merges; `pykrete migrate --diff src/` emits a `patch -p1`-compatible unified diff. The walker traverses `.pyk` files under each input path, locates every `DataFrame[X]` site via the `AliasSite` byte-range model, and rewrites token-preservingly. The in-place rewrite is **atomic per file** — pykrete writes to a sibling temp file and renames, so an interrupted run never leaves a half-rewritten source. See [cookbook recipe 6](/cookbook/#6-migrate-dataframex-to-the-v20-dialect-tagged-names).
+- **Call-graph dialect adjudication** (PR-M3). Each `DataFrame[X]` binding's downstream usage is inspected for dialect-discriminating method signals: Spark-only (`withColumn` / `withColumns` / `createOrReplaceTempView` / `repartition` / SparkSession constructors and the rest of the Spark surface) versus pandas-only (`assign` / `pivot_table` / `.loc` / `.iloc` / pandas `merge` / `rename(columns=...)` / and the pandas dispatched surface). Only Spark signals → **Spark**; only pandas → **pandas**; both → **Ambiguous** (rewrite skipped, `# pykrete: ambiguous` marker injected on the line above, idempotent on re-runs); no signal → defaults to Spark.
+- **D0090 strict-mode escalation** (PR-M3). Under `"typeCheckingMode": "strict"` in `pykrete.json`, D0090 lands as **error** instead of warning. Non-strict modes (`off` / `basic` / `standard`) keep the warning unchanged. The escalation ships in the same release as `pykrete migrate`, per "trust over hype, delay over bad launch".
+- **`pykrete check --report-aliases` `resolvedDialect`** field now reports `"pandas"` and `"ambiguous"` discriminators in addition to `"spark"`. v1.5 reported every site as `"spark"` because adjudication wasn't yet wired; v1.6 lights the call-graph adjudicator into the same envelope. `aliasReportVersion` stays at `"1"`.
+- **Pandas `pivot_table(index=, columns=, values=, aggfunc=)` literal-form** (PR-D1): the v1.6 pandas reshape downpayment. String-literal arguments and list-of-literals shapes resolve against `PandasFrame[X]`'s schema, firing D0030 on a typo with a *did you mean*. Variable arguments (`index=col_var`), callable `aggfunc` (`aggfunc=np.mean`), and the no-arg form fall through to Unknown. Full `pivot_table` schema-tracking (the wide output schema) is deferred to v1.7 paired with broader pandas reshape.
+- **`.take()` dialect-gate** (PR-A2): the last v1.5 deferred dialect-gate closes. pandas `pdf.take([0, 2])` returns a DataFrame and now passes through (`PandasFrame[X]` → `PandasFrame[X]`) instead of dying as a Spark terminal.
+- **`pdf.loc[mask, "col"]` nested-arg D0030 FP fix** (PR-A2): v1.5's PR-C `.loc` literal-form arm fired D0030 against the row-mask argument when both row-mask and column-literal arms were present; v1.6 gates the row-mask arm so it falls through to Unknown (deferred per v1.5 spec) while the column-literal arm still fires D0030 on a typo.
+- **`cross_dialect_handoff_gate` recognizer extracted** (PR-A1): the v1.5 architecture-audit "Keep in sync" comment between the `.toPandas()` and `spark.createDataFrame(pdf)` arms gets replaced by a single shared recognizer. No behavior change — audit-debt closure.
+
+For the verification posture and per-donor matrix, see [Real-codebase tests](/about/pykrete-tests/) and [Production readiness → Real-codebase testing](/about/production-readiness/#real-codebase-testing). For the full pandas direction across v1.7+ and v2.0, see [Pandas roadmap](/about/pandas-roadmap/).
 
 ## Next up
 
-### v1.6 — `pykrete migrate` paired with D0090 strict-mode escalation, plus pandas reshape or string-DSL
+### v1.7 — pandas reshape + `.loc` / `.iloc` non-literal forms + string-DSLs
 
-The non-negotiable v1.6 commitment: `pykrete migrate` (auto-rewriter binary for `DataFrame[X]` → `SparkFrame[X]` / `PandasFrame[X]`) ships paired atomically with D0090 escalation to error under strict mode. Per "trust over hype, delay over bad launch", strict-mode users on green v1.4.x/v1.5.x CI must not see a silent escalation without a fix-button. The framework PR settles `--fix` flag protocol, AST→source-edit mapping, in-place rewrite with backup, and ambiguity-tagged comment injection — same shape as Ruff's `--fix`.
+Now that the migrator + D0090 escalation are out the door, v1.7's focus is on broader pandas reshape and the string-fragment column refs.
 
-Alongside that, one of the following lands per the v1.6 planning committee:
-
-- **Broader `.loc` / `.iloc` and pandas reshape**: `.loc[mask, "col"]` (boolean mask), `.loc[:, "a":"b"]` (column range), `.iloc[...]`, plus `pivot_table`, `groupby.agg`, `melt`, `stack` / `unstack`, `reset_index`, `set_index`.
+- **Pandas reshape**: `melt`, `stack` / `unstack`, `groupby.agg`, `reset_index`, `set_index`, plus full `pivot_table` schema-tracking (the wide output schema — variable column values become column names of the result frame; v1.6 ships the literal-form column-input check on the same call).
+- **`.loc` non-literal forms and `.iloc`**: `.loc[mask, "col"]` (boolean mask), `.loc[:, "a":"b"]` (column range), and `pdf.iloc[...]`.
 - **`df.query("…")` / `df.eval("…")` mini-DSLs**: parse string-fragment column refs separately. numexpr-influenced syntax, not SQL.
-- **`pd.read_csv(...)` and other pandas I/O entry points**.
+- **`pd.read_csv(...)` and other pandas I/O entry points**: schema inference from file headers / SQL / type-stubs as a separate design surface.
+- **Retrofitting pandas `PROBE-TYPE-IS` to the v1.3 hybrid donors** (MLflow, Feast, iceberg-python).
+- **Canonical-vs-direct CI gate (I3)** from the v1.4 architecture audit.
 
 ### Window-key type tracking
 

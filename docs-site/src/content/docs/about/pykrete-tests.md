@@ -1,6 +1,6 @@
 ---
 title: Real-codebase tests
-description: How pykrete is tested against 94 fixtures and 235 schema-tracking probes from 17 upstream codebases — what we cover, what the goldens and probes verify, what's deliberately out of scope.
+description: How pykrete is tested against 100 fixtures and 241 schema-tracking probes from 17 upstream codebases — what we cover, what the goldens and probes verify, what's deliberately out of scope.
 ---
 
 [pykrete-tests](https://github.com/amirnaderi93/pykrete-tests) is a separate repo that vendors fixtures from 17 widely-used PySpark and pandas codebases, adds pykrete annotations the way a real adopter would, and on every push runs two release-blocking suites against pykrete built fresh from a pinned source-commit: a golden-diff suite (JSON output of `pykrete check` against a frozen snapshot) and a 235-probe schema-tracking suite (inline `# PROBE-*` assertions that columns survive transforms, that specific diagnostics fire on deliberately-corrupted fixtures, that Spark and pandas type-tracking hold through transformations, and that the v1.3 pandas check sites — `PandasFrame[X]` column refs, the six dispatched operations, the deprecated-`DataFrame[X]` warning — work end-to-end). It exists for two reasons:
@@ -10,13 +10,13 @@ description: How pykrete is tested against 94 fixtures and 235 schema-tracking p
 
 ## The donors
 
-94 fixtures (46 annotated + 48 deliberately-corrupted under `probes_negative/`) across 17 donors. The 10 PySpark donors are all Apache 2.0; the 10 pandas-coverage donors carry Apache 2.0, BSD-3-Clause, or MIT licenses (verified per donor at the pinned tag).
+100 fixtures (47 annotated + 53 deliberately-corrupted under `probes_negative/`) across 17 donors. The 10 PySpark donors are all Apache 2.0; the 10 pandas-coverage donors carry Apache 2.0, BSD-3-Clause, or MIT licenses (verified per donor at the pinned tag).
 
 ### PySpark donors (10)
 
 | donor | upstream | annotated | probes_negative |
 |---|---|---:|---:|
-| **spark** | [apache/spark](https://github.com/apache/spark) | 8 | 2 |
+| **spark** | [apache/spark](https://github.com/apache/spark) | 8 | 4 |
 | **delta** | [delta-io/delta](https://github.com/delta-io/delta) | 4 | 2 |
 | **kedro-plugins** | [kedro-org/kedro-plugins](https://github.com/kedro-org/kedro-plugins) | 3 | 1 |
 | **iceberg-python** | [apache/iceberg-python](https://github.com/apache/iceberg-python) | 3 | 3 |
@@ -24,8 +24,8 @@ description: How pykrete is tested against 94 fixtures and 235 schema-tracking p
 | **mlflow** | [mlflow/mlflow](https://github.com/mlflow/mlflow) | 6 | 6 |
 | **feast** | [feast-dev/feast](https://github.com/feast-dev/feast) | 4 | 4 |
 | **quinn** | [MrPowers/quinn](https://github.com/MrPowers/quinn) | 3 | 2 |
-| **dbt-spark** | [dbt-labs/dbt-spark](https://github.com/dbt-labs/dbt-spark) | 2 | 0 |
-| **python-deequ** | [awslabs/python-deequ](https://github.com/awslabs/python-deequ) | 2 | 0 |
+| **dbt-spark** | [dbt-labs/dbt-spark](https://github.com/dbt-labs/dbt-spark) | 2 | 5 |
+| **python-deequ** | [awslabs/python-deequ](https://github.com/awslabs/python-deequ) | 2 | 6 |
 
 ### Pandas donors (10 — 3 hybrid carry-over from v1.3 + 7 new in v1.4)
 
@@ -46,36 +46,36 @@ explicitly so the coverage claim stays honest:
 | **pandera** | canonical-fixture-only | [unionai-oss/pandera](https://github.com/unionai-oss/pandera) | 1 | 2 |
 | **great-expectations** | canonical-fixture-only | [great-expectations/great_expectations](https://github.com/great-expectations/great_expectations) | 1 | 2 |
 | **prophet** | direct-dispatch | [facebook/prophet](https://github.com/facebook/prophet) | 1 | 2 |
-| **seaborn** | direct-dispatch | [mwaskom/seaborn](https://github.com/mwaskom/seaborn) | 2 | 3 |
-| **yfinance** | direct-dispatch | [ranaroussi/yfinance](https://github.com/ranaroussi/yfinance) | 1 | 3 |
+| **seaborn** | direct-dispatch | [mwaskom/seaborn](https://github.com/mwaskom/seaborn) | 3 | 4 |
+| **yfinance** | direct-dispatch | [ranaroussi/yfinance](https://github.com/ranaroussi/yfinance) | 1 | 5 |
 
 Three donors — delta, hudi, and mlflow — carry **v1.1 enum value vocabulary** fixtures: Delta CDC `_change_type` (`{"insert", "update_preimage", "update_postimage", "delete"}`), Hudi `_hoodie_operation` (`{"I", "-U", "U", "D"}`), and MLflow run status (`{"RUNNING", "FINISHED", "FAILED", "KILLED", "SCHEDULED"}`). Each ships an annotated fixture demonstrating in-vocab usage and a `probes_negative/` counterpart asserting D0084 `enumValueMismatch` fires on off-vocab typos.
 
-Three donors — mlflow, feast, and iceberg-python — carry **v1.3 pandas dialect** fixtures: an annotated `PandasFrame[X]` shape exercising the six dispatched operations, paired with `probes_negative/` counterparts asserting D0030 fires on a bare `df["typo"]` subscript and D0090 fires on the deprecated `DataFrame[X]` alias. The 7 new v1.4 pandas donors extend the surface — each carries at least one annotated fixture and at least one `probes_negative/` counterpart, plus 3 `PROBE-TYPE-IS` markers per donor (21 markers across the seven donors, exactly meeting the v1.4 spec §1 floor of ≥3 per donor / ≥21 total).
+Three donors — mlflow, feast, and iceberg-python — carry **v1.3 pandas dialect** fixtures: an annotated `PandasFrame[X]` shape exercising the six dispatched operations, paired with `probes_negative/` counterparts asserting D0030 fires on a bare `df["typo"]` subscript and D0090 fires on the deprecated `DataFrame[X]` alias. The 7 new v1.4 pandas donors extend the surface — each carries at least one annotated fixture and at least one `probes_negative/` counterpart, plus 3 `PROBE-TYPE-IS` markers per donor (21 markers across the seven donors, exactly meeting the v1.4 spec §1 floor of ≥3 per donor / ≥21 total). The v1.6 probe batch ([pykrete-tests PR-P1](https://github.com/amirnaderi93/pykrete-tests/pull/25)) added 4 cross-codebase closures for v1.5 audit gaps (PR-A2 Gate (b) positional path, PR-A3 chain-survival, PR-B1 cross-frame, PR-B2 `column_name_arg` ungated arms) plus 2 NEW PR-D1 `pivot_table` probes (positive on a pandas-heavy donor; negative for the typo-in-`values` shape).
 
 Every annotated fixture currently emits at most D0090 warnings against the released binary (one per `DataFrame[X]` annotation; the alias is deprecated in v1.3 and removed in v2.0); annotated fixtures that use the new `SparkFrame[X]` / `PandasFrame[X]` canonical names emit zero diagnostics. The `probes_negative/` fixtures are deliberately broken — each one's `.golden.json` carries the exact diagnostics pykrete must fire, and the golden-diff suite verifies they fire on every release. The donor table with pinned commits and per-donor coverage rationale — what each codebase exercises, why it earned a slot — lives in the [pykrete-tests README](https://github.com/amirnaderi93/pykrete-tests#the-donors).
 
 ## Schema-tracking probes
 
-On top of golden-diff, every release runs **235 schema-tracking probes**:
+On top of golden-diff, every release runs **241 schema-tracking probes**:
 
-- **181 positive probes** across 45 of the 46 annotated fixtures assert columns survive `.select` / `.filter` / `.withColumn` and similar narrow transforms (Spark) plus the pandas analogues `df[col_list]` / `df[mask]` / `df["new"] = expr`, AND that dtype claims on `SparkFrame[X]` and `PandasFrame[X]` parameters survive the dispatched chains. These probes prove that the absence of a diagnostic isn't a silent miss — pykrete genuinely tracked the column or the dtype through the chain. The feast `spark_kafka_processor` streaming fixture is annotated but probe-free, since it has no typed-DataFrame slot a probe can anchor to.
-- **54 negative probes** across 48 deliberately-corrupted fixtures assert specific diagnostics fire: D0030 (`unknownColumn`), D0060 (`missingJoinKey`), D0081 (`nonNumericArithmetic` — v1.4 widened to subscript-on-name receivers), D0082 (`crossTypeComparison` — widened correspondingly), D0084 (`enumValueMismatch`), and D0090 (`deprecatedDataFrameAlias`). Without these, a silently-passing checker would satisfy every annotated probe vacuously.
+- **179 positive probes** across 46 annotated fixtures assert columns survive `.select` / `.filter` / `.withColumn` and similar narrow transforms (Spark) plus the pandas analogues `df[col_list]` / `df[mask]` / `df["new"] = expr`, AND that dtype claims on `SparkFrame[X]` and `PandasFrame[X]` parameters survive the dispatched chains. These probes prove that the absence of a diagnostic isn't a silent miss — pykrete genuinely tracked the column or the dtype through the chain. The feast `spark_kafka_processor` streaming fixture is annotated but probe-free, since it has no typed-DataFrame slot a probe can anchor to.
+- **58 negative probes** across 53 deliberately-corrupted fixtures assert specific diagnostics fire: D0030 (`unknownColumn` — v1.6 widens to pandas `pivot_table` literal-arg typos), D0060 (`missingJoinKey`), D0081 (`nonNumericArithmetic` — v1.4 widened to subscript-on-name receivers), D0082 (`crossTypeComparison` — widened correspondingly), D0084 (`enumValueMismatch`), and D0090 (`deprecatedDataFrameAlias`). Without these, a silently-passing checker would satisfy every annotated probe vacuously.
 - **Enum value vocabulary verification** in 3 of the 17 donors — Delta CDC `_change_type`, Hudi `_hoodie_operation`, and MLflow run status. Positive probes assert in-vocab literals stay clean across `==` / `.isin` / `withColumn` / `F.expr` / `groupBy` chains; negative probes assert D0084 fires when an off-vocab typo is used in a comparison or fill operation.
 - **`PROBE-TYPE-IS` Spark type-tracking coverage** in 3 of the 17 donors — quinn, MLflow, and python-deequ — shipped in v1.2. Each donor ships at least one type-tracking assertion through `.select` / `.withColumn` / `.filter` chains. The synth wraps the assertion in `{df}.select(col("x") + 1)`, binding `col(...)` against the typed DataFrame in scope so off-claim markers fire D0081. A CI gate mutates the claimed type on every `PROBE-TYPE-IS` marker and verifies D0081 fires.
-- **`PROBE-TYPE-IS` pandas type-tracking coverage** (new in v1.4 — closes [pykrete-tests#14](https://github.com/amirnaderi93/pykrete-tests/issues/14)) in 7 of the 17 donors — scikit-learn, statsmodels, pandera, Great Expectations, prophet, seaborn, and yfinance. The synth on `PandasFrame[X]` wraps `{df}.assign(__probe={df}["x"] + 1)` (a dispatched pandas op) so off-claim numeric types fall through to D0081 — 21 markers across the 7 new donors (3 per donor, exactly meeting the v1.4 spec §1 floor of ≥3 per donor / ≥21 total). Retrofitting the v1.3 hybrid donors (mlflow, feast, iceberg-python) with pandas TYPE-IS markers was deliberately out of scope per v1.4 spec §1 and stayed out of scope in v1.5; revisit in v1.6.
+- **`PROBE-TYPE-IS` pandas type-tracking coverage** (new in v1.4 — closes [pykrete-tests#14](https://github.com/amirnaderi93/pykrete-tests/issues/14)) in 7 of the 17 donors — scikit-learn, statsmodels, pandera, Great Expectations, prophet, seaborn, and yfinance. The synth on `PandasFrame[X]` wraps `{df}.assign(__probe={df}["x"] + 1)` (a dispatched pandas op) so off-claim numeric types fall through to D0081 — 21 markers across the 7 new donors (3 per donor, exactly meeting the v1.4 spec §1 floor of ≥3 per donor / ≥21 total). Retrofitting the v1.3 hybrid donors (mlflow, feast, iceberg-python) with pandas TYPE-IS markers was deliberately out of scope per v1.4 spec §1 and stayed out of scope in v1.5 / v1.6; revisit in v1.7.
 - **Pandas check-site coverage** in 10 of the 17 donors — the three v1.3 hybrid carry-overs (mlflow, feast, iceberg-python) plus the seven v1.4 additions. Each donor ships at least one annotated `PandasFrame[X]` fixture exercising at least some of the dispatched operations, paired with `probes_negative/` counterparts asserting D0030 fires on bare `df["typo"]` subscripts and D0090 fires on the deprecated `DataFrame[X]` alias.
 
 Together, the suite verifies four properties on every release: **column resolution + diagnostic firing + Spark type tracking + pandas type tracking**.
 
 Probes are inline `# PROBE-*` comment markers in `.pyk` fixtures, parsed by `scripts/probes.py` and verified against `pykrete check --format json` output. The marker grammar, placement convention, and `catalog-drift-watch` workflow that keeps `PROBE-EXPECTS` D-codes in sync with upstream are documented in [`scripts/PROBES.md`](https://github.com/amirnaderi93/pykrete-tests/blob/main/scripts/PROBES.md). CI fails if any probe asserts the wrong outcome.
 
-What the v1.5 probe suite does *not* yet verify, all tracked for v1.6+:
+What the v1.6 probe suite does *not* yet verify, all tracked for v1.7+:
 
-- **`pykrete migrate` binary + D0090 strict-mode escalation** (paired, non-negotiable v1.6 commitment).
-- **`.loc[mask, "col"]` (boolean mask), `.loc[:, "a":"b"]` (column range), `pdf.iloc[...]`** — deferred to v1.6, paired with broader pandas reshape.
+- **Full `pivot_table` schema-tracking** — the wide output schema. v1.6 ships the literal-form column check on the inputs; output-shape modeling is paired with broader pandas reshape in v1.7.
+- **`.loc[mask, "col"]` (boolean mask) row-key tracking, `.loc[:, "a":"b"]` (column range), `pdf.iloc[...]`** — deferred to v1.7, paired with broader pandas reshape.
 - **`df.query("…")` / `df.eval("…")` mini-DSLs.** Own design surface; numexpr-influenced syntax, separate parser from the SQL path used by `selectExpr`.
-- **Broader pandas method modeling** (`pivot_table`, `groupby.agg`, `melt`, `stack` / `unstack`, `reset_index`, `set_index`).
+- **Broader pandas method modeling** (`groupby.agg`, `melt`, `stack` / `unstack`, `reset_index`, `set_index`).
 - **`pd.read_csv(...)` and other pandas I/O entry points.** Schema inference from file headers / SQL / type-stubs is a separate design surface.
 - **`PROBE-TYPE-IS` synth-shape coverage beyond D0081 (Spark side).** The current synth shape (`{df}.select(col("x") + 1)`) falsifies on non-numeric. D0080 (`returnTypeMismatch`) and D0082 (`crossTypeComparison`) need their own synth shapes; the raw-mutation suite covers them until then.
 - Numeric-subtype distinguishability (`int` vs `long` vs `short` arithmetic narrowing). Carried forward from v1.1.

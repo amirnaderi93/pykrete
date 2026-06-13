@@ -1,6 +1,39 @@
 # Changelog
 
 
+## 0.4.0
+
+Tracks the v1.6.0 pykrete release — `pykrete migrate` (auto-rewriter
+for `DataFrame[X]` → `SparkFrame[X]` / `PandasFrame[X]` with
+call-graph dialect adjudication), paired atomically with D0090
+strict-mode escalation (under `"typeCheckingMode": "strict"` the
+warning lands as **error**, but the fix-button ships in the same
+release so strict-mode projects on green v1.4.x/v1.5.x CI aren't
+stranded). The bundled `pykrete` binary gains the new `migrate`
+subcommand with three modes: `pykrete migrate src/` rewrites in
+place (atomic per file, token-preserving); `pykrete migrate --check
+src/` previews per-site verdicts to stdout (pipe-friendly, exit 1 if
+any site needs attention); `pykrete migrate --diff src/` emits a
+`patch -p1`-compatible unified diff. Ambiguous bindings — used with
+both Spark-only and pandas-only methods — get an idempotent
+`# pykrete: ambiguous` marker injected on the line above the
+unchanged annotation; re-runs don't accumulate duplicates. The
+`pykrete check --report-aliases` envelope's `resolvedDialect` field
+now reports `"pandas"` and `"ambiguous"` in addition to `"spark"`
+(v1.5 reported every site as `"spark"` because adjudication wasn't
+yet wired). Pandas `pivot_table(index=, columns=, values=,
+aggfunc=)` literal-form column checking ships as the v1.6 pandas
+reshape downpayment. Two v1.5 deferrals close: `.take()` is now
+dialect-gated (pandas `pdf.take([0, 2]).merge(...)` keeps tracking),
+and the `pdf.loc[mask, "col"]` nested-arg D0030 FP on the row-mask
+side closes. The audit-debt `cross_dialect_handoff_gate` recognizer
+the v1.5 PR-A1/PR-A2 inference left as a "Keep in sync" comment is
+extracted to a single shared site. No new D-codes, no new annotation
+forms; SemVer-minor under the `tighteningDiagnostics` policy.
+Version bump aligns the extension with the v1.6.0 cycle-close per
+the version-guard contract. See the
+[main CHANGELOG](../../CHANGELOG.md#160---2026-06-13) for details.
+
 ## 0.3.0
 
 Tracks the v1.5.0 pykrete release — cross-dialect handoff between

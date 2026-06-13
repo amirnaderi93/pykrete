@@ -73,8 +73,61 @@ annotation site with its resolved dialect, so projects can quantify
 the v2.0 migration scope before v1.6's `pykrete migrate` ships. The
 LSP synthetic-pool gets a soft cap with one-shot warning and
 saturation sentinel, closing the v1.4 architecture-audit I4 finding.
-D0090 stays at warning everywhere in v1.5; the severity escalation
-lands in v1.6 paired atomically with `pykrete migrate`.
+
+**`pykrete migrate` + D0090 strict-mode escalation shipped in v1.6**:
+`pykrete migrate` is the auto-rewriter binary for the deprecated
+`DataFrame[X]` alias. It walks each `.pyk` file under each input
+path, locates every `DataFrame[X]` annotation site via the
+`AliasSite` byte-range model, applies call-graph dialect
+adjudication to each binding's downstream usage (Spark-only methods
+like `withColumn` / `createOrReplaceTempView` / `repartition` →
+**Spark**; pandas-only methods like `assign` / `pivot_table` /
+`.loc` / `.iloc` / pandas `merge` / `rename(columns=...)` →
+**pandas**; both signals → **Ambiguous**; no signal → defaults to
+Spark), and rewrites the annotation in place token-preservingly —
+atomic per file (sibling temp + rename) so an interrupted run never
+leaves half-rewritten source. Three modes: `pykrete migrate src/`
+rewrites in place; `pykrete migrate --check src/` previews per-site
+verdicts to stdout (exit 1 if any site needs attention, 0
+otherwise — CI-ready); `pykrete migrate --diff src/` emits a
+`patch -p1`-compatible unified diff. Ambiguous sites get an
+idempotent `# pykrete: ambiguous` marker injected on the line above
+the unchanged annotation; re-runs don't accumulate duplicates.
+Paired atomically with `D0090 deprecatedDataFrameAlias` escalation:
+under `"typeCheckingMode": "strict"` the warning now lands as
+**error**, but the fix-button ships in the same release so
+strict-mode users on green CI aren't stranded. Non-strict modes keep
+the warning unchanged. Pandas `pivot_table(index=, columns=,
+values=, aggfunc=)` literal-form column checking ships as the
+v1.6 pandas reshape downpayment — string-literal arguments and
+list-of-literals shapes resolve against `PandasFrame[X]`'s schema,
+firing D0030 with a *did you mean*; variable arguments and callable
+`aggfunc` fall through. Two v1.5 deferrals close: `.take()` is now
+dialect-gated (pandas `pdf.take([0, 2])` passes through instead of
+dying as a Spark terminal), and the `pdf.loc[mask, "col"]`
+nested-arg D0030 false positive on the row-mask side closes. Plus
+audit-debt closure: the `cross_dialect_handoff_gate` recognizer the
+v1.5 PR-A1/PR-A2 inference left as a "Keep in sync" comment is
+extracted to a single shared site.
+
+## Next up
+
+### v1.7 — pandas reshape + `.loc` / `.iloc` non-literal forms + `.query` / `.eval` mini-DSLs
+
+Broader pandas reshape: `melt` / `stack` / `unstack` /
+`groupby.agg` / `reset_index` / `set_index`, plus full
+`pivot_table` schema-tracking (the wide output schema — variable
+column values become column names of the result frame). `.loc`
+non-literal forms (`.loc[mask, "col"]` boolean-mask row keys,
+`.loc[:, "a":"b"]` column-range slicing) and `pdf.iloc[...]`
+integer-position indexing. The `df.query("…")` and `df.eval("…")`
+mini-DSLs (numexpr-influenced syntax, separate parser from the SQL
+path used by `selectExpr`). `pd.read_csv(...)` and other pandas
+I/O entry points if scope allows (schema inference from file
+headers / SQL / type-stubs is a separate design surface).
+Retrofitting pandas `PROBE-TYPE-IS` to the v1.3 hybrid donors
+(MLflow, Feast, iceberg-python). Canonical-vs-direct CI gate (I3
+from the v1.4 architecture audit).
 
 ## PyCharm support
 
@@ -258,8 +311,10 @@ exist when referenced.
 Priority: **PySpark (done) → pandas check-site (done, v1.3) → pandas
 depth + type-tracking (done, v1.4) → cross-dialect handoffs +
 deferred-promise closure (done, v1.5) → `pykrete migrate` paired with
-D0090 strict-mode escalation, plus pandas reshape or `.query` / `.eval`
-mini-DSLs (v1.6) → polars** → others (DuckDB, Dask, …).
+D0090 strict-mode escalation + pandas `pivot_table` literal-form +
+`.take()` dialect-gate closure (done, v1.6) → broader pandas reshape
++ `.loc` / `.iloc` non-literal forms + `.query` / `.eval` mini-DSLs
+(v1.7) → polars** → others (DuckDB, Dask, …).
 
 The core type model — `SparkFrame[Schema]` / `PandasFrame[Schema]` /
 `DataFrame[Schema]`, the `Schema` class, column checks, return-type
@@ -282,7 +337,12 @@ literal-form, dialect-gated `.head` / `.tail` / `.first` for pandas
 chains, two PR-F1-class sibling gates (`column_name_arg` ungated arms +
 `collect_col_refs` cross-DataFrame routing), the `--report-aliases` JSON
 envelope for v2.0 migration sizing, and the synthetic-pool soft cap
-that closes the v1.4 architecture-audit I4 finding.
+that closes the v1.4 architecture-audit I4 finding. v1.6 ships
+`pykrete migrate` — the auto-rewriter binary paired with D0090
+strict-mode escalation — plus pandas `pivot_table` literal-form column
+checking, the `.take()` dialect-gate closure, the `pdf.loc[mask, "col"]`
+nested-arg D0030 FP closure, and the audit-debt `cross_dialect_handoff_gate`
+recognizer extraction.
 
 ### Forking `ty`
 

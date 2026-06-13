@@ -437,16 +437,20 @@ A typo anywhere — `sales["amunt"]`, `sales[["regoin", "amount"]]` — fires `u
 
 ### Dialect-gated `.head` / `.tail` / `.first`
 
-PySpark recognizes `.head()`, `.tail()`, and `.first()` as chain-ending terminals (they return a `Row` or `None`, not a `DataFrame`). In pandas, the same three names return a sliced `DataFrame` — `pdf.head(10).merge(other, on="id")` is canonical pandas code. v1.5 dialect-gates the classification: pandas receivers (`PandasFrame[X]`) pass through unchanged, Spark receivers stay terminals. Pandas `count()` deliberately stays terminal (it returns a per-column Series).
+PySpark recognizes `.head()`, `.tail()`, `.first()`, and `.take()` as chain-ending terminals (they return a `Row` / list of `Row`s, not a `DataFrame`). In pandas, the same four names return a sliced `DataFrame` — `pdf.head(10).merge(other, on="id")` and `pdf.take([0, 2]).merge(other, on="id")` are canonical pandas code. v1.5 dialect-gated `.head` / `.tail` / `.first`; v1.6 closes the same gate on `.take()`. Pandas receivers (`PandasFrame[X]`) pass through unchanged; Spark receivers stay terminals. Pandas `count()` deliberately stays terminal (it returns a per-column Series).
 
 ```python
 def first_n(orders: PandasFrame[Order], other: PandasFrame[OtherSchema]) -> pd.DataFrame:
     return orders.head(100).merge(other, on="id")   # 'id' checked against Order and OtherSchema
 ```
 
-### `.loc[:, "col"]` literal-form (v1.5)
+### `.loc[:, "col"]` literal-form (v1.5, v1.6 nested-arg FP closure)
 
-`pdf.loc[:, "col"]` resolves the string-literal column against `PandasFrame[X]`'s schema, firing D0030 on a typo with a *did you mean*. Only the literal form lands in v1.5; variable column keys (`pdf.loc[:, col_var]`), boolean-mask row keys (`pdf.loc[mask, "col"]`), column-range slicing (`pdf.loc[:, "a":"b"]`), and `pdf.iloc[...]` fall through to Unknown and are deferred to v1.6 paired with broader pandas reshape.
+`pdf.loc[:, "col"]` resolves the string-literal column against `PandasFrame[X]`'s schema, firing D0030 on a typo with a *did you mean*. Only the literal form lands in v1.5; variable column keys (`pdf.loc[:, col_var]`), boolean-mask row-key tracking (`pdf.loc[mask, "col"]`), column-range slicing (`pdf.loc[:, "a":"b"]`), and `pdf.iloc[...]` fall through to Unknown and are deferred to v1.7 paired with broader pandas reshape. v1.6 closes the `pdf.loc[mask, "col"]` nested-arg D0030 false positive on the row-mask side: the row-mask now falls through to Unknown (deferred per spec) while the column-literal arm still fires D0030 on a typo.
+
+### `.pivot_table(index=, columns=, values=, aggfunc=)` literal-form (v1.6)
+
+`pdf.pivot_table(index="cat", columns="year", values="amount", aggfunc="sum")` resolves the string-literal arguments to `index` / `columns` / `values` / `aggfunc` against `PandasFrame[X]`'s schema, firing D0030 on a typo with a *did you mean*. List-of-literals shapes (`index=["a", "b"]`) are also checked. Variable arguments (`index=col_var`), callable `aggfunc` (`aggfunc=np.mean`), and the no-arg form fall through to Unknown. Full `pivot_table` schema-tracking (the wide output schema — variable column values become column names of the result frame) is deferred to v1.7 paired with broader pandas reshape (`melt` / `stack` / `unstack` / `groupby.agg`).
 
 ### Six dispatched operations
 
@@ -486,7 +490,7 @@ For the PySpark-only operations on this page (joins / aggregations / windows / I
 Some of the surface is intentionally outside pykrete's reach. These aren't gaps to fill — they're runtime concerns, not schema concerns:
 
 - **Structured streaming** (`readStream`, `writeStream`, `isStreaming`). pykrete is a static checker against declared schemas; streaming state is a runtime construct.
-- **Arrow conversions, pandas-on-Spark, and UDF-shaped pandas interop** (`toArrow`, `mapInPandas`, `applyInPandas`, `mapInArrow`, `pandas_api`, ...). The result isn't a vanilla dataframe anymore. pandas check-site coverage shipped in v1.3 as its own typed surface (`PandasFrame[X]`) — see the [Pandas dispatch](#pandas-dispatch) section above. v1.5 adds the `.toPandas()` and `spark.createDataFrame(pdf)` cross-dialect handoff (re-tagging `SparkFrame[X]` ↔ `PandasFrame[X]` at those two seams); polars is next on the [roadmap](/pykrete/about/roadmap/).
+- **Arrow conversions, pandas-on-Spark, and UDF-shaped pandas interop** (`toArrow`, `mapInPandas`, `applyInPandas`, `mapInArrow`, `pandas_api`, ...). The result isn't a vanilla dataframe anymore. pandas check-site coverage shipped in v1.3 as its own typed surface (`PandasFrame[X]`) — see the [Pandas dispatch](#pandas-dispatch) section above. v1.5 added the `.toPandas()` and `spark.createDataFrame(pdf)` cross-dialect handoff (re-tagging `SparkFrame[X]` ↔ `PandasFrame[X]` at those two seams); v1.6 added the `.take()` pandas dialect-gate and `pivot_table` literal-form. Polars is tracked for v1.7+ on the [roadmap](/pykrete/about/roadmap/).
 - **RDD-level operations** (`rdd`, `mapPartitions`, `foreach`). These drop below the dataframe abstraction by design.
 - **Runtime introspection** (`describe`, `summary`, `stat.*`). These return shape-of-data summaries, not schemas.
 - **UDF internals**. The decorator's return type is honored, but the body is opaque.
