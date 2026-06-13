@@ -27,6 +27,10 @@ pub struct AliasSite {
     pub column: usize,
     pub resolved_dialect: Dialect,
     pub would_be_replacement: String,
+    // PR-M2: add `pub range: TextRange` here. `main.rs::apply_alias_rewrites`
+    // currently walks line/col → byte offset because no byte range exists;
+    // once the field lands, the walker helper can be replaced with a direct
+    // `source[range.start()..range.end()]` substitution.
 }
 
 /// Walk every analyzed file's AST and collect every `DataFrame[X]`

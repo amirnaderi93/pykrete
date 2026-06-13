@@ -195,7 +195,7 @@ def f(s: SparkFrame[Sale]) -> SparkFrame[Sale]:
 // ---------------------------------------------------------------
 
 #[test]
-fn migrate_default_mode_reports_not_yet_implemented() {
+fn migrate_default_mode_exits_nonzero_until_pr_m2_lands() {
     let dir = tmpdir("default");
     let pyk = write_fixture(
         &dir,
@@ -209,15 +209,20 @@ fn migrate_default_mode_reports_not_yet_implemented() {
         .output()
         .expect("run pykrete migrate");
 
-    assert!(
-        out.status.success(),
-        "expected exit 0 from PR-M1 skeleton, got {:?}",
+    // Per PR-M1 round-2 reviewer finding: default mode must exit non-zero
+    // so CI gating on `pykrete migrate src/` does not silently pass during
+    // the M1 → M2 transition. Once PR-M2 lands and the rewriter ships, this
+    // test will need updating to assert success on rewrite.
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "expected exit 2 from PR-M1 skeleton (CI footgun guard), got {:?}",
         out.status
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("not yet implemented"),
-        "stderr missing 'not yet implemented': {stderr}"
+        stderr.contains("in-place rewrite ships in PR-M2"),
+        "stderr missing PR-M2 deferral marker: {stderr}"
     );
     assert!(
         stderr.contains("PR-M2") || stderr.contains("--check") || stderr.contains("--diff"),

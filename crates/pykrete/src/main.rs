@@ -656,9 +656,12 @@ fn run_migrate(args: &[String]) -> ExitCode {
         }
         MigrateMode::Apply => {
             eprintln!(
-                "pykrete migrate: rewriter not yet implemented (v1.6 PR-M1 ships the skeleton; rewrite logic lands in PR-M2). Use --check or --diff for now."
+                "pykrete migrate: in-place rewrite ships in PR-M2. v1.6 PR-M1 ships --check / --diff only. Use one of those flags or wait for the next release."
             );
-            ExitCode::SUCCESS
+            // Exit non-zero so CI gating on `pykrete migrate src/` does not
+            // silently pass during the M1 → M2 transition. Once PR-M2 lands,
+            // this branch will perform the actual rewrite + return SUCCESS.
+            ExitCode::from(2)
         }
     }
 }
