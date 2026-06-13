@@ -12,14 +12,16 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr};
 use ruff_python_parser::parse_module;
 use ruff_source_file::LineIndex;
-use ruff_text_size::Ranged;
+use ruff_text_size::{Ranged, TextRange};
 
 use crate::dataframe::{self, Dialect};
 
 /// One reported alias site. `file` / `line` / `column` together form the
 /// stable identifier downstream tooling (e.g. v1.6 `pykrete migrate`)
 /// keys against; positions are 1-indexed to match the `--format json`
-/// diagnostic output and most editor gutters.
+/// diagnostic output and most editor gutters. `range` is the source
+/// byte range of the alias expression (`DataFrame` or `DataFrame[X]`),
+/// used by the v1.6 PR-M2 in-place rewriter for token-preserving edits.
 #[derive(Debug, Clone)]
 pub struct AliasSite {
     pub file: String,
@@ -27,10 +29,7 @@ pub struct AliasSite {
     pub column: usize,
     pub resolved_dialect: Dialect,
     pub would_be_replacement: String,
-    // PR-M2: add `pub range: TextRange` here. `main.rs::apply_alias_rewrites`
-    // currently walks line/col → byte offset because no byte range exists;
-    // once the field lands, the walker helper can be replaced with a direct
-    // `source[range.start()..range.end()]` substitution.
+    pub range: TextRange,
 }
 
 /// Walk every analyzed file's AST and collect every `DataFrame[X]`
@@ -79,6 +78,7 @@ impl<'a> SourceOrderVisitor<'a> for AliasVisitor<'a> {
                 column: start.column.get(),
                 resolved_dialect: rec.dialect,
                 would_be_replacement: dataframe::spark_frame_rewrite(raw_text),
+                range,
             });
             // Don't descend into a recognized alias — the inner bare
             // `DataFrame` of `DataFrame[Sales]` would otherwise be

@@ -75,10 +75,10 @@ Modes (mutually exclusive):
         --check    Exit 1 if any file would change, 0 if none. No writes.
         --diff     Print a unified diff of the proposed changes to stdout.
                    No writes.
-    (default)      Perform the rewrite in place. NOTE: in v1.6 PR-M1 the
-                   rewriter is not yet implemented; running without
-                   --check / --diff prints a deferral notice on stderr
-                   and exits 2. Use --check / --diff or wait for PR-M2.
+    (default)      Rewrite each matching file in place. One line per
+                   modified file is printed to stdout ('rewrote: <path>');
+                   files with no aliases are left untouched. Exits 0 on
+                   success.
 
 Options:
     -h, --help     Show this help and exit.
@@ -86,6 +86,7 @@ Options:
 Example:
     pykrete migrate --check src/
     pykrete migrate --diff sales.pyk
+    pykrete migrate src/
 ";
 
 fn main() -> ExitCode {
@@ -533,10 +534,10 @@ fn find_pykrete_json(anchor: Option<&Path>) -> Option<PathBuf> {
 /// Mode selected via `--check` / `--diff` (or neither).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MigrateMode {
-    /// Default: apply the rewrite. v1.6 PR-M1 is a skeleton — the
-    /// rewriter ships in PR-M2; this mode currently prints a deferral
-    /// notice and exits 2 (non-zero so CI gating on `pykrete migrate`
-    /// does not silently pass during the M1 → M2 transition).
+    /// Default: apply the rewrite in place. For each file with one or
+    /// more `DataFrame[X]` alias sites, splice in the `SparkFrame[X]`
+    /// replacements and atomically write the result back (tempfile +
+    /// rename). Clean files are left untouched.
     Apply,
     /// `--check`: exit 1 if any file would change, 0 otherwise. No
     /// writes, no diff.
@@ -639,12 +640,8 @@ fn run_migrate(args: &[String]) -> ExitCode {
         MigrateMode::Diff => {
             // Group sites by file (collect_alias_sites preserves input
             // order, which is sorted), emit one unified diff per file.
-            // No write side-effects. v1.6 PR-M1 ships minimal unified-diff
-            // format (whole-file `-`/`+` blocks under `--- a/path` / `+++
-            // b/path` headers) — `patch -p1` accepts it. Per-edit LCS
-            // hunks with 3 lines of context are deferred to PR-M2 once
-            // `AliasSite` carries a byte range (see TODO at
-            // alias_report.rs:30-33).
+            // No write side-effects. Per-edit hunks: one `@@ -L,1 +L,1 @@`
+            // hunk per alias site, single-line old + single-line new.
             let mut by_file: Vec<(&str, &str, Vec<&pykrete::AliasSite>)> = Vec::new();
             for (path, source) in &sources {
                 let file_sites: Vec<&pykrete::AliasSite> =
@@ -654,133 +651,193 @@ fn run_migrate(args: &[String]) -> ExitCode {
                 }
             }
             for (path, source, file_sites) in &by_file {
-                let rewritten = apply_alias_rewrites(source, file_sites);
-                let diff = unified_diff(path, source, &rewritten);
+                let diff = unified_diff(path, source, file_sites);
                 print!("{diff}");
             }
             ExitCode::SUCCESS
         }
         MigrateMode::Apply => {
-            eprintln!(
-                "pykrete migrate: in-place rewrite ships in PR-M2. v1.6 PR-M1 ships --check / --diff only. Use one of those flags or wait for the next release."
-            );
-            // Exit non-zero so CI gating on `pykrete migrate src/` does not
-            // silently pass during the M1 → M2 transition. Once PR-M2 lands,
-            // this branch will perform the actual rewrite + return SUCCESS.
-            ExitCode::from(2)
-        }
-    }
-}
-
-/// Apply every `AliasSite`'s `would_be_replacement` to `source`,
-/// returning the rewritten string. Used only by `--diff` to produce
-/// the proposed text. Sites are sorted descending by byte offset so
-/// earlier edits don't shift later positions.
-///
-/// PR-M1 reuses `AliasSite`'s `line` / `column` to locate edits
-/// because `AliasSite` does not yet carry a byte range. The actual
-/// in-place rewriter (PR-M2) will widen `AliasSite` with a byte
-/// range; this PR's `--diff` path is a preview, not the production
-/// edit emitter.
-fn apply_alias_rewrites(source: &str, sites: &[&pykrete::AliasSite]) -> String {
-    // (line_idx_0based, col_idx_0based, replacement) tuples, sorted
-    // descending so byte offsets to earlier sites stay valid as we
-    // splice from the bottom up.
-    let mut edits: Vec<(usize, usize, &str)> = sites
-        .iter()
-        .map(|s| (s.line - 1, s.column - 1, s.would_be_replacement.as_str()))
-        .collect();
-    edits.sort_by(|a, b| b.cmp(a));
-
-    let mut lines: Vec<String> = source.split_inclusive('\n').map(String::from).collect();
-    for (line_idx, col_idx, replacement) in edits {
-        let Some(line) = lines.get_mut(line_idx) else {
-            continue;
-        };
-        // Walk the line by char to find the byte offset of column N
-        // (1-indexed in the site, 0-indexed here). The deprecated
-        // alias source text starts with "DataFrame" — replace the
-        // contiguous "DataFrame[...]" or bare "DataFrame" token.
-        let byte_start = char_col_to_byte_offset(line, col_idx);
-        let Some(byte_end) = find_alias_token_end(line, byte_start) else {
-            continue;
-        };
-        line.replace_range(byte_start..byte_end, replacement);
-    }
-    lines.concat()
-}
-
-/// Translate a 0-indexed column count (chars) to a byte offset in
-/// `line`. Returns `line.len()` if `col` is past the end.
-fn char_col_to_byte_offset(line: &str, col: usize) -> usize {
-    line.char_indices()
-        .nth(col)
-        .map(|(b, _)| b)
-        .unwrap_or(line.len())
-}
-
-/// From `byte_start`, find the end of the alias token —
-/// `DataFrame[...]` (matching brackets) or bare `DataFrame`. Returns
-/// `None` if the token doesn't start with `DataFrame`.
-fn find_alias_token_end(line: &str, byte_start: usize) -> Option<usize> {
-    const TOKEN: &str = "DataFrame";
-    let rest = line.get(byte_start..)?;
-    if !rest.starts_with(TOKEN) {
-        return None;
-    }
-    let after = byte_start + TOKEN.len();
-    let tail = line.get(after..)?;
-    if !tail.starts_with('[') {
-        return Some(after);
-    }
-    let mut depth: usize = 0;
-    for (i, ch) in tail.char_indices() {
-        match ch {
-            '[' => depth += 1,
-            ']' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(after + i + 1);
+            // sources[i].0 is the string path; expanded[i] is the same
+            // path as a PathBuf. Iterate in lockstep so we have a
+            // PathBuf for atomic_write and a &str for the sites filter.
+            //
+            // Round-2 reviewer caught: previous loop would `return` on
+            // first error, leaving the user with a half-migrated tree
+            // and no summary of what was/wasn't done. Now: collect
+            // errors, attempt every file, then summarize.
+            let mut rewrote = 0usize;
+            let mut failed: Vec<(std::path::PathBuf, io::Error)> = Vec::new();
+            let mut skipped = 0usize;
+            for (path_buf, (path_str, source)) in expanded.iter().zip(sources.iter()) {
+                let file_sites: Vec<&pykrete::AliasSite> =
+                    sites.iter().filter(|s| s.file == *path_str).collect();
+                if file_sites.is_empty() {
+                    skipped += 1;
+                    continue;
+                }
+                let rewritten = apply_alias_rewrites(source, &file_sites);
+                match atomic_write(path_buf, &rewritten) {
+                    Ok(()) => {
+                        println!("rewrote: {}", path_buf.display());
+                        rewrote += 1;
+                    }
+                    Err(e) => {
+                        eprintln!("error writing {}: {e}", path_buf.display());
+                        failed.push((path_buf.clone(), e));
+                    }
                 }
             }
-            _ => {}
+            if !failed.is_empty() {
+                eprintln!(
+                    "migrate: rewrote {rewrote} file(s), {} failed, {skipped} clean (no aliases)",
+                    failed.len()
+                );
+                return ExitCode::from(2);
+            }
+            ExitCode::SUCCESS
         }
     }
-    Some(after)
 }
 
-/// Minimal unified-diff generator for v1.6 PR-M1. Emits one whole-file
-/// hunk (`@@ -1,N +1,M @@`) under `--- a/path` / `+++ b/path` headers,
-/// with every old line as `-` and every new line as `+`; no context
-/// lines. `patch -p1` accepts it. Per-edit LCS hunks with surrounding
-/// context are deferred to PR-M2 once `AliasSite` carries a byte range
-/// (see TODO at `alias_report.rs:30-33`).
-fn unified_diff(path: &str, old: &str, new: &str) -> String {
-    let old_lines: Vec<&str> = old.split_inclusive('\n').collect();
-    let new_lines: Vec<&str> = new.split_inclusive('\n').collect();
-    let mut out = String::new();
-    out.push_str(&format!("--- a/{path}\n"));
-    out.push_str(&format!("+++ b/{path}\n"));
+/// Write `contents` to `path` atomically: canonicalize through any
+/// symlinks first, then write to a tempfile in the canonical target's
+/// directory, then `rename` over the original. The canonicalize step
+/// is round-2-reviewer-mandated: without it, `fs::rename` on a symlink
+/// path would replace the SYMLINK ENTRY with a regular file, silently
+/// de-linking and leaving the real source untouched. The rename is
+/// atomic on POSIX (and on Windows when both paths are on the same
+/// volume — guaranteed here because the tempfile lives next to the
+/// resolved target). A crash mid-write or mid-rename always leaves
+/// the original intact: the tempfile is cleaned up on EVERY failure
+/// path (fs::write error, fs::rename error).
+fn atomic_write(path: &Path, contents: &str) -> io::Result<()> {
+    let target = fs::canonicalize(path)?;
+    let dir = target.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = target
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no file name"))?;
+    let mut tmp_name = std::ffi::OsString::from(".");
+    tmp_name.push(file_name);
+    tmp_name.push(".pykrete-migrate.tmp");
+    let tmp = dir.join(tmp_name);
+    // Round-2 reviewer: prior code didn't clean up on fs::write failure,
+    // leaving stale `.pykrete-migrate.tmp` dotfiles in user source trees
+    // after disk-full / EIO events. Wrap both fallible steps with the
+    // same cleanup path.
+    if let Err(e) = fs::write(&tmp, contents) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    if let Err(e) = fs::rename(&tmp, &target) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
+}
 
-    // Whole-file diff: emit a single hunk covering both sides. v1.6
-    // PR-M1 doesn't need a real LCS — the skeleton-level reviewer
-    // value is that a diff is produced; PR-M2 can swap in a real
-    // diff algorithm if the reviewer asks for tighter hunks.
-    let old_len = old_lines.len();
-    let new_len = new_lines.len();
-    out.push_str(&format!("@@ -1,{old_len} +1,{new_len} @@\n"));
-    for line in &old_lines {
-        out.push('-');
-        out.push_str(line);
-        if !line.ends_with('\n') {
-            out.push('\n');
+/// Apply every `AliasSite`'s `would_be_replacement` to `source` via
+/// direct byte-range substitution, returning the rewritten string.
+/// Sites are spliced in descending byte-offset order so earlier edits
+/// don't shift later positions. The byte range comes from `AliasSite.range`
+/// (populated by the walker from `expr.range()`), so this routine never
+/// re-tokenizes — token-preserving by construction.
+fn apply_alias_rewrites(source: &str, sites: &[&pykrete::AliasSite]) -> String {
+    let mut edits: Vec<(usize, usize, &str)> = sites
+        .iter()
+        .map(|s| {
+            (
+                usize::from(s.range.start()),
+                usize::from(s.range.end()),
+                s.would_be_replacement.as_str(),
+            )
+        })
+        .collect();
+    edits.sort_by_key(|e| std::cmp::Reverse(e.0));
+
+    let mut out = source.to_string();
+    for (start, end, replacement) in edits {
+        out.replace_range(start..end, replacement);
+    }
+    out
+}
+
+/// Per-edit unified diff. One `@@ -L,1 +L,1 @@` hunk per `AliasSite`,
+/// showing the single original line as `-` and the single rewritten
+/// line as `+`. Output is `patch -p1`-compatible. Because every alias
+/// rewrite is a single-line edit (`DataFrame[X]` → `SparkFrame[X]`
+/// never spans a newline), each hunk needs exactly one old line + one
+/// new line and no surrounding context.
+fn unified_diff(path: &str, source: &str, sites: &[&pykrete::AliasSite]) -> String {
+    let line_starts: Vec<usize> = std::iter::once(0)
+        .chain(source.match_indices('\n').map(|(i, _)| i + 1))
+        .collect();
+    let line_at = |offset: usize| -> usize {
+        line_starts
+            .binary_search(&offset)
+            .unwrap_or_else(|idx| idx - 1)
+    };
+    let line_text = |idx: usize| -> &str {
+        let start = line_starts[idx];
+        let end = line_starts.get(idx + 1).copied().unwrap_or(source.len());
+        &source[start..end]
+    };
+
+    // Build (line_idx, edits-on-this-line) groups in source order so the
+    // diff reads top-to-bottom. Multiple sites on the same line collapse
+    // into one hunk whose `-` line is the original and whose `+` line
+    // has every alias replaced.
+    let mut by_line: Vec<(usize, Vec<&pykrete::AliasSite>)> = Vec::new();
+    let mut sorted: Vec<&pykrete::AliasSite> = sites.to_vec();
+    sorted.sort_by_key(|s| usize::from(s.range.start()));
+    for s in sorted {
+        let line_idx = line_at(usize::from(s.range.start()));
+        match by_line.last_mut() {
+            Some((last_line, edits)) if *last_line == line_idx => edits.push(s),
+            _ => by_line.push((line_idx, vec![s])),
         }
     }
-    for line in &new_lines {
-        out.push('+');
-        out.push_str(line);
-        if !line.ends_with('\n') {
+
+    // Round-2 reviewer: prior `--- a/{path}` with an absolute path
+    // produced `--- a//abs/path` (double slash) which breaks the standard
+    // `patch -p1` workflow. Strip a single leading slash so the diff
+    // headers look like `--- a/abs/path` consistently for both relative
+    // and absolute input paths.
+    let normalized_path = path.strip_prefix('/').unwrap_or(path);
+    let mut out = String::new();
+    out.push_str(&format!("--- a/{normalized_path}\n"));
+    out.push_str(&format!("+++ b/{normalized_path}\n"));
+    for (line_idx, edits) in &by_line {
+        let original = line_text(*line_idx);
+        let line_start_offset = line_starts[*line_idx];
+        // Splice descending so earlier edits' offsets stay valid as we
+        // mutate the buffer.
+        let mut rewritten = original.to_string();
+        let mut sorted_edits: Vec<&&pykrete::AliasSite> = edits.iter().collect();
+        sorted_edits.sort_by_key(|s| std::cmp::Reverse(usize::from(s.range.start())));
+        for s in sorted_edits {
+            let s_start = usize::from(s.range.start()) - line_start_offset;
+            let s_end = usize::from(s.range.end()) - line_start_offset;
+            rewritten.replace_range(s_start..s_end, &s.would_be_replacement);
+        }
+        let line_no = line_idx + 1;
+        out.push_str(&format!("@@ -{line_no},1 +{line_no},1 @@\n"));
+        out.push('-');
+        out.push_str(original);
+        // Round-2 reviewer: POSIX unified-diff requires the marker
+        // `\ No newline at end of file` when a hunk line doesn't end
+        // with `\n`. Without it, `patch -p1` rejects the hunk because
+        // the in-memory line carries a `\n` the source file doesn't.
+        // Apply mode operates on raw bytes and is unaffected; only
+        // `--diff` output needs the marker.
+        if !original.ends_with('\n') {
             out.push('\n');
+            out.push_str("\\ No newline at end of file\n");
+        }
+        out.push('+');
+        out.push_str(&rewritten);
+        if !rewritten.ends_with('\n') {
+            out.push('\n');
+            out.push_str("\\ No newline at end of file\n");
         }
     }
     out
