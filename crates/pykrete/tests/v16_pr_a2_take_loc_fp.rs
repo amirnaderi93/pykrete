@@ -192,16 +192,15 @@ def f(pdf: PandasFrame[Orders]):
 // still fires when `pdf.loc[:, "typo"]` is the standalone return value
 // and "typo" is NOT in the schema.
 //
-// NOTE: the spec also listed `pdf.assign(bad=pdf.loc[:, "typo"] + 1)`
-// as a regression-guard expecting D0030 on "typo". Pre-fix, that form
-// only fired D0030 on `loc` (the FP we removed), NEVER on `typo` — the
-// nested method-arg path goes through `apply_add_columns_iter` →
-// `collect_col_refs`, which does NOT recognize `.loc` literal-form col
-// refs (the literal-form `analyze_expr` arm is not reached for nested
-// args). Wiring nested-arg `.loc[:, "typo"]` detection is broader
-// `.loc`/`.iloc` scope deferred to v1.7 per spec §9.1. The standalone
-// form below is the v1.5 PR-C true-positive surface that PR-A2 must
-// not regress.
+// Round-2 reviewer arbitrated the scope correctly: spec §9.1 defers BROADER
+// `.loc`/`.iloc` indexer shapes (boolean-mask rows, integer indexers,
+// list/slice column shapes) — NOT the literal-form `(:, "X")` in nested-arg
+// position. §3.2's mandatory negative-space test list explicitly includes
+// the nested-arg `pdf.assign(bad=pdf.loc[:, "typo"] + 1)` case as a paired
+// regression guard. Round 2 wired a new arm into `col_refs.rs:281-298` (the
+// loc_literal_subscript recognizer with the Pandas dialect gate) that mirrors
+// the standalone-form arm in `expr.rs:246-262`. The two tests below pin both
+// the standalone form (this one) and the nested-arg form (next).
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -214,6 +213,35 @@ class Orders(Schema):
 
 def f(pdf: PandasFrame[Orders]):
     return pdf.loc[:, "typo"]
+"#,
+    );
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "typo");
+}
+
+// ---------------------------------------------------------------------------
+// V16A2_loc_literal_form_typo_in_assign_arg_fires_d0030:
+//
+// Spec §3.2 mandatory paired regression-guard for the nested-arg form. The
+// new col_refs.rs arm catches `pdf.loc[:, "typo"]` when it appears as a
+// method argument (e.g. inside `.assign(bad=...)`). Pre-round-2, the
+// nested path through `apply_add_columns_iter → collect_col_refs` did NOT
+// recognize the literal-form col-ref and the typo was silent. With the new
+// arm at col_refs.rs:281-298, the col-ref walker now treats `pdf.loc[:,
+// "typo"]` like any other column reference and `report_column_refs` fires
+// D0030 against the Orders schema.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn V16A2_loc_literal_form_typo_in_assign_arg_fires_d0030() {
+    let result = check(
+        r#"
+class Orders(Schema):
+    id: int
+    status: string
+
+def f(pdf: PandasFrame[Orders]):
+    return pdf.assign(bad=pdf.loc[:, "typo"])
 "#,
     );
     assert_has_code(&result, "D0030");

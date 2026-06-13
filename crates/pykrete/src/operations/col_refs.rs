@@ -290,6 +290,26 @@ pub(super) fn collect_col_refs<'a>(
         ));
         return;
     }
+    // `pdf.loc[:, "literal"]` literal-form col-ref recognition (Spec §3.2 —
+    // PR-A2 second seam). The standalone-form arm in `expr.rs:246-262` only
+    // reaches via top-level `analyze_expr`; for nested-arg position like
+    // `pdf.assign(bad=pdf.loc[:, "typo"] + 1)` the col-ref walker enters
+    // here, and without this arm the typo never fires D0030. Uses the
+    // existing `loc_literal_subscript` recognizer at `expr.rs:424` + the
+    // Pandas dialect gate to avoid emitting on Spark frames (which don't
+    // have `.loc`). Sibling of the `df["X"]` arm below.
+    if let Some(sub) = expr.as_subscript_expr()
+        && let Some((name, col_lit)) = super::expr::loc_literal_subscript(sub)
+        && ctx.lookup(name.id.as_str()).is_some()
+        && ctx.lookup_dialect(name.id.as_str()) == Some(crate::dataframe::Dialect::Pandas)
+    {
+        out.push((
+            Some(name.id.as_str()),
+            col_lit.value.to_str(),
+            col_lit.range(),
+        ));
+        return;
+    }
     // `df["X"]` subscript access — the sibling of `df.X`. Real PySpark code
     // uses this ubiquitously (`df["age"]`, `df["name"]`), and a typo in the
     // string slot should be a D0030 just like a typo on `df.X` or
