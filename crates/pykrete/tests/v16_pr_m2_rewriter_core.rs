@@ -544,3 +544,112 @@ fn diff_headers_strip_double_slash_on_absolute_paths() {
         "diff header has double slash from absolute path: {diff}"
     );
 }
+
+// ---------------------------------------------------------------
+// Round-2 PR-M3 reviewer (B1): --diff with ambiguous sites must
+// produce a `patch -p1`-applicable diff whose result matches what
+// --apply writes. Pre-fix, ambiguous sites produced a tautological
+// `-line` / `+line` no-op hunk AND omitted the `# pykrete: ambiguous`
+// marker, breaking round-trip equivalence with --apply.
+// ---------------------------------------------------------------
+
+#[test]
+#[cfg(unix)]
+fn diff_for_ambiguous_inserts_marker_and_round_trips_to_apply() {
+    let dir = tmpdir("ambiguous_diff_a");
+    let src = "\
+class Sale(Schema):
+    region: string
+
+
+def f(df: DataFrame[Sale]) -> int:
+    a = df.withColumn('x', 1)
+    b = df.assign(x=1)
+    return 0
+";
+    let original_pyk = write_fixture(&dir, "x.pyk", src);
+
+    // 1. Capture --diff output.
+    let diff_out = Command::new(bin())
+        .arg("migrate")
+        .arg("--diff")
+        .arg(&original_pyk)
+        .output()
+        .expect("run pykrete migrate --diff");
+    assert!(diff_out.status.success(), "exit was {:?}", diff_out.status);
+    let diff = String::from_utf8(diff_out.stdout).expect("utf8 stdout");
+
+    // The diff must contain the ambiguous-marker insertion.
+    assert!(
+        diff.contains("# pykrete: ambiguous"),
+        "diff missing ambiguous marker insertion: {diff}"
+    );
+    // It must NOT contain a tautological `-DataFrame[Sale]` / `+DataFrame[Sale]` no-op.
+    let lines: Vec<&str> = diff.lines().collect();
+    let has_tautological = lines
+        .windows(2)
+        .any(|w| w[0].starts_with("-DataFrame[Sale]") && w[1].starts_with("+DataFrame[Sale]"));
+    assert!(
+        !has_tautological,
+        "diff has tautological -DataFrame[Sale] / +DataFrame[Sale] no-op: {diff}"
+    );
+
+    // 2. Run --apply to capture what the final tree should look like.
+    let apply_out = Command::new(bin())
+        .arg("migrate")
+        .arg(&original_pyk)
+        .output()
+        .expect("run pykrete migrate --apply");
+    assert!(
+        apply_out.status.success(),
+        "exit was {:?}",
+        apply_out.status
+    );
+    let applied = fs::read_to_string(&original_pyk).expect("read applied");
+
+    // 3. Apply the same diff via `patch -p1` to a fresh copy of `src`
+    //    and verify the patched content matches `applied`.
+    let target_dir = tmpdir("ambiguous_diff_b");
+    let target_pyk = target_dir.join("x.pyk");
+    fs::write(&target_pyk, src).unwrap();
+
+    // The diff was emitted with the original absolute path; rewrite to
+    // a relative `a/x.pyk` so `patch -p1` resolves within target_dir.
+    let abs_strip = original_pyk
+        .strip_prefix("/")
+        .unwrap_or(&original_pyk)
+        .to_string_lossy()
+        .to_string();
+    let rel_diff = diff.replace(&abs_strip, "x.pyk");
+
+    let mut child = std::process::Command::new("patch")
+        .arg("-p1")
+        .current_dir(&target_dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn patch -p1");
+    {
+        use std::io::Write as _;
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(rel_diff.as_bytes())
+            .expect("write to patch stdin");
+    }
+    let patch_out = child.wait_with_output().expect("wait patch");
+    assert!(
+        patch_out.status.success(),
+        "patch -p1 rejected diff: stderr={} stdout={}",
+        String::from_utf8_lossy(&patch_out.stderr),
+        String::from_utf8_lossy(&patch_out.stdout),
+    );
+
+    let patched = fs::read_to_string(&target_pyk).expect("read patched");
+    assert_eq!(
+        applied, patched,
+        "diff did NOT round-trip through patch -p1 to match --apply result.\n=== applied ===\n{applied}\n=== patched ===\n{patched}"
+    );
+}

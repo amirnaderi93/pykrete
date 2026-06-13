@@ -19,12 +19,29 @@ use ruff_text_size::{Ranged, TextRange};
 
 use crate::dataframe::{self, Dialect};
 
+/// What the v1.6 PR-M3 call-graph walk decided for one binding. Lives
+/// here (not in `alias_adjudicate`) so `AliasSite` can carry the typed
+/// verdict directly — without this, consumers had to recover the
+/// "ambiguous" verdict from a `would_be_replacement.starts_with(...)`
+/// text heuristic, which is one schema rename away from silently
+/// mis-classifying every site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdjudicatedDialect {
+    Spark,
+    Pandas,
+    Ambiguous,
+}
+
 /// One reported alias site. `file` / `line` / `column` together form the
 /// stable identifier downstream tooling (e.g. v1.6 `pykrete migrate`)
 /// keys against; positions are 1-indexed to match the `--format json`
 /// diagnostic output and most editor gutters. `range` is the source
 /// byte range of the alias expression (`DataFrame` or `DataFrame[X]`),
 /// used by the v1.6 PR-M2 in-place rewriter for token-preserving edits.
+/// `verdict` is the v1.6 PR-M3 call-graph adjudication verdict; `None`
+/// before adjudication runs (v1.5/PR-M1/PR-M2 behavior), `Some(...)`
+/// after `alias_adjudicate::apply_verdicts`. The JSON serializer and
+/// migrator both branch on this field directly — no text heuristics.
 #[derive(Debug, Clone)]
 pub struct AliasSite {
     pub file: String,
@@ -33,6 +50,7 @@ pub struct AliasSite {
     pub resolved_dialect: Dialect,
     pub would_be_replacement: String,
     pub range: TextRange,
+    pub verdict: Option<AdjudicatedDialect>,
 }
 
 /// Walk every analyzed file's AST and collect every `DataFrame[X]`
@@ -82,6 +100,7 @@ impl<'a> SourceOrderVisitor<'a> for AliasVisitor<'a> {
                 resolved_dialect: rec.dialect,
                 would_be_replacement: dataframe::spark_frame_rewrite(raw_text),
                 range,
+                verdict: None,
             });
             // Don't descend into a recognized alias — the inner bare
             // `DataFrame` of `DataFrame[Sales]` would otherwise be
@@ -96,21 +115,18 @@ impl<'a> SourceOrderVisitor<'a> for AliasVisitor<'a> {
 
 /// Serialize an in-memory alias inventory to the spec §5.1 JSON shape.
 /// `resolvedDialect` ranges over `"spark"` / `"pandas"` / `"ambiguous"`
-/// after v1.6 PR-M3 adjudication. The ambiguous discriminator is
-/// inferred from `would_be_replacement` matching the source text
-/// verbatim (the rewriter no-op convention adjudication uses).
+/// after v1.6 PR-M3 adjudication. Branches on the typed `verdict` field;
+/// `None` (pre-adjudication, v1.5 behavior) falls back to `"spark"` per
+/// spec §5.1 ("v1.5 reports every site as `spark`").
 pub fn render_alias_report_json(sites: &[AliasSite]) -> String {
     let aliases: Vec<serde_json::Value> = sites
         .iter()
         .map(|s| {
-            let is_noop = s.would_be_replacement.starts_with("DataFrame");
-            let dialect = if is_noop {
-                "ambiguous"
-            } else {
-                match s.resolved_dialect {
-                    Dialect::Spark => "spark",
-                    Dialect::Pandas => "pandas",
-                }
+            let dialect = match s.verdict {
+                Some(AdjudicatedDialect::Spark) => "spark",
+                Some(AdjudicatedDialect::Pandas) => "pandas",
+                Some(AdjudicatedDialect::Ambiguous) => "ambiguous",
+                None => "spark",
             };
             serde_json::json!({
                 "file": s.file,

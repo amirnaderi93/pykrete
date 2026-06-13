@@ -212,9 +212,10 @@ $ pykrete migrate --check src/
 src/sales.pyk:5:20: would rewrite to SparkFrame[Sale]
 src/sales.pyk:5:40: would rewrite to SparkFrame[Sale]
 src/pivot.pyk:11:18: would rewrite to PandasFrame[Order]
+src/util.pyk:7:14: ambiguous — needs human review (mixed Spark/pandas usage)
 ```
 
-Exit code is 1 if any site would be rewritten, 0 otherwise — drop it into CI to gate merges. The `--diff src/` variant prints a `patch -p1`-compatible unified diff for review.
+Exit code is 1 if any site needs attention (including ambiguous sites), 0 otherwise — drop it into CI to gate merges. Per-site lines go to stdout, so the standard `pykrete migrate --check src/ > report.txt` redirect works. The `--diff src/` variant prints a `patch -p1`-compatible unified diff for review; ambiguous sites in `--diff` show up as an inserted `# pykrete: ambiguous` marker (no tautological rewrite hunks).
 
 **Step 2 — rewrite.** `pykrete migrate src/` does the work in place. Adjudication picks per-site:
 

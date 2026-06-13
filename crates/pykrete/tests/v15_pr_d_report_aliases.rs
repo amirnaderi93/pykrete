@@ -232,6 +232,81 @@ def f(df: DataFrame[Sales]) -> DataFrame[Sales]:
     assert_eq!(v["aliases"].as_array().expect("array").len(), 2);
 }
 
+// ---------------------------------------------------------------
+// v1.6 PR-M3 round-2 reviewer (I1): CLI tests pinning the new
+// adjudication discriminators in the JSON envelope. Pre-PR-M3 only
+// `"spark"` was valid; M3 added `"pandas"` and `"ambiguous"` and
+// the M3 round-1 review noted no CLI tests covered them.
+// ---------------------------------------------------------------
+
+#[test]
+fn report_aliases_resolved_dialect_pandas_for_pandas_shaped_binding() {
+    // Pandas-only discriminator method (`.assign(...)`) on the binding
+    // tags it as pandas; the JSON envelope must reflect that exact
+    // discriminator string.
+    let dir = tmpdir("report_pandas");
+    let p = write_pyk(
+        &dir,
+        "pandas_only.pyk",
+        "\
+class Sale(Schema):
+    region: string
+
+
+def f(df: DataFrame[Sale]) -> int:
+    out = df.assign(x=1)
+    return 0
+",
+    );
+    let (exit, v) = run_report(&p);
+    assert_eq!(exit, 0, "report mode always exits 0");
+    let aliases = v["aliases"].as_array().expect("array");
+    assert_eq!(aliases.len(), 1);
+    assert_eq!(
+        aliases[0]["resolvedDialect"], "pandas",
+        "pandas-shaped binding should adjudicate to pandas: {aliases:?}"
+    );
+    assert_eq!(
+        aliases[0]["wouldBeReplacement"], "PandasFrame[Sale]",
+        "wouldBeReplacement should be the pandas canonical form: {aliases:?}"
+    );
+}
+
+#[test]
+fn report_aliases_resolved_dialect_ambiguous_for_mixed_usage() {
+    // Mixed Spark + pandas discriminators on the same binding → ambiguous.
+    // The migrator leaves these in place and emits a marker; report mode
+    // must surface the verdict so v2.0-migration tooling can act on it.
+    let dir = tmpdir("report_ambiguous");
+    let p = write_pyk(
+        &dir,
+        "mixed.pyk",
+        "\
+class Sale(Schema):
+    region: string
+
+
+def f(df: DataFrame[Sale]) -> int:
+    a = df.withColumn(\"x\", 1)
+    b = df.assign(x=1)
+    return 0
+",
+    );
+    let (exit, v) = run_report(&p);
+    assert_eq!(exit, 0);
+    let aliases = v["aliases"].as_array().expect("array");
+    assert_eq!(aliases.len(), 1);
+    assert_eq!(
+        aliases[0]["resolvedDialect"], "ambiguous",
+        "mixed-usage binding should adjudicate to ambiguous: {aliases:?}"
+    );
+    // For ambiguous, wouldBeReplacement is the raw source text (rewriter no-op).
+    assert_eq!(
+        aliases[0]["wouldBeReplacement"], "DataFrame[Sale]",
+        "ambiguous wouldBeReplacement should equal the raw source text: {aliases:?}"
+    );
+}
+
 #[test]
 fn report_aliases_help_lists_the_flag() {
     let out = Command::new(bin())

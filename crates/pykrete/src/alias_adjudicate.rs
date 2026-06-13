@@ -14,16 +14,14 @@ use ruff_python_ast::{Expr, Stmt, StmtFunctionDef};
 use ruff_python_parser::parse_module;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
-use crate::alias_report::AliasSite;
+use crate::alias_report::{AdjudicatedDialect, AliasSite};
 use crate::dataframe::{self, Dialect};
 
-/// What the call-graph walk decided for one binding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AdjudicatedDialect {
-    Spark,
-    Pandas,
-    Ambiguous,
-}
+// Round-2 reviewer (I2): `AdjudicatedDialect` lives in `alias_report.rs`
+// now so `AliasSite` can carry the typed verdict directly. Re-export
+// here so existing `alias_adjudicate::AdjudicatedDialect` call sites
+// (tests, internal walkers) keep compiling.
+pub use crate::alias_report::AdjudicatedDialect as _AdjudicatedDialect;
 
 /// Spark-discriminating method names. A `binding.METHOD(...)` call where
 /// METHOD is one of these tags the binding as Spark.
@@ -324,6 +322,7 @@ fn apply_verdict(
             continue;
         }
         let raw = &source[s.range];
+        s.verdict = Some(verdict);
         match verdict {
             AdjudicatedDialect::Spark => {
                 s.resolved_dialect = Dialect::Spark;
@@ -334,6 +333,12 @@ fn apply_verdict(
                 s.would_be_replacement = pandas_frame_rewrite(raw);
             }
             AdjudicatedDialect::Ambiguous => {
+                // Per spec §2.3: ambiguous sites are NOT rewritten. The
+                // dialect field stays `Spark` as a placeholder for legacy
+                // consumers (LSP hover, transpiler) that still read it;
+                // new consumers MUST check `verdict` first. Round-2
+                // reviewer (I2) added the typed field so future code
+                // doesn't have to dig through `would_be_replacement` text.
                 s.resolved_dialect = Dialect::Spark;
                 s.would_be_replacement = raw.to_string();
             }
@@ -357,27 +362,26 @@ pub fn pandas_frame_rewrite(raw: &str) -> String {
 
 /// Whether any site in `path` was adjudicated as ambiguous — used by the
 /// migrator to decide whether `# pykrete: ambiguous` markers need to be
-/// emitted alongside the alias rewrite. Ambiguous sites are the one case
-/// where `would_be_replacement` equals the raw `DataFrame...` text
-/// verbatim (the rewriter is a no-op), so that's the discriminator.
-pub fn has_ambiguous_in_file(sites: &[AliasSite], path: &str, source: &str) -> bool {
-    sites.iter().filter(|s| s.file == path).any(|s| {
-        let raw = &source[s.range];
-        s.would_be_replacement == raw && raw.starts_with("DataFrame")
-    })
+/// emitted alongside the alias rewrite. Round-2 reviewer (I2) replaced
+/// the prior text-equality heuristic with the typed `verdict` field;
+/// sites without a verdict (pre-adjudication, v1.5 behavior) are never
+/// ambiguous.
+pub fn has_ambiguous_in_file(sites: &[AliasSite], path: &str, _source: &str) -> bool {
+    sites
+        .iter()
+        .filter(|s| s.file == path)
+        .any(|s| s.verdict == Some(AdjudicatedDialect::Ambiguous))
 }
 
 /// For the migrator: collect every ambiguous site's start offset in
 /// `path`, sorted and deduped. The migrator inserts one `# pykrete:
 /// ambiguous` comment per distinct line on the line above the site.
-pub fn ambiguous_site_offsets(sites: &[AliasSite], path: &str, source: &str) -> Vec<TextSize> {
+/// Round-2 reviewer (I2): switched from text-heuristic to typed verdict.
+pub fn ambiguous_site_offsets(sites: &[AliasSite], path: &str, _source: &str) -> Vec<TextSize> {
     let mut out: Vec<TextSize> = sites
         .iter()
         .filter(|s| s.file == path)
-        .filter(|s| {
-            let raw = &source[s.range];
-            s.would_be_replacement == raw && raw.starts_with("DataFrame")
-        })
+        .filter(|s| s.verdict == Some(AdjudicatedDialect::Ambiguous))
         .map(|s| s.range.start())
         .collect();
     out.sort();
