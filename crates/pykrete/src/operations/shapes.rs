@@ -91,16 +91,22 @@ pub(super) fn two_df_method(method: &str) -> Option<TwoDfMethod> {
 /// pass-through arm (`PandasFrame[X]` → `PandasFrame[X]`) so a follow-up
 /// `pdf.head().assign(...)` still sees the schema. Spec §2.3.
 ///
+/// v1.6 PR-A2 extends the gate to `take`: pandas `pdf.take([i, j, k])`
+/// returns a row-sliced DataFrame (same shape as `head`/`tail`/`first`),
+/// whereas Spark `df.take(n)` returns `list[Row]`. v1.6 spec §3.2.
+///
 /// Sibling-arm classification within the terminal table:
-/// - `head`/`tail`/`first` — dialect-gated here (Spark-only terminal).
+/// - `head`/`tail`/`first`/`take` — dialect-gated here (Spark-only
+///   terminal; pandas receiver passes through with schema preserved).
 /// - `count` — stays terminal on both dialects (pandas returns a Series
 ///   of per-column counts; Series tracking is out of v1.5 scope).
 /// - `collect`/`show`/`printSchema`/`explain` — Spark-only methods; on
 ///   a pandas receiver they fall through to Unknown, which the same
 ///   `true` return achieves (the chain dies). No behavior change.
-/// - `take` — exists on both but deferred to v1.6.
 pub(super) fn is_terminal_method(method: &str, dialect: Option<Dialect>) -> bool {
-    if matches!(dialect, Some(Dialect::Pandas)) && matches!(method, "head" | "tail" | "first") {
+    if matches!(dialect, Some(Dialect::Pandas))
+        && matches!(method, "head" | "tail" | "first" | "take")
+    {
         return false;
     }
     matches!(

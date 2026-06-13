@@ -270,9 +270,18 @@ pub(super) fn collect_col_refs<'a>(
     // Importantly, this filters out things like `F.add_months(...)` —
     // `F` is not in `ctx`, so the attribute is left for the default walker
     // to descend into, and `add_months` is not collected.
+    //
+    // v1.6 PR-A2 — `loc`/`iloc` are pandas indexer accessors, NOT column
+    // names. Without this gate, a nested arg like
+    // `pdf.assign(bag=pdf.loc[:, "x"])` walks the subscript-fall-through
+    // into `pdf.loc` (Attribute) and false-fires D0030 on `loc`. The
+    // literal-form `pdf.loc[:, "x"]` arm in `column_exprs.rs:82-88`
+    // handles the inference; this arm needs to skip the accessor names
+    // outright. Spec §3.2.
     if let Some(attr) = expr.as_attribute_expr()
         && let Some(name) = attr.value.as_name_expr()
         && ctx.lookup(name.id.as_str()).is_some()
+        && !matches!(attr.attr.id.as_str(), "loc" | "iloc")
     {
         out.push((
             Some(name.id.as_str()),
