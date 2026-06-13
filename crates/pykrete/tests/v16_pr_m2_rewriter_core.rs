@@ -4,8 +4,8 @@
 //! atomic write semantics, non-ASCII preservation, and multi-file/clean
 //! mtime guarantees. Negative-space tests per v14-rule 4.
 //!
-//! Adjudication is single-discriminator (`spark`) — call-graph-aware
-//! adjudication (`pandas` / `ambiguous`) lands in PR-M3.
+//! Call-graph adjudication (`spark` / `pandas` / `ambiguous`) lands in
+//! PR-M3 — see `v16_pr_m3_adjudication_d0090.rs` for that surface.
 
 use std::fs;
 use std::process::Command;
@@ -364,15 +364,18 @@ fn tempfile_is_cleaned_up_after_successful_write() {
 }
 
 // ---------------------------------------------------------------
-// Sites adjudicated as Spark today (call-graph adjudication is PR-M3)
+// PR-M3 adjudication contract — pandas-shaped bindings emit PandasFrame[X]
 // ---------------------------------------------------------------
-
+//
+// v1.6 PR-M3 shipped call-graph adjudication: a binding used only via
+// pandas-only methods (here `.assign(...)`) re-tags from the parser-level
+// Spark default to Pandas, and the rewriter emits `PandasFrame[X]`. This
+// test was deliberately forward-incompatible in PR-M2 — it asserted the
+// opposite so PR-M3's landing would force the flip. The inversion below
+// is that flip.
 #[test]
-fn every_site_resolves_to_sparkframe_in_pr_m2() {
+fn pandas_shaped_binding_resolves_to_pandasframe_post_m3() {
     let dir = tmpdir("dialect");
-    // Even when the binding is later used like a pandas DataFrame
-    // (.assign(...)), v1.6 PR-M2 still emits `SparkFrame[X]` —
-    // ambiguous-aware adjudication is PR-M3's scope.
     let pyk = write_fixture(
         &dir,
         "x.pyk",
@@ -388,12 +391,12 @@ fn every_site_resolves_to_sparkframe_in_pr_m2() {
 
     let after = fs::read_to_string(&pyk).expect("read back");
     assert!(
-        after.contains("SparkFrame[Sale]"),
-        "PR-M2 must emit SparkFrame[X] for every alias (PR-M3 adds adjudication): {after}"
+        after.contains("PandasFrame[Sale]"),
+        "PR-M3 adjudication: pandas-shaped binding must emit PandasFrame[X]: {after}"
     );
     assert!(
-        !after.contains("PandasFrame["),
-        "PR-M2 must NOT emit PandasFrame[X] (that's PR-M3): {after}"
+        !after.contains("SparkFrame[Sale]"),
+        "PR-M3 adjudication: must NOT keep SparkFrame[X] when usage is pandas-only: {after}"
     );
 }
 
@@ -539,5 +542,114 @@ fn diff_headers_strip_double_slash_on_absolute_paths() {
     assert!(
         !diff.contains("b//"),
         "diff header has double slash from absolute path: {diff}"
+    );
+}
+
+// ---------------------------------------------------------------
+// Round-2 PR-M3 reviewer (B1): --diff with ambiguous sites must
+// produce a `patch -p1`-applicable diff whose result matches what
+// --apply writes. Pre-fix, ambiguous sites produced a tautological
+// `-line` / `+line` no-op hunk AND omitted the `# pykrete: ambiguous`
+// marker, breaking round-trip equivalence with --apply.
+// ---------------------------------------------------------------
+
+#[test]
+#[cfg(unix)]
+fn diff_for_ambiguous_inserts_marker_and_round_trips_to_apply() {
+    let dir = tmpdir("ambiguous_diff_a");
+    let src = "\
+class Sale(Schema):
+    region: string
+
+
+def f(df: DataFrame[Sale]) -> int:
+    a = df.withColumn('x', 1)
+    b = df.assign(x=1)
+    return 0
+";
+    let original_pyk = write_fixture(&dir, "x.pyk", src);
+
+    // 1. Capture --diff output.
+    let diff_out = Command::new(bin())
+        .arg("migrate")
+        .arg("--diff")
+        .arg(&original_pyk)
+        .output()
+        .expect("run pykrete migrate --diff");
+    assert!(diff_out.status.success(), "exit was {:?}", diff_out.status);
+    let diff = String::from_utf8(diff_out.stdout).expect("utf8 stdout");
+
+    // The diff must contain the ambiguous-marker insertion.
+    assert!(
+        diff.contains("# pykrete: ambiguous"),
+        "diff missing ambiguous marker insertion: {diff}"
+    );
+    // It must NOT contain a tautological `-DataFrame[Sale]` / `+DataFrame[Sale]` no-op.
+    let lines: Vec<&str> = diff.lines().collect();
+    let has_tautological = lines
+        .windows(2)
+        .any(|w| w[0].starts_with("-DataFrame[Sale]") && w[1].starts_with("+DataFrame[Sale]"));
+    assert!(
+        !has_tautological,
+        "diff has tautological -DataFrame[Sale] / +DataFrame[Sale] no-op: {diff}"
+    );
+
+    // 2. Run --apply to capture what the final tree should look like.
+    let apply_out = Command::new(bin())
+        .arg("migrate")
+        .arg(&original_pyk)
+        .output()
+        .expect("run pykrete migrate --apply");
+    assert!(
+        apply_out.status.success(),
+        "exit was {:?}",
+        apply_out.status
+    );
+    let applied = fs::read_to_string(&original_pyk).expect("read applied");
+
+    // 3. Apply the same diff via `patch -p1` to a fresh copy of `src`
+    //    and verify the patched content matches `applied`.
+    let target_dir = tmpdir("ambiguous_diff_b");
+    let target_pyk = target_dir.join("x.pyk");
+    fs::write(&target_pyk, src).unwrap();
+
+    // The diff was emitted with the original absolute path; rewrite to
+    // a relative `a/x.pyk` so `patch -p1` resolves within target_dir.
+    let abs_strip = original_pyk
+        .strip_prefix("/")
+        .unwrap_or(&original_pyk)
+        .to_string_lossy()
+        .to_string();
+    let rel_diff = diff.replace(&abs_strip, "x.pyk");
+
+    let mut child = std::process::Command::new("patch")
+        .arg("-p1")
+        .current_dir(&target_dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn patch -p1");
+    {
+        use std::io::Write as _;
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(rel_diff.as_bytes())
+            .expect("write to patch stdin");
+    }
+    let patch_out = child.wait_with_output().expect("wait patch");
+    assert!(
+        patch_out.status.success(),
+        "patch -p1 rejected diff: stderr={} stdout={}",
+        String::from_utf8_lossy(&patch_out.stderr),
+        String::from_utf8_lossy(&patch_out.stdout),
+    );
+
+    let patched = fs::read_to_string(&target_pyk).expect("read patched");
+    assert_eq!(
+        applied, patched,
+        "diff did NOT round-trip through patch -p1 to match --apply result.\n=== applied ===\n{applied}\n=== patched ===\n{patched}"
     );
 }

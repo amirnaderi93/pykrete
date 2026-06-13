@@ -91,19 +91,21 @@ def f(s: DataFrame[Sale]) -> DataFrame[Sale]:
         "expected exit 1 on aliased tree, got {:?}",
         out.status
     );
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    // Per PR-M3 round-2 reviewer (B2): site lines go to STDOUT not stderr,
+    // matching the cookbook example + ruff/pyright/clippy convention.
+    let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stderr.contains("would rewrite to SparkFrame[Sale]"),
-        "stderr missing 'would rewrite to SparkFrame[Sale]': {stderr}"
+        stdout.contains("would rewrite to SparkFrame[Sale]"),
+        "stdout missing 'would rewrite to SparkFrame[Sale]': {stdout}"
     );
     // Both the param and the return annotation → at least two site lines.
-    let site_lines: Vec<&str> = stderr
+    let site_lines: Vec<&str> = stdout
         .lines()
         .filter(|l| l.contains("would rewrite to"))
         .collect();
     assert!(
         site_lines.len() >= 2,
-        "expected >=2 site lines, got {}: {stderr}",
+        "expected >=2 site lines, got {}: {stdout}",
         site_lines.len()
     );
 }
@@ -419,9 +421,10 @@ fn migrate_check_walks_directory_for_pyk_files() {
         "expected exit 1 because nested alias.pyk has DataFrame[Sale], got {:?}",
         out.status
     );
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    // Per PR-M3 round-2 reviewer (B2): per-site lines moved stderr → stdout.
+    let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stderr.contains("alias.pyk"),
-        "stderr should name the nested file: {stderr}"
+        stdout.contains("alias.pyk"),
+        "stdout should name the nested file: {stdout}"
     );
 }

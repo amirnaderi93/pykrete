@@ -79,6 +79,7 @@ We hold pykrete to PySpark's standard because that's the standard that matters:
 - **JSON output is a stability contract from v1.0.0.** Field names, types, semantics, and D-code identity will not change without a SemVer-major bump and a corresponding `schemaVersion` bump. See [Production readiness → JSON output stability contract](https://amirnaderi93.github.io/pykrete/about/production-readiness/#json-output-stability-contract).
 - **No-false-positives policy.** When pykrete cannot determine a schema or a type with confidence, it stops checking that subtree rather than guessing. A static checker that cries wolf gets switched off.
 - **Pre-major-release audit cycle.** Every X.0.0 bump runs three independent fresh-eyes audits (architecture, Spark coverage, docs sync) before the tag. Findings ship in the release notes.
+- **One-command v2.0 migration.** `DataFrame[X]` is a deprecated alias removed in v2.0. v1.6 ships `pykrete migrate` — it walks each binding's downstream usage, classifies it as Spark / pandas / ambiguous, and rewrites the annotation in place to the dialect-tagged canonical name. Under `"typeCheckingMode": "strict"`, D0090 escalates from warning to error so strict-mode projects gate on the migration; non-strict modes keep the warning unchanged. See [Migrating to v2.0](https://amirnaderi93.github.io/pykrete/cookbook/#6-migrate-dataframex-to-the-v20-dialect-tagged-names) for the cookbook recipe.
 
 If pykrete is wrong on your code, [open an issue](https://github.com/amirnaderi93/pykrete/issues) — false positives are triaged ahead of everything else.
 
@@ -92,7 +93,7 @@ For Neovim, Helix, Emacs, and other LSP clients, see [docs/editors/](docs/editor
 
 Full documentation at **[amirnaderi93.github.io/pykrete](https://amirnaderi93.github.io/pykrete/)** — schema reference, diagnostic catalog, how it works, the roadmap.
 
-Today: PySpark (feature-complete), pandas check-site coverage (v1.3), pandas depth (v1.4), and cross-dialect handoff between Spark and pandas (v1.5 — `.toPandas()` / `spark.createDataFrame(pdf)`, dialect-gated `.head` / `.tail` / `.first`, `.loc[:, "col"]` literal-form, and a `--report-aliases` JSON envelope for sizing the v2.0 `DataFrame[X]` migration). Next: `pykrete migrate` paired with D0090 strict-mode escalation, broader `.loc` / `.iloc`, `.query` / `.eval` mini-DSLs, pandas reshape, and polars — see the [roadmap](docs/roadmap.md).
+Today: PySpark (feature-complete), pandas check-site coverage (v1.3), pandas depth (v1.4), cross-dialect handoff between Spark and pandas (v1.5 — `.toPandas()` / `spark.createDataFrame(pdf)`, dialect-gated `.head` / `.tail` / `.first`, `.loc[:, "col"]` literal-form, and a `--report-aliases` JSON envelope for sizing the v2.0 `DataFrame[X]` migration), and the `pykrete migrate` auto-rewriter with call-graph dialect adjudication + D0090 strict-mode escalation (v1.6). Next: broader `.loc` / `.iloc`, `.query` / `.eval` mini-DSLs, pandas reshape, and polars — see the [roadmap](docs/roadmap.md).
 
 ## Repository layout
 

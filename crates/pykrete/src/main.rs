@@ -247,7 +247,8 @@ fn run_check(args: &[String]) -> ExitCode {
     // even when records are emitted — this is informational, not a
     // diagnostic. v1.5 PR-D spec §5.1.
     if report_aliases {
-        let sites = pykrete::collect_alias_sites(&sources);
+        let mut sites = pykrete::collect_alias_sites(&sources);
+        pykrete::adjudicate_alias_sites(&sources, &mut sites);
         let rendered = pykrete::render_alias_report_json(&sites);
         println!("{rendered}");
         return ExitCode::SUCCESS;
@@ -621,18 +622,40 @@ fn run_migrate(args: &[String]) -> ExitCode {
         }
     }
 
-    let sites = pykrete::collect_alias_sites(&sources);
+    let mut sites = pykrete::collect_alias_sites(&sources);
+    // v1.6 PR-M3: walk each binding's downstream usage and re-tag each
+    // site as Spark / Pandas / ambiguous before any output. Ambiguous
+    // sites keep their raw `DataFrame[X]` text — the rewriter is a
+    // no-op there and the marker is injected separately below.
+    pykrete::adjudicate_alias_sites(&sources, &mut sites);
 
     match mode {
         MigrateMode::Check => {
             if sites.is_empty() {
                 ExitCode::SUCCESS
             } else {
+                // Round-2 reviewer (B2): per-site lines go to STDOUT, not
+                // stderr. Cookbook example treats them as data the user
+                // pipes into `tee` / grep / CI gating. Stderr is reserved
+                // for actual runtime errors. Matches ruff/pyright/clippy
+                // convention.
+                // Round-2 reviewer (B2): ambiguous sites get a distinct
+                // message — the old "would rewrite to DataFrame[Sale]"
+                // was tautological (same string is already in source) and
+                // gave the user no signal that the site needed human
+                // adjudication, not auto-rewrite.
                 for s in &sites {
-                    eprintln!(
-                        "{}:{}:{}: would rewrite to {}",
-                        s.file, s.line, s.column, s.would_be_replacement
-                    );
+                    if s.verdict == Some(pykrete::AdjudicatedDialect::Ambiguous) {
+                        println!(
+                            "{}:{}:{}: ambiguous — needs human review (mixed Spark/pandas usage)",
+                            s.file, s.line, s.column
+                        );
+                    } else {
+                        println!(
+                            "{}:{}:{}: would rewrite to {}",
+                            s.file, s.line, s.column, s.would_be_replacement
+                        );
+                    }
                 }
                 ExitCode::from(1)
             }
@@ -675,7 +698,8 @@ fn run_migrate(args: &[String]) -> ExitCode {
                     skipped += 1;
                     continue;
                 }
-                let rewritten = apply_alias_rewrites(source, &file_sites);
+                let rewritten =
+                    apply_alias_rewrites_with_ambiguous(source, &file_sites, &sites, path_str);
                 match atomic_write(path_buf, &rewritten) {
                     Ok(()) => {
                         println!("rewrote: {}", path_buf.display());
@@ -735,12 +759,97 @@ fn atomic_write(path: &Path, contents: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// Apply `apply_alias_rewrites` and additionally inject a `# pykrete:
+/// ambiguous` comment on the line above every ambiguous site. The
+/// ambiguous lookup goes through the full `all_sites` slice (not just
+/// `file_sites`) because the helper API takes both — caller already
+/// scoped to this file with `path_str`, the helper re-filters internally.
+/// Ambiguous sites' `would_be_replacement` equals the raw source text,
+/// so `apply_alias_rewrites` is a no-op on them and the marker is the
+/// only edit.
+fn apply_alias_rewrites_with_ambiguous(
+    source: &str,
+    file_sites: &[&pykrete::AliasSite],
+    all_sites: &[pykrete::AliasSite],
+    path: &str,
+) -> String {
+    let rewritten = apply_alias_rewrites(source, file_sites);
+    let ambiguous_offsets = pykrete::ambiguous_site_offsets(all_sites, path, source);
+    inject_ambiguous_markers(&rewritten, source, &ambiguous_offsets)
+}
+
+/// For each ambiguous offset (positions in the ORIGINAL source), insert
+/// `# pykrete: ambiguous` on the line above. Inserts in descending line
+/// order so earlier inserts don't shift later line offsets. One marker
+/// per distinct line, and idempotent across re-runs: if the line above
+/// the target already trims to `# pykrete: ambiguous`, skip — so running
+/// `pykrete migrate` twice on a file with unresolved ambiguous sites
+/// does not double-stack markers.
+fn inject_ambiguous_markers(
+    rewritten: &str,
+    original_source: &str,
+    offsets: &[ruff_text_size::TextSize],
+) -> String {
+    if offsets.is_empty() {
+        return rewritten.to_string();
+    }
+    // Determine the line number for each offset (1-based), then for each
+    // distinct line, find the byte position in `rewritten` at the start
+    // of that line and insert the marker comment with the matching
+    // indent. Lines stay stable: byte rewrites earlier in M3 only
+    // replace `DataFrame` (9 bytes) with `SparkFrame`/`PandasFrame`
+    // (10/11 bytes) — never insert or delete newlines.
+    let mut line_indices: Vec<usize> = offsets
+        .iter()
+        .map(|off| line_index_of(original_source, usize::from(*off)))
+        .collect();
+    line_indices.sort();
+    line_indices.dedup();
+    let line_starts: Vec<usize> = std::iter::once(0)
+        .chain(rewritten.match_indices('\n').map(|(i, _)| i + 1))
+        .collect();
+    let mut out = rewritten.to_string();
+    for line_idx in line_indices.into_iter().rev() {
+        // Idempotency: if the preceding line already trims to the marker
+        // comment, skip. Round-2 reviewer (important): the docstring
+        // promised this; the impl did not. Re-runs on an unresolved file
+        // used to stack duplicate markers.
+        if line_idx > 0 {
+            let prev_start = line_starts.get(line_idx - 1).copied().unwrap_or(0);
+            let prev_end = line_starts.get(line_idx).copied().unwrap_or(out.len());
+            let prev_line = &out[prev_start..prev_end];
+            if prev_line.trim() == "# pykrete: ambiguous" {
+                continue;
+            }
+        }
+        let start = line_starts.get(line_idx).copied().unwrap_or(out.len());
+        let end = line_starts.get(line_idx + 1).copied().unwrap_or(out.len());
+        let line_text = &out[start..end];
+        let indent: String = line_text
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .collect();
+        let marker = format!("{indent}# pykrete: ambiguous\n");
+        out.insert_str(start, &marker);
+    }
+    out
+}
+
+fn line_index_of(source: &str, offset: usize) -> usize {
+    source[..offset.min(source.len())]
+        .bytes()
+        .filter(|b| *b == b'\n')
+        .count()
+}
+
 /// Apply every `AliasSite`'s `would_be_replacement` to `source` via
 /// direct byte-range substitution, returning the rewritten string.
 /// Sites are spliced in descending byte-offset order so earlier edits
 /// don't shift later positions. The byte range comes from `AliasSite.range`
 /// (populated by the walker from `expr.range()`), so this routine never
-/// re-tokenizes — token-preserving by construction.
+/// re-tokenizes — token-preserving by construction. Ambiguous sites,
+/// where `would_be_replacement` equals the raw source text, are no-ops
+/// here; the `# pykrete: ambiguous` marker is injected separately.
 fn apply_alias_rewrites(source: &str, sites: &[&pykrete::AliasSite]) -> String {
     let mut edits: Vec<(usize, usize, &str)> = sites
         .iter()
@@ -761,12 +870,16 @@ fn apply_alias_rewrites(source: &str, sites: &[&pykrete::AliasSite]) -> String {
     out
 }
 
-/// Per-edit unified diff. One `@@ -L,1 +L,1 @@` hunk per `AliasSite`,
-/// showing the single original line as `-` and the single rewritten
-/// line as `+`. Output is `patch -p1`-compatible. Because every alias
-/// rewrite is a single-line edit (`DataFrame[X]` → `SparkFrame[X]`
-/// never spans a newline), each hunk needs exactly one old line + one
-/// new line and no surrounding context.
+/// Per-edit unified diff. One `@@ -L,1 +L,1 @@` hunk per non-ambiguous
+/// site (`DataFrame[X]` → `SparkFrame[X]` / `PandasFrame[X]`), plus a
+/// `@@ -L,0 +L,1 @@` insertion hunk above each ambiguous site for the
+/// `# pykrete: ambiguous` marker. Round-2 reviewer (B1): pre-fix, the
+/// diff for ambiguous sites was a tautological `-line` / `+line` no-op
+/// AND the marker was missing — so `pykrete migrate --diff | patch -p1`
+/// did NOT round-trip to the same result as `pykrete migrate --apply`.
+/// Now: ambiguous sites are skipped from the rewrite hunks and get
+/// their marker emitted as a pure-insertion hunk. The diff is
+/// `patch -p1`-compatible AND equivalent to apply mode end-to-end.
 fn unified_diff(path: &str, source: &str, sites: &[&pykrete::AliasSite]) -> String {
     let line_starts: Vec<usize> = std::iter::once(0)
         .chain(source.match_indices('\n').map(|(i, _)| i + 1))
@@ -782,12 +895,27 @@ fn unified_diff(path: &str, source: &str, sites: &[&pykrete::AliasSite]) -> Stri
         &source[start..end]
     };
 
+    // Round-2 reviewer (B1): split sites into ambiguous (marker-only)
+    // and rewritable (real rewrite). The rewrite hunk path only sees
+    // sites that actually change the source; ambiguous sites get a
+    // pure-insertion marker hunk emitted alongside.
+    let ambiguous: Vec<&pykrete::AliasSite> = sites
+        .iter()
+        .copied()
+        .filter(|s| s.verdict == Some(pykrete::AdjudicatedDialect::Ambiguous))
+        .collect();
+    let rewritable: Vec<&pykrete::AliasSite> = sites
+        .iter()
+        .copied()
+        .filter(|s| s.verdict != Some(pykrete::AdjudicatedDialect::Ambiguous))
+        .collect();
+
     // Build (line_idx, edits-on-this-line) groups in source order so the
     // diff reads top-to-bottom. Multiple sites on the same line collapse
     // into one hunk whose `-` line is the original and whose `+` line
     // has every alias replaced.
     let mut by_line: Vec<(usize, Vec<&pykrete::AliasSite>)> = Vec::new();
-    let mut sorted: Vec<&pykrete::AliasSite> = sites.to_vec();
+    let mut sorted: Vec<&pykrete::AliasSite> = rewritable.clone();
     sorted.sort_by_key(|s| usize::from(s.range.start()));
     for s in sorted {
         let line_idx = line_at(usize::from(s.range.start()));
@@ -795,6 +923,25 @@ fn unified_diff(path: &str, source: &str, sites: &[&pykrete::AliasSite]) -> Stri
             Some((last_line, edits)) if *last_line == line_idx => edits.push(s),
             _ => by_line.push((line_idx, vec![s])),
         }
+    }
+
+    // Build the set of (line_idx, indent) for ambiguous marker insertions.
+    // One marker per distinct ambiguous line (matches `inject_ambiguous_markers`).
+    let mut ambiguous_lines: Vec<(usize, String)> = Vec::new();
+    let mut seen_lines: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut sorted_amb = ambiguous;
+    sorted_amb.sort_by_key(|s| usize::from(s.range.start()));
+    for s in sorted_amb {
+        let line_idx = line_at(usize::from(s.range.start()));
+        if !seen_lines.insert(line_idx) {
+            continue;
+        }
+        let line = line_text(line_idx);
+        let indent: String = line
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .collect();
+        ambiguous_lines.push((line_idx, indent));
     }
 
     // Round-2 reviewer: prior `--- a/{path}` with an absolute path
@@ -806,7 +953,41 @@ fn unified_diff(path: &str, source: &str, sites: &[&pykrete::AliasSite]) -> Stri
     let mut out = String::new();
     out.push_str(&format!("--- a/{normalized_path}\n"));
     out.push_str(&format!("+++ b/{normalized_path}\n"));
-    for (line_idx, edits) in &by_line {
+
+    // Round-2 reviewer (B1): walk both rewrite and marker hunks in
+    // source order so the diff reads top-to-bottom. patch -p1 tracks
+    // line-number offsets across hunks automatically, so hunk headers
+    // stay at their original-source line numbers. For a tie (marker
+    // + rewrite on same line) emit the marker first so the inserted
+    // comment appears above the rewritten line.
+    let mut rewrite_iter = by_line.iter().peekable();
+    let mut marker_iter = ambiguous_lines.iter().peekable();
+    loop {
+        let next_rewrite_line = rewrite_iter.peek().map(|(l, _)| *l);
+        let next_marker_line = marker_iter.peek().map(|(l, _)| *l);
+        let emit_marker = match (next_marker_line, next_rewrite_line) {
+            (Some(m), Some(r)) => m <= r,
+            (Some(_), None) => true,
+            (None, _) => false,
+        };
+        if emit_marker {
+            let (line_idx, indent) = marker_iter.next().expect("peek matched");
+            let line_no = line_idx + 1;
+            // GNU patch interprets `@@ -L,0 +L,1 @@` as "insert AFTER
+            // original line L", so to land the marker BEFORE the
+            // ambiguous-site line we use `L-1` on the original-count
+            // side. For the very first line, `L-1 == 0` means "insert
+            // at the start of the file" — valid.
+            let before = line_no.saturating_sub(1);
+            out.push_str(&format!("@@ -{before},0 +{line_no},1 @@\n"));
+            out.push('+');
+            out.push_str(indent);
+            out.push_str("# pykrete: ambiguous\n");
+            continue;
+        }
+        let Some((line_idx, edits)) = rewrite_iter.next() else {
+            break;
+        };
         let original = line_text(*line_idx);
         let line_start_offset = line_starts[*line_idx];
         // Splice descending so earlier edits' offsets stay valid as we
@@ -825,10 +1006,7 @@ fn unified_diff(path: &str, source: &str, sites: &[&pykrete::AliasSite]) -> Stri
         out.push_str(original);
         // Round-2 reviewer: POSIX unified-diff requires the marker
         // `\ No newline at end of file` when a hunk line doesn't end
-        // with `\n`. Without it, `patch -p1` rejects the hunk because
-        // the in-memory line carries a `\n` the source file doesn't.
-        // Apply mode operates on raw bytes and is unaffected; only
-        // `--diff` output needs the marker.
+        // with `\n`. Apply mode operates on raw bytes and is unaffected.
         if !original.ends_with('\n') {
             out.push('\n');
             out.push_str("\\ No newline at end of file\n");

@@ -1,12 +1,15 @@
 //! `pykrete check --report-aliases` — inventory of every deprecated
 //! `DataFrame[X]` alias site across a project.
 //!
-//! v1.5 PR-D ships visibility only: this walker collects sites; the
-//! migrator binary that rewrites them lands in v1.6 paired with D0090
-//! `warning → error` escalation (spec §5, §9.2). Per spec round-2
-//! resolution, `resolvedDialect` is always `"spark"` in v1.5 — the
-//! reserved `"ambiguous"` discriminator is v1.6's call-graph
-//! adjudication and is not emitted here.
+//! v1.5 PR-D shipped visibility: this walker collects sites tagged with
+//! the default Spark dialect. v1.6 PR-M3 layers call-graph adjudication
+//! (see [`crate::alias_adjudicate`]) on top — the walker still emits
+//! every site at the parser-level Spark default, then `adjudicate()`
+//! revisits each binding's downstream usage and re-tags it as Spark,
+//! Pandas, or ambiguous. The JSON serializer below renders all three
+//! discriminators; ambiguous sites are the case where
+//! `would_be_replacement` equals the raw source text verbatim (the
+//! rewriter is a no-op and the migrator emits `# pykrete: ambiguous`).
 
 use ruff_python_ast::Expr;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr};
@@ -16,12 +19,29 @@ use ruff_text_size::{Ranged, TextRange};
 
 use crate::dataframe::{self, Dialect};
 
+/// What the v1.6 PR-M3 call-graph walk decided for one binding. Lives
+/// here (not in `alias_adjudicate`) so `AliasSite` can carry the typed
+/// verdict directly — without this, consumers had to recover the
+/// "ambiguous" verdict from a `would_be_replacement.starts_with(...)`
+/// text heuristic, which is one schema rename away from silently
+/// mis-classifying every site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdjudicatedDialect {
+    Spark,
+    Pandas,
+    Ambiguous,
+}
+
 /// One reported alias site. `file` / `line` / `column` together form the
 /// stable identifier downstream tooling (e.g. v1.6 `pykrete migrate`)
 /// keys against; positions are 1-indexed to match the `--format json`
 /// diagnostic output and most editor gutters. `range` is the source
 /// byte range of the alias expression (`DataFrame` or `DataFrame[X]`),
 /// used by the v1.6 PR-M2 in-place rewriter for token-preserving edits.
+/// `verdict` is the v1.6 PR-M3 call-graph adjudication verdict; `None`
+/// before adjudication runs (v1.5/PR-M1/PR-M2 behavior), `Some(...)`
+/// after `alias_adjudicate::apply_verdicts`. The JSON serializer and
+/// migrator both branch on this field directly — no text heuristics.
 #[derive(Debug, Clone)]
 pub struct AliasSite {
     pub file: String,
@@ -30,6 +50,7 @@ pub struct AliasSite {
     pub resolved_dialect: Dialect,
     pub would_be_replacement: String,
     pub range: TextRange,
+    pub verdict: Option<AdjudicatedDialect>,
 }
 
 /// Walk every analyzed file's AST and collect every `DataFrame[X]`
@@ -79,6 +100,7 @@ impl<'a> SourceOrderVisitor<'a> for AliasVisitor<'a> {
                 resolved_dialect: rec.dialect,
                 would_be_replacement: dataframe::spark_frame_rewrite(raw_text),
                 range,
+                verdict: None,
             });
             // Don't descend into a recognized alias — the inner bare
             // `DataFrame` of `DataFrame[Sales]` would otherwise be
@@ -92,16 +114,19 @@ impl<'a> SourceOrderVisitor<'a> for AliasVisitor<'a> {
 }
 
 /// Serialize an in-memory alias inventory to the spec §5.1 JSON shape.
-/// `resolvedDialect` is always `"spark"` in v1.5 — the only path that
-/// reaches this serializer is `DataFrame[X]` (the deprecated alias),
-/// which `dataframe::recognize_with_dialect` always tags as Spark.
+/// `resolvedDialect` ranges over `"spark"` / `"pandas"` / `"ambiguous"`
+/// after v1.6 PR-M3 adjudication. Branches on the typed `verdict` field;
+/// `None` (pre-adjudication, v1.5 behavior) falls back to `"spark"` per
+/// spec §5.1 ("v1.5 reports every site as `spark`").
 pub fn render_alias_report_json(sites: &[AliasSite]) -> String {
     let aliases: Vec<serde_json::Value> = sites
         .iter()
         .map(|s| {
-            let dialect = match s.resolved_dialect {
-                Dialect::Spark => "spark",
-                Dialect::Pandas => "pandas",
+            let dialect = match s.verdict {
+                Some(AdjudicatedDialect::Spark) => "spark",
+                Some(AdjudicatedDialect::Pandas) => "pandas",
+                Some(AdjudicatedDialect::Ambiguous) => "ambiguous",
+                None => "spark",
             };
             serde_json::json!({
                 "file": s.file,
