@@ -660,47 +660,79 @@ fn run_migrate(args: &[String]) -> ExitCode {
             // sources[i].0 is the string path; expanded[i] is the same
             // path as a PathBuf. Iterate in lockstep so we have a
             // PathBuf for atomic_write and a &str for the sites filter.
+            //
+            // Round-2 reviewer caught: previous loop would `return` on
+            // first error, leaving the user with a half-migrated tree
+            // and no summary of what was/wasn't done. Now: collect
+            // errors, attempt every file, then summarize.
+            let mut rewrote = 0usize;
+            let mut failed: Vec<(std::path::PathBuf, io::Error)> = Vec::new();
+            let mut skipped = 0usize;
             for (path_buf, (path_str, source)) in expanded.iter().zip(sources.iter()) {
                 let file_sites: Vec<&pykrete::AliasSite> =
                     sites.iter().filter(|s| s.file == *path_str).collect();
                 if file_sites.is_empty() {
+                    skipped += 1;
                     continue;
                 }
                 let rewritten = apply_alias_rewrites(source, &file_sites);
-                if let Err(e) = atomic_write(path_buf, &rewritten) {
-                    eprintln!("error writing {}: {e}", path_buf.display());
-                    return ExitCode::from(2);
+                match atomic_write(path_buf, &rewritten) {
+                    Ok(()) => {
+                        println!("rewrote: {}", path_buf.display());
+                        rewrote += 1;
+                    }
+                    Err(e) => {
+                        eprintln!("error writing {}: {e}", path_buf.display());
+                        failed.push((path_buf.clone(), e));
+                    }
                 }
-                println!("rewrote: {}", path_buf.display());
+            }
+            if !failed.is_empty() {
+                eprintln!(
+                    "migrate: rewrote {rewrote} file(s), {} failed, {skipped} clean (no aliases)",
+                    failed.len()
+                );
+                return ExitCode::from(2);
             }
             ExitCode::SUCCESS
         }
     }
 }
 
-/// Write `contents` to `path` atomically: write to a tempfile in the
-/// same directory, then `rename` over the original. The rename is
+/// Write `contents` to `path` atomically: canonicalize through any
+/// symlinks first, then write to a tempfile in the canonical target's
+/// directory, then `rename` over the original. The canonicalize step
+/// is round-2-reviewer-mandated: without it, `fs::rename` on a symlink
+/// path would replace the SYMLINK ENTRY with a regular file, silently
+/// de-linking and leaving the real source untouched. The rename is
 /// atomic on POSIX (and on Windows when both paths are on the same
-/// volume — which is guaranteed here because the tempfile lives next
-/// to the target). A crash mid-write leaves the original intact, not
-/// a half-written file.
+/// volume — guaranteed here because the tempfile lives next to the
+/// resolved target). A crash mid-write or mid-rename always leaves
+/// the original intact: the tempfile is cleaned up on EVERY failure
+/// path (fs::write error, fs::rename error).
 fn atomic_write(path: &Path, contents: &str) -> io::Result<()> {
-    let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path
+    let target = fs::canonicalize(path)?;
+    let dir = target.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = target
         .file_name()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no file name"))?;
     let mut tmp_name = std::ffi::OsString::from(".");
     tmp_name.push(file_name);
     tmp_name.push(".pykrete-migrate.tmp");
     let tmp = dir.join(tmp_name);
-    fs::write(&tmp, contents)?;
-    match fs::rename(&tmp, path) {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            let _ = fs::remove_file(&tmp);
-            Err(e)
-        }
+    // Round-2 reviewer: prior code didn't clean up on fs::write failure,
+    // leaving stale `.pykrete-migrate.tmp` dotfiles in user source trees
+    // after disk-full / EIO events. Wrap both fallible steps with the
+    // same cleanup path.
+    if let Err(e) = fs::write(&tmp, contents) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
     }
+    if let Err(e) = fs::rename(&tmp, &target) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// Apply every `AliasSite`'s `would_be_replacement` to `source` via
@@ -765,9 +797,15 @@ fn unified_diff(path: &str, source: &str, sites: &[&pykrete::AliasSite]) -> Stri
         }
     }
 
+    // Round-2 reviewer: prior `--- a/{path}` with an absolute path
+    // produced `--- a//abs/path` (double slash) which breaks the standard
+    // `patch -p1` workflow. Strip a single leading slash so the diff
+    // headers look like `--- a/abs/path` consistently for both relative
+    // and absolute input paths.
+    let normalized_path = path.strip_prefix('/').unwrap_or(path);
     let mut out = String::new();
-    out.push_str(&format!("--- a/{path}\n"));
-    out.push_str(&format!("+++ b/{path}\n"));
+    out.push_str(&format!("--- a/{normalized_path}\n"));
+    out.push_str(&format!("+++ b/{normalized_path}\n"));
     for (line_idx, edits) in &by_line {
         let original = line_text(*line_idx);
         let line_start_offset = line_starts[*line_idx];
@@ -785,13 +823,21 @@ fn unified_diff(path: &str, source: &str, sites: &[&pykrete::AliasSite]) -> Stri
         out.push_str(&format!("@@ -{line_no},1 +{line_no},1 @@\n"));
         out.push('-');
         out.push_str(original);
+        // Round-2 reviewer: POSIX unified-diff requires the marker
+        // `\ No newline at end of file` when a hunk line doesn't end
+        // with `\n`. Without it, `patch -p1` rejects the hunk because
+        // the in-memory line carries a `\n` the source file doesn't.
+        // Apply mode operates on raw bytes and is unaffected; only
+        // `--diff` output needs the marker.
         if !original.ends_with('\n') {
             out.push('\n');
+            out.push_str("\\ No newline at end of file\n");
         }
         out.push('+');
         out.push_str(&rewritten);
         if !rewritten.ends_with('\n') {
             out.push('\n');
+            out.push_str("\\ No newline at end of file\n");
         }
     }
     out

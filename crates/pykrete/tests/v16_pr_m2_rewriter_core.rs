@@ -396,3 +396,148 @@ fn every_site_resolves_to_sparkframe_in_pr_m2() {
         "PR-M2 must NOT emit PandasFrame[X] (that's PR-M3): {after}"
     );
 }
+
+// ---------------------------------------------------------------
+// Round-2 reviewer findings — regression tests
+// ---------------------------------------------------------------
+
+// Symlink corruption: round-1 atomic_write replaced the symlink ENTRY
+// with a regular file, silently de-linking. Round 2 canonicalizes
+// through the symlink first, so the migration writes through to the
+// real target and the symlink topology survives.
+#[test]
+#[cfg(unix)]
+fn migrate_through_symlink_writes_target_not_link() {
+    let dir = tmpdir("symlink");
+    let target = write_fixture(
+        &dir,
+        "real.pyk",
+        "def f(s: DataFrame[Sale]) -> DataFrame[Sale]:\n    return s\n",
+    );
+    let link = dir.join("link.pyk");
+    std::os::unix::fs::symlink(&target, &link).expect("create symlink");
+
+    let out = Command::new(bin())
+        .arg("migrate")
+        .arg(&link)
+        .output()
+        .expect("run pykrete migrate");
+    assert!(out.status.success(), "exit was {:?}", out.status);
+
+    // Real target was rewritten.
+    let after = fs::read_to_string(&target).expect("read real");
+    assert!(
+        after.contains("SparkFrame[Sale]"),
+        "target file not rewritten: {after}"
+    );
+    // Symlink entry survives as a symlink.
+    let link_meta = fs::symlink_metadata(&link).expect("symlink_metadata");
+    assert!(
+        link_meta.file_type().is_symlink(),
+        "link.pyk is no longer a symlink — atomic_write de-linked it"
+    );
+}
+
+// No-trailing-newline files: --diff must emit the POSIX marker
+// `\ No newline at end of file` so `patch -p1` accepts the hunk.
+#[test]
+fn diff_emits_no_newline_marker_when_source_lacks_trailing_newline() {
+    let dir = tmpdir("no-nl");
+    let pyk = write_fixture(
+        &dir,
+        "x.pyk",
+        // intentional: no trailing newline
+        "def f(s: DataFrame[Sale]) -> DataFrame[Sale]: return s",
+    );
+
+    let out = Command::new(bin())
+        .arg("migrate")
+        .arg("--diff")
+        .arg(&pyk)
+        .output()
+        .expect("run pykrete migrate --diff");
+    assert!(out.status.success(), "exit was {:?}", out.status);
+    let diff = String::from_utf8(out.stdout).expect("utf8 stdout");
+    assert!(
+        diff.contains("\\ No newline at end of file"),
+        "diff missing POSIX no-newline marker: {diff}"
+    );
+}
+
+// Multi-file partial failure: when one file fails to write, the
+// summary line tells the user what was/wasn't done and exit is 2.
+#[test]
+#[cfg(unix)]
+fn multi_file_partial_failure_emits_summary_and_exit_2() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tmpdir("partial");
+    let writable_dir = dir.join("writable");
+    fs::create_dir(&writable_dir).unwrap();
+    let writable = write_fixture(
+        &writable_dir,
+        "a.pyk",
+        "def f(s: DataFrame[Sale]) -> DataFrame[Sale]:\n    return s\n",
+    );
+    // Make the second file's directory read-only so atomic_write fails.
+    let readonly_dir = dir.join("readonly");
+    fs::create_dir(&readonly_dir).unwrap();
+    let readonly = write_fixture(
+        &readonly_dir,
+        "b.pyk",
+        "def g(s: DataFrame[Sale]) -> DataFrame[Sale]:\n    return s\n",
+    );
+    let mut perms = fs::metadata(&readonly_dir).unwrap().permissions();
+    perms.set_mode(0o555);
+    fs::set_permissions(&readonly_dir, perms).unwrap();
+
+    let out = Command::new(bin())
+        .arg("migrate")
+        .arg(&writable)
+        .arg(&readonly)
+        .output()
+        .expect("run pykrete migrate");
+
+    // Restore perms so tempdir cleanup works.
+    let mut restore = fs::metadata(&readonly_dir).unwrap().permissions();
+    restore.set_mode(0o755);
+    let _ = fs::set_permissions(&readonly_dir, restore);
+
+    assert_eq!(out.status.code(), Some(2), "exit was {:?}", out.status);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("migrate: rewrote") && stderr.contains("failed"),
+        "stderr missing summary line: {stderr}"
+    );
+}
+
+// Diff header path normalization: round-1 absolute paths produced
+// `--- a//abs/path` (double slash). Round 2 strips a single leading
+// `/` so the `a/path` convention reads cleanly for both relative
+// and absolute inputs.
+#[test]
+fn diff_headers_strip_double_slash_on_absolute_paths() {
+    let dir = tmpdir("abs-path");
+    let pyk = write_fixture(
+        &dir,
+        "x.pyk",
+        "def f(s: DataFrame[Sale]) -> DataFrame[Sale]:\n    return s\n",
+    );
+    // Force absolute path.
+    let abs = pyk.canonicalize().expect("canonicalize");
+    let out = Command::new(bin())
+        .arg("migrate")
+        .arg("--diff")
+        .arg(&abs)
+        .output()
+        .expect("run pykrete migrate --diff");
+    assert!(out.status.success(), "exit was {:?}", out.status);
+    let diff = String::from_utf8(out.stdout).expect("utf8 stdout");
+    assert!(
+        !diff.contains("a//"),
+        "diff header has double slash from absolute path: {diff}"
+    );
+    assert!(
+        !diff.contains("b//"),
+        "diff header has double slash from absolute path: {diff}"
+    );
+}
