@@ -1,12 +1,15 @@
 //! `pykrete check --report-aliases` — inventory of every deprecated
 //! `DataFrame[X]` alias site across a project.
 //!
-//! v1.5 PR-D ships visibility only: this walker collects sites; the
-//! migrator binary that rewrites them lands in v1.6 paired with D0090
-//! `warning → error` escalation (spec §5, §9.2). Per spec round-2
-//! resolution, `resolvedDialect` is always `"spark"` in v1.5 — the
-//! reserved `"ambiguous"` discriminator is v1.6's call-graph
-//! adjudication and is not emitted here.
+//! v1.5 PR-D shipped visibility: this walker collects sites tagged with
+//! the default Spark dialect. v1.6 PR-M3 layers call-graph adjudication
+//! (see [`crate::alias_adjudicate`]) on top — the walker still emits
+//! every site at the parser-level Spark default, then `adjudicate()`
+//! revisits each binding's downstream usage and re-tags it as Spark,
+//! Pandas, or ambiguous. The JSON serializer below renders all three
+//! discriminators; ambiguous sites are the case where
+//! `would_be_replacement` equals the raw source text verbatim (the
+//! rewriter is a no-op and the migrator emits `# pykrete: ambiguous`).
 
 use ruff_python_ast::Expr;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr};
@@ -92,16 +95,22 @@ impl<'a> SourceOrderVisitor<'a> for AliasVisitor<'a> {
 }
 
 /// Serialize an in-memory alias inventory to the spec §5.1 JSON shape.
-/// `resolvedDialect` is always `"spark"` in v1.5 — the only path that
-/// reaches this serializer is `DataFrame[X]` (the deprecated alias),
-/// which `dataframe::recognize_with_dialect` always tags as Spark.
+/// `resolvedDialect` ranges over `"spark"` / `"pandas"` / `"ambiguous"`
+/// after v1.6 PR-M3 adjudication. The ambiguous discriminator is
+/// inferred from `would_be_replacement` matching the source text
+/// verbatim (the rewriter no-op convention adjudication uses).
 pub fn render_alias_report_json(sites: &[AliasSite]) -> String {
     let aliases: Vec<serde_json::Value> = sites
         .iter()
         .map(|s| {
-            let dialect = match s.resolved_dialect {
-                Dialect::Spark => "spark",
-                Dialect::Pandas => "pandas",
+            let is_noop = s.would_be_replacement.starts_with("DataFrame");
+            let dialect = if is_noop {
+                "ambiguous"
+            } else {
+                match s.resolved_dialect {
+                    Dialect::Spark => "spark",
+                    Dialect::Pandas => "pandas",
+                }
             };
             serde_json::json!({
                 "file": s.file,

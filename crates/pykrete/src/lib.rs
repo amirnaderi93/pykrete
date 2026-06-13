@@ -21,6 +21,7 @@
 //!    propagating bindings on `x = …` assignments, and validating the
 //!    `return` value against the declared return type.
 
+pub mod alias_adjudicate;
 pub mod alias_report;
 pub mod completion;
 pub mod config;
@@ -38,6 +39,9 @@ pub mod transpiler;
 pub mod types;
 pub mod walk;
 
+pub use alias_adjudicate::{
+    adjudicate as adjudicate_alias_sites, ambiguous_site_offsets, has_ambiguous_in_file,
+};
 pub use alias_report::{AliasSite, collect_alias_sites, render_alias_report_json};
 pub use completion::{CompletionItem, CompletionItemKind, completions};
 pub use config::Config;
@@ -182,10 +186,24 @@ pub fn check_project(files: &[(String, String)]) -> ProjectCheckResult {
 /// Run the project checker at the given [`CheckMode`]. Diagnostics
 /// whose [`Diagnostic::min_mode`] is stricter than `mode` are filtered
 /// out — and `mode` of [`CheckMode::Off`] drops them all.
+///
+/// v1.6 PR-M3: D0090 `deprecatedDataFrameAlias` is emitted as a warning
+/// by the renderer and ann-assign driver. Under `CheckMode::Strict`,
+/// escalate it to an error here — the migration story for v2.0 is that
+/// strict-mode projects fail the build until `pykrete migrate` is run.
+/// Non-strict modes keep the warning unchanged, preserving the v1.5
+/// behavior for users who haven't opted into strict.
 pub fn check_project_with_mode(files: &[(String, String)], mode: CheckMode) -> ProjectCheckResult {
     let mut project = check_project_unfiltered(files);
     for file in &mut project.files {
         file.result.diagnostics.retain(|d| mode.shows(d.min_mode));
+        if mode == CheckMode::Strict {
+            for d in &mut file.result.diagnostics {
+                if d.code == "D0090" {
+                    d.severity = Severity::Error;
+                }
+            }
+        }
     }
     project
 }

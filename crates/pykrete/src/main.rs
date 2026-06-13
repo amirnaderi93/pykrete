@@ -247,7 +247,8 @@ fn run_check(args: &[String]) -> ExitCode {
     // even when records are emitted — this is informational, not a
     // diagnostic. v1.5 PR-D spec §5.1.
     if report_aliases {
-        let sites = pykrete::collect_alias_sites(&sources);
+        let mut sites = pykrete::collect_alias_sites(&sources);
+        pykrete::adjudicate_alias_sites(&sources, &mut sites);
         let rendered = pykrete::render_alias_report_json(&sites);
         println!("{rendered}");
         return ExitCode::SUCCESS;
@@ -621,7 +622,12 @@ fn run_migrate(args: &[String]) -> ExitCode {
         }
     }
 
-    let sites = pykrete::collect_alias_sites(&sources);
+    let mut sites = pykrete::collect_alias_sites(&sources);
+    // v1.6 PR-M3: walk each binding's downstream usage and re-tag each
+    // site as Spark / Pandas / ambiguous before any output. Ambiguous
+    // sites keep their raw `DataFrame[X]` text — the rewriter is a
+    // no-op there and the marker is injected separately below.
+    pykrete::adjudicate_alias_sites(&sources, &mut sites);
 
     match mode {
         MigrateMode::Check => {
@@ -675,7 +681,8 @@ fn run_migrate(args: &[String]) -> ExitCode {
                     skipped += 1;
                     continue;
                 }
-                let rewritten = apply_alias_rewrites(source, &file_sites);
+                let rewritten =
+                    apply_alias_rewrites_with_ambiguous(source, &file_sites, &sites, path_str);
                 match atomic_write(path_buf, &rewritten) {
                     Ok(()) => {
                         println!("rewrote: {}", path_buf.display());
@@ -735,12 +742,82 @@ fn atomic_write(path: &Path, contents: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// Apply `apply_alias_rewrites` and additionally inject a `# pykrete:
+/// ambiguous` comment on the line above every ambiguous site. The
+/// ambiguous lookup goes through the full `all_sites` slice (not just
+/// `file_sites`) because the helper API takes both — caller already
+/// scoped to this file with `path_str`, the helper re-filters internally.
+/// Ambiguous sites' `would_be_replacement` equals the raw source text,
+/// so `apply_alias_rewrites` is a no-op on them and the marker is the
+/// only edit.
+fn apply_alias_rewrites_with_ambiguous(
+    source: &str,
+    file_sites: &[&pykrete::AliasSite],
+    all_sites: &[pykrete::AliasSite],
+    path: &str,
+) -> String {
+    let rewritten = apply_alias_rewrites(source, file_sites);
+    let ambiguous_offsets = pykrete::ambiguous_site_offsets(all_sites, path, source);
+    inject_ambiguous_markers(&rewritten, source, &ambiguous_offsets)
+}
+
+/// For each ambiguous offset (positions in the ORIGINAL source), insert
+/// `# pykrete: ambiguous` on the line above. Inserts in descending line
+/// order so earlier inserts don't shift later line offsets. One marker
+/// per distinct line; if a line is already preceded by one, no duplicate.
+fn inject_ambiguous_markers(
+    rewritten: &str,
+    original_source: &str,
+    offsets: &[ruff_text_size::TextSize],
+) -> String {
+    if offsets.is_empty() {
+        return rewritten.to_string();
+    }
+    // Determine the line number for each offset (1-based), then for each
+    // distinct line, find the byte position in `rewritten` at the start
+    // of that line and insert the marker comment with the matching
+    // indent. Lines stay stable: byte rewrites earlier in M3 only
+    // replace `DataFrame` (9 bytes) with `SparkFrame`/`PandasFrame`
+    // (10/11 bytes) — never insert or delete newlines.
+    let mut line_indices: Vec<usize> = offsets
+        .iter()
+        .map(|off| line_index_of(original_source, usize::from(*off)))
+        .collect();
+    line_indices.sort();
+    line_indices.dedup();
+    let line_starts: Vec<usize> = std::iter::once(0)
+        .chain(rewritten.match_indices('\n').map(|(i, _)| i + 1))
+        .collect();
+    let mut out = rewritten.to_string();
+    for line_idx in line_indices.into_iter().rev() {
+        let start = line_starts.get(line_idx).copied().unwrap_or(out.len());
+        let end = line_starts.get(line_idx + 1).copied().unwrap_or(out.len());
+        let line_text = &out[start..end];
+        let indent: String = line_text
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .collect();
+        let marker = format!("{indent}# pykrete: ambiguous\n");
+        out.insert_str(start, &marker);
+    }
+    out
+}
+
+fn line_index_of(source: &str, offset: usize) -> usize {
+    source[..offset.min(source.len())]
+        .bytes()
+        .filter(|b| *b == b'\n')
+        .count()
+}
+
 /// Apply every `AliasSite`'s `would_be_replacement` to `source` via
 /// direct byte-range substitution, returning the rewritten string.
 /// Sites are spliced in descending byte-offset order so earlier edits
 /// don't shift later positions. The byte range comes from `AliasSite.range`
 /// (populated by the walker from `expr.range()`), so this routine never
-/// re-tokenizes — token-preserving by construction.
+/// re-tokenizes — token-preserving by construction. Ambiguous sites,
+/// where `would_be_replacement` equals the raw source text, are no-ops
+/// here; the `# pykrete: ambiguous` marker is injected separately.
 fn apply_alias_rewrites(source: &str, sites: &[&pykrete::AliasSite]) -> String {
     let mut edits: Vec<(usize, usize, &str)> = sites
         .iter()

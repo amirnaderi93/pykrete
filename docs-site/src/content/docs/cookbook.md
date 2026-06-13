@@ -201,6 +201,52 @@ def report(refunds: SparkFrame[Refund]) -> DataFrame:
 
 **Pitfall.** `exclude` is a list of path substrings, not glob patterns. `"target"` matches `crates/target/`, `target/release/`, and any path containing the string. Be specific enough to avoid accidental matches. See the full reference: [Configuration](/pykrete/reference/configuration/).
 
+## 6. Migrate `DataFrame[X]` to the v2.0 dialect-tagged names
+
+**Goal.** The `DataFrame[X]` alias is deprecated through the v1.x line and removed in v2.0. Replace every site with the dialect-tagged canonical name (`SparkFrame[X]` or `PandasFrame[X]`) before the v2.0 upgrade — or before flipping `"typeCheckingMode": "strict"`, where v1.6+ escalates [`D0090`](/pykrete/reference/diagnostics/#deprecateddataframealias--d0090) to error.
+
+**Step 1 — preview.** `pykrete migrate --check src/` walks every `.pyk` file under `src/`, applies call-graph dialect adjudication to each binding's downstream usage, and prints the file + line of every site that would be rewritten:
+
+```bash
+$ pykrete migrate --check src/
+src/sales.pyk:5:20: would rewrite to SparkFrame[Sale]
+src/sales.pyk:5:40: would rewrite to SparkFrame[Sale]
+src/pivot.pyk:11:18: would rewrite to PandasFrame[Order]
+```
+
+Exit code is 1 if any site would be rewritten, 0 otherwise — drop it into CI to gate merges. The `--diff src/` variant prints a `patch -p1`-compatible unified diff for review.
+
+**Step 2 — rewrite.** `pykrete migrate src/` does the work in place. Adjudication picks per-site:
+
+- Binding used with Spark-only methods (`withColumn`, `createOrReplaceTempView`, `repartition`, …) → `SparkFrame[X]`.
+- Binding used with pandas-only methods (`assign`, `pivot_table`, `.loc`, `.iloc`, `merge`, …) → `PandasFrame[X]`.
+- Binding used with *both* dialect-discriminating signals → ambiguous: the rewrite is skipped, the source text stays `DataFrame[X]`, and a `# pykrete: ambiguous` marker is inserted on the line above so you know to adjudicate by hand.
+- Binding with no discriminating signal (an unused parameter, a pure return slot, …) → defaults to `SparkFrame[X]`.
+
+```pyk
+# Before
+def revenue(sales: DataFrame[Sale]) -> DataFrame[Sale]:
+    return sales.withColumn("total", sales.qty * sales.unit_price)
+```
+
+```pyk
+# After (pure-Spark usage → SparkFrame)
+def revenue(sales: SparkFrame[Sale]) -> SparkFrame[Sale]:
+    return sales.withColumn("total", sales.qty * sales.unit_price)
+```
+
+```pyk
+# Mixed usage → ambiguous, stays DataFrame with a marker for review
+# pykrete: ambiguous
+def either(df: DataFrame[Sale]) -> int:
+    df.withColumn("a", 1)           # Spark
+    return df.assign(b=2)           # pandas
+```
+
+**Step 3 — verify.** Re-run `pykrete check src/` (or `pykrete migrate --check src/`). Both should exit 0 once every site is migrated, including under strict mode.
+
+**Pitfall — ambiguous sites are real signal.** A binding used as both a Spark and a pandas dataframe almost always means the code is wrong (the two dialects don't share an API surface; one branch will fail at runtime). The migrator leaves them alone deliberately. Decide which dialect that path takes and pick the right annotation by hand.
+
 ## See also
 
 - [Operations](/pykrete/reference/operations/) — every PySpark op pykrete recognizes, and where chains end.

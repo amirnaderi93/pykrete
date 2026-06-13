@@ -4,8 +4,8 @@
 //! atomic write semantics, non-ASCII preservation, and multi-file/clean
 //! mtime guarantees. Negative-space tests per v14-rule 4.
 //!
-//! Adjudication is single-discriminator (`spark`) — call-graph-aware
-//! adjudication (`pandas` / `ambiguous`) lands in PR-M3.
+//! Call-graph adjudication (`spark` / `pandas` / `ambiguous`) lands in
+//! PR-M3 — see `v16_pr_m3_adjudication_d0090.rs` for that surface.
 
 use std::fs;
 use std::process::Command;
@@ -364,15 +364,18 @@ fn tempfile_is_cleaned_up_after_successful_write() {
 }
 
 // ---------------------------------------------------------------
-// Sites adjudicated as Spark today (call-graph adjudication is PR-M3)
+// PR-M3 adjudication contract — pandas-shaped bindings emit PandasFrame[X]
 // ---------------------------------------------------------------
-
+//
+// v1.6 PR-M3 shipped call-graph adjudication: a binding used only via
+// pandas-only methods (here `.assign(...)`) re-tags from the parser-level
+// Spark default to Pandas, and the rewriter emits `PandasFrame[X]`. This
+// test was deliberately forward-incompatible in PR-M2 — it asserted the
+// opposite so PR-M3's landing would force the flip. The inversion below
+// is that flip.
 #[test]
-fn every_site_resolves_to_sparkframe_in_pr_m2() {
+fn pandas_shaped_binding_resolves_to_pandasframe_post_m3() {
     let dir = tmpdir("dialect");
-    // Even when the binding is later used like a pandas DataFrame
-    // (.assign(...)), v1.6 PR-M2 still emits `SparkFrame[X]` —
-    // ambiguous-aware adjudication is PR-M3's scope.
     let pyk = write_fixture(
         &dir,
         "x.pyk",
@@ -388,12 +391,12 @@ fn every_site_resolves_to_sparkframe_in_pr_m2() {
 
     let after = fs::read_to_string(&pyk).expect("read back");
     assert!(
-        after.contains("SparkFrame[Sale]"),
-        "PR-M2 must emit SparkFrame[X] for every alias (PR-M3 adds adjudication): {after}"
+        after.contains("PandasFrame[Sale]"),
+        "PR-M3 adjudication: pandas-shaped binding must emit PandasFrame[X]: {after}"
     );
     assert!(
-        !after.contains("PandasFrame["),
-        "PR-M2 must NOT emit PandasFrame[X] (that's PR-M3): {after}"
+        !after.contains("SparkFrame[Sale]"),
+        "PR-M3 adjudication: must NOT keep SparkFrame[X] when usage is pandas-only: {after}"
     );
 }
 
