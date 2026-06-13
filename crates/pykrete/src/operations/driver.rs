@@ -137,7 +137,7 @@ pub(crate) fn inherited_dialect<'a>(
                 // miss the handoff — `spark` itself has no dialect tag, but
                 // the call's result is `SparkFrame[X]` by spec.
                 if attr.attr.id.as_str() == "createDataFrame"
-                    && createdataframe_handoff_dialect(c, ctx).is_some()
+                    && cross_dialect_handoff_gate(c, ctx).is_some()
                 {
                     return Some(crate::dataframe::Dialect::Spark);
                 }
@@ -159,22 +159,34 @@ pub(crate) fn inherited_dialect<'a>(
     }
 }
 
-/// Whether `call` is a `<X>.createDataFrame(...)` that satisfies one of
-/// the spec §2.2 schema-source gates (`schema=` Spark-tagged kwarg or
-/// positional Pandas-tagged arg). Used inside [`inherited_dialect`] so
-/// the handoff at `analyze_method_call_inner` lines up with the dialect
-/// propagated to the LHS at the bind_df callsite. The check is
-/// structural-by-dialect, not by view existence, to keep this side of
-/// the loop cheap (no analyze_expr descent into argument subtrees here).
+/// Which spec §2.2 schema-source gate fired on a
+/// `<X>.createDataFrame(...)` call. Carries the matched arg expression by
+/// reference so the view-side consumer can resolve it with `analyze_expr`
+/// and the dialect-side consumer can short-circuit to `Dialect::Spark`.
+pub(crate) enum HandoffGate<'a> {
+    /// Gate (a): `schema=` kwarg whose value resolves to a Spark-tagged
+    /// frame binding. Holds the kwarg value expression.
+    SchemaKwarg(&'a Expr),
+    /// Gate (b): positional first arg that resolves to a Pandas-tagged
+    /// frame. Holds the positional arg expression.
+    PandasPositional(&'a Expr),
+}
+
+/// Recognize whether `call` (assumed `<X>.createDataFrame(...)`)
+/// satisfies one of the spec §2.2 schema-source gates. Pure recognizer —
+/// returns the matched arg by reference for the consumer to descend
+/// into. Does NOT call `analyze_expr`: the view-side consumer
+/// (`createdataframe_handoff_view` in `expr.rs`) invokes `analyze_expr`
+/// on the returned expression to resolve the schema, while the
+/// dialect-side consumer (inside [`inherited_dialect`]) short-circuits
+/// to `Dialect::Spark` without descent — keeping the dialect loop cheap.
 ///
-/// **Keep in sync** with `createdataframe_handoff_view` (`expr.rs`):
-/// any change to the gate-set (the (a)/(b) conditions) must update both
-/// helpers. They are deliberately separate so the dialect path stays
-/// cheap (no view resolution), but the gate logic must agree exactly.
-fn createdataframe_handoff_dialect<'a>(
-    call: &ruff_python_ast::ExprCall,
-    ctx: &BodyContext<'a>,
-) -> Option<crate::dataframe::Dialect> {
+/// Gate (a) — `schema=` kwarg with a Spark-tagged value.
+/// Gate (b) — first positional arg with a Pandas tag.
+pub(crate) fn cross_dialect_handoff_gate<'a>(
+    call: &'a ruff_python_ast::ExprCall,
+    ctx: &BodyContext<'_>,
+) -> Option<HandoffGate<'a>> {
     if let Some(kw) = call
         .arguments
         .keywords
@@ -182,11 +194,11 @@ fn createdataframe_handoff_dialect<'a>(
         .find(|k| k.arg.as_ref().is_some_and(|n| n.id.as_str() == "schema"))
         && inherited_dialect(&kw.value, ctx) == Some(crate::dataframe::Dialect::Spark)
     {
-        return Some(crate::dataframe::Dialect::Spark);
+        return Some(HandoffGate::SchemaKwarg(&kw.value));
     }
     let arg = call.arguments.args.first()?;
     if inherited_dialect(arg, ctx) == Some(crate::dataframe::Dialect::Pandas) {
-        return Some(crate::dataframe::Dialect::Spark);
+        return Some(HandoffGate::PandasPositional(arg));
     }
     None
 }

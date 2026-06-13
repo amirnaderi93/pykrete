@@ -535,14 +535,11 @@ fn pandas_list_kwarg<'a>(call: &'a ExprCall, name: &str) -> Option<&'a ruff_pyth
 /// Gate (a) — `schema=` kwarg resolves to a Spark-tagged frame binding.
 /// Gate (b) — first positional arg resolves to a Pandas-tagged frame.
 ///
-/// Dialect lookup runs FIRST (cheap, no diagnostic side effects); only
-/// when a gate matches does the helper call [`analyze_expr`] to resolve
-/// the schema view. This avoids double-walking args via the §10 fallback
-/// at the [`analyze_expr`] Call-arm when neither gate fires.
-///
-/// **Keep in sync** with `createdataframe_handoff_dialect` (`driver.rs`):
-/// any change to the gate-set must update both helpers (the dialect-side
-/// helper stays cheap, but the gate logic must agree exactly).
+/// v1.6 PR-A1 — gate recognition is shared with the dialect-side path
+/// (`inherited_dialect` in `driver.rs`) via [`cross_dialect_handoff_gate`].
+/// This helper is the view-side consumer: it descends into the matched
+/// arg via [`analyze_expr`] to resolve the schema view; the dialect-side
+/// consumer short-circuits to `Dialect::Spark` without descent.
 fn createdataframe_handoff_view<'a>(
     call: &'a ExprCall,
     ctx: &BodyContext<'a>,
@@ -550,20 +547,11 @@ fn createdataframe_handoff_view<'a>(
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<SchemaView<'a>> {
-    if let Some(kw) = call
-        .arguments
-        .keywords
-        .iter()
-        .find(|k| k.arg.as_ref().is_some_and(|n| n.id.as_str() == "schema"))
-        && inherited_dialect(&kw.value, ctx) == Some(Dialect::Spark)
-    {
-        return analyze_expr(&kw.value, ctx, source, line_index, diagnostics);
-    }
-    let arg = call.arguments.args.first()?;
-    if inherited_dialect(arg, ctx) == Some(Dialect::Pandas) {
-        return analyze_expr(arg, ctx, source, line_index, diagnostics);
-    }
-    None
+    let matched = match super::driver::cross_dialect_handoff_gate(call, ctx)? {
+        super::driver::HandoffGate::SchemaKwarg(e)
+        | super::driver::HandoffGate::PandasPositional(e) => e,
+    };
+    analyze_expr(matched, ctx, source, line_index, diagnostics)
 }
 
 pub(super) fn analyze_method_call<'a>(
