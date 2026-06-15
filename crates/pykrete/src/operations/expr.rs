@@ -27,6 +27,7 @@ use ruff_text_size::{Ranged, TextRange};
 
 use crate::dataframe::{self, DataFrameAnnotation, Dialect};
 use crate::diagnostics::{Diagnostic, Severity};
+use crate::dialect_signals::PANDAS_INHERITED_ARMS;
 use crate::registry::{MethodParam, ParamKind};
 use crate::schema::{
     DerivedField, FieldPathResult, Schema, SchemaView, resolve_path, suggest_field_name,
@@ -869,8 +870,22 @@ fn analyze_method_call_inner<'a>(
     // false here; route the chain to the pass-through arm so a follow-up
     // `pdf.head().assign(...)` / `pdf.take([0, 2]).assign(...)` still
     // sees the schema. Spec §2.3 (v1.5 PR-A3) / §3.2 (v1.6 PR-A2 adds
-    // `take`).
-    if receiver_is_pandas_inherited && matches!(method, "head" | "tail" | "first" | "take") {
+    // `take`). v1.7 PR-A1: the four method names plus `drop` are
+    // tracked in `PANDAS_INHERITED_ARMS`; the membership check ties
+    // this arm to the shared list (`drop` has its own dispatch arms
+    // below, so it stays out of this specific pass-through subset).
+    //
+    // The `matches!` is the load-bearing dispatch (compile-time exhaustive
+    // over the literal subset this arm handles). The trailing
+    // `PANDAS_INHERITED_ARMS.contains` is a TRIPWIRE — if a contributor
+    // removes one of the four names from the shared list, this arm
+    // silently stops firing for that method and the v17_pr_a1 guard test
+    // surfaces the drift. Do NOT "simplify" by dropping either side; the
+    // pairing is intentional.
+    if receiver_is_pandas_inherited
+        && matches!(method, "head" | "tail" | "first" | "take")
+        && PANDAS_INHERITED_ARMS.contains(&method)
+    {
         return Some(receiver);
     }
 
