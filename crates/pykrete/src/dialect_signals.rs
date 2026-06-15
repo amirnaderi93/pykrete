@@ -53,6 +53,21 @@
 /// `binding.METHOD(...)` call or `binding.ATTR` access where the
 /// symbol is one of these tags the binding as Spark in the call-graph
 /// adjudicator.
+///
+/// All names here MUST be Spark-only — pandas DataFrame must NOT
+/// expose a same-spelled method/attribute. Notable collisions that are
+/// explicitly EXCLUDED:
+///
+/// - `corr`, `cov`: pandas exposes both as DataFrame methods (return a
+///   correlation/covariance matrix DataFrame). Spark's `df.corr(col1,
+///   col2)` returns a scalar float; same spelling, different shape.
+///   Including either would mis-classify a pandas binding as Spark.
+/// - `crosstab`: pandas has `pd.crosstab(...)` as a top-level function
+///   only, not a DataFrame method, so `df.crosstab(...)` IS Spark-only.
+/// - `unpivot`: pandas uses `df.melt(...)`; `df.unpivot()` does not
+///   exist on pandas DataFrame.
+/// - `summary`: pandas uses `df.describe()`; `df.summary()` does not
+///   exist on pandas DataFrame.
 pub const SPARK_DISCRIMINATORS: &[&str] = &[
     "withColumn",
     "withColumns",
@@ -80,6 +95,23 @@ pub const SPARK_DISCRIMINATORS: &[&str] = &[
     "toDF",
     "sampleBy",
     "foreachPartition",
+    // v1.7 PR-A2 (spark-D1 closure): Spark-only DataFrame surface that
+    // pandas has no same-spelled method/attribute for. Each is
+    // cross-checked against the pandas DataFrame API in the doc above.
+    "selectExpr",
+    "freqItems",
+    "approxQuantile",
+    "crosstab",
+    "colRegex",
+    "summary",
+    "mapInPandas",
+    "mapInArrow",
+    "writeTo",
+    "writeStream",
+    "unpivot",
+    "rdd",
+    "isStreaming",
+    "sparkSession",
 ];
 
 /// Pandas-discriminating method and attribute names. A

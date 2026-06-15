@@ -856,7 +856,7 @@ fn apply_alias_rewrites_with_ambiguous(
     path: &str,
 ) -> String {
     let rewritten = apply_alias_rewrites(source, file_sites);
-    let ambiguous_offsets = pykrete::ambiguous_site_offsets(all_sites, path, source);
+    let ambiguous_offsets = pykrete::ambiguous_site_offsets(all_sites, path);
     inject_ambiguous_markers(&rewritten, source, &ambiguous_offsets)
 }
 
