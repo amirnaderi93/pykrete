@@ -1,15 +1,17 @@
 ---
 title: Pandas roadmap
-description: The pandas-specific direction for pykrete — where v1.3 / v1.4 / v1.5 / v1.6 landed, where v1.7+ is going, what v2.0 locks in.
+description: The pandas-specific direction for pykrete — where v1.3 / v1.4 / v1.5 / v1.6 / v1.7 landed, where v1.8+ is going, what v2.0 locks in.
 ---
 
 This page tracks the pandas-specific direction for pykrete. The umbrella [roadmap](/about/roadmap/) covers the project as a whole; this page is the pandas-focused complement.
 
-## Where we are (v1.6.0)
+## Where we are (v1.7.0)
 
-**Annotation surface**: `PandasFrame[X]` is a canonical parser-level peer of `SparkFrame[X]`. Same `Pick[…]` / `Omit[…]` / `Merge[…]` derived-schema operators. `DataFrame[X]` is a deprecated alias (warning `D0090`, removed in v2.0). v1.5 shipped `pykrete check --report-aliases` — a JSON envelope listing every `DataFrame[X]` annotation site with its resolved dialect and suggested replacement — so projects can quantify the v2.0 migration scope. v1.6 ships **`pykrete migrate`**: the auto-rewriter binary that walks each `DataFrame[X]` binding's downstream usage, classifies it as Spark / pandas / ambiguous via call-graph adjudication, and rewrites the annotation in place to the dialect-tagged canonical name (atomic per file, token-preserving). Paired atomically with D0090 strict-mode escalation: under `"typeCheckingMode": "strict"` the warning now lands as **error**, but the fix-button ships in the same release. The `--report-aliases` `resolvedDialect` field now reports `"pandas"` and `"ambiguous"` in addition to `"spark"` — v1.5 reported every site as `"spark"` because adjudication wasn't yet wired; v1.6 lights the call-graph adjudicator into the same envelope. `aliasReportVersion` bumps from `"1"` to `"2"` — the field shape is unchanged, but the `resolvedDialect` value-set expansion is a breaking change for consumers that switched on `"spark"` only.
+**Annotation surface**: `PandasFrame[X]` is a canonical parser-level peer of `SparkFrame[X]`. Same `Pick[…]` / `Omit[…]` / `Merge[…]` derived-schema operators. `DataFrame[X]` is a deprecated alias (warning `D0090`, removed in v2.0). v1.5 shipped `pykrete check --report-aliases` — a JSON envelope listing every `DataFrame[X]` annotation site with its resolved dialect and suggested replacement — so projects can quantify the v2.0 migration scope. v1.6 shipped **`pykrete migrate`**: the auto-rewriter binary that walks each `DataFrame[X]` binding's downstream usage, classifies it as Spark / pandas / ambiguous via call-graph adjudication, and rewrites the annotation to the dialect-tagged canonical name (atomic per file, token-preserving). v1.7 flips the migrator default to `--check` — `pykrete migrate src/` now previews verdicts; `--apply` opts into the rewrite. Paired atomically with D0090 strict-mode escalation (shipped v1.6): under `"typeCheckingMode": "strict"` the warning now lands as **error**, but the fix-button ships in the same release. The `--report-aliases` `resolvedDialect` field reports `"spark"` / `"pandas"` / `"ambiguous"`; `aliasReportVersion` is at `"2"`.
 
-**Pandas `pivot_table` literal-form (new in v1.6)**: `pdf.pivot_table(index="cat", columns="year", values="amount", aggfunc="sum")` resolves the string-literal arguments to `index` / `columns` / `values` / `aggfunc` against `PandasFrame[X]`'s schema, firing D0030 on a typo with a *did you mean*. List-of-literals shapes (`index=["a", "b"]`) are also checked. Variable arguments (`index=col_var`), callable `aggfunc=...` (`aggfunc=np.mean`), and the no-arg form fall through to Unknown. Full `pivot_table` schema-tracking (the wide output schema — variable column values become column names of the result frame) is deferred to v1.7 paired with broader pandas reshape (`melt` / `stack` / `unstack` / `groupby.agg`).
+**Pandas `melt` literal-form (new in v1.7)**: `pdf.melt(id_vars=["a", "b"], value_vars=["c", "d"], var_name="variable", value_name="value")` resolves the string-literal arguments to `id_vars` / `value_vars` against `PandasFrame[X]`'s schema, firing D0030 on a typo with a *did you mean*. List-of-literals shapes (`id_vars=["a", "b"]`) and single-literal `id_vars="a"` are also checked. Variable arguments (`id_vars=cols_var`) and the no-arg form fall through to Unknown. The pandas dispatch is gated on `receiver_is_pandas_inherited` so the existing Spark `melt`/`unpivot` arm's behavior on `SparkFrame[X]` receivers is unchanged. Full `melt` output schema-tracking (the long-format schema with `var_name` / `value_name` as columns) is deferred to v1.8 paired with `stack` / `unstack` / `groupby.agg`.
+
+**Pandas `pivot_table` literal-form (shipped v1.6)**: `pdf.pivot_table(index="cat", columns="year", values="amount", aggfunc="sum")` resolves the string-literal arguments to `index` / `columns` / `values` / `aggfunc` against `PandasFrame[X]`'s schema, firing D0030 on a typo with a *did you mean*. List-of-literals shapes (`index=["a", "b"]`) are also checked. Variable arguments (`index=col_var`), callable `aggfunc=...` (`aggfunc=np.mean`), and the no-arg form fall through to Unknown. Full `pivot_table` schema-tracking (the wide output schema — variable column values become column names of the result frame) is deferred to v1.8 paired with the rest of pandas reshape (`stack` / `unstack` / `groupby.agg`).
 
 **`.take()` dialect-gate closure (new in v1.6)**: pandas `pdf.take([0, 2])` returns a DataFrame and now passes through (`PandasFrame[X]` → `PandasFrame[X]`) instead of dying as a Spark terminal. Closes the last v1.5 deferred dialect-gate alongside `.head` / `.tail` / `.first`.
 
@@ -22,7 +24,7 @@ This page tracks the pandas-specific direction for pykrete. The umbrella [roadma
 - Round-trip: `spark.createDataFrame(df.toPandas())` preserves the tag end-to-end.
 - Pandas `.head()` / `.tail()` / `.first()` are dialect-gated: pandas receivers pass through (`PandasFrame[X]` → `PandasFrame[X]`), Spark receivers stay terminals. `pdf.head(10).merge(other, on="id")` keeps tracking.
 
-**`.loc[:, "col"]` literal-form (shipped v1.5)**: `pdf.loc[:, "col"]` resolves the string-literal column against `PandasFrame[X]`'s schema, firing D0030 on a typo with a *did you mean*. Variable column keys (`pdf.loc[:, col_var]`), column-range slicing (`pdf.loc[:, "a":"b"]`), and `pdf.iloc[...]` still fall through to Unknown — deferred to v1.7 paired with broader pandas reshape. (v1.6 closed the `pdf.loc[mask, "col"]` D0030 FP on the row-mask side; row-mask schema-tracking still lands with v1.7.)
+**`.loc[:, "col"]` literal-form (shipped v1.5)**: `pdf.loc[:, "col"]` resolves the string-literal column against `PandasFrame[X]`'s schema, firing D0030 on a typo with a *did you mean*. Variable column keys (`pdf.loc[:, col_var]`), column-range slicing (`pdf.loc[:, "a":"b"]`), and `pdf.iloc[...]` still fall through to Unknown — deferred to v1.8 paired with broader pandas reshape. (v1.6 closed the `pdf.loc[mask, "col"]` D0030 FP on the row-mask side; row-mask schema-tracking still lands with v1.8.)
 
 **Check sites modeled** (six dispatched operations plus the assign / melt kwarg paths):
 
@@ -48,17 +50,19 @@ This page tracks the pandas-specific direction for pykrete. The umbrella [roadma
 - **4 canonical-fixture-only** (scikit-learn, statsmodels, pandera, Great Expectations) — pykrete checks synthesized user-pattern examples inspired by each library's API, since the library code itself operates above raw pandas dispatch (numpy arrays, metric domains).
 - 21 positive `PROBE-TYPE-IS` markers (3 per new donor), mix of string / binary atomic families. Temporal and numeric subtype families are correctly excluded from the dispatch path the synth uses (the synth is gated on arithmetic-supported types so the marker is falsifiable; numeric subtypes are out of scope per v1.4 §10 deferral).
 
-## v1.7+ horizons (committed but unscheduled)
+## v1.8+ horizons (committed but unscheduled)
 
-- **Full `pivot_table` schema-tracking** — the wide output schema (variable column values become column names of the result frame). v1.6 ships literal-form column checking on the inputs; the output-shape model is paired with broader pandas reshape in v1.7.
-- **`.loc` non-literal forms**: `.loc[mask, "col"]` (boolean mask) row-key tracking, `.loc[:, "a":"b"]` (column range), and `pdf.iloc[...]` — deferred to v1.7 paired with broader pandas reshape. (v1.6 closed the `pdf.loc[mask, "col"]` D0030 FP on the row-mask side; the row-mask is no longer a typo source, but the row-mask schema-tracking lands with v1.7.)
+- **Full `pivot_table` and `melt` schema-tracking** — the wide / long output schemas (variable column values become column names of the result frame for `pivot_table`; `var_name` / `value_name` become columns of the long frame for `melt`). v1.6 + v1.7 ship literal-form column checking on the inputs; the output-shape models are paired with the rest of pandas reshape in v1.8.
+- **`.loc` non-literal forms**: `.loc[mask, "col"]` (boolean mask) row-key tracking, `.loc[:, "a":"b"]` (column range), and `pdf.iloc[...]` — deferred to v1.8 paired with broader pandas reshape. (v1.6 closed the `pdf.loc[mask, "col"]` D0030 FP on the row-mask side; the row-mask is no longer a typo source, but the row-mask schema-tracking lands with v1.8.)
 - **`df.query("…")` and `df.eval("…")` mini-DSLs**: parse string-fragment column refs separately. numexpr-influenced syntax, not SQL — separate parser from the path used by `selectExpr`. High signal for production pandas code.
-- **Broader pandas method modeling**: `df.groupby(...).agg(...)`, `df.stack` / `df.unstack`, `df.reset_index`, `df.set_index`, `df.melt`. Currently fall through to opaque (except v1.5's shared `melt` / `unpivot` dispatcher).
+- **Broader pandas method modeling**: `df.groupby(...).agg(...)`, `df.stack` / `df.unstack`, `df.reset_index`, `df.set_index`. Currently fall through to opaque.
+- **New D-code for cross-dialect method mismatch (spark-D2)**: fire a diagnostic when a pandas-only method is called on `SparkFrame[X]` (or vice versa) instead of the silent fall-through.
+- **`--include-py` flag for `pykrete migrate`**: let the migrator walk the multiplexer cohort's `.py` files alongside `.pyk`.
 - **Pandas multi-index support**: `df.set_index(["a","b"])` produces a structurally-different shape pykrete doesn't model yet.
 - **`pd.read_csv(...)` and other I/O entry points** (`pd.read_parquet`, `pd.read_json`, `pd.read_sql`, …): schema inference from file headers / SQL / type-stubs is a separate design surface.
 - **Pandas dtype subtypes**: `float32` vs `float64`, `int8/16/32/64`, `Int64` (nullable) vs `int64`. Carve-out from v1.0 spec; revisit if user demand surfaces.
 - **Ordered `CategoricalDtype(ordered=True)`, tz-aware `datetime64[ns, tz]`, `timedelta64[ns]` / `IntervalDtype`**: re-deferred from v1.3 §4.
-- **Retrofitting pandas `PROBE-TYPE-IS` to the v1.3 hybrid donors** (MLflow, Feast, iceberg-python) — v1.4 / v1.5 / v1.6 deliberately scoped these out; revisit in v1.7.
+- **Retrofitting pandas `PROBE-TYPE-IS` to the v1.3 hybrid donors** (MLflow, Feast, iceberg-python) — v1.4 / v1.5 / v1.6 / v1.7 deliberately scoped these out; revisit in v1.8.
 
 ## v2.0 commitments (locked)
 
@@ -68,7 +72,7 @@ This page tracks the pandas-specific direction for pykrete. The umbrella [roadma
 ## What we deliberately don't ship (and why)
 
 - **Pandas runtime validation**: pykrete is a static checker. Validating values at runtime is `pandera`'s job — that's why pandera is on the v1.4 donor list (sibling tool, not competitor).
-- **polars support**: separate dialect with separate idioms. Tracked for v1.7+ if user demand surfaces; not gated on pandas work, but realistically follows pandas reshape.
+- **polars support**: separate dialect with separate idioms. Tracked for v1.8+ if user demand surfaces; not gated on pandas work, but realistically follows pandas reshape.
 - **Pandas-on-Spark API (`pyspark.pandas`)**: parallel surface to pandas with subtle semantic differences. Modeled only if a real PySpark user requests it.
 - **Inferred-schema mode**: pykrete asks users to declare schemas; auto-inference contradicts the "declare your contract" value prop.
 
@@ -80,5 +84,6 @@ This page tracks the pandas-specific direction for pykrete. The umbrella [roadma
 | v1.4.0 | "check-site coverage + type-tracking across the dominant pandas stack — 10 donors, 21 new pandas `PROBE-TYPE-IS` markers (3 per new donor), three checker bug closures" | yes — 223 probes total across 17 donors |
 | v1.5.0 | "cross-dialect handoff (Spark↔pandas), `.loc[:, "col"]` literal-form, dialect-gated `.head`/`.tail`/`.first`, `--report-aliases` JSON envelope" | yes — 235 probes total across 17 donors |
 | v1.6.0 | "`pykrete migrate` auto-rewriter + D0090 strict-mode escalation (paired); pandas `pivot_table` literal-form column checking; `.take()` dialect-gate closure; `pdf.loc[mask, "col"]` D0030 FP fix" | yes — 241 probes total across 17 donors |
-| v1.7.0 (target) | + "broader pandas reshape (`melt` / `stack` / `unstack` / `groupby.agg` + full `pivot_table` schema-tracking); `.loc` non-literal forms + `.iloc`; `.query` / `.eval` mini-DSLs (committee scoping)" | TBD per spec |
+| v1.7.0 | "migrator `--check` default + `--apply` opt-in; pandas `df.melt(id_vars=, value_vars=)` literal-form; `dialect_signals` shared module + CI-guard; Spark-D1 audit closure (14 new `SPARK_DISCRIMINATORS`); parse-error surface + CRLF marker normalization on migrate" | yes — 247 probes total across 17 donors |
+| v1.8.0 (target) | + "rest of pandas reshape (`stack` / `unstack` / `groupby.agg` + full `pivot_table` / `melt` output schema-tracking); `.loc` non-literal forms + `.iloc`; `.query` / `.eval` mini-DSLs; spark-D2 D-code; `--include-py` migrate flag; LSP polish" | TBD per spec |
 | v2.0.0 (target) | canonical `SparkFrame[X]` / `PandasFrame[X]` only; deprecated alias removed | tag-time grep against repo |

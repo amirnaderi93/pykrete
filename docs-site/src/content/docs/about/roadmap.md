@@ -82,16 +82,35 @@ The v1.6 cycle's headline is **`pykrete migrate`**: the auto-rewriter binary for
 
 For the verification posture and per-donor matrix, see [Real-codebase tests](/about/pykrete-tests/) and [Production readiness → Real-codebase testing](/about/production-readiness/#real-codebase-testing). For the full pandas direction across v1.7+ and v2.0, see [Pandas roadmap](/about/pandas-roadmap/).
 
+## Shipped in v1.7 — migrator `--check` default + pandas `melt` + `dialect_signals` + Spark-D1 audit closure
+
+The v1.7 cycle hardens the v1.6 migrator surface, ships the pandas reshape downpayment for `melt`, and closes the v1.6 architecture-audit Important #3 finding.
+
+- **`pykrete migrate` default mode flips to `--check`** (PR-M1). `pykrete migrate src/` now runs check-mode (preview verdicts on stdout, exit 1 if any site needs attention, 0 otherwise). `--apply` is the new opt-in for the in-place rewrite. The flip lands two cycles after the binary first shipped; the v1.6 release notes explicitly flagged the CLI surface as pre-stable. A first-run on v1.7 with no flag emits a one-line stderr warning so adopters discover the change without reading release notes. **Adopter callout**: any CI invocation that ran `pykrete migrate src/` expecting in-place rewrite needs `pykrete migrate --apply src/`.
+- **Pandas `df.melt(id_vars=, value_vars=, var_name=, value_name=)` literal-form** (PR-D1; spec §4). String-literal arguments and list-of-literals shapes resolve against `PandasFrame[X]`'s schema, firing D0030 on a typo with a *did you mean*. Variable arguments (`id_vars=cols_var`) and the no-arg form fall through to Unknown. The pandas dispatch is gated on `receiver_is_pandas_inherited`, so the existing Spark `melt`/`unpivot` arm's behavior on `SparkFrame[X]` receivers is unchanged. Full `melt` output schema-tracking (the long-format schema with `var_name` / `value_name` as columns) is deferred to v1.8.
+- **`dialect_signals` shared module** (PR-A1; closes v1.6 architecture-audit Important #3). The v1.6 cycle left `PANDAS_ONLY_SIGNALS` (binding-classification) and `PANDAS_INHERITED_ARMS` (expr-side dispatched arms) as parallel lists in two files with a "Keep in sync" comment between them. v1.7 extracts both into a single `crates/pykrete/src/dialect_signals.rs` module. PR-A2 added `SPARK_DISCRIMINATORS` to the same module — the Spark-side companion populated with 14 new Spark-only methods (`selectExpr`, `freqItems`, `approxQuantile`, `crosstab`, `colRegex`, `summary`, `mapInPandas`, `mapInArrow`, `writeTo`, `writeStream`, `unpivot`, `rdd`, `isStreaming`, `sparkSession`). `corr` / `cov` were considered and deliberately excluded for pandas collision risk (caught at A2 review).
+- **CI-guard test pinning `expr.rs` pandas-arm methods to `PANDAS_INHERITED_ARMS`** (PR-A1). Asserts the methods dispatched by the `receiver_is_pandas_inherited` arm in `operations/expr.rs` are exactly the methods in `PANDAS_INHERITED_ARMS`. Honest scoping: catches "added to one list, forgot the other" (parallel-edit drift), does NOT catch "added a wholly new dispatched arm and updated neither list" (omitted-edit drift). Failure mode #2 is a v1.8 candidate.
+- **`pykrete migrate` parse-error surface** (PR-M1). Files that fail to parse are skipped (existing behavior); v1.7 reports each skipped file on stderr with the parse error so adopters can see why a file didn't get migrated.
+- **CRLF marker normalization in `# pykrete: ambiguous` insertions** (PR-M1). On Windows-style CRLF source files, the v1.6 marker inserter mixed LF (the marker itself) with surrounding CRLF runs. v1.7 detects the line-ending convention and emits the marker with the matching ending.
+- **Audit-debt mop-up** (PR-A2). `_source: &str` dead parameter dropped from `ambiguous_site_offsets` / `has_ambiguous_in_file`; two-vector lockstep loop in the migrate driver's parse-error filter collapsed to single-pass.
+
+For the verification posture and per-donor matrix, see [Real-codebase tests](/about/pykrete-tests/) and [Production readiness → Real-codebase testing](/about/production-readiness/#real-codebase-testing). For the full pandas direction across v1.8+ and v2.0, see [Pandas roadmap](/about/pandas-roadmap/).
+
 ## Next up
 
-### v1.7 — pandas reshape + `.loc` / `.iloc` non-literal forms + string-DSLs
+### v1.8 — broader pandas reshape + LSP polish + `--include-py` migrate flag + spark-D2 D-code
 
-Now that the migrator + D0090 escalation are out the door, v1.7's focus is on broader pandas reshape and the string-fragment column refs.
+Now that `melt` literal-form, the migrator `--check` default, and the audit-debt closure are out the door, v1.8's focus is on the rest of the pandas reshape surface, an LSP polish block, and the spark-D2 cross-dialect mismatch D-code.
 
-- **Pandas reshape**: `melt`, `stack` / `unstack`, `groupby.agg`, `reset_index`, `set_index`, plus full `pivot_table` schema-tracking (the wide output schema — variable column values become column names of the result frame; v1.6 ships the literal-form column-input check on the same call).
+- **Pandas reshape**: `stack` / `unstack`, `groupby.agg`, `reset_index`, `set_index`, plus full `pivot_table` and `melt` output schema-tracking (the wide / long output schemas — variable column values become column names of the result frame; `var_name` / `value_name` become columns of the long frame).
 - **`.loc` non-literal forms and `.iloc`**: `.loc[mask, "col"]` (boolean mask), `.loc[:, "a":"b"]` (column range), and `pdf.iloc[...]`.
 - **`df.query("…")` / `df.eval("…")` mini-DSLs**: parse string-fragment column refs separately. numexpr-influenced syntax, not SQL.
 - **`pd.read_csv(...)` and other pandas I/O entry points**: schema inference from file headers / SQL / type-stubs as a separate design surface.
+- **`--include-py` flag for `pykrete migrate`**: let the migrator walk `.py` files in the multiplexer cohort alongside `.pyk`.
+- **New D-code for cross-dialect method mismatch (spark-D2)**: fire a diagnostic when a pandas-only method is called on `SparkFrame[X]` (or vice versa) instead of the silent fall-through.
+- **D0073 / D0083 cross-codebase probes**: extend the v1.7 D0040 / D0050 / D0051 negative-probe sweep to the remaining un-probed D-codes.
+- **LSP polish block**: visitor name-shadowing M3 round-2, hover_timeout flake, col-ref helper consolidation, suggester threshold.
+- **CI-guard for the omitted-edit drift class**: extend the v1.7 CI-guard to catch new arms that get added without updating either list.
 - **Retrofitting pandas `PROBE-TYPE-IS` to the v1.3 hybrid donors** (MLflow, Feast, iceberg-python).
 - **Canonical-vs-direct CI gate (I3)** from the v1.4 architecture audit.
 

@@ -86,48 +86,88 @@ like `withColumn` / `createOrReplaceTempView` / `repartition` →
 **pandas**; both signals → **Ambiguous**; no signal → defaults to
 Spark), and rewrites the annotation in place token-preservingly —
 atomic per file (sibling temp + rename) so an interrupted run never
-leaves half-rewritten source. Three modes: `pykrete migrate src/`
-rewrites in place; `pykrete migrate --check src/` previews per-site
-verdicts to stdout (exit 1 if any site needs attention, 0
-otherwise — CI-ready); `pykrete migrate --diff src/` emits a
-`patch -p1`-compatible unified diff. Ambiguous sites get an
-idempotent `# pykrete: ambiguous` marker injected on the line above
-the unchanged annotation; re-runs don't accumulate duplicates.
-Paired atomically with `D0090 deprecatedDataFrameAlias` escalation:
-under `"typeCheckingMode": "strict"` the warning now lands as
-**error**, but the fix-button ships in the same release so
-strict-mode users on green CI aren't stranded. Non-strict modes keep
-the warning unchanged. Pandas `pivot_table(index=, columns=,
-values=, aggfunc=)` literal-form column checking ships as the
-v1.6 pandas reshape downpayment — string-literal arguments and
-list-of-literals shapes resolve against `PandasFrame[X]`'s schema,
-firing D0030 with a *did you mean*; variable arguments and callable
-`aggfunc` fall through. Two v1.5 deferrals close: `.take()` is now
-dialect-gated (pandas `pdf.take([0, 2])` passes through instead of
-dying as a Spark terminal), and the `pdf.loc[mask, "col"]`
-nested-arg D0030 false positive on the row-mask side closes. Plus
-audit-debt closure: the `cross_dialect_handoff_gate` recognizer the
-v1.5 PR-A1/PR-A2 inference left as a "Keep in sync" comment is
-extracted to a single shared site.
+leaves half-rewritten source. v1.6 shipped the binary defaulting to
+in-place rewrite; v1.7 flipped the default to `--check` (see
+below). Ambiguous sites get an idempotent `# pykrete: ambiguous`
+marker injected on the line above the unchanged annotation; re-runs
+don't accumulate duplicates. Paired atomically with
+`D0090 deprecatedDataFrameAlias` escalation: under
+`"typeCheckingMode": "strict"` the warning now lands as **error**,
+but the fix-button ships in the same release so strict-mode users on
+green CI aren't stranded. Non-strict modes keep the warning
+unchanged. Pandas `pivot_table(index=, columns=, values=, aggfunc=)`
+literal-form column checking ships as the v1.6 pandas reshape
+downpayment — string-literal arguments and list-of-literals shapes
+resolve against `PandasFrame[X]`'s schema, firing D0030 with a *did
+you mean*; variable arguments and callable `aggfunc` fall through.
+Two v1.5 deferrals close: `.take()` is now dialect-gated (pandas
+`pdf.take([0, 2])` passes through instead of dying as a Spark
+terminal), and the `pdf.loc[mask, "col"]` nested-arg D0030 false
+positive on the row-mask side closes. Plus audit-debt closure: the
+`cross_dialect_handoff_gate` recognizer the v1.5 PR-A1/PR-A2
+inference left as a "Keep in sync" comment is extracted to a single
+shared site.
+
+**Migrator UX hardening + pandas `melt` literal-form + Spark-D1
+audit-debt closure shipped in v1.7**: `pykrete migrate`'s default
+mode flips from in-place rewrite to `--check` preview. `--apply`
+is the new opt-in for the in-place rewrite. The flip lands two
+cycles after the binary first shipped; the v1.6 release notes
+explicitly flagged the surface as pre-stable. A first-run on v1.7
+with no flag emits a one-line stderr warning so adopters discover
+the change without reading release notes. Pandas
+`df.melt(id_vars=, value_vars=, var_name=, value_name=)`
+literal-form column checking ships as the v1.7 pandas reshape
+downpayment — string-literal arguments and list-of-literals shapes
+resolve against `PandasFrame[X]`'s schema, firing D0030 with a
+*did you mean*; variable arguments and the no-arg form fall
+through. The pandas dispatch is gated on the
+`receiver_is_pandas_inherited` arm so the existing Spark `melt`
+arm's behavior on `SparkFrame[X]` receivers is unchanged. The
+v1.6 architecture-audit Important #3 finding (parallel
+`PANDAS_ONLY_SIGNALS` / `PANDAS_INHERITED_ARMS` lists with a "Keep
+in sync" comment) closes via a shared `dialect_signals` module,
+paired with a CI-guard test pinning the `expr.rs` pandas-arm
+methods to the shared list. The Spark-D1 audit closure adds 14
+Spark-only methods to `SPARK_DISCRIMINATORS` (`selectExpr`,
+`freqItems`, `approxQuantile`, `crosstab`, `colRegex`, `summary`,
+`mapInPandas`, `mapInArrow`, `writeTo`, `writeStream`, `unpivot`,
+`rdd`, `isStreaming`, `sparkSession`) — `corr` / `cov` deliberately
+excluded for pandas collision risk (caught at A2 review). Plus two
+migrate UX hardenings: parse-error skips now surface on stderr, and
+CRLF marker normalization lands for Windows source files. Internal
+audit-debt mop-up: the `_source: &str` dead parameter is dropped
+from `ambiguous_site_offsets` / `has_ambiguous_in_file`, and the
+two-vector lockstep loop in the migrate driver's parse-error filter
+collapses to a single-pass filter.
 
 ## Next up
 
-### v1.7 — pandas reshape + `.loc` / `.iloc` non-literal forms + `.query` / `.eval` mini-DSLs
+### v1.8 — broader pandas reshape + LSP polish + `--include-py` for migrate + spark-D2
 
-Broader pandas reshape: `melt` / `stack` / `unstack` /
-`groupby.agg` / `reset_index` / `set_index`, plus full
-`pivot_table` schema-tracking (the wide output schema — variable
-column values become column names of the result frame). `.loc`
-non-literal forms (`.loc[mask, "col"]` boolean-mask row keys,
-`.loc[:, "a":"b"]` column-range slicing) and `pdf.iloc[...]`
-integer-position indexing. The `df.query("…")` and `df.eval("…")`
-mini-DSLs (numexpr-influenced syntax, separate parser from the SQL
-path used by `selectExpr`). `pd.read_csv(...)` and other pandas
-I/O entry points if scope allows (schema inference from file
-headers / SQL / type-stubs is a separate design surface).
-Retrofitting pandas `PROBE-TYPE-IS` to the v1.3 hybrid donors
-(MLflow, Feast, iceberg-python). Canonical-vs-direct CI gate (I3
-from the v1.4 architecture audit).
+Broader pandas reshape: `stack` / `unstack` / `groupby.agg`,
+`reset_index` / `set_index`, plus full `pivot_table` and `melt`
+output schema-tracking (the wide / long output schemas — variable
+column values become column names of the result frame; `var_name` /
+`value_name` become columns of the long frame). `.loc` non-literal
+forms (`.loc[mask, "col"]` boolean-mask row keys, `.loc[:, "a":"b"]`
+column-range slicing) and `pdf.iloc[...]` integer-position indexing.
+The `df.query("…")` and `df.eval("…")` mini-DSLs (numexpr-influenced
+syntax, separate parser from the SQL path used by `selectExpr`).
+`pd.read_csv(...)` and other pandas I/O entry points if scope allows
+(schema inference from file headers / SQL / type-stubs is a separate
+design surface). Retrofitting pandas `PROBE-TYPE-IS` to the v1.3
+hybrid donors (MLflow, Feast, iceberg-python). Canonical-vs-direct
+CI gate (I3 from the v1.4 architecture audit). LSP polish block:
+visitor name-shadowing M3 round-2, hover_timeout flake, col-ref
+helper consolidation, suggester threshold. `--include-py` flag for
+`pykrete migrate` to walk the multiplexer cohort's `.py` files
+alongside `.pyk`. A new D-code for cross-dialect method mismatch
+(spark-D2) — fire a diagnostic when a pandas-only method is called
+on `SparkFrame[X]` (or vice versa) instead of the silent
+fall-through. Cross-codebase probe coverage extended to D0073 /
+D0083. CI-guard widened to catch the "omitted-edit" drift class on
+top of v1.7's "parallel-edit" coverage.
 
 ## PyCharm support
 
@@ -312,9 +352,13 @@ Priority: **PySpark (done) → pandas check-site (done, v1.3) → pandas
 depth + type-tracking (done, v1.4) → cross-dialect handoffs +
 deferred-promise closure (done, v1.5) → `pykrete migrate` paired with
 D0090 strict-mode escalation + pandas `pivot_table` literal-form +
-`.take()` dialect-gate closure (done, v1.6) → broader pandas reshape
-+ `.loc` / `.iloc` non-literal forms + `.query` / `.eval` mini-DSLs
-(v1.7) → polars** → others (DuckDB, Dask, …).
+`.take()` dialect-gate closure (done, v1.6) → migrator UX hardening
+(`pykrete migrate` defaults to `--check`) + pandas `melt`
+literal-form + `dialect_signals` shared module + Spark-D1 audit
+closure (done, v1.7) → broader pandas reshape (`stack` / `unstack` /
+`groupby.agg`) + `.loc` / `.iloc` non-literal forms + `.query` /
+`.eval` mini-DSLs + spark-D2 D-code + `--include-py` migrate flag +
+LSP polish (v1.8) → polars** → others (DuckDB, Dask, …).
 
 The core type model — `SparkFrame[Schema]` / `PandasFrame[Schema]` /
 `DataFrame[Schema]`, the `Schema` class, column checks, return-type
