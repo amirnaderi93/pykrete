@@ -47,7 +47,7 @@ fn write_fixture(dir: &std::path::Path, name: &str, source: &str) -> std::path::
 }
 
 #[test]
-fn V17PRA1_assign_signals_pandas_through_adjudicator() {
+fn v17_pr_a1_assign_signals_pandas_through_adjudicator() {
     let dir = tmpdir("assign-signals-pandas");
     let pyk = write_fixture(
         &dir,
@@ -74,7 +74,7 @@ fn V17PRA1_assign_signals_pandas_through_adjudicator() {
 }
 
 #[test]
-fn V17PRA1_with_column_only_binding_stays_spark() {
+fn v17_pr_a1_with_column_only_binding_stays_spark() {
     let dir = tmpdir("withcolumn-only");
     let pyk = write_fixture(
         &dir,
@@ -101,7 +101,7 @@ fn V17PRA1_with_column_only_binding_stays_spark() {
 }
 
 #[test]
-fn V17PRA1_pivot_table_signals_pandas_through_adjudicator() {
+fn v17_pr_a1_pivot_table_signals_pandas_through_adjudicator() {
     let dir = tmpdir("pivot-table-signals");
     let pyk = write_fixture(
         &dir,
@@ -124,7 +124,7 @@ fn V17PRA1_pivot_table_signals_pandas_through_adjudicator() {
 }
 
 #[test]
-fn V17PRA1_pdf_head_then_assign_chain_preserves_schema() {
+fn v17_pr_a1_pdf_head_then_assign_chain_preserves_schema() {
     let result = check(
         r#"
 class Sale(Schema):
@@ -141,7 +141,7 @@ def f(pdf: PandasFrame[Sale]) -> int:
 }
 
 #[test]
-fn V17PRA1_sdf_head_terminates_chain_on_spark() {
+fn v17_pr_a1_sdf_head_terminates_chain_on_spark() {
     let result = check(
         r#"
 class Sale(Schema):
@@ -158,7 +158,7 @@ def f(sdf: SparkFrame[Sale]) -> int:
 }
 
 #[test]
-fn V17PRA1_pdf_take_then_assign_chain_preserves_schema() {
+fn v17_pr_a1_pdf_take_then_assign_chain_preserves_schema() {
     let result = check(
         r#"
 class Sale(Schema):
@@ -175,7 +175,7 @@ def f(pdf: PandasFrame[Sale]) -> int:
 }
 
 #[test]
-fn V17PRA1_head_alone_does_not_classify_binding_as_pandas() {
+fn v17_pr_a1_head_alone_does_not_classify_binding_as_pandas() {
     let dir = tmpdir("head-alone");
     let pyk = write_fixture(
         &dir,
@@ -202,7 +202,7 @@ fn V17PRA1_head_alone_does_not_classify_binding_as_pandas() {
 }
 
 #[test]
-fn V17PRA1_drop_alone_does_not_classify_binding_as_pandas() {
+fn v17_pr_a1_drop_alone_does_not_classify_binding_as_pandas() {
     let dir = tmpdir("drop-alone");
     let pyk = write_fixture(
         &dir,

@@ -874,6 +874,14 @@ fn analyze_method_call_inner<'a>(
     // tracked in `PANDAS_INHERITED_ARMS`; the membership check ties
     // this arm to the shared list (`drop` has its own dispatch arms
     // below, so it stays out of this specific pass-through subset).
+    //
+    // The `matches!` is the load-bearing dispatch (compile-time exhaustive
+    // over the literal subset this arm handles). The trailing
+    // `PANDAS_INHERITED_ARMS.contains` is a TRIPWIRE — if a contributor
+    // removes one of the four names from the shared list, this arm
+    // silently stops firing for that method and the v17_pr_a1 guard test
+    // surfaces the drift. Do NOT "simplify" by dropping either side; the
+    // pairing is intentional.
     if receiver_is_pandas_inherited
         && matches!(method, "head" | "tail" | "first" | "take")
         && PANDAS_INHERITED_ARMS.contains(&method)

@@ -47,7 +47,7 @@ const PANDAS_INHERITED_ARM_METHODS: &[&str] = &[
 /// `receiver_is_pandas_inherited && method == "M"` arm to `expr.rs`,
 /// updates this inventory, but forgets to add `M` to either list.
 #[test]
-fn V17PRA1_every_arm_method_is_listed() {
+fn v17_pr_a1_every_arm_method_is_listed() {
     for method in PANDAS_INHERITED_ARM_METHODS {
         let in_only = PANDAS_ONLY_SIGNALS.contains(method);
         let in_inherited = PANDAS_INHERITED_ARMS.contains(method);
@@ -70,7 +70,7 @@ fn V17PRA1_every_arm_method_is_listed() {
 /// if `assign` ever leaks into `PANDAS_INHERITED_ARMS`, the meaning of
 /// the list — "shared-with-Spark" — is corrupted.
 #[test]
-fn V17PRA1_only_signals_and_inherited_arms_are_disjoint() {
+fn v17_pr_a1_only_signals_and_inherited_arms_are_disjoint() {
     for method in PANDAS_ONLY_SIGNALS {
         assert!(
             !PANDAS_INHERITED_ARMS.contains(method),
@@ -89,7 +89,7 @@ fn V17PRA1_only_signals_and_inherited_arms_are_disjoint() {
 /// length surfaces the "you added an arm, did you update the
 /// inventory?" question in code review.
 #[test]
-fn V17PRA1_inventory_has_eight_methods() {
+fn v17_pr_a1_inventory_has_eight_methods() {
     assert_eq!(
         PANDAS_INHERITED_ARM_METHODS.len(),
         8,
@@ -108,7 +108,7 @@ fn V17PRA1_inventory_has_eight_methods() {
 /// classifies Spark `df.head()` as Pandas and the schema mutates
 /// silently.
 #[test]
-fn V17PRA1_head_is_only_in_inherited_arms() {
+fn v17_pr_a1_head_is_only_in_inherited_arms() {
     assert!(
         PANDAS_INHERITED_ARMS.contains(&"head"),
         "head must remain in PANDAS_INHERITED_ARMS — the expr.rs arm \
@@ -128,7 +128,7 @@ fn V17PRA1_head_is_only_in_inherited_arms() {
 /// binding as Pandas if it sees a pandas-only signal. `assign` is the
 /// canonical example.
 #[test]
-fn V17PRA1_assign_is_only_in_pandas_only_signals() {
+fn v17_pr_a1_assign_is_only_in_pandas_only_signals() {
     assert!(
         PANDAS_ONLY_SIGNALS.contains(&"assign"),
         "assign must remain in PANDAS_ONLY_SIGNALS — the call-graph \
