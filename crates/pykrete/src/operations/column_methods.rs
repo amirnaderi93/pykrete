@@ -660,7 +660,7 @@ fn expr_is_none_literal(expr: &Expr) -> bool {
 /// numeric widening (`int` < `long` < `double`); any branch nullable →
 /// `Nullable(T)`. Returns `None` (Unknown) when no two branches share a
 /// reconcilable type, so downstream checks stay permissive.
-fn melt_value_column_type(branch_types: &[Option<ColumnType>]) -> Option<ColumnType> {
+pub(super) fn melt_value_column_type(branch_types: &[Option<ColumnType>]) -> Option<ColumnType> {
     let common = common_branch_type(branch_types)?;
     let any_nullable = branch_types
         .iter()

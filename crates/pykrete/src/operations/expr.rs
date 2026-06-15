@@ -6,8 +6,8 @@ use super::column_methods::{
     apply_melt, apply_pandas_assign, apply_pandas_drop_columns, apply_rename_dict,
     apply_with_columns, apply_with_columns_renamed, check_column_method_args,
     check_fillna_dict_keys, check_pandas_assign_enum_sinks, check_subset_kwarg,
-    check_with_column_enum_sink, check_with_columns_enum_sinks, parse_string_list,
-    report_column_refs,
+    check_with_column_enum_sink, check_with_columns_enum_sinks, melt_value_column_type,
+    parse_string_list, report_column_refs,
 };
 use super::context::{BodyContext, MAX_INFER_DEPTH};
 use super::driver::{check_function_body, inherited_dialect};
@@ -1156,6 +1156,81 @@ fn analyze_method_call_inner<'a>(
         }
         report_column_refs(&refs, &receiver, ctx, source, line_index, diagnostics);
         return None;
+    }
+    // v1.7 PR-D1 — `pdf.melt(id_vars=, value_vars=, var_name=, value_name=)`
+    // literal-form schema synthesis (spec §4). Pandas's `melt` uses a
+    // different argument shape from Spark's (which routes to the
+    // `apply_melt` arm below): kwargs `id_vars=` / `value_vars=` /
+    // `var_name=` / `value_name=` instead of positional column lists +
+    // `variableColumnName=` / `valueColumnName=`. Both kwargs required
+    // as literals for the arm to fire; missing either → fall through.
+    // Output schema = `id_vars + [var_name, value_name]`; id_vars retain
+    // their declared types from the receiver, `var_name` is string, and
+    // `value_name` is the common type of the `value_vars` columns
+    // (Unknown if they disagree). Non-literal arg shapes (variable,
+    // computed) fall through, no diagnostic.
+    if receiver_is_pandas_inherited && method == "melt" {
+        let id_vars_expr = pandas_kwarg_value(call, "id_vars");
+        let value_vars_expr = pandas_kwarg_value(call, "value_vars");
+        let (Some(id_vars_expr), Some(value_vars_expr)) = (id_vars_expr, value_vars_expr) else {
+            return None;
+        };
+        let id_vars: Vec<(&'a str, TextRange)> =
+            if let Some(lit) = id_vars_expr.as_string_literal_expr() {
+                vec![(lit.value.to_str(), lit.range())]
+            } else {
+                parse_string_list(id_vars_expr)?
+            };
+        let value_vars: Vec<(&'a str, TextRange)> =
+            if let Some(lit) = value_vars_expr.as_string_literal_expr() {
+                vec![(lit.value.to_str(), lit.range())]
+            } else {
+                parse_string_list(value_vars_expr)?
+            };
+        let var_name: &'a str = match pandas_kwarg_value(call, "var_name") {
+            Some(e) => match e.as_string_literal_expr() {
+                Some(s) => s.value.to_str(),
+                None => return None,
+            },
+            None => "variable",
+        };
+        let value_name: &'a str = match pandas_kwarg_value(call, "value_name") {
+            Some(e) => match e.as_string_literal_expr() {
+                Some(s) => s.value.to_str(),
+                None => return None,
+            },
+            None => "value",
+        };
+        let mut refs: Vec<(Option<&'a str>, &'a str, TextRange)> = Vec::new();
+        refs.extend(id_vars.iter().map(|&(n, r)| (None, n, r)));
+        refs.extend(value_vars.iter().map(|&(n, r)| (None, n, r)));
+        report_column_refs(&refs, &receiver, ctx, source, line_index, diagnostics);
+        let recv_fields = receiver.typed_fields(ctx.schemas());
+        let mut out_fields: Vec<DerivedField<'a>> = Vec::new();
+        for (name, _) in &id_vars {
+            if let Some(f) = recv_fields.iter().find(|f| f.name == *name) {
+                out_fields.push(f.clone());
+            }
+        }
+        let value_field_types: Vec<Option<ColumnType>> = value_vars
+            .iter()
+            .map(|(n, _)| {
+                recv_fields
+                    .iter()
+                    .find(|f| f.name == *n)
+                    .and_then(|f| f.ty.clone())
+            })
+            .collect();
+        let value_ty = melt_value_column_type(&value_field_types);
+        out_fields.push(DerivedField {
+            name: var_name,
+            ty: Some(ColumnType::String),
+        });
+        out_fields.push(DerivedField {
+            name: value_name,
+            ty: value_ty,
+        });
+        return Some(SchemaView::Derived(out_fields));
     }
     if matches!(method, "melt" | "unpivot") {
         return Some(apply_melt(
