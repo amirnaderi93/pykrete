@@ -806,6 +806,14 @@ fn analyze_method_call_inner<'a>(
     //    return None and fall through.
     let receiver_dialect = inherited_dialect(&attr.value, ctx);
     let receiver_is_spark_inherited = receiver_dialect == Some(Dialect::Spark);
+    // v1.8 PR-A1 — `receiver_is_pandas_inherited` arms are SCANNED by
+    // `crates/pykrete/build.rs` to generate `PANDAS_INHERITED_ARM_METHODS_GENERATED`.
+    // Two arm shapes are recognized: `receiver_is_pandas_inherited && matches!(method, "A" | "B" | ...)`
+    // and `receiver_is_pandas_inherited && method == "X"`. Adding a new
+    // arm shape (e.g. `if receiver_is_pandas_inherited && ARM_SET.contains(method)`)
+    // requires a parallel update to `build.rs::extract_methods` or the
+    // build fails. See `tests/v17_pr_a1_dialect_signals_guard.rs` for
+    // the tripwire test that catches drift.
     let receiver_is_pandas_inherited = receiver_dialect == Some(Dialect::Pandas);
 
     // `df.createOrReplaceTempView("name")` — register `df`'s schema

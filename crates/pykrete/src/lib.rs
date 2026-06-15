@@ -48,7 +48,10 @@ pub use alias_report::{
 };
 pub use completion::{CompletionItem, CompletionItemKind, completions};
 pub use config::Config;
-pub use dialect_signals::{PANDAS_INHERITED_ARMS, PANDAS_ONLY_SIGNALS, SPARK_DISCRIMINATORS};
+pub use dialect_signals::{
+    PANDAS_INHERITED_ARM_METHODS_GENERATED, PANDAS_INHERITED_ARMS, PANDAS_ONLY_SIGNALS,
+    SPARK_DISCRIMINATORS,
+};
 pub use hover::{HoverInfo, hover};
 pub use symbols::{
     DocumentSymbol, Span, SymbolKind, definition, document_symbols, prepare_rename, references,
