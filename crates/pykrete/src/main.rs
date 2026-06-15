@@ -43,12 +43,20 @@ Options:
                            'DataFrame[X]' annotation site (planning aid
                            for the v2.0 alias removal); suppresses normal
                            diagnostic output and always exits 0.
+        --deprecation-report
+                           Emit a JSON envelope listing every D0090-firing
+                           site (file, line, column, raw annotation,
+                           adjudicated dialect, suggested rewrite) for CI
+                           gating and migration dashboards; suppresses
+                           normal diagnostic output and always exits 0.
+                           Mutually exclusive with --report-aliases.
     -h, --help             Show this help and exit.
 
 Example:
     pykrete check examples/orders.pyk
     pykrete check --format json examples/orders.pyk
     pykrete check --report-aliases src/
+    pykrete check --deprecation-report src/
 ";
 
 const TRANSPILE_HELP: &str = "\
@@ -151,6 +159,7 @@ struct CheckArgs {
     verbose: bool,
     format: OutputFormat,
     report_aliases: bool,
+    deprecation_report: bool,
     paths: Vec<String>,
 }
 
@@ -158,6 +167,7 @@ fn parse_check_args(args: &[String]) -> Result<CheckArgs, String> {
     let mut verbose = false;
     let mut format = OutputFormat::Text;
     let mut report_aliases = false;
+    let mut deprecation_report = false;
     let mut paths: Vec<String> = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -176,6 +186,7 @@ fn parse_check_args(args: &[String]) -> Result<CheckArgs, String> {
                 format = parse_format(value)?;
             }
             "--report-aliases" => report_aliases = true,
+            "--deprecation-report" => deprecation_report = true,
             s if s.starts_with('-') => {
                 return Err(format!("unknown option '{s}'; see `pykrete check --help`"));
             }
@@ -183,10 +194,17 @@ fn parse_check_args(args: &[String]) -> Result<CheckArgs, String> {
         }
         i += 1;
     }
+    if report_aliases && deprecation_report {
+        return Err(
+            "--report-aliases and --deprecation-report are mutually exclusive; pass only one"
+                .to_string(),
+        );
+    }
     Ok(CheckArgs {
         verbose,
         format,
         report_aliases,
+        deprecation_report,
         paths,
     })
 }
@@ -213,6 +231,7 @@ fn run_check(args: &[String]) -> ExitCode {
         verbose,
         format,
         report_aliases,
+        deprecation_report,
         paths,
     } = match parse_check_args(args) {
         Ok(v) => v,
@@ -266,6 +285,21 @@ fn run_check(args: &[String]) -> ExitCode {
         let mut sites = pykrete::collect_alias_sites(&sources);
         pykrete::adjudicate_alias_sites(&sources, &mut sites);
         let rendered = pykrete::render_alias_report_json(&sites);
+        println!("{rendered}");
+        return ExitCode::SUCCESS;
+    }
+
+    // `--deprecation-report` is the v1.8 PR-V1 sibling: same collection
+    // + adjudication plumbing, different envelope. Every alias site is a
+    // D0090-firing site, so no filter — the envelope mirrors the alias
+    // inventory but adds the diagnostic code, rule name, binding name,
+    // and a precomputed by-dialect summary so CI gates and migration
+    // dashboards can consume the report without re-aggregating. Exit 0
+    // matches `--report-aliases`: this is an inventory, not a gate.
+    if deprecation_report {
+        let mut sites = pykrete::collect_alias_sites(&sources);
+        pykrete::adjudicate_alias_sites(&sources, &mut sites);
+        let rendered = pykrete::render_deprecation_report_json(&sites);
         println!("{rendered}");
         return ExitCode::SUCCESS;
     }

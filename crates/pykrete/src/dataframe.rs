@@ -190,9 +190,10 @@ pub fn spark_frame_rewrite(raw: &str) -> String {
 pub fn format_d0090_message(raw_text: &str) -> (String, String) {
     let rewrite = spark_frame_rewrite(raw_text);
     let message = format!(
-        "'{raw_text}' is a deprecated alias for '{rewrite}' \
-         and will be removed in pykrete v2.0. \
-         Rewrite as '{rewrite}'.",
+        "'{raw_text}' is a deprecated alias for '{rewrite}', \
+         slated for removal in a future pykrete v2.0. \
+         Rewrite as '{rewrite}', or run \
+         `pykrete check --deprecation-report` to inventory remaining sites.",
     );
     (message, rewrite)
 }

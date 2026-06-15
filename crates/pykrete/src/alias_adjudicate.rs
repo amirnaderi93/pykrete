@@ -178,9 +178,9 @@ fn adjudicate_function(func: &StmtFunctionDef, source: &str, path: &str, sites: 
         visitor.visit_stmt(stmt);
     }
 
-    for (i, (_, range)) in bindings.iter().enumerate() {
+    for (i, (name, range)) in bindings.iter().enumerate() {
         let verdict = visitor.usage[i].verdict();
-        apply_verdict(sites, path, *range, source, verdict);
+        apply_verdict(sites, path, *range, source, verdict, name);
     }
 }
 
@@ -264,6 +264,7 @@ fn apply_verdict(
     site_range: TextRange,
     source: &str,
     verdict: AdjudicatedDialect,
+    binding_name: &str,
 ) {
     for s in sites.iter_mut() {
         if s.file != path {
@@ -274,6 +275,7 @@ fn apply_verdict(
         }
         let raw = &source[s.range];
         s.verdict = Some(verdict);
+        s.binding_name = Some(binding_name.to_string());
         match verdict {
             AdjudicatedDialect::Spark => {
                 s.resolved_dialect = Dialect::Spark;
