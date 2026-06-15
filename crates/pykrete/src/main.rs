@@ -655,15 +655,15 @@ fn run_migrate(args: &[String]) -> ExitCode {
         }
     };
 
-    if mode_was_implicit {
-        eprintln!(
-            "v1.7+: `pykrete migrate` is dry-run by default. Use `--apply` to write changes."
-        );
-    }
-
     if paths.is_empty() {
         eprintln!("specify a file or directory; see `pykrete migrate --help`");
         return ExitCode::from(2);
+    }
+
+    if mode_was_implicit {
+        eprintln!(
+            "pykrete: migrate default is now --check; pass --apply to rewrite in place (v1.7+)"
+        );
     }
 
     let expanded: Vec<PathBuf> = match expand_paths(&paths) {
