@@ -57,6 +57,7 @@ fn v17_pr_a1_assign_signals_pandas_through_adjudicator() {
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate");
@@ -84,6 +85,7 @@ fn v17_pr_a1_with_column_only_binding_stays_spark() {
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate");
@@ -111,6 +113,7 @@ fn v17_pr_a1_pivot_table_signals_pandas_through_adjudicator() {
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate");
@@ -185,6 +188,7 @@ fn v17_pr_a1_head_alone_does_not_classify_binding_as_pandas() {
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate");
@@ -212,6 +216,7 @@ fn v17_pr_a1_drop_alone_does_not_classify_binding_as_pandas() {
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate");
