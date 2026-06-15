@@ -46,6 +46,7 @@ fn pure_spark_usage_rewrites_to_sparkframe() {
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate");
@@ -77,6 +78,7 @@ fn pure_pandas_usage_rewrites_to_pandasframe() {
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate");
@@ -104,6 +106,7 @@ fn loc_subscript_alone_signals_pandas() {
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate");
@@ -127,6 +130,7 @@ fn iloc_subscript_alone_signals_pandas() {
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate");
@@ -151,6 +155,7 @@ fn mixed_usage_is_ambiguous_and_keeps_dataframe_with_marker() {
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate");
@@ -189,6 +194,7 @@ fn ambiguous_marker_lands_on_the_line_above_the_site() {
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate");
@@ -225,6 +231,7 @@ fn unused_binding_defaults_to_spark() {
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate");
@@ -248,6 +255,7 @@ fn return_only_annotation_defaults_to_spark() {
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate");
@@ -275,6 +283,7 @@ fn local_annassign_is_adjudicated_against_its_body_usage() {
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate");
@@ -401,6 +410,7 @@ fn migrate_then_check_strict_passes() {
 
     let migrate_out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate");
@@ -466,6 +476,7 @@ def ambiguous(df: DataFrame[Sale]) -> int:
 
     let migrate_out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate");
@@ -553,6 +564,7 @@ def ambiguous(df: DataFrame[Sale]) -> int:
 
     let run1 = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate (1)");
@@ -566,6 +578,7 @@ def ambiguous(df: DataFrame[Sale]) -> int:
 
     let run2 = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate (2)");
@@ -658,6 +671,7 @@ def k(df: DataFrame[Sale]) -> int:
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate");
@@ -693,6 +707,7 @@ fn camelcase_groupby_still_classifies_as_spark() {
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate");

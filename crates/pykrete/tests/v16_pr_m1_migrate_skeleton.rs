@@ -8,6 +8,11 @@
 //!
 //! Negative-space tests per v14-rule 4: no-args usage, mutually
 //! exclusive flags, nonexistent file, unknown option.
+//!
+//! v1.7 PR-M1 flipped the default mode from rewrite to check; the
+//! `migrate_default_mode_rewrites_in_place` smoke test was renamed
+//! and passes `--apply` explicitly. The flipped-default semantics
+//! live in `v17_pr_m1_check_default.rs`.
 
 use std::fs;
 use std::process::Command;
@@ -201,13 +206,17 @@ def f(s: SparkFrame[Sale]) -> SparkFrame[Sale]:
 }
 
 // ---------------------------------------------------------------
-// Default mode: in-place rewrite (PR-M2; smoke test here, full
+// Apply mode: in-place rewrite (PR-M2; smoke test here, full
 // coverage in v16_pr_m2_rewriter_core.rs)
+//
+// v1.7 PR-M1 flipped the default to check-mode. The rewriter path
+// is now `--apply`; `v17_pr_m1_check_default.rs` covers the
+// flipped-default semantics (no-flag = check).
 // ---------------------------------------------------------------
 
 #[test]
-fn migrate_default_mode_rewrites_in_place() {
-    let dir = tmpdir("default");
+fn migrate_apply_mode_rewrites_in_place() {
+    let dir = tmpdir("apply");
     let pyk = write_fixture(
         &dir,
         "aliased.pyk",
@@ -216,13 +225,14 @@ fn migrate_default_mode_rewrites_in_place() {
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
-        .expect("run pykrete migrate");
+        .expect("run pykrete migrate --apply");
 
     assert!(
         out.status.success(),
-        "default mode should exit 0 once the rewriter ships, got {:?}; stderr={}",
+        "--apply should exit 0 once the rewriter ships, got {:?}; stderr={}",
         out.status,
         String::from_utf8_lossy(&out.stderr)
     );
@@ -259,6 +269,10 @@ fn migrate_help_prints_usage() {
         assert!(
             stdout.contains("pykrete migrate"),
             "{flag} help missing 'pykrete migrate': {stdout}"
+        );
+        assert!(
+            stdout.contains("--apply"),
+            "{flag} help missing '--apply': {stdout}"
         );
         assert!(
             stdout.contains("--check"),

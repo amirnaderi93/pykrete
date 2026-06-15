@@ -6,6 +6,11 @@
 //!
 //! Call-graph adjudication (`spark` / `pandas` / `ambiguous`) lands in
 //! PR-M3 — see `v16_pr_m3_adjudication_d0090.rs` for that surface.
+//!
+//! v1.7 PR-M1 flipped `pykrete migrate <path>`'s default mode from
+//! rewrite to check; tests below pass `--apply` explicitly to keep
+//! exercising the rewriter path. The flipped-default semantics are
+//! covered in `v17_pr_m1_check_default.rs`.
 
 use std::fs;
 use std::process::Command;
@@ -49,6 +54,7 @@ def g(t: DataFrame[Sale]) -> int:
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate");
@@ -97,6 +103,7 @@ fn clean_file_is_not_rewritten_and_mtime_unchanged() {
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate");
@@ -137,6 +144,7 @@ def f(s: DataFrame[Sale]) -> DataFrame[Sale]:
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate");
@@ -173,6 +181,7 @@ fn two_aliases_on_one_line_both_rewritten() {
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate");
@@ -200,6 +209,7 @@ fn bare_dataframe_rewrites_to_bare_sparkframe() {
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate");
@@ -227,6 +237,7 @@ fn idempotent_second_run_is_a_no_op() {
 
     let out1 = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("first run");
@@ -237,6 +248,7 @@ fn idempotent_second_run_is_a_no_op() {
 
     let out2 = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("second run");
@@ -286,6 +298,7 @@ fn multi_file_modified_written_clean_untouched() {
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&dir)
         .output()
         .expect("run pykrete migrate <dir>");
@@ -345,6 +358,7 @@ fn tempfile_is_cleaned_up_after_successful_write() {
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate");
@@ -384,6 +398,7 @@ fn pandas_shaped_binding_resolves_to_pandasframe_post_m3() {
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&pyk)
         .output()
         .expect("run pykrete migrate");
@@ -422,6 +437,7 @@ fn migrate_through_symlink_writes_target_not_link() {
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&link)
         .output()
         .expect("run pykrete migrate");
@@ -495,6 +511,7 @@ fn multi_file_partial_failure_emits_summary_and_exit_2() {
 
     let out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&writable)
         .arg(&readonly)
         .output()
@@ -597,6 +614,7 @@ def f(df: DataFrame[Sale]) -> int:
     // 2. Run --apply to capture what the final tree should look like.
     let apply_out = Command::new(bin())
         .arg("migrate")
+        .arg("--apply")
         .arg(&original_pyk)
         .output()
         .expect("run pykrete migrate --apply");
