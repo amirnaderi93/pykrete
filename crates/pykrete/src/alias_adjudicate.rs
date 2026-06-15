@@ -16,77 +16,13 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use crate::alias_report::{AdjudicatedDialect, AliasSite};
 use crate::dataframe::{self, Dialect};
+use crate::dialect_signals::{PANDAS_ONLY_SIGNALS, SPARK_DISCRIMINATORS};
 
 // Round-2 reviewer (I2): `AdjudicatedDialect` lives in `alias_report.rs`
 // now so `AliasSite` can carry the typed verdict directly. Re-export
 // here so existing `alias_adjudicate::AdjudicatedDialect` call sites
 // (tests, internal walkers) keep compiling.
 pub use crate::alias_report::AdjudicatedDialect as _AdjudicatedDialect;
-
-/// Spark-discriminating method names. A `binding.METHOD(...)` call where
-/// METHOD is one of these tags the binding as Spark.
-const SPARK_DISCRIMINATORS: &[&str] = &[
-    "withColumn",
-    "withColumns",
-    "withColumnsRenamed",
-    "withColumnRenamed",
-    "createOrReplaceTempView",
-    "createOrReplaceGlobalTempView",
-    "createTempView",
-    "createGlobalTempView",
-    "repartition",
-    "coalesce",
-    "persist",
-    "unpersist",
-    "cache",
-    "checkpoint",
-    "printSchema",
-    "toPandas",
-    "show",
-    "collect",
-    "crossJoin",
-    "unionByName",
-    "subtract",
-    "exceptAll",
-    "intersectAll",
-    "toDF",
-    "sampleBy",
-    "foreachPartition",
-];
-
-/// Pandas-discriminating method names plus attribute names (`.loc` / `.iloc`).
-/// A `binding.METHOD(...)` or `binding.ATTR` access where the symbol is one
-/// of these tags the binding as Pandas.
-///
-/// Case sensitivity is load-bearing: Spark's analogues are camelCase
-/// (`groupBy`, `withColumnRenamed`) and must not collapse into the
-/// lowercase pandas names (`groupby`, `rename`).
-const PANDAS_DISCRIMINATORS: &[&str] = &[
-    "assign",
-    "pivot_table",
-    "pivot",
-    "melt",
-    "merge",
-    "applymap",
-    "to_dict",
-    "idxmax",
-    "idxmin",
-    "loc",
-    "iloc",
-    "iat",
-    "at",
-    "groupby",
-    "rename",
-    "query",
-    "eval",
-    "astype",
-    "set_index",
-    "reset_index",
-    "value_counts",
-    "nlargest",
-    "nsmallest",
-    "copy",
-];
 
 /// Apply call-graph adjudication to every site, in place: update
 /// `resolved_dialect` and `would_be_replacement` to reflect the
@@ -283,7 +219,7 @@ impl<'a> SourceOrderVisitor<'a> for UsageVisitor<'a> {
             let method = attr.attr.id.as_str();
             if SPARK_DISCRIMINATORS.contains(&method) {
                 self.usage[idx].spark = true;
-            } else if PANDAS_DISCRIMINATORS.contains(&method) {
+            } else if PANDAS_ONLY_SIGNALS.contains(&method) {
                 self.usage[idx].pandas = true;
             }
         }
@@ -292,7 +228,7 @@ impl<'a> SourceOrderVisitor<'a> for UsageVisitor<'a> {
             && let Some(idx) = self.names.iter().position(|n| *n == name.id.as_str())
         {
             let symbol = attr.attr.id.as_str();
-            if PANDAS_DISCRIMINATORS.contains(&symbol) {
+            if PANDAS_ONLY_SIGNALS.contains(&symbol) {
                 self.usage[idx].pandas = true;
             } else if SPARK_DISCRIMINATORS.contains(&symbol) {
                 self.usage[idx].spark = true;
