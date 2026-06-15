@@ -317,7 +317,7 @@ pub fn pandas_frame_rewrite(raw: &str) -> String {
 /// the prior text-equality heuristic with the typed `verdict` field;
 /// sites without a verdict (pre-adjudication, v1.5 behavior) are never
 /// ambiguous.
-pub fn has_ambiguous_in_file(sites: &[AliasSite], path: &str, _source: &str) -> bool {
+pub fn has_ambiguous_in_file(sites: &[AliasSite], path: &str) -> bool {
     sites
         .iter()
         .filter(|s| s.file == path)
@@ -328,7 +328,7 @@ pub fn has_ambiguous_in_file(sites: &[AliasSite], path: &str, _source: &str) -> 
 /// `path`, sorted and deduped. The migrator inserts one `# pykrete:
 /// ambiguous` comment per distinct line on the line above the site.
 /// Round-2 reviewer (I2): switched from text-heuristic to typed verdict.
-pub fn ambiguous_site_offsets(sites: &[AliasSite], path: &str, _source: &str) -> Vec<TextSize> {
+pub fn ambiguous_site_offsets(sites: &[AliasSite], path: &str) -> Vec<TextSize> {
     let mut out: Vec<TextSize> = sites
         .iter()
         .filter(|s| s.file == path)
@@ -468,7 +468,7 @@ def f(df: DataFrame[Sale]) -> int:
         let files = vec![("test.pyk".to_string(), src.to_string())];
         let mut sites = collect_alias_sites(&files);
         adjudicate(&files, &mut sites);
-        assert!(has_ambiguous_in_file(&sites, "test.pyk", src));
-        assert_eq!(ambiguous_site_offsets(&sites, "test.pyk", src).len(), 1);
+        assert!(has_ambiguous_in_file(&sites, "test.pyk"));
+        assert_eq!(ambiguous_site_offsets(&sites, "test.pyk").len(), 1);
     }
 }
