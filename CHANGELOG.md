@@ -6,6 +6,72 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-06-15
+
+Seventh minor release on the v1.0 line. The headline change is the **`pykrete migrate` default-mode flip**: `pykrete migrate src/` now runs in `--check` mode (preview verdicts + non-zero exit if any site needs attention) instead of rewriting in place. `--apply` is the new opt-in for the in-place rewrite. The flip lands two cycles after `pykrete migrate` first shipped (v1.6); the v1.6 release-notes explicitly flagged the CLI surface as pre-stable. The release also ships pandas `df.melt(id_vars=, value_vars=, var_name=, value_name=)` literal-form column checking as the v1.7 pandas reshape downpayment, closes the v1.6 architecture-audit Important #3 finding via a shared `dialect_signals` module (`PANDAS_ONLY_SIGNALS` + `PANDAS_INHERITED_ARMS` + `SPARK_DISCRIMINATORS`) with a CI-guard test, surfaces parse-error skips on `pykrete migrate` to stderr, normalizes CRLF on `# pykrete: ambiguous` marker insertions, and mops up audit-debt with 14 Spark-only methods added to `SPARK_DISCRIMINATORS` (the Spark-D1 audit closure). No new D-codes, no new annotation forms; SemVer-minor under the `tighteningDiagnostics` policy and the pre-stable CLI policy carved out in v1.6.
+
+### Added
+
+- **Pandas `df.melt(id_vars=, value_vars=, var_name=, value_name=)` literal-form** (PR-D1; spec §4). `pdf.melt(id_vars=["a", "b"], value_vars=["c", "d"], var_name="variable", value_name="value")` resolves the string-literal arguments to `id_vars` / `value_vars` against `PandasFrame[X]`'s schema, firing D0030 on a typo with a *did you mean*. List-of-literals shapes (`id_vars=["a", "b"]`) are also checked. Single-literal `id_vars="a"` falls through cleanly. Variable arguments (`id_vars=cols_var`) and the no-arg form fall through to Unknown. The pandas dispatch is gated on `receiver_is_pandas_inherited` so the existing Spark `melt`/`unpivot` arm's behavior on `SparkFrame[X]` receivers is unchanged (regression guard). Full `melt` output schema-tracking (the long-format schema with `var_name` / `value_name` as columns) is deferred to v1.8 paired with `stack` / `unstack` / `groupby.agg`.
+- **`dialect_signals` shared module** (PR-A1; spec §2.1). New `crates/pykrete/src/dialect_signals.rs` extracts two semantically-distinct lists into a single shared surface: `PANDAS_ONLY_SIGNALS` (binding-classification signals consumed by the call-graph adjudicator at `alias_adjudicate.rs`) and `PANDAS_INHERITED_ARMS` (the pandas-dispatched expr-side method-call recognizers consumed by `operations/expr.rs`). v1.6 left these as two parallel lists in two files with a "Keep in sync" comment between them — load-bearing parity that the v1.6 architecture audit flagged as audit-debt Important #3. The extract enforces the parity at call site. PR-A2 (this cycle) added `SPARK_DISCRIMINATORS` to the same module — the Spark-side companion to `PANDAS_ONLY_SIGNALS`, populated with 14 Spark-only methods (see below).
+- **14 Spark-only methods in `SPARK_DISCRIMINATORS`** (PR-A2; spec §2.2). The Spark-D1 audit closure adds `selectExpr`, `freqItems`, `approxQuantile`, `crosstab`, `colRegex`, `summary`, `mapInPandas`, `mapInArrow`, `writeTo`, `writeStream`, `unpivot`, `rdd`, `isStreaming`, and `sparkSession` to the discriminator list, so a binding that calls any of these adjudicates as Spark. `corr` and `cov` were considered and **deliberately excluded** — pandas has same-named methods at the DataFrame level, so including them as Spark discriminators would mis-adjudicate pandas-receiver chains as Spark. Caught at PR-A2 review.
+- **`pykrete migrate` parse-error surface** (PR-M1; spec §1.2). Files that fail to parse are skipped (existing behavior); v1.7 now reports each skipped file on stderr with the parse error so adopters can see why a file didn't get migrated instead of having to diff before/after to discover the silent skip.
+- **CRLF marker normalization in `# pykrete: ambiguous` insertions** (PR-M1; spec §1.3). On Windows-style CRLF source files, the v1.6 marker inserter emitted a marker line that mixed LF (the marker itself) with the surrounding CRLF runs, leaving a mixed-EOL file. v1.7 detects the source's line-ending convention and emits the marker with the matching ending.
+- **CI-guard test pinning `expr.rs` pandas-arm methods to `PANDAS_INHERITED_ARMS`** (PR-A1; spec §2.1). The new `dialect_signals` extract is paired with a test that asserts the methods dispatched by the `receiver_is_pandas_inherited` arm in `operations/expr.rs` are exactly the methods in `PANDAS_INHERITED_ARMS`. **Honest scoping note**: this is partial drift coverage — it catches "added a method to one list, forgot the other" (the parallel-edit class), but does NOT catch "added a wholly new dispatched arm and updated neither list" (the omitted-edit class). Explicitly framed in the spec as audit-flagged failure mode #1 closure; failure mode #2 (omitted-edit) stays a v1.8 candidate.
+
+### Changed
+
+- **`pykrete migrate` default mode is now `--check`** (PR-M1; spec §1.1). v1.6 shipped `pykrete migrate src/` as a rewrite-in-place default with `--check` and `--diff` as opt-in preview modes. v1.7 flips: `pykrete migrate src/` runs check-mode (preview verdicts on stdout, exit 1 if any site needs attention, 0 otherwise) and `--apply` is the new opt-in for the in-place rewrite. `--check` and `--diff` keep working as explicit flags. The flip lands two cycles after `pykrete migrate` first shipped; the v1.6 release notes explicitly flagged the CLI surface as pre-stable per the "`pykrete migrate` CLI surface is new and isn't yet part of the SemVer-major contract; flag names and stdout shape may evolve in v1.7+" compatibility note. **Release-notes callout for adopters**: any CI invocation that ran `pykrete migrate src/` and expected an in-place rewrite needs to switch to `pykrete migrate --apply src/`. The cookbook recipe 6 update spells out the migration. A first-run on v1.7 with no flag also emits a one-line `pykrete: migrate default is now --check; pass --apply to rewrite in place (v1.7+)` warning to stderr so adopters discover the change without reading release notes.
+- **Trust-claim surfaces** swept end-to-end for v1.7 reality: README "Reliability and trust" + "Today / Next" lines; the docs-site splash; `about/production-readiness`; `about/pykrete-tests`; the docs-site roadmap; the canonical `docs/roadmap.md`; the pandas roadmap; the operations ref (pandas `melt` literal-form); the cookbook recipe 6 (the migrate `--check`-default flip); the VS Code extension README; and `editors/vscode/CHANGELOG.md`. All refresh to **247 schema-tracking probes across 99 of 100 fixtures from 17 donors** (182 positive + 65 negative under `probes_negative/`, including the 2 new PR-D1 `melt` probes from pykrete-tests PR-D1 #28 and the 6 PR-P1 D0040/D0050/D0051 negative probes from pykrete-tests PR-P1 #27); counts are extracted via `python scripts/probes.py extract cross-codebase | jq` per the v1.4 rule, NOT `grep -c`.
+- **Pandas roadmap** updated: `melt` literal-form moves from "v1.7 horizon" to shipped; full `pivot_table` schema-tracking, `stack` / `unstack` / `groupby.agg`, `reset_index` / `set_index`, `.loc` non-literal forms + `.iloc`, the `.query` / `.eval` mini-DSLs, pandas I/O entry points, and polars stay tracked for v1.8+.
+
+### Fixed
+
+- **PR-A2 — `corr` / `cov` excluded from `SPARK_DISCRIMINATORS`** (spec §2.2; A2 review catch). Initial discriminator-list expansion included `corr` and `cov` from the Spark `DataFrameStatFunctions` surface. PR-A2 review flagged that pandas exposes same-named methods at the DataFrame level, so a `pdf.corr()` chain would have mis-adjudicated `pdf` as Spark. Excluded before merge; documented in the spec as the "collision-risk excluded" subset.
+
+### Internal
+
+- **Dropped `_source: &str` dead parameter** (PR-A2; spec §2.3, audit-debt closure). `ambiguous_site_offsets` and `has_ambiguous_in_file` carried a `_source: &str` parameter that was never read inside the function bodies — v1.6 introduced it as a forward-compat slot that never got used. v1.7 drops it. The call sites stop passing the source slice. No behavior change.
+- **Single-pass parse-error filter loop** (PR-M1; spec §1.2, audit-debt closure). The migrate driver's parse-error filter previously walked `expanded.iter().zip(sources.iter())` in lockstep, an arrangement the v1.6 architecture audit flagged as a footgun (any future divergence in the two vectors' lengths would silently truncate). v1.7 collapses the two-vector lockstep to a single-pass filter over the expanded entries.
+
+### Verified properties (cumulative)
+
+The trust suite verifies, on every release:
+
+- **Column resolution** through the Spark v1.0 surface plus the pandas analogues — 182 positive probes across 46 annotated fixtures (now including pandas `melt` literal-form per PR-D1).
+- **Diagnostic firing** on broken fixtures — 65 negative probes across 54 `probes_negative/` fixtures pinning D0030 `unknownColumn` (now including pandas `melt` literal-arg typos per PR-D1), D0040 / D0050 / D0051 enum / range / nullability checks (now covered cross-codebase per pykrete-tests PR-P1), D0060 `missingJoinKey`, D0081 `nonNumericArithmetic`, D0082 `crossTypeComparison`, D0084 `enumValueMismatch`, and D0090 `deprecatedDataFrameAlias`.
+- **Spark type tracking** through transformations, scoped to D0081 via the `PROBE-TYPE-IS` synth-shape path (shipped v1.2).
+- **Pandas type tracking** through dispatched chains (shipped v1.4) on `PandasFrame[X]`, scoped to D0081 via the assign-arithmetic synth — 24 `PROBE-TYPE-IS` markers across 10 of the 17 donors.
+- **Cross-dialect handoff** (shipped v1.5, `.take()` closure v1.6): `.toPandas()` re-tags `SparkFrame[X]` to `PandasFrame[X]`; `spark.createDataFrame(pdf)` re-tags back when a schema source is present; pandas `.head` / `.tail` / `.first` / `.take` are dialect-gated.
+
+### Deferred (v1.8 trackers)
+
+- **Full `melt` output schema-tracking** — the long-format output schema where `var_name` / `value_name` become columns of the result frame. v1.7 ships literal-form column checking on the inputs; the output-shape model is paired with broader pandas reshape (`stack` / `unstack` / `groupby.agg`) in v1.8.
+- **Pandas reshape sweep** — `stack` / `unstack` / `groupby.agg`, `reset_index` / `set_index`, full `pivot_table` schema-tracking. v1.7 ships `melt` literal-form as the downpayment; the rest land in v1.8.
+- **`--include-py` flag for `pykrete migrate`** — let the migrator walk `.py` files in the multiplexer cohort alongside `.pyk`. v1.8 candidate.
+- **New D-code for cross-dialect method mismatch (spark-D2)** — fire a diagnostic when a pandas-only method is called on `SparkFrame[X]` (or vice versa) instead of the silent fall-through. v1.8 candidate.
+- **D0073 / D0083 cross-codebase probes** — extend the v1.7 D0040/D0050/D0051 negative-probe sweep to the remaining un-probed D-codes. v1.8 candidate.
+- **LSP polish block** — visitor name-shadowing M3 round-2, hover_timeout flake, col-ref helper consolidation, suggester threshold. v1.8 candidate.
+- **CI-guard for the omitted-edit drift class** — v1.7's CI-guard catches "added to one list, forgot the other" but not "added a new arm, updated neither list". v1.8 candidate.
+- **`.loc[mask, "col"]` and `.loc[:, "a":"b"]`** — boolean-mask row keys and column-range slicing still fall through to Unknown.
+- **`pdf.iloc[...]`** — integer-position indexing, tracked for v1.8.
+- **`df.query("…")` / `df.eval("…")` mini-DSLs** — own design surface; numexpr-influenced syntax, separate parser from the SQL path used by `selectExpr`. v1.8+.
+- **`pd.read_csv(...)` and other pandas I/O entry points** — schema inference from file headers / SQL / type-stubs is a separate design surface.
+- **Retrofitting pandas `PROBE-TYPE-IS` to the v1.3 hybrid donors** (MLflow, Feast, iceberg-python) — scoped out of v1.4 / v1.5 / v1.6 / v1.7; revisit in v1.8.
+- **Canonical-vs-direct CI gate (I3)** — surfaced by the v1.4 architecture audit; carried forward.
+- **polars** — separate dialect with separate idioms; v1.8+ if user demand surfaces.
+
+### Coordinated with
+
+- pykrete-tests: PR-P1 of the v1.7 cycle [shipped](https://github.com/amirnaderi93/pykrete-tests/pull/27) 6 D0040 / D0050 / D0051 negative probes (2 per D-code), lifting cross-codebase probe coverage from 241 to 247 and adding 3 new D-codes to the negative-probe pin matrix.
+- pykrete-tests: PR-D1 of the v1.7 cycle is [open](https://github.com/amirnaderi93/pykrete-tests/pull/28) and awaits the v1.7.0 catalog pin bump — the 2 new pandas `melt` probes (positive on a pandas-heavy donor; negative for the typo-in-`value_vars` shape) currently CI-red by design until the pin bumps to the v1.7.0 tag SHA. Same disclosure pattern as v1.6.0's deferred catalog pin. **Forward-flag for the TM's catalog-pin chore PR**: PR-D1 emits new D0030 diagnostics on bad `melt` column literals, so the catalog-pin bump will need a golden-mass-refresh check on any `probes_negative/` fixture that exercises `melt` — the coordinated #28 already ships the fixture pair, but the cascade is on the record per v1.6 retro rule 13 (severity-flipping cascade).
+
+### Compatibility
+
+- **`DataFrame[X]` source-compatible through v1.x.** Every existing `DataFrame[X]` annotation continues to type-check. Removal is still committed for v2.0; v1.7 keeps `pykrete migrate` shipping (now `--check`-default; `--apply` opts into the rewrite). Under `"typeCheckingMode": "strict"` D0090 stays at error.
+- **JSON output contract.** Diagnostic JSON `schemaVersion` stays at `"1"`. `--report-aliases` envelope `aliasReportVersion` stays at `"2"` (v1.6's `resolvedDialect` value-set expansion). No new D-codes; no existing diagnostic's shape or semantics changed. SemVer-minor under the `tighteningDiagnostics` policy.
+- **`pykrete migrate` CLI surface — pre-stable callout still applies.** v1.6 flagged the surface as pre-stable; v1.7 exercises that carve-out with the `--check`-default flip. The flip is the most visible user-facing change in v1.7: any CI invocation that ran `pykrete migrate src/` and expected an in-place rewrite needs `--apply`. A stderr warning on first-run-without-flag in v1.7 surfaces the change to adopters who skipped the release notes. The pre-stable callout remains for v1.8+; we expect the surface to stabilize once real-world v2.0 migration usage surfaces.
+
 ## [1.6.0] - 2026-06-13
 
 Sixth minor release on the v1.0 line. The headline change is **`pykrete migrate`**: an auto-rewriter binary that walks each `DataFrame[X]` binding's downstream usage, classifies it as Spark / pandas / ambiguous via call-graph adjudication, and rewrites the annotation in place to the dialect-tagged canonical name. Paired atomically with `D0090 deprecatedDataFrameAlias` strict-mode escalation — under `"typeCheckingMode": "strict"` the warning now lands as **error**, but the same release ships the fix-button so strict-mode users on green v1.4.x/v1.5.x CI aren't stranded. Non-strict modes keep the warning unchanged. Ambiguous sites — bindings used with both Spark-only and pandas-only methods — are not rewritten; an idempotent `# pykrete: ambiguous` marker is injected on the line above so a re-run doesn't accumulate duplicates. The pandas reshape downpayment ships `pivot_table(index=, columns=, values=, aggfunc=)` literal-form column checking. The v1.5 `.take()` dialect-gate deferral closes (pandas `pdf.take([0, 2])` returns a DataFrame and now passes through instead of dying as a Spark terminal); the `pdf.loc[...]` nested-arg D0030 false positive on row-mask + literal-column shapes closes. The audit-debt `cross_dialect_handoff_gate` recognizer that v1.5 left as a "Keep in sync" comment is extracted. No new D-codes, no new annotation forms; SemVer-minor under the `tighteningDiagnostics` policy.
@@ -2140,7 +2206,8 @@ full contract.
 - **Multi-file analysis** via imported typed declarations.
 - **`pykrete.json`** project configuration with non-strict / strict modes.
 
-[Unreleased]: https://github.com/amirnaderi93/pykrete/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/amirnaderi93/pykrete/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/amirnaderi93/pykrete/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/amirnaderi93/pykrete/compare/v1.5.0...v1.6.0
 [1.1.0]: https://github.com/amirnaderi93/pykrete/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/amirnaderi93/pykrete/compare/v0.1.40...v1.0.0

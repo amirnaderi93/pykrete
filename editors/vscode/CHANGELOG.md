@@ -1,6 +1,45 @@
 # Changelog
 
 
+## 0.5.0
+
+Tracks the v1.7.0 pykrete release — migrator UX hardening (`pykrete
+migrate` defaults to `--check`; `--apply` opts into the in-place
+rewrite) + pandas `df.melt(...)` literal-form column checking + the
+v1.6 architecture-audit Important #3 closure via a shared
+`dialect_signals` module + the Spark-D1 audit closure (14 new
+`SPARK_DISCRIMINATORS`). The bundled `pykrete migrate src/` now
+runs check-mode by default: it walks every `.pyk` file, applies
+call-graph dialect adjudication, and prints per-site verdicts to
+stdout (exit 1 if any site needs attention, 0 otherwise). To
+rewrite in place, pass `--apply`. A first-run on v1.7 with no flag
+emits a one-line stderr warning so adopters discover the change
+without reading release notes — any CI invocation that ran
+`pykrete migrate src/` and expected an in-place rewrite needs to
+switch to `pykrete migrate --apply src/`. Pandas
+`df.melt(id_vars=, value_vars=, var_name=, value_name=)`
+literal-form column checking ships as the v1.7 reshape downpayment:
+string-literal arguments and list-of-literals shapes resolve
+against `PandasFrame[X]`'s schema, firing D0030 on a typo with a
+*did you mean*. The pandas dispatch is gated on
+`receiver_is_pandas_inherited` so the existing Spark
+`melt` / `unpivot` arm's behavior on `SparkFrame[X]` receivers is
+unchanged. Internal: the v1.6 parallel `PANDAS_ONLY_SIGNALS` /
+`PANDAS_INHERITED_ARMS` lists collapse into a shared
+`dialect_signals` module with a CI-guard test pinning the `expr.rs`
+pandas-arm methods to the shared list. 14 Spark-only methods
+(`selectExpr`, `freqItems`, `approxQuantile`, `crosstab`,
+`colRegex`, `summary`, `mapInPandas`, `mapInArrow`, `writeTo`,
+`writeStream`, `unpivot`, `rdd`, `isStreaming`, `sparkSession`) get
+added to `SPARK_DISCRIMINATORS` — `corr` / `cov` deliberately
+excluded for pandas collision risk. `pykrete migrate` parse-error
+skips now surface on stderr; CRLF marker normalization lands for
+Windows source files. No new D-codes, no new annotation forms;
+SemVer-minor under the `tighteningDiagnostics` policy.
+Cycle-close minor bump aligns the extension with the v1.7.0 tag
+per the version-guard contract. See the
+[main CHANGELOG](../../CHANGELOG.md#170---2026-06-15) for details.
+
 ## 0.4.0
 
 Tracks the v1.6.0 pykrete release — `pykrete migrate` (auto-rewriter
