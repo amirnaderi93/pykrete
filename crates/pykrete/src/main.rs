@@ -76,21 +76,33 @@ Usage:
     pykrete migrate [OPTIONS] <FILE_OR_DIR> [<FILE_OR_DIR> ...]
 
 Modes (mutually exclusive):
-        --check    Exit 1 if any file would change, 0 if none. No writes.
-        --diff     Print a unified diff of the proposed changes to stdout.
-                   No writes.
-    (default)      Rewrite each matching file in place. One line per
+        --apply    Rewrite each matching file in place. One line per
                    modified file is printed to stdout ('rewrote: <path>');
                    files with no aliases are left untouched. Exits 0 on
                    success.
+        --diff     Print a unified diff of the proposed changes to stdout.
+                   No writes.
+    (default)      Check mode. Exit 1 if any file would change, 0 if none.
+                   No writes. (Use --apply to rewrite.) The `--check` flag
+                   is accepted as an explicit alias for the default.
+
+Migration from v1.6 → v1.7: `pykrete migrate <path>` no longer rewrites
+files by default. Pass `--apply` to restore v1.6's rewrite-on-default
+behavior, or `--check` / `--diff` to inspect proposed changes without
+writes. This is TS-style `--noEmit`-by-default safety.
+
+When a binding's downstream usage is ambiguous between Spark and pandas,
+the migrator leaves the `DataFrame[X]` text intact and (under `--apply`)
+injects a `# pykrete: ambiguous` comment on the line above so the human
+review the next step needs is visible in the diff.
 
 Options:
     -h, --help     Show this help and exit.
 
 Example:
-    pykrete migrate --check src/
-    pykrete migrate --diff sales.pyk
-    pykrete migrate src/
+    pykrete migrate src/                # dry-run check (default)
+    pykrete migrate --apply src/        # rewrite in place
+    pykrete migrate --diff sales.pyk    # preview as unified diff
 ";
 
 fn main() -> ExitCode {
@@ -537,16 +549,17 @@ fn find_pykrete_json(anchor: Option<&Path>) -> Option<PathBuf> {
     }
 }
 
-/// Mode selected via `--check` / `--diff` (or neither).
+/// Mode selected via `--apply` / `--check` / `--diff` (or neither).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MigrateMode {
-    /// Default: apply the rewrite in place. For each file with one or
-    /// more `DataFrame[X]` alias sites, splice in the `SparkFrame[X]`
-    /// replacements and atomically write the result back (tempfile +
-    /// rename). Clean files are left untouched.
+    /// `--apply`: rewrite each matching file in place. For each file
+    /// with one or more `DataFrame[X]` alias sites, splice in the
+    /// `SparkFrame[X]` replacements and atomically write the result
+    /// back (tempfile + rename). Clean files are left untouched.
     Apply,
-    /// `--check`: exit 1 if any file would change, 0 otherwise. No
-    /// writes, no diff.
+    /// Default mode (v1.7+): exit 1 if any file would change, 0
+    /// otherwise. No writes, no diff. `--check` is accepted as an
+    /// explicit alias for clarity.
     Check,
     /// `--diff`: print a unified diff of the proposed changes to
     /// stdout. No writes.
@@ -555,6 +568,11 @@ enum MigrateMode {
 
 struct MigrateArgs {
     mode: MigrateMode,
+    /// True when none of `--apply` / `--check` / `--diff` was passed —
+    /// the user is on the v1.7 default (`Check`). The CLI prints a
+    /// one-line stderr warning in this case so v1.6 users who expected
+    /// rewrite-on-default see the migration path.
+    mode_was_implicit: bool,
     paths: Vec<String>,
 }
 
@@ -563,15 +581,27 @@ fn parse_migrate_args(args: &[String]) -> Result<MigrateArgs, String> {
     let mut paths: Vec<String> = Vec::new();
     for a in args {
         match a.as_str() {
+            "--apply" => {
+                if let Some(existing) = mode
+                    && existing != MigrateMode::Apply
+                {
+                    return Err(mutex_error(existing, MigrateMode::Apply));
+                }
+                mode = Some(MigrateMode::Apply);
+            }
             "--check" => {
-                if mode == Some(MigrateMode::Diff) {
-                    return Err("--check and --diff are mutually exclusive; pick one".to_string());
+                if let Some(existing) = mode
+                    && existing != MigrateMode::Check
+                {
+                    return Err(mutex_error(existing, MigrateMode::Check));
                 }
                 mode = Some(MigrateMode::Check);
             }
             "--diff" => {
-                if mode == Some(MigrateMode::Check) {
-                    return Err("--check and --diff are mutually exclusive; pick one".to_string());
+                if let Some(existing) = mode
+                    && existing != MigrateMode::Diff
+                {
+                    return Err(mutex_error(existing, MigrateMode::Diff));
                 }
                 mode = Some(MigrateMode::Diff);
             }
@@ -583,10 +613,28 @@ fn parse_migrate_args(args: &[String]) -> Result<MigrateArgs, String> {
             _ => paths.push(a.clone()),
         }
     }
+    let mode_was_implicit = mode.is_none();
     Ok(MigrateArgs {
-        mode: mode.unwrap_or(MigrateMode::Apply),
+        mode: mode.unwrap_or(MigrateMode::Check),
+        mode_was_implicit,
         paths,
     })
+}
+
+fn mode_flag_name(mode: MigrateMode) -> &'static str {
+    match mode {
+        MigrateMode::Apply => "--apply",
+        MigrateMode::Check => "--check",
+        MigrateMode::Diff => "--diff",
+    }
+}
+
+fn mutex_error(a: MigrateMode, b: MigrateMode) -> String {
+    format!(
+        "{} and {} are mutually exclusive; pick one",
+        mode_flag_name(a),
+        mode_flag_name(b)
+    )
 }
 
 fn run_migrate(args: &[String]) -> ExitCode {
@@ -595,13 +643,23 @@ fn run_migrate(args: &[String]) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let MigrateArgs { mode, paths } = match parse_migrate_args(args) {
+    let MigrateArgs {
+        mode,
+        mode_was_implicit,
+        paths,
+    } = match parse_migrate_args(args) {
         Ok(v) => v,
         Err(msg) => {
             eprintln!("{msg}");
             return ExitCode::from(2);
         }
     };
+
+    if mode_was_implicit {
+        eprintln!(
+            "v1.7+: `pykrete migrate` is dry-run by default. Use `--apply` to write changes."
+        );
+    }
 
     if paths.is_empty() {
         eprintln!("specify a file or directory; see `pykrete migrate --help`");
@@ -616,16 +674,35 @@ fn run_migrate(args: &[String]) -> ExitCode {
         }
     };
 
+    let mut expanded_kept: Vec<PathBuf> = Vec::with_capacity(expanded.len());
     let mut sources: Vec<(String, String)> = Vec::with_capacity(expanded.len());
     for path in &expanded {
         match fs::read_to_string(path) {
-            Ok(source) => sources.push((path.to_string_lossy().into_owned(), source)),
+            Ok(source) => {
+                // Parse each source once up-front so we can surface
+                // unparseable files to the user. The downstream walkers
+                // (`collect_alias_sites`, `adjudicate_alias_sites`) silently
+                // skip on parse failure — that's fine for the report path
+                // (D0001 is the diagnostic channel for parse errors), but
+                // the migrate CLI runs without `check` semantics so the
+                // user never learns a file was skipped. Print once per
+                // skipped file on stderr and drop it from both slices so
+                // the lockstep with `expanded_kept` stays consistent.
+                let path_str = path.to_string_lossy().into_owned();
+                if ruff_python_parser::parse_module(&source).is_err() {
+                    eprintln!("skipped (parse error): {path_str}");
+                    continue;
+                }
+                expanded_kept.push(path.clone());
+                sources.push((path_str, source));
+            }
             Err(e) => {
                 eprintln!("error reading {}: {e}", path.display());
                 return ExitCode::from(2);
             }
         }
     }
+    let expanded = expanded_kept;
 
     let mut sites = pykrete::collect_alias_sites(&sources);
     // v1.6 PR-M3: walk each binding's downstream usage and re-tag each
@@ -790,6 +867,12 @@ fn apply_alias_rewrites_with_ambiguous(
 /// the target already trims to `# pykrete: ambiguous`, skip — so running
 /// `pykrete migrate` twice on a file with unresolved ambiguous sites
 /// does not double-stack markers.
+///
+/// EOL: matches the source file's predominant line ending. A `\r\n`-ended
+/// source (Windows-checked-out git tree) gets the marker emitted with
+/// `\r\n`; an `\n`-ended source gets `\n`. v1.6 hard-wired `\n`, which
+/// created mixed-EOL files on CRLF sources — git surfaced those as a
+/// whole-file change on the next commit.
 fn inject_ambiguous_markers(
     rewritten: &str,
     original_source: &str,
@@ -798,6 +881,7 @@ fn inject_ambiguous_markers(
     if offsets.is_empty() {
         return rewritten.to_string();
     }
+    let eol = detect_eol(original_source);
     // Determine the line number for each offset (1-based), then for each
     // distinct line, find the byte position in `rewritten` at the start
     // of that line and insert the marker comment with the matching
@@ -834,10 +918,22 @@ fn inject_ambiguous_markers(
             .chars()
             .take_while(|c| *c == ' ' || *c == '\t')
             .collect();
-        let marker = format!("{indent}# pykrete: ambiguous\n");
+        let marker = format!("{indent}# pykrete: ambiguous{eol}");
         out.insert_str(start, &marker);
     }
     out
+}
+
+/// Sniff the source's predominant line ending. Looks at the first
+/// `\n` only: if preceded by `\r`, the source is CRLF; otherwise LF.
+/// Empty / no-newline files default to LF. Mixed-EOL sources (rare)
+/// inherit whichever EOL the first newline lands on — per spec, don't
+/// over-engineer.
+fn detect_eol(source: &str) -> &'static str {
+    match source.find('\n') {
+        Some(i) if i > 0 && source.as_bytes()[i - 1] == b'\r' => "\r\n",
+        _ => "\n",
+    }
 }
 
 fn line_index_of(source: &str, offset: usize) -> usize {
