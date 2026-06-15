@@ -26,10 +26,10 @@
 use pykrete::{PANDAS_INHERITED_ARMS, PANDAS_ONLY_SIGNALS};
 
 /// Every method name appearing in an `expr.rs` arm gated by
-/// `receiver_is_pandas_inherited`. Verified at v1.7 PR-A1 against
-/// `operations/expr.rs` lines 874 (head/tail/first/take pass-through),
-/// 1067 (rename), 1078 (assign), 1095 (drop columns kwarg), 1114
-/// (drop positional), 1130 (pivot_table).
+/// `receiver_is_pandas_inherited`. Verified at v1.7 PR-G against
+/// `operations/expr.rs` lines 885 (head/tail/first/take pass-through),
+/// 1082 (rename), 1093 (assign), 1110 (drop columns kwarg), 1129
+/// (drop positional), 1145 (pivot_table), 1172 (melt).
 const PANDAS_INHERITED_ARM_METHODS: &[&str] = &[
     "head",
     "tail",
@@ -39,6 +39,7 @@ const PANDAS_INHERITED_ARM_METHODS: &[&str] = &[
     "assign",
     "drop",
     "pivot_table",
+    "melt",
 ];
 
 /// Every method in the `expr.rs` pandas-arm inventory above must
@@ -89,12 +90,12 @@ fn v17_pr_a1_only_signals_and_inherited_arms_are_disjoint() {
 /// length surfaces the "you added an arm, did you update the
 /// inventory?" question in code review.
 #[test]
-fn v17_pr_a1_inventory_has_eight_methods() {
+fn v17_pr_a1_inventory_has_nine_methods() {
     assert_eq!(
         PANDAS_INHERITED_ARM_METHODS.len(),
-        8,
-        "expr.rs pandas-arm inventory pinned at 8 methods as of v1.7 \
-         PR-A1; if you're seeing this fail you've added/removed an arm \
+        9,
+        "expr.rs pandas-arm inventory pinned at 9 methods as of v1.7 \
+         PR-G; if you're seeing this fail you've added/removed an arm \
          in operations/expr.rs and the inventory above needs the same \
          update."
     );

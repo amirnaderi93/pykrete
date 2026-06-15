@@ -74,7 +74,9 @@ fn migrate_no_flag_runs_check_mode_does_not_write() {
     // Stderr warning fires when the user did not pass an explicit mode.
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("v1.7+: `pykrete migrate` is dry-run by default"),
+        stderr.contains(
+            "pykrete: migrate default is now --check; pass --apply to rewrite in place (v1.7+)"
+        ),
         "stderr missing v1.7 dry-run warning: {stderr}"
     );
     assert!(
@@ -108,7 +110,9 @@ fn migrate_no_flag_on_clean_tree_exits_zero_and_warns() {
     // no `--check` / `--apply` / `--diff` was passed.
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("v1.7+: `pykrete migrate` is dry-run by default"),
+        stderr.contains(
+            "pykrete: migrate default is now --check; pass --apply to rewrite in place (v1.7+)"
+        ),
         "stderr missing v1.7 dry-run warning on clean tree: {stderr}"
     );
 }
@@ -133,7 +137,9 @@ fn migrate_explicit_check_flag_does_not_warn() {
 
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        !stderr.contains("v1.7+: `pykrete migrate` is dry-run by default"),
+        !stderr.contains(
+            "pykrete: migrate default is now --check; pass --apply to rewrite in place (v1.7+)"
+        ),
         "explicit --check should NOT emit the migration warning: {stderr}"
     );
 }
@@ -169,7 +175,9 @@ fn migrate_apply_writes_to_disk_no_warning() {
     // Explicit mode → no warning.
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        !stderr.contains("v1.7+: `pykrete migrate` is dry-run by default"),
+        !stderr.contains(
+            "pykrete: migrate default is now --check; pass --apply to rewrite in place (v1.7+)"
+        ),
         "explicit --apply should NOT emit the migration warning: {stderr}"
     );
 }
@@ -203,7 +211,9 @@ fn migrate_diff_unchanged_from_v16() {
     // Explicit mode → no warning.
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        !stderr.contains("v1.7+: `pykrete migrate` is dry-run by default"),
+        !stderr.contains(
+            "pykrete: migrate default is now --check; pass --apply to rewrite in place (v1.7+)"
+        ),
         "explicit --diff should NOT emit the migration warning: {stderr}"
     );
 }
