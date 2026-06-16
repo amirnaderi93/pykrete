@@ -166,3 +166,12 @@ pub const PANDAS_ONLY_SIGNALS: &[&str] = &[
 /// dispatch is dialect-gated. Pandas-only names go in
 /// [`PANDAS_ONLY_SIGNALS`].
 pub const PANDAS_INHERITED_ARMS: &[&str] = &["head", "tail", "first", "take", "drop"];
+
+// v1.8 PR-A1 — `PANDAS_INHERITED_ARM_METHODS_GENERATED` is produced by
+// `crates/pykrete/build.rs` at compile time. The constant lives in
+// `$OUT_DIR/pandas_inherited_arm_methods.rs` and lists every method
+// name appearing in a `receiver_is_pandas_inherited &&` arm in
+// `operations/expr.rs`. The hand-maintained inventory in
+// `tests/v17_pr_a1_dialect_signals_guard.rs` checks against it for
+// drift (closes v1.7 retro rule 4).
+include!(concat!(env!("OUT_DIR"), "/pandas_inherited_arm_methods.rs"));
