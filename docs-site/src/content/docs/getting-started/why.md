@@ -52,6 +52,6 @@ It **isn't** a runtime validator, a query planner, or a replacement for tests. I
 
 ## Where it's going
 
-PySpark is feature-complete; pandas check-site coverage shipped in v1.3, type-tracking in v1.4, cross-dialect handoff in v1.5, the `pykrete migrate` rewriter in v1.6, migrator UX hardening + pandas `melt` in v1.7, and the v2.0 deprecation runway (`pykrete check --deprecation-report` + D0091 cross-dialect mismatch warning) in v1.8. Broader pandas reshape is next, then polars. The [roadmap](/pykrete/about/roadmap/) has the detail.
+PySpark is feature-complete; pandas check-site coverage shipped in v1.3, type-tracking in v1.4, cross-dialect handoff in v1.5, the `pykrete migrate` rewriter in v1.6, migrator UX hardening + pandas `melt` in v1.7, the v2.0 deprecation runway (`pykrete check --deprecation-report` + D0091 cross-dialect mismatch warning) in v1.8, and v2.0 migration plannability (`--deprecation-report` v2 envelope with per-site `migrationStatus` + `--ack` filter + D0091 maturity) in v1.9. Broader pandas reshape is next, then polars. The [roadmap](/pykrete/about/roadmap/) has the detail.
 
 Ready to try it? [Install](/pykrete/getting-started/install/) takes a minute; the [quickstart](/pykrete/getting-started/quickstart/) gets a real function under checking in five.

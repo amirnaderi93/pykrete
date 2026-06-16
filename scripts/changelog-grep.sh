@@ -54,7 +54,7 @@ fi
 numeric_claim_command() {
     case "$1" in
         probes)
-            echo "python3 ../pykrete-tests/scripts/probes.py extract cross-codebase | jq -r .totals.probes"
+            echo "python3 ../pykrete-tests/scripts/probes.py extract ../pykrete-tests/cross-codebase | jq '.probes | length'"
             ;;
         fixtures)
             echo "find ../pykrete-tests/cross-codebase \\( -path '*annotated*' -name '*.pyk' -o -path '*probes_negative*' -name '*.pyk' \\) | wc -l | tr -d ' '"

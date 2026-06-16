@@ -220,7 +220,7 @@ Known claim keys (defined in `scripts/changelog-grep.sh::numeric_claim_command`)
 
 | Key | Live-extract command |
 |---|---|
-| `probes` | `python3 ../pykrete-tests/scripts/probes.py extract cross-codebase \| jq -r .totals.probes` |
+| `probes` | `python3 ../pykrete-tests/scripts/probes.py extract ../pykrete-tests/cross-codebase \| jq '.probes \| length'` |
 | `fixtures` | `find ../pykrete-tests/cross-codebase \( -path '*annotated*' -name '*.pyk' -o -path '*probes_negative*' -name '*.pyk' \) \| wc -l` |
 | `tests` | `cargo test --release --workspace 2>&1 \| grep -oE '[0-9]+ passed' \| awk '{s+=$1} END {print s}'` |
 | `donors` | `find ../pykrete-tests/cross-codebase -maxdepth 1 -mindepth 1 -type d \| wc -l` |

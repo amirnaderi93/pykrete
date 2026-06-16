@@ -109,11 +109,24 @@ The v1.8 cycle's headline is **`pykrete check --deprecation-report` makes the v2
 
 For the verification posture and per-donor matrix, see [Real-codebase tests](/about/pykrete-tests/) and [Production readiness → Real-codebase testing](/about/production-readiness/#real-codebase-testing). For the full pandas direction across v1.9+ and v2.0, see [Pandas roadmap](/about/pandas-roadmap/).
 
+## Shipped in v1.9 — v2.0 migration plannability + D0091 maturity + audit-debt CI-running tests
+
+The v1.9 cycle's headline is **`pykrete check --deprecation-report` makes v2.0 migration plannable**: the envelope bumps to `deprecationReportVersion: "2"` with per-site `migrationStatus` (`pending` / `acknowledged`) and a `--ack` filter so CI can gate site-by-site without committing pykrete to a v2.0 ship date. The release matures D0091 (strict-mode escalation + suggestion drift guard + `shape_changes` hint + new bare-attribute inference arm) and backs the v1.8 `build.rs` audit-debt closure with CI-running tests.
+
+- **`--deprecation-report` v2 envelope** (PR-V1 #152; spec §4). `deprecationReportVersion` bumps from `"1"` to `"2"`. Per-site adds `migrationStatus: "pending" | "acknowledged"` driven by a `# pykrete: ack-deprecation` comment marker on the line above the alias annotation — site-level opt-in, no JSON edit, no separate state file. New `--ack=<pending|acknowledged>` filter flag narrows the envelope to one cohort for CI gating: `pykrete check --deprecation-report --ack=pending src/` exits non-zero with the unacked-site inventory; `--ack=acknowledged` runs the inverse for "did anything regress from acked back to pending" checks. Per v1.8 spec §10.5, the v2 envelope deliberately ships **without** `targetVersion` / `removalVersion` / `shipDate` fields — pykrete tracks per-site migration progress; the user picks the v2.0 ship date.
+- **D0091 strict-mode escalation + suggestion drift guard + `shape_changes` hint** (PR-D1 #154; spec §3.1). Under `"typeCheckingMode": "strict"` D0091 escalates from warning to **error**, mirroring the v1.6 PR-M3 D0090 precedent. Non-strict modes keep the warning unchanged. A tripwire test pins the suggestion table against the live `CrossDialectSuggestion` registry so adding a pair on one side without the other fails build. `CrossDialectSuggestion` gains a `shape_changes: bool` field; pairs where the call-site argument shape differs across dialects (`withColumnRenamed` → `rename`, `assign` → `withColumn`) append "— note arg shape differs" to the suggestion text.
+- **D0091 bare-attribute path** (PR-D2 #151; spec §3.2). NEW inference arm on `Expr::Attribute` catches `pdf.rdd`, `sdf.loc`, `pdf.iloc`, `sdf.toPandas` (bare, no call) and the rest of the cross-dialect attribute surface that the v1.8 `Expr::Call` path missed. Two new property tables drive the check: `SPARK_DISCRIMINATOR_PROPERTIES` (3 entries — `rdd`, `isStreaming`, `sparkSession`) and `PANDAS_INHERITED_PROPERTIES` (4 entries — `loc`, `iloc`, `at`, `iat`). Receiver-dialect-gated like the `Expr::Call` path.
+- **`PANDAS_INHERITED_ARM_METHODS` tripwire backed by CI-running tests** (PR-A1 #155; spec §2.1). The v1.8 PR-A1 shipped the `build.rs`-generated inventory backed by an inline `mod tests` block — which, per the v1.8 retro, didn't actually run in CI. v1.9 extracts a `build_helpers.rs` module so `cargo test --test build_helpers` exercises the drift-catching mechanic.
+- **CHANGELOG grep gate v2 — `text-numeric` label** (PR-A2 #150; spec §2.2). New fenced-block label `text-numeric` lets `<number> <key>` claims (probes / fixtures / tests / donors) be live-verified against the source-of-truth extract commands. Drift fails CI loudly. Closes v1.8 retro rule 7.
+- **D0091 cross-codebase coverage** (pykrete-tests PR-P1 #32). 2 negative probes (pandera Pandas→Spark misuse + delta Spark→Pandas misuse). Lifts cross-codebase probe coverage from 253 to 255 (183 positive + 72 negative).
+
+For the verification posture and per-donor matrix, see [Real-codebase tests](/about/pykrete-tests/) and [Production readiness → Real-codebase testing](/about/production-readiness/#real-codebase-testing). For the full pandas direction across v1.10+ and v2.0, see [Pandas roadmap](/about/pandas-roadmap/).
+
 ## Next up
 
-### v1.9 — broader pandas reshape + LSP polish + `--include-py` / `--changed-only` migrate flags + D0091 strict-mode
+### v1.10 — broader pandas reshape + LSP polish + `--include-py` / `--changed-only` migrate flags + omitted-edit CI-guard
 
-Now that the v2.0 readiness surface, the spark-D2 D-code, and the audit-class structural closures are out the door, v1.9's focus is on the rest of the pandas reshape surface, the LSP polish block, the migrator's remaining flag surface, and the D0091 strict-mode escalation.
+Now that the v2.0 migration plannability surface, D0091 maturity, and the v1.8 audit-debt CI-running closure are out the door, v1.10's focus is on the rest of the pandas reshape surface, the LSP polish block, and the migrator's remaining flag surface.
 
 - **Pandas reshape**: `stack` / `unstack`, `groupby.agg`, `reset_index`, `set_index`, plus full `pivot_table` and `melt` output schema-tracking (the wide / long output schemas — variable column values become column names of the result frame; `var_name` / `value_name` become columns of the long frame).
 - **`.loc` non-literal forms and `.iloc`**: `.loc[mask, "col"]` (boolean mask), `.loc[:, "a":"b"]` (column range), and `pdf.iloc[...]`.
@@ -121,11 +134,11 @@ Now that the v2.0 readiness surface, the spark-D2 D-code, and the audit-class st
 - **`pd.read_csv(...)` and other pandas I/O entry points**: schema inference from file headers / SQL / type-stubs as a separate design surface.
 - **`--include-py` flag for `pykrete migrate`**: let the migrator walk `.py` files in the multiplexer cohort alongside `.pyk`.
 - **`--changed-only` flag** for both `pykrete migrate` and `pykrete check`: walk only files changed against HEAD. Pairs naturally with CI invocations.
-- **D0091 strict-mode escalation**: fire as error under `"typeCheckingMode": "strict"`. v1.8 shipped warning-only because the back-compat surface is genuinely larger than D0090's was; escalate once real-world usage signal lands.
 - **LSP polish block**: visitor name-shadowing M3 round-2, hover_timeout flake, col-ref helper consolidation, suggester threshold.
-- **CI-guard for the omitted-edit drift class**: v1.8's `build.rs` extraction closes the parallel-edit class structurally; extend to catch new arms that get added without updating either list.
+- **CI-guard for the omitted-edit drift class**: v1.8's `build.rs` extraction closes the parallel-edit class structurally; v1.9 backed it with CI-running tests; v1.10 extends to catch new arms added without updating either list.
 - **Retrofitting pandas `PROBE-TYPE-IS` to the v1.3 hybrid donors** (MLflow, Feast, iceberg-python).
 - **Canonical-vs-direct CI gate (I3)** from the v1.4 architecture audit.
+- **Centralized-bump-cycle trial decision**: v1.9 spec §9.2 amendment trial-ran centralizing per-PR extension version bumps to the release PR via the `.github/centralized-bump-cycle.marker` file. v1.10 spec re-adds the marker (if the trial continues) or reverts the amendment.
 
 ### Window-key type tracking
 
