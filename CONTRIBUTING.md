@@ -205,6 +205,32 @@ The CI step `scripts/changelog-grep.sh` (v1.8 PR-A2; closes v1.7 retro rule 6) v
 
 This catches the v1.7-class drift where a binary-emitted string quoted in CHANGELOG silently diverges from the actual code. **Inline single-backtick quotes are NOT checked by the gate** — fence the block (with `stderr` / `stdout` / `text`) to opt in. Other fence labels (`python`, `bash`, `rust`, no label) are ignored.
 
+### Numeric trust-claim verification (`text-numeric` blocks, v1.9+)
+
+For trust-claim numbers — probe counts, fixture counts, test totals, donor counts — wrap them in a `text-numeric` block. Each line is `<number> <key>` where `<key>` is one of the known claims below. The gate runs the live-extract command for the key and fails if the live value differs from the claimed number.
+
+    ```text-numeric
+    253 probes
+    112 fixtures
+    1553 tests
+    17 donors
+    ```
+
+Known claim keys (defined in `scripts/changelog-grep.sh::numeric_claim_command`):
+
+| Key | Live-extract command |
+|---|---|
+| `probes` | `python3 ../pykrete-tests/scripts/probes.py extract cross-codebase \| jq -r .totals.probes` |
+| `fixtures` | `find ../pykrete-tests/cross-codebase \( -path '*annotated*' -name '*.pyk' -o -path '*probes_negative*' -name '*.pyk' \) \| wc -l` |
+| `tests` | `cargo test --release --workspace 2>&1 \| grep -oE '[0-9]+ passed' \| awk '{s+=$1} END {print s}'` |
+| `donors` | `find ../pykrete-tests/cross-codebase -maxdepth 1 -mindepth 1 -type d \| wc -l` |
+
+Unknown keys fail with `MISMATCH: ... unknown numeric-claim key: '<key>'`. To add a new key, extend `numeric_claim_command` in `scripts/changelog-grep.sh` in the same PR that adds the CHANGELOG line using it (mirrors the sibling-arm-grep discipline elsewhere in the codebase).
+
+PR CI runs the gate with `--skip-live-extract` (the `pykrete-tests` sibling repo isn't checked out beside `pykrete` on the GitHub Actions runner). The skip mode still validates fenced-block syntax + the known-key allowlist; only command execution is bypassed. Release-time runs (PR-F + manual local verification) run the full gate with live extracts.
+
+This catches the v1.8-class drift where a trust-claim number quoted in CHANGELOG (e.g. "106 fixtures") silently diverges from the live extract (which was 112) — closes v1.8 retro rule 7.
+
 ## Filing issues
 
 Pick the matching template when you open a new issue on GitHub (defined under `.github/ISSUE_TEMPLATE/`):

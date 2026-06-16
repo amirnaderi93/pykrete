@@ -64,7 +64,7 @@ pykrete: migrate default is now --check; pass --apply to rewrite in place (v1.7+
 }
 '
 extra=ok
-grep -q "checked 1 block(s) across 1 line(s)" "$LAST_TMP/stdout" || extra=missing_summary
+grep -q "checked 1 block(s) across 1 source-anchored line(s)" "$LAST_TMP/stdout" || extra=missing_summary
 assert "stderr block with present content passes" 0 "$LAST_RC" "$extra"
 rm -rf "$LAST_TMP"
 
@@ -93,7 +93,7 @@ this line does not exist anywhere in source
 }
 '
 extra=ok
-grep -q "no fenced stderr/stdout/text blocks" "$LAST_TMP/stdout" || extra=should_be_no_op
+grep -q "no fenced stderr/stdout/text/text-numeric blocks" "$LAST_TMP/stdout" || extra=should_be_no_op
 assert "unlabeled fenced block is ignored" 0 "$LAST_RC" "$extra"
 rm -rf "$LAST_TMP"
 
@@ -103,7 +103,7 @@ A `nonexistent inline string never in source` quoted inline.
 ' 'fn main() {}
 '
 extra=ok
-grep -q "no fenced stderr/stdout/text blocks" "$LAST_TMP/stdout" || extra=should_be_no_op
+grep -q "no fenced stderr/stdout/text/text-numeric blocks" "$LAST_TMP/stdout" || extra=should_be_no_op
 assert "inline backtick string is ignored" 0 "$LAST_RC" "$extra"
 rm -rf "$LAST_TMP"
 
@@ -121,7 +121,7 @@ line three of output
 }
 '
 extra=ok
-grep -q "checked 1 block(s) across 3 line(s)" "$LAST_TMP/stdout" || extra=wrong_line_count
+grep -q "checked 1 block(s) across 3 source-anchored line(s)" "$LAST_TMP/stdout" || extra=wrong_line_count
 assert "multi-line block checks each line" 0 "$LAST_RC" "$extra"
 rm -rf "$LAST_TMP"
 
@@ -149,7 +149,7 @@ run_case '# CHANGELOG
 ' 'fn main() {}
 '
 extra=ok
-grep -q "checked 0 block(s)" "$LAST_TMP/stdout" || grep -q "no fenced stderr/stdout/text blocks" "$LAST_TMP/stdout" || extra=unexpected_summary
+grep -q "checked 0 block(s)" "$LAST_TMP/stdout" || grep -q "no fenced stderr/stdout/text/text-numeric blocks" "$LAST_TMP/stdout" || extra=unexpected_summary
 assert "empty fenced block produces no false alarm" 0 "$LAST_RC" "$extra"
 rm -rf "$LAST_TMP"
 
@@ -162,7 +162,7 @@ def code_snippet_not_binary_output():
 ' 'fn main() {}
 '
 extra=ok
-grep -q "no fenced stderr/stdout/text blocks" "$LAST_TMP/stdout" || extra=python_label_not_ignored
+grep -q "no fenced stderr/stdout/text/text-numeric blocks" "$LAST_TMP/stdout" || extra=python_label_not_ignored
 assert "python-labeled fenced block is ignored" 0 "$LAST_RC" "$extra"
 rm -rf "$LAST_TMP"
 
@@ -230,6 +230,164 @@ extra=ok
 grep -q "MISMATCH" "$LAST_TMP/stderr" || extra=missed_drift
 grep -q "v1.7 retro rule 6" "$LAST_TMP/stderr" || extra="${extra}+missing_rule_pointer"
 assert "v1.7 PR-G drift class (fenced-block variant) is caught" 1 "$LAST_RC" "$extra"
+rm -rf "$LAST_TMP"
+
+# v1.9 PR-A2 — text-numeric block cases.
+# Each case stubs the numeric_claim_command via PYKRETE_NUMERIC_CLAIM_TABLE_OVERRIDE
+# so the tests stay deterministic without depending on a pykrete-tests
+# checkout being present beside this worktree.
+
+run_numeric_case() {
+    local changelog_content="$1"
+    local override="$2"
+    local tmp
+    tmp=$(mktemp -d)
+    printf '%s' "$changelog_content" > "$tmp/CHANGELOG.md"
+    mkdir -p "$tmp/src"
+    printf 'fn main() {}\n' > "$tmp/src/main.rs"
+    printf '%s\n' "$override" > "$tmp/override.sh"
+    CHANGELOG="$tmp/CHANGELOG.md" SRC_DIR="$tmp/src" \
+        PYKRETE_NUMERIC_CLAIM_TABLE_OVERRIDE="$tmp/override.sh" \
+        bash "$GATE" > "$tmp/stdout" 2> "$tmp/stderr"
+    local rc=$?
+    LAST_TMP="$tmp"
+    LAST_RC=$rc
+    return 0
+}
+
+# --- Case 13: text-numeric block with correct probe count → PASS ---
+run_numeric_case '# CHANGELOG
+```text-numeric
+253 probes
+```
+' 'numeric_claim_command() {
+    case "$1" in
+        probes) echo "echo 253" ;;
+        *) return 1 ;;
+    esac
+}'
+extra=ok
+grep -q "checked 1 block(s)" "$LAST_TMP/stdout" || extra=missing_summary
+grep -q "1 text-numeric claim" "$LAST_TMP/stdout" || extra="${extra}+missing_numeric_count"
+assert "text-numeric block with correct count passes" 0 "$LAST_RC" "$extra"
+rm -rf "$LAST_TMP"
+
+# --- Case 14: text-numeric block with WRONG fixture count → FAIL with clear MISMATCH ---
+# Emulates the v1.8 PR-F blocker: CHANGELOG L30 claimed "106 fixtures" but
+# live was 112. The v2 gate catches this structurally.
+run_numeric_case '# CHANGELOG
+```text-numeric
+106 fixtures
+```
+' 'numeric_claim_command() {
+    case "$1" in
+        fixtures) echo "echo 112" ;;
+        *) return 1 ;;
+    esac
+}'
+extra=ok
+grep -qF "MISMATCH: text-numeric 'fixtures' expected 106 but live was 112" "$LAST_TMP/stderr" || extra=missing_mismatch_msg
+assert "text-numeric block with wrong fixture count fails (v1.8 PR-F blocker emulation)" 1 "$LAST_RC" "$extra"
+rm -rf "$LAST_TMP"
+
+# --- Case 15: text-numeric block with UNKNOWN key → FAIL with clear message ---
+run_numeric_case '# CHANGELOG
+```text-numeric
+999 unknownthing
+```
+' 'numeric_claim_command() {
+    case "$1" in
+        probes) echo "echo 253" ;;
+        *) return 1 ;;
+    esac
+}'
+extra=ok
+grep -qF "unknown numeric-claim key: 'unknownthing'" "$LAST_TMP/stderr" || extra=missing_unknown_msg
+assert "text-numeric block with unknown key fails clearly" 1 "$LAST_RC" "$extra"
+rm -rf "$LAST_TMP"
+
+# --- Case 16: text-numeric block with MALFORMED line (no number) → FAIL ---
+run_numeric_case '# CHANGELOG
+```text-numeric
+notanumber probes
+```
+' 'numeric_claim_command() {
+    case "$1" in
+        probes) echo "echo 253" ;;
+        *) return 1 ;;
+    esac
+}'
+extra=ok
+grep -q "is not a positive integer" "$LAST_TMP/stderr" || extra=missing_malformed_msg
+assert "text-numeric block with malformed line fails clearly" 1 "$LAST_RC" "$extra"
+rm -rf "$LAST_TMP"
+
+# --- Case 17: --skip-live-extract honored — unknown key still fails, but valid keys don't run commands ---
+tmp=$(mktemp -d)
+printf '%s' '# CHANGELOG
+```text-numeric
+999 probes
+```
+' > "$tmp/CHANGELOG.md"
+mkdir -p "$tmp/src"
+printf 'fn main() {}\n' > "$tmp/src/main.rs"
+# No override file: default table is used. probes command would fail in
+# this temp dir (no ../pykrete-tests). --skip-live-extract bypasses the
+# run, so the gate passes despite the wrong number.
+CHANGELOG="$tmp/CHANGELOG.md" SRC_DIR="$tmp/src" \
+    bash "$GATE" --skip-live-extract > "$tmp/stdout" 2> "$tmp/stderr"
+rc=$?
+extra=ok
+grep -q "live extract SKIPPED" "$tmp/stdout" || extra=missing_skip_msg
+assert "--skip-live-extract bypasses command execution" 0 "$rc" "$extra"
+rm -rf "$tmp"
+
+# --- Case 18: --skip-live-extract still validates the key table ---
+tmp=$(mktemp -d)
+printf '%s' '# CHANGELOG
+```text-numeric
+123 nosuchkey
+```
+' > "$tmp/CHANGELOG.md"
+mkdir -p "$tmp/src"
+printf 'fn main() {}\n' > "$tmp/src/main.rs"
+CHANGELOG="$tmp/CHANGELOG.md" SRC_DIR="$tmp/src" \
+    PYKRETE_SKIP_LIVE_EXTRACT=1 \
+    bash "$GATE" > "$tmp/stdout" 2> "$tmp/stderr"
+rc=$?
+extra=ok
+grep -qF "unknown numeric-claim key: 'nosuchkey'" "$tmp/stderr" || extra=missing_unknown_msg
+assert "--skip-live-extract still validates the claim-key allowlist" 1 "$rc" "$extra"
+rm -rf "$tmp"
+
+# --- Case 19: mixed text + text-numeric block — both label paths exercised together ---
+run_numeric_case '# CHANGELOG
+```text
+present-text-line
+```
+prose between blocks
+```text-numeric
+253 probes
+112 fixtures
+```
+' 'numeric_claim_command() {
+    case "$1" in
+        probes) echo "echo 253" ;;
+        fixtures) echo "echo 112" ;;
+        *) return 1 ;;
+    esac
+}'
+# Source for the text block needs to contain "present-text-line" — but the
+# default run_numeric_case stubs src/main.rs without it. Patch it here:
+printf 'fn main() { println!("present-text-line"); }\n' > "$LAST_TMP/src/main.rs"
+CHANGELOG="$LAST_TMP/CHANGELOG.md" SRC_DIR="$LAST_TMP/src" \
+    PYKRETE_NUMERIC_CLAIM_TABLE_OVERRIDE="$LAST_TMP/override.sh" \
+    bash "$GATE" > "$LAST_TMP/stdout" 2> "$LAST_TMP/stderr"
+LAST_RC=$?
+extra=ok
+grep -q "2 text-numeric claim" "$LAST_TMP/stdout" || extra=wrong_numeric_count
+grep -q "1 source-anchored line" "$LAST_TMP/stdout" || extra="${extra}+wrong_source_count"
+assert "mixed text + text-numeric blocks both checked" 0 "$LAST_RC" "$extra"
 rm -rf "$LAST_TMP"
 
 echo
