@@ -23,6 +23,8 @@
 
 pub mod alias_adjudicate;
 pub mod alias_report;
+#[doc(hidden)]
+pub mod build_helpers;
 pub mod completion;
 pub mod config;
 pub mod dataframe;
