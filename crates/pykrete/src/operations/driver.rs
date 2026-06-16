@@ -159,6 +159,52 @@ pub(crate) fn inherited_dialect<'a>(
     }
 }
 
+/// Mirror of [`inherited_dialect`] for the deprecated-alias bit.
+/// Walks the chain back to the bottom Name (same traversal rules as
+/// `inherited_dialect`) and reports whether that Name was bound from
+/// a deprecated `DataFrame[X]` annotation. `false` for opaque
+/// receivers, non-frame names, and bindings whose annotation used the
+/// canonical `SparkFrame[X]` / `PandasFrame[X]` spellings.
+///
+/// v1.8 PR-D1 uses this to gate D0091: spec §3.5 carves out
+/// deprecated-alias receivers from cross-dialect mismatch reporting
+/// because the v2.0 migration narrative is "adjudicate, then enforce"
+/// — flagging mismatch on a binding that hasn't yet picked its
+/// dialect is noise that pre-dates the migration window.
+pub(crate) fn inherited_is_deprecated_alias(expr: &Expr, ctx: &BodyContext<'_>) -> bool {
+    let mut cursor = expr;
+    loop {
+        match cursor {
+            Expr::Name(n) => return ctx.is_name_from_deprecated_alias(n.id.as_str()),
+            Expr::Named(named) => cursor = &named.value,
+            Expr::Call(c) => {
+                let Some(attr) = c.func.as_attribute_expr() else {
+                    return false;
+                };
+                // `.toPandas()` / `<X>.createDataFrame(...)` flip the
+                // dialect tag (Spark↔Pandas) so the originating
+                // deprecated-alias bit no longer governs the chain
+                // tail's adjudication — the handoff IS the
+                // adjudication. Match the `inherited_dialect` flip
+                // points so propagation stays in lockstep.
+                if attr.attr.id.as_str() == "createDataFrame"
+                    && cross_dialect_handoff_gate(c, ctx).is_some()
+                {
+                    return false;
+                }
+                if attr.attr.id.as_str() == "toPandas"
+                    && inherited_dialect(&attr.value, ctx) == Some(crate::dataframe::Dialect::Spark)
+                {
+                    return false;
+                }
+                cursor = &attr.value;
+            }
+            Expr::Attribute(a) => cursor = &a.value,
+            _ => return false,
+        }
+    }
+}
+
 /// Which spec §2.2 schema-source gate fired on a
 /// `<X>.createDataFrame(...)` call. Carries the matched arg expression by
 /// reference so the view-side consumer can resolve it with `analyze_expr`
@@ -298,9 +344,13 @@ fn walk_stmt<'a>(
             }
             if let Some(schema) = schema {
                 let inherited = inherited_dialect(&a.value, ctx);
+                let inherited_alias = inherited_is_deprecated_alias(&a.value, ctx);
                 for target in &a.targets {
                     if let Some(name) = target.as_name_expr() {
                         ctx.bind_df(name.id.as_str(), schema.clone(), inherited);
+                        if inherited_alias {
+                            ctx.mark_deprecated_alias_name(name.id.as_str());
+                        }
                         ctx.record_local_binding(name.id.as_str(), name.range, schema.clone());
                     }
                 }
@@ -427,7 +477,12 @@ fn walk_stmt<'a>(
                     ctx.mark_local_target(vars);
                     if let (Some(name), Some(schema)) = (vars.as_name_expr(), schema) {
                         let inherited = inherited_dialect(&item.context_expr, ctx);
+                        let inherited_alias =
+                            inherited_is_deprecated_alias(&item.context_expr, ctx);
                         ctx.bind_df(name.id.as_str(), schema.clone(), inherited);
+                        if inherited_alias {
+                            ctx.mark_deprecated_alias_name(name.id.as_str());
+                        }
                         ctx.record_local_binding(name.id.as_str(), name.range, schema);
                     }
                 }
@@ -625,6 +680,9 @@ fn handle_ann_assign<'a>(
             if let Some(schema) = ctx.find_schema(schema_name) {
                 let view = SchemaView::Declared(schema);
                 ctx.bind_df(target_name, view.clone(), recognized_dialect);
+                if is_deprecated_alias {
+                    ctx.mark_deprecated_alias_name(target_name);
+                }
                 ctx.record_local_binding(target_name, target_range, view);
             } else {
                 let rendered = dataframe::render_annotation(
@@ -645,7 +703,7 @@ fn handle_ann_assign<'a>(
                 ));
             }
         }
-        Some((DataFrameAnnotation::Derived(expr), _, _)) => {
+        Some((DataFrameAnnotation::Derived(expr), _, is_deprecated_alias)) => {
             // `x: DataFrame[Pick[…]] = …` — a local derived-schema
             // re-annotation. Surface its validation errors, then bind
             // the resolved view.
@@ -663,6 +721,9 @@ fn handle_ann_assign<'a>(
             }
             if let Some(view) = crate::schema::resolve_derived_schema(expr, ctx.schemas()) {
                 ctx.bind_df(target_name, view.clone(), recognized_dialect);
+                if is_deprecated_alias {
+                    ctx.mark_deprecated_alias_name(target_name);
+                }
                 ctx.record_local_binding(target_name, target_range, view);
             }
         }

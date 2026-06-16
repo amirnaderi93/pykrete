@@ -1,0 +1,6 @@
+class Sale(Schema):
+    region: string
+
+
+def f(pdf: PandasFrame[Sale]) -> PandasFrame[Sale]:
+    return pdf.withColumn("region", lit("X"))
