@@ -248,6 +248,16 @@ def either(df: DataFrame[Sale]) -> int:
 
 **Step 3 — verify.** Re-run `pykrete check src/` (or `pykrete migrate src/` to re-run check-mode). Both should exit 0 once every site is migrated, including under strict mode.
 
+**Step 4 — gate CI on the inventory (v1.8+).** `pykrete check --deprecation-report src/` emits a JSON envelope listing every D0090-firing site with its adjudicated dialect and suggested rewrite. Drop it into a CI step to fail the build whenever the inventory is non-empty, so v2.0 readiness becomes a measurable invariant rather than a checklist item:
+
+```bash
+pykrete check --deprecation-report src/ > deprecation.json
+test "$(jq '.summary.totalSites' < deprecation.json)" -eq 0 \
+  || { echo "v2.0 readiness gate failed; see deprecation.json"; exit 1; }
+```
+
+The envelope's shape is `{deprecationReportVersion: "1", sites: [...], summary: {totalSites, byDialect: {spark, pandas, ambiguous}}}`. Per-site fields include `file`, `line`, `column`, `code` (always `D0090`), `ruleName`, `bindingName`, `rawAnnotation`, `adjudicatedDialect`, and `suggestedRewrite` (null for ambiguous sites). Mutually exclusive with `--report-aliases` (passing both exits 2). See the [D0090 diagnostics reference](/pykrete/reference/diagnostics/#deprecateddataframealias--d0090) for the full schema.
+
 **Pitfall — ambiguous sites are real signal.** A binding used as both a Spark and a pandas dataframe almost always means the code is wrong (the two dialects don't share an API surface; one branch will fail at runtime). The migrator leaves them alone deliberately. Decide which dialect that path takes and pick the right annotation by hand.
 
 ## See also

@@ -41,6 +41,7 @@ The **rule name** (`unknownColumn`) is what the CLI prints and what the editor s
 | `D0083` | `nullabilityMismatch` | A nullable column flows into a slot the return schema declares non-null. Strict mode only. |
 | `D0084` | `enumValueMismatch` | A string literal compared against, or written into, a column declared `enum[...]` is not in the column's vocabulary. |
 | `D0090` | `deprecatedDataFrameAlias` | `DataFrame[X]` is used instead of the dialect-specific `SparkFrame[X]` / `PandasFrame[X]`. Warning. |
+| `D0091` | `crossDialectMethodMismatch` | A pandas-only method is called on a `SparkFrame[X]` receiver, or a Spark-only method on a `PandasFrame[X]` receiver. Warning. |
 
 ## The ones you'll see most
 
@@ -197,8 +198,8 @@ def revenue(sales: DataFrame[Sale]) -> DataFrame[Sale]:
 ```
 
 ```
-sales.pyk:5:20 - warning deprecatedDataFrameAlias: 'DataFrame[Sale]' is a deprecated alias for 'SparkFrame[Sale]' and will be removed in pykrete v2.0. Rewrite as 'SparkFrame[Sale]'.
-sales.pyk:5:40 - warning deprecatedDataFrameAlias: 'DataFrame[Sale]' is a deprecated alias for 'SparkFrame[Sale]' and will be removed in pykrete v2.0. Rewrite as 'SparkFrame[Sale]'.
+sales.pyk:5:20 - warning deprecatedDataFrameAlias: 'DataFrame[Sale]' is a deprecated alias for 'SparkFrame[Sale]', slated for removal in a future pykrete v2.0. Rewrite as 'SparkFrame[Sale]', or run `pykrete check --deprecation-report` to inventory remaining sites.
+sales.pyk:5:40 - warning deprecatedDataFrameAlias: 'DataFrame[Sale]' is a deprecated alias for 'SparkFrame[Sale]', slated for removal in a future pykrete v2.0. Rewrite as 'SparkFrame[Sale]', or run `pykrete check --deprecation-report` to inventory remaining sites.
 ```
 
 The bare form fires the same way, with the message naming `DataFrame` / `SparkFrame` instead of the subscripted spelling:
@@ -211,8 +212,8 @@ def passthrough(df: DataFrame) -> DataFrame:
 ```
 
 ```
-sales.pyk:1:21 - warning deprecatedDataFrameAlias: 'DataFrame' is a deprecated alias for 'SparkFrame' and will be removed in pykrete v2.0. Rewrite as 'SparkFrame'.
-sales.pyk:1:35 - warning deprecatedDataFrameAlias: 'DataFrame' is a deprecated alias for 'SparkFrame' and will be removed in pykrete v2.0. Rewrite as 'SparkFrame'.
+sales.pyk:1:21 - warning deprecatedDataFrameAlias: 'DataFrame' is a deprecated alias for 'SparkFrame', slated for removal in a future pykrete v2.0. Rewrite as 'SparkFrame', or run `pykrete check --deprecation-report` to inventory remaining sites.
+sales.pyk:1:35 - warning deprecatedDataFrameAlias: 'DataFrame' is a deprecated alias for 'SparkFrame', slated for removal in a future pykrete v2.0. Rewrite as 'SparkFrame', or run `pykrete check --deprecation-report` to inventory remaining sites.
 ```
 
 Every `DataFrame` annotation fires — parameter, return, and any `.cast(DataFrame[X])` re-anchors all emit the warning independently. A function with two `DataFrame[Sale]` slots gets two warnings, as above.
@@ -229,9 +230,58 @@ pykrete check --report-aliases src/ > aliases.json
 
 The flag is invocation-only: it suppresses normal diagnostic output and always exits 0, since the report is informational rather than a diagnostic.
 
+**Inventorying for CI gates (v1.8+).** `pykrete check --deprecation-report` is the v1.8 sibling envelope, purpose-built for v2.0 readiness gating. It emits the same per-site shape `--report-aliases` does (file, line, column, binding name, raw annotation, adjudicated dialect, suggested rewrite) plus an explicit `code: "D0090"` / `ruleName: "deprecatedDataFrameAlias"` on every site and a `summary: {totalSites, byDialect: {spark, pandas, ambiguous}}` block, so a CI step can decide whether to block a merge without re-parsing diagnostic text. The envelope's own version is `deprecationReportVersion: "1"`. The flag is mutually exclusive with `--report-aliases`; passing both exits 2 with a usage error.
+
+```bash
+pykrete check --deprecation-report src/ > deprecation.json
+# In CI, fail the build if the inventory is non-empty:
+test "$(jq '.summary.totalSites' < deprecation.json)" -eq 0
+```
+
+Like `--report-aliases`, the flag is invocation-only — diagnostic output is suppressed and the command always exits 0 (the report is informational; gate on the JSON, not the exit code).
+
 **Fix — automated.** `pykrete migrate --apply src/` performs the rewrite. In v1.6, `--apply` was the implicit default; v1.7 flips the default to dry-run, so `--apply` is required to write. It rewrites every Spark-adjudicated site to `SparkFrame[X]`, every pandas-adjudicated site to `PandasFrame[X]`, and leaves ambiguous sites unchanged with an idempotent `# pykrete: ambiguous` marker on the line above so the user can adjudicate by hand. The rewrite is token-preserving (the only byte change in non-ambiguous lines is the `DataFrame` prefix) and atomic per file (sibling temp + rename, so an interrupted run never leaves half-rewritten source). In v1.6 the default mode of `pykrete migrate src/` was the in-place rewrite; v1.7 flips that to `--check` — `pykrete migrate src/` now previews per-site verdicts to stdout and exits 1 if any site needs attention. `--apply` is the new opt-in for the in-place rewrite, and `--diff src/` emits a `patch -p1`-compatible unified diff. A first-run on v1.7 with no flag emits a one-line stderr warning so adopters discover the change without reading release notes. See [cookbook recipe 6](/cookbook/#6-migrate-dataframex-to-the-v20-dialect-tagged-names) for the full workflow.
 
 **Fix — manual.** Rename `DataFrame[X]` to `SparkFrame[X]` for PySpark code or `PandasFrame[X]` for pandas code. The import path (`pyspark.sql.DataFrame` vs `pandas.DataFrame`) is unchanged; only the pykrete annotation slot is renamed.
+
+### `crossDialectMethodMismatch` — D0091
+
+A method whose vocabulary belongs to one dialect is being called on a receiver tagged as the other dialect. Pandas-only methods called on `SparkFrame[X]` receivers (`sdf.assign(...)`, `sdf.merge(...)`, `sdf.rename(columns=...)`), and Spark-only methods called on `PandasFrame[X]` receivers (`pdf.withColumn(...)`, `pdf.selectExpr(...)`, `pdf.createOrReplaceTempView(...)`), both fire D0091 as a **warning** starting in v1.8.
+
+```pyk
+class Sale(Schema):
+    region: string
+    amount: int
+
+def revenue(sales: PandasFrame[Sale]) -> PandasFrame[Sale]:
+    return sales.withColumn("total", sales["amount"] * 2)
+    #            ^^^^^^^^^^                                D0091
+```
+
+```
+sales.pyk:5:18 - warning crossDialectMethodMismatch: 'withColumn' is a Spark-only DataFrame method but the receiver is a PandasFrame. Use '.assign(...)' instead.
+```
+
+**Suggestions.** D0091 carries a *use `.x(...)` instead* hint for the high-traffic cross-dialect pairs:
+
+| Receiver dialect | Method called | Suggested replacement |
+|---|---|---|
+| `PandasFrame[X]` | `withColumn`, `withColumns` | `assign` |
+| `PandasFrame[X]` | `withColumnRenamed`, `withColumnsRenamed` | `rename` |
+| `PandasFrame[X]` | `selectExpr` | `eval` |
+| `PandasFrame[X]` | `toPandas` | `copy` |
+| `SparkFrame[X]` | `assign` | `withColumn` |
+| `SparkFrame[X]` | `rename` | `withColumnRenamed` |
+| `SparkFrame[X]` | `groupby` | `groupBy` |
+| `SparkFrame[X]` | `merge` | `join` |
+
+Methods without a clean cross-dialect equivalent (`mapInPandas`, `freqItems`, `pivot_table`, …) render a bare mismatch note without a suggestion. The suggestion field is also exposed via the LSP `Diagnostic.suggestion` slot, so editors that support `textDocument/codeAction` can light up a quick-fix.
+
+**Carve-outs.** D0091 fires only on adjudicated receivers (`SparkFrame[X]` / `PandasFrame[X]`). Untagged bindings (parameters without a frame annotation) skip the gate. The deprecated `DataFrame[X]` alias also skips, so D0090 and D0091 don't double-fire on the same line — the v2.0 migration narrative is "adjudicate, then enforce". Two pandas-discriminator method names — `pivot` and `melt` — are excluded from the Spark-receiver direction because Spark exposes legitimate same-spelled surfaces (`groupBy(...).pivot(...)`, Spark 3.4+ positional `df.melt(ids, values, ...)`); firing on those would false-positive idiomatic Spark code. The pandas-direction check has no equivalent carve-out — every Spark discriminator is genuinely absent from the pandas DataFrame surface.
+
+**Back-compat preservation.** Pre-v1.8, `pdf.withColumn(...)` typechecked silently as Spark — the existing un-gated `column_method_shape` arm still handles the call, schema flows through unchanged. D0091 is informational warning **alongside** the existing behavior, not a replacement. Adopters who want the warning quieted today can downgrade D0091 to `off` in `pykrete.json`'s `rules` block. Strict-mode escalation (warning → error under `"typeCheckingMode": "strict"`) is deferred to v1.9 because the back-compat surface is genuinely larger than D0090's was.
+
+**Fix.** Replace the method call with the dialect-appropriate spelling from the table above. If the receiver is genuinely the wrong dialect (the call won't work at runtime in the called library), fix the upstream chain — `.toPandas()` to convert a Spark receiver to pandas, `spark.createDataFrame(pdf)` to go the other way (v1.5+ cross-dialect handoff).
 
 ## Changing severity
 

@@ -141,9 +141,42 @@ from `ambiguous_site_offsets` / `has_ambiguous_in_file`, and the
 two-vector lockstep loop in the migrate driver's parse-error filter
 collapses to a single-pass filter.
 
+**v2.0 deprecation runway + spark-D2 D0091 + audit-class structural
+closures shipped in v1.8**: the v1.8 headline is **`pykrete check
+--deprecation-report` makes the v2.0 migration measurable**. A new
+JSON envelope (`deprecationReportVersion: "1"`) inventories every
+D0090-firing site with its adjudicated dialect and suggested
+rewrite — drop it into CI to gate v2.0 readiness without re-parsing
+diagnostic text. D0090's message text is amended in lockstep:
+drops "and will be removed in pykrete v2.0" for the softer "slated
+for removal in a future pykrete v2.0" and names the new
+`--deprecation-report` flag inline so users encountering D0090 in
+CI output have a one-command path to the migration surface. The
+new **`D0091 crossDialectMethodMismatch`** warning fires when a
+pandas-only method is called on a Spark receiver (`pdf.withColumn(...)`,
+`pdf.selectExpr(...)`) or a Spark-only method on a pandas
+receiver (`sdf.assign(...)`, `sdf.merge(...)`), with a *use
+`.x(...)` instead* suggestion for the high-traffic pairs
+(`withColumn` ↔ `assign`, `withColumnRenamed` ↔ `rename`,
+`selectExpr` → `eval`, `toPandas` → `copy`, `groupby` → `groupBy`,
+`merge` → `join`). Warning-only this cycle; strict-mode escalation
+deferred to v1.9 because the back-compat surface is genuinely
+larger than D0090's was. Carve-outs: deprecated `DataFrame[X]`
+alias receivers skip the gate (avoid double-warning with D0090);
+`pivot` and `melt` on Spark receivers don't fire (Spark exposes
+same-spelled `groupBy(...).pivot(...)` and 3.4+ positional `melt`
+surfaces). Two audit-class closures land structurally: `build.rs`
+auto-generates the `PANDAS_INHERITED_ARM_METHODS` inventory from
+`expr.rs` source (the hand-maintained list becomes a tripwire —
+within-cycle drift is structurally impossible), and
+`scripts/changelog-grep.sh` is a new CI gate that grep-anchors
+every CHANGELOG-fenced binary string to `crates/pykrete/src/`.
+Cross-codebase probe coverage extends to D0073 / D0083 (2 negative
+probes each via pykrete-tests PR-P1 #30) — 247 → 253 probes.
+
 ## Next up
 
-### v1.8 — broader pandas reshape + LSP polish + `--include-py` for migrate + spark-D2
+### v1.9 — broader pandas reshape + LSP polish + `--include-py` / `--changed-only` migrate flags + D0091 strict-mode
 
 Broader pandas reshape: `stack` / `unstack` / `groupby.agg`,
 `reset_index` / `set_index`, plus full `pivot_table` and `melt`
@@ -162,12 +195,12 @@ CI gate (I3 from the v1.4 architecture audit). LSP polish block:
 visitor name-shadowing M3 round-2, hover_timeout flake, col-ref
 helper consolidation, suggester threshold. `--include-py` flag for
 `pykrete migrate` to walk the multiplexer cohort's `.py` files
-alongside `.pyk`. A new D-code for cross-dialect method mismatch
-(spark-D2) — fire a diagnostic when a pandas-only method is called
-on `SparkFrame[X]` (or vice versa) instead of the silent
-fall-through. Cross-codebase probe coverage extended to D0073 /
-D0083. CI-guard widened to catch the "omitted-edit" drift class on
-top of v1.7's "parallel-edit" coverage.
+alongside `.pyk`, plus a `--changed-only` flag for both
+`pykrete migrate` and `pykrete check` that walks only files changed
+against HEAD. D0091 strict-mode escalation (warning → error under
+`"typeCheckingMode": "strict"`) once v1.8 usage signal lands.
+CI-guard widened to catch the "omitted-edit" drift class on top of
+v1.8's structural build.rs closure for the parallel-edit class.
 
 ## PyCharm support
 
@@ -355,10 +388,14 @@ D0090 strict-mode escalation + pandas `pivot_table` literal-form +
 `.take()` dialect-gate closure (done, v1.6) → migrator UX hardening
 (`pykrete migrate` defaults to `--check`) + pandas `melt`
 literal-form + `dialect_signals` shared module + Spark-D1 audit
-closure (done, v1.7) → broader pandas reshape (`stack` / `unstack` /
-`groupby.agg`) + `.loc` / `.iloc` non-literal forms + `.query` /
-`.eval` mini-DSLs + spark-D2 D-code + `--include-py` migrate flag +
-LSP polish (v1.8) → polars** → others (DuckDB, Dask, …).
+closure (done, v1.7) → v2.0 deprecation runway (`pykrete check
+--deprecation-report` JSON envelope + D0090 message amend) +
+spark-D2 D0091 cross-dialect mismatch warning + build.rs-generated
+inventory + CHANGELOG-binary CI gate (done, v1.8) → broader pandas
+reshape (`stack` / `unstack` / `groupby.agg`) + `.loc` / `.iloc`
+non-literal forms + `.query` / `.eval` mini-DSLs + D0091 strict-mode
+escalation + `--include-py` / `--changed-only` migrate flags + LSP
+polish (v1.9) → polars** → others (DuckDB, Dask, …).
 
 The core type model — `SparkFrame[Schema]` / `PandasFrame[Schema]` /
 `DataFrame[Schema]`, the `Schema` class, column checks, return-type

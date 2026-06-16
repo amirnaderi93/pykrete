@@ -1,6 +1,51 @@
 # Changelog
 
 
+## 0.6.0
+
+Tracks the v1.8.0 pykrete release — **`pykrete check --deprecation-report`
+makes the v2.0 migration measurable**. A new JSON envelope
+(`deprecationReportVersion: "1"`) inventories every D0090-firing
+site with its adjudicated dialect and suggested rewrite — drop it
+into CI to gate v2.0 readiness without re-parsing diagnostic text.
+The envelope reuses the v1.5 `--report-aliases` plumbing; the two
+flags are mutually exclusive. D0090's message text is amended in
+lockstep: drops the date-committal "and will be removed in pykrete
+v2.0" framing for the softer "slated for removal in a future
+pykrete v2.0" (no ship-date commitment) and names the new
+`--deprecation-report` flag inline so users encountering D0090 in
+CI output have a one-command path to the migration surface. The
+new **`D0091 crossDialectMethodMismatch`** warning fires when a
+pandas-only method is called on a Spark receiver
+(`pdf.withColumn(...)`, `pdf.selectExpr(...)`) or a Spark-only
+method on a pandas receiver (`sdf.assign(...)`, `sdf.merge(...)`),
+with a *use `.x(...)` instead* suggestion for the high-traffic
+pairs (`withColumn` ↔ `assign`, `withColumnRenamed` ↔ `rename`,
+`selectExpr` → `eval`, `toPandas` → `copy`; `groupby` → `groupBy`,
+`merge` → `join`). The suggestion is exposed via the LSP
+`Diagnostic.suggestion` slot so the editor lights up a quick-fix
+on the bulb action. Warning-only this cycle; strict-mode
+escalation deferred to v1.9 because the back-compat surface is
+genuinely larger than D0090's was. Carve-outs: deprecated
+`DataFrame[X]` alias receivers skip the gate (avoid double-warning
+with D0090); `pivot` and `melt` on Spark receivers don't fire
+(Spark exposes legitimate same-spelled `groupBy(...).pivot(...)`
+and 3.4+ positional `melt` surfaces). Two audit-class closures
+land structurally: `build.rs` auto-generates the
+`PANDAS_INHERITED_ARM_METHODS` inventory from `expr.rs` source
+(the hand-maintained list becomes a tripwire — within-cycle drift
+is structurally impossible); `scripts/changelog-grep.sh` is a new
+CI gate that grep-anchors every CHANGELOG-fenced binary string
+(`stderr` / `stdout` / `text` labels) against
+`crates/pykrete/src/`. D0073 / D0083 cross-codebase probe coverage
+added via pykrete-tests PR-P1 #30 (4 new negative probes — 249 →
+253). No new annotation forms; SemVer-minor under the
+`tighteningDiagnostics` policy and the established alias-report-
+style JSON-additive policy. Cycle-close minor bump aligns the
+extension with the v1.8.0 tag per the version-guard contract. See
+the [main CHANGELOG](../../CHANGELOG.md#180---2026-06-16) for
+details.
+
 ## 0.5.0
 
 Tracks the v1.7.0 pykrete release — migrator UX hardening (`pykrete
