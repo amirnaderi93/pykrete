@@ -172,7 +172,9 @@ within-cycle drift is structurally impossible), and
 `scripts/changelog-grep.sh` is a new CI gate that grep-anchors
 every CHANGELOG-fenced binary string to `crates/pykrete/src/`.
 Cross-codebase probe coverage extends to D0073 / D0083 (2 negative
-probes each via pykrete-tests PR-P1 #30) — 247 → 253 probes.
+probes each via pykrete-tests PR-P1 #30) — 247 → 249 → 253 probes
+(PR-D1 #28 melt fills 247 → 249 in the v1.7 → v1.8 catalog window;
+PR-P1 #30 D0073 / D0083 lifts 249 → 253).
 
 ## Next up
 
