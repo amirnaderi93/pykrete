@@ -1,0 +1,107 @@
+# Release gate
+#
+# v1.10 PR-A2 — closes v1.9 arch-I2.
+#
+# WHY THIS EXISTS
+# ---------------
+# The daily CI workflow (.github/workflows/ci.yml) runs
+# `scripts/changelog-grep.sh --skip-live-extract` because pykrete-tests
+# isn't checked out beside pykrete on the runner. That defers the
+# live-extract numeric trust-claim verification (text-numeric blocks +
+# prose paragraph numeric claims, gate v2 + v3) to a manual step at
+# PR-F time. A dev who forgets to run it locally can ship a CHANGELOG
+# with stale "N probes" / "N fixtures" / "N positive" claims.
+#
+# This workflow closes the gap structurally: on push to a release branch
+# (release/v*) OR on a PR labeled `release-ready` OR on manual dispatch,
+# it checks out both pykrete + pykrete-tests as siblings and runs the
+# gate WITHOUT --skip-live-extract.
+#
+# TRIGGER MODEL
+# -------------
+# - push to release/v* — pre-tag verification (cycle-close PR-F should
+#   have already run this locally; this is the structural guard).
+# - pull_request with label `release-ready` — apply the label to any PR
+#   you want to run the full live-extract gate against (e.g. PR-F).
+# - workflow_dispatch — manual fallback (operator wants to verify a
+#   particular ref).
+#
+# WHY NOT "ALWAYS RUN LIVE-EXTRACT ON EVERY PR"
+# --------------------------------------------
+# The live extract requires checking out pykrete-tests + running
+# `probes.py extract cross-codebase` (tens of seconds + transitive
+# Python deps). On every PR it would inflate daily CI load 5-10x for a
+# class of bug that only ships at release time. Release-gate is the
+# cost-correct trigger.
+
+name: Release gate
+
+on:
+  push:
+    branches:
+      - 'release/v*'
+  pull_request:
+    types: [labeled, synchronize, opened, reopened]
+  workflow_dispatch:
+
+jobs:
+  release-gate-check:
+    # Only run on PR if the PR carries the `release-ready` label. Push +
+    # workflow_dispatch always run.
+    if: |
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'release-ready'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout pykrete
+        uses: actions/checkout@v4
+        with:
+          path: pykrete
+
+      # The known-claim table in scripts/changelog-grep.sh references
+      # `../pykrete-tests/` relative to the pykrete checkout root. Check
+      # out pykrete-tests as a sibling directory so the live extracts
+      # resolve.
+      - name: Checkout pykrete-tests sibling
+        uses: actions/checkout@v4
+        with:
+          repository: amirnaderi93/pykrete-tests
+          path: pykrete-tests
+
+      - name: Install Python (for probes.py)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install jq
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.95.0
+
+      - name: Cache cargo & target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: pykrete
+
+      # Self-tests verify the gate itself is healthy before we trust its
+      # judgment on CHANGELOG. Order: self-tests first, then the live gate.
+      - name: CHANGELOG grep gate — self-tests
+        working-directory: pykrete
+        run: bash scripts/changelog-grep.test.sh
+
+      # The release gate. WITHOUT --skip-live-extract: every text-numeric
+      # block AND every prose paragraph numeric claim is verified against
+      # the live extract commands. Drift fails the build.
+      - name: CHANGELOG grep gate — full live extract (v2 + v3)
+        working-directory: pykrete
+        run: bash scripts/changelog-grep.sh
+
+      # Tag-time test verification. release/v* branches gate on the full
+      # release-mode test suite passing — same shape as a pre-tag developer
+      # would run locally per CONTRIBUTING.md "Releases".
+      - name: Cargo test (release mode)
+        working-directory: pykrete
+        run: cargo test --release --workspace

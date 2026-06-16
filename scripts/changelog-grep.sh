@@ -1,23 +1,32 @@
 #!/usr/bin/env bash
 # v1.8 PR-A2 — CHANGELOG-binary string drift CI gate.
 # v1.9 PR-A2 — extended with `text-numeric` blocks (live-extract numeric trust-claim verification).
+# v1.10 PR-A2 — extended with prose-paragraph numeric scan (gate v3).
 #
 # Closes v1.7 retro rule 6 (v1.7 PR-F's CHANGELOG quoted a warning text
 # different from the actual main.rs:660 emission; PR-G patched after the
-# fact) and v1.8 retro rule 7 (v1.8 PR-F's "106 fixtures" claim drifted
-# from the live 112; architecture audit caught it after the fact).
+# fact), v1.8 retro rule 7 (v1.8 PR-F's "106 fixtures" claim drifted
+# from the live 112; architecture audit caught it after the fact), and
+# v1.9 retro rule 12 (v1.9 PR-F shipped "183 positive + 72 negative" in a
+# prose paragraph outside any fenced block; the v2 gate missed it).
 #
 # v1 gate: extracts fenced code blocks labeled stderr/stdout/text from
 # CHANGELOG.md and grep-anchors each non-empty line to crates/pykrete/src/.
 #
-# v2 gate (this script, v1.9): adds the `text-numeric` label. Blocks marked
-# `text-numeric` contain one `<number> <key>` line per claim. Each key maps
-# to a known live-extract command; the script runs the command and compares
-# the output to the claimed number. Drift fails CI loudly.
+# v2 gate (v1.9): adds the `text-numeric` label. Blocks marked `text-numeric`
+# contain one `<number> <key>` line per claim. Each key maps to a known
+# live-extract command; the script runs the command and compares the output
+# to the claimed number. Drift fails CI loudly.
 #
-# Scope per v1.9-spec.md §2.2: fenced blocks only, four labels
-# (stderr/stdout/text/text-numeric). README and inline backticks are still
-# out of scope.
+# v3 gate (this script, v1.10): scans prose paragraphs (everything OUTSIDE
+# fenced blocks) for <digit> <known-key> patterns. Each match is verified
+# against the same known-claim table v2 uses. Single-backtick-wrapped
+# numbers (e.g. backtick-183-positive-backtick) are the editor's escape
+# hatch for historical / external-context numbers and are skipped.
+#
+# Scope per v1.10-spec.md §2.2.2: CHANGELOG.md only; fenced blocks (four
+# labels) + prose numeric mentions of known keys. README and docs-site
+# prose stay out of scope.
 
 set -u
 
@@ -65,6 +74,14 @@ numeric_claim_command() {
         donors)
             echo "find ../pykrete-tests/cross-codebase -maxdepth 1 -mindepth 1 -type d | wc -l | tr -d ' '"
             ;;
+        positive)
+            # Positive probes = every probe whose kind is NOT EXPECTS (which
+            # is the negative-probe kind; see pykrete-tests/scripts/probes.py).
+            echo "python3 ../pykrete-tests/scripts/probes.py extract ../pykrete-tests/cross-codebase | jq '[.probes[] | select(.kind != \"EXPECTS\")] | length'"
+            ;;
+        negative)
+            echo "python3 ../pykrete-tests/scripts/probes.py extract ../pykrete-tests/cross-codebase | jq '[.probes[] | select(.kind == \"EXPECTS\")] | length'"
+            ;;
         *)
             return 1
             ;;
@@ -99,6 +116,22 @@ pattern = re.compile(
     r"^```(stderr|stdout|text-numeric|text)\n([\s\S]*?)^```",
     re.MULTILINE,
 )
+# Strip ALL fenced blocks (any label, labeled or not) before prose scan, so
+# prose-scan never doubles up on `text-numeric` lines and never trips on
+# code-snippet digits.
+any_fence = re.compile(r"^```[^\n]*\n[\s\S]*?^```", re.MULTILINE)
+
+# v1.10 PR-A2 gate v3 — prose-paragraph numeric scan.
+# Pattern from v1.10-spec.md §2.2.2 — case-sensitive on the key per spec.
+prose_pat = re.compile(
+    r"(\d+)\s+(positive|negative|probes|fixtures|tests|donors)\b"
+)
+# Single-backtick escape hatch. The pattern matches a span between two
+# single backticks (not double / triple); newlines disallowed so a stray
+# unclosed backtick can't swallow the rest of the file. Built via chr(96)
+# so the bash 3.2 heredoc pre-parser sees no unbalanced literal backticks.
+_BT = chr(96)
+backtick_span = re.compile(_BT + r"[^" + _BT + r"\n]+" + _BT)
 
 # Compute opening-fence line numbers by counting newlines up to the match.
 out_lines = []
@@ -117,17 +150,43 @@ for m in pattern.finditer(text):
         encoded = line.replace("\t", "\\t")
         out_lines.append(f"{label}\t{start_line}\t{encoded}")
 
+# Prose scan: replace fenced blocks with newline-preserving blanks so line
+# numbers stay aligned. Backtick-spans (escape hatch) are replaced with a
+# non-whitespace sentinel of the same length so the prose pattern can't
+# reach across them — a digit on one side of a code span and a key on the
+# other isn't a semantic claim. `\s+` won't bridge the sentinel.
+def blank_keep_lines(match):
+    return "\n" * match.group(0).count("\n")
+
+def sentinel_mask(match):
+    raw = match.group(0)
+    # Preserve embedded newlines; replace every other char with `_`.
+    return "".join(c if c == "\n" else "_" for c in raw)
+
+prose_text = any_fence.sub(blank_keep_lines, text)
+prose_text = backtick_span.sub(sentinel_mask, prose_text)
+
+for ln, line in enumerate(prose_text.splitlines(), start=1):
+    for pm in prose_pat.finditer(line):
+        claimed = pm.group(1)
+        key = pm.group(2)
+        # `prose` is the record-type marker (analogous to label for fenced
+        # blocks). Encode tabs same as above for split safety.
+        encoded = f"{claimed} {key}".replace("\t", "\\t")
+        out_lines.append(f"prose\t{ln}\t{encoded}")
+
 sys.stdout.write("\n".join(out_lines))
 PY
 )
 
 if [ -z "$parsed" ]; then
-    echo "changelog-grep: no fenced stderr/stdout/text/text-numeric blocks in $CHANGELOG (0 candidates; gate is a no-op until binary-output is quoted)."
+    echo "changelog-grep: no fenced stderr/stdout/text/text-numeric blocks and no prose numeric claims in $CHANGELOG (0 candidates; gate is a no-op)."
     exit 0
 fi
 
 total_lines=0
 total_numeric_lines=0
+total_prose_lines=0
 fail=0
 # Bash 3.2 ships on macOS without `declare -A`; track unique block
 # identifiers via a newline-delimited string instead.
@@ -135,16 +194,61 @@ seen_blocks=""
 
 while IFS=$'\t' read -r label start_line line; do
     [ -z "$label" ] && continue
-    key="$label@$start_line"
-    case "
+    if [ "$label" != "prose" ]; then
+        key="$label@$start_line"
+        case "
 $seen_blocks
 " in
-        *"
+            *"
 $key
 "*) ;;
-        *) seen_blocks="$seen_blocks
+            *) seen_blocks="$seen_blocks
 $key" ;;
-    esac
+        esac
+    fi
+
+    if [ "$label" = "prose" ]; then
+        total_prose_lines=$((total_prose_lines + 1))
+        restored="${line//\\t/$'\t'}"
+        # shellcheck disable=SC2086
+        set -- $restored
+        claimed="$1"
+        claim_key="$2"
+        # Python emitted `<digit> <known-key>`, so both fields are present
+        # and `<digit>` is numeric by construction (regex enforced). Defensive
+        # re-check anyway — guards against a future python-side bug.
+        case "$claimed" in
+            ''|*[!0-9]*)
+                echo "PROSE-MISMATCH: CHANGELOG.md line $start_line first token '$claimed' is not a positive integer" >&2
+                fail=1
+                continue
+                ;;
+        esac
+        if ! cmd=$(numeric_claim_command "$claim_key"); then
+            # Unknown key in prose: per spec §2.2.2 ignored ("only known
+            # keys are gated"). Python pre-filtered to the known-key set,
+            # so this branch is reachable only if the prose pattern grows
+            # ahead of the claim table — keep silent to honor spec scope.
+            continue
+        fi
+        if [ "$SKIP_LIVE_EXTRACT" = "1" ]; then
+            # Syntax + key allowlist passed; live compare deferred to the
+            # release-gate workflow.
+            continue
+        fi
+        actual=$(bash -c "$cmd" 2>/dev/null || true)
+        actual=$(printf '%s' "$actual" | tr -d '[:space:]')
+        if [ -z "$actual" ]; then
+            echo "PROSE-MISMATCH: CHANGELOG.md line $start_line live extract produced no output. Command: $cmd" >&2
+            fail=1
+            continue
+        fi
+        if [ "$claimed" != "$actual" ]; then
+            echo "PROSE-MISMATCH: line $start_line: '$claimed $claim_key' vs live $actual (command: $cmd)" >&2
+            fail=1
+        fi
+        continue
+    fi
 
     if [ "$label" = "text-numeric" ]; then
         total_numeric_lines=$((total_numeric_lines + 1))
@@ -204,14 +308,14 @@ $parsed
 EOF
 
 total_blocks=$(printf '%s' "$seen_blocks" | grep -c '^.' || true)
-if [ "$SKIP_LIVE_EXTRACT" = "1" ] && [ "$total_numeric_lines" -gt 0 ]; then
-    echo "changelog-grep: checked $total_blocks block(s) across $total_lines source-anchored line(s) against $SRC_DIR/ + $total_numeric_lines text-numeric claim(s) (live extract SKIPPED)."
-else
-    echo "changelog-grep: checked $total_blocks block(s) across $total_lines source-anchored line(s) against $SRC_DIR/ + $total_numeric_lines text-numeric claim(s)."
+suffix=""
+if [ "$SKIP_LIVE_EXTRACT" = "1" ] && { [ "$total_numeric_lines" -gt 0 ] || [ "$total_prose_lines" -gt 0 ]; }; then
+    suffix=" (live extract SKIPPED)"
 fi
+echo "changelog-grep: checked $total_blocks block(s) across $total_lines source-anchored line(s) against $SRC_DIR/ + $total_numeric_lines text-numeric claim(s) + $total_prose_lines prose numeric claim(s)$suffix."
 
 if [ "$fail" -ne 0 ]; then
-    echo "changelog-grep: CHANGELOG-binary string drift detected. See v1.7 retro rule 6 + v1.8 retro rule 7 / v1.9-spec.md §2.2." >&2
+    echo "changelog-grep: CHANGELOG drift detected. See v1.7 retro rule 6 + v1.8 retro rule 7 + v1.9 retro rule 12 / v1.10-spec.md §2.2.2." >&2
     exit 1
 fi
 

@@ -390,6 +390,114 @@ grep -q "1 source-anchored line" "$LAST_TMP/stdout" || extra="${extra}+wrong_sou
 assert "mixed text + text-numeric blocks both checked" 0 "$LAST_RC" "$extra"
 rm -rf "$LAST_TMP"
 
+# v1.10 PR-A2 — gate v3 prose-paragraph numeric scan cases.
+
+# --- Case 20: prose with correct numbers → PASS ---
+run_numeric_case '# CHANGELOG
+prose paragraph: 112 fixtures verified end-to-end across the suite.
+' 'numeric_claim_command() {
+    case "$1" in
+        fixtures) echo "echo 112" ;;
+        *) return 1 ;;
+    esac
+}'
+extra=ok
+grep -q "1 prose numeric claim" "$LAST_TMP/stdout" || extra=missing_prose_count
+assert "prose with correct numbers passes" 0 "$LAST_RC" "$extra"
+rm -rf "$LAST_TMP"
+
+# --- Case 21: prose with WRONG numbers — v1.9 PR-F drift emulation ---
+# v1.9 PR-F shipped "183 positive + 72 negative = 255 probes" in a prose
+# paragraph outside any fenced block; v2 gate missed it. Gate v3 catches it.
+# Stub live extract at v1.9.0 baseline: 185 positive + 70 negative = 255.
+run_numeric_case '# CHANGELOG
+the v1.9 release ships 183 positive + 72 negative = 255 probes
+' 'numeric_claim_command() {
+    case "$1" in
+        positive) echo "echo 185" ;;
+        negative) echo "echo 70" ;;
+        probes) echo "echo 255" ;;
+        *) return 1 ;;
+    esac
+}'
+extra=ok
+grep -qF "PROSE-MISMATCH: line 2: '183 positive' vs live 185" "$LAST_TMP/stderr" || extra=missing_positive_mismatch
+grep -qF "PROSE-MISMATCH: line 2: '72 negative' vs live 70" "$LAST_TMP/stderr" || extra="${extra}+missing_negative_mismatch"
+# `255 probes` matches live (the spec emulation isn't drifted there); should NOT fire.
+if grep -qF "'255 probes'" "$LAST_TMP/stderr"; then extra="${extra}+false_positive_on_probes"; fi
+assert "v1.9 PR-F drift (183 positive + 72 negative) caught by prose scan" 1 "$LAST_RC" "$extra"
+rm -rf "$LAST_TMP"
+
+# --- Case 22: prose with backtick-wrapped historical number — escape hatch honored ---
+run_numeric_case '# CHANGELOG
+the v1.8 pin had `183 positive` which lifted to 185 in v1.9.
+' 'numeric_claim_command() {
+    case "$1" in
+        positive) echo "echo 185" ;;
+        *) return 1 ;;
+    esac
+}'
+extra=ok
+# Backtick-wrapped `183 positive` must NOT trigger.
+if grep -qF "'183 positive'" "$LAST_TMP/stderr"; then extra=escape_hatch_failed; fi
+# Bare `185 in v1.9` doesn't end in a known key, so no other match expected.
+grep -q "prose numeric claim" "$LAST_TMP/stdout" || extra="${extra}+missing_summary"
+assert "single-backtick wrapping is the escape hatch for historical numbers" 0 "$LAST_RC" "$extra"
+rm -rf "$LAST_TMP"
+
+# --- Case 23: prose with unknown key — ignored ---
+run_numeric_case '# CHANGELOG
+the suite has 42 widgets and 17 thingamajigs.
+' 'numeric_claim_command() {
+    case "$1" in
+        widgets) echo "echo 999" ;;
+        *) return 1 ;;
+    esac
+}'
+extra=ok
+if grep -q "widgets" "$LAST_TMP/stderr"; then extra=unknown_key_not_silent; fi
+if grep -q "thingamajigs" "$LAST_TMP/stderr"; then extra="${extra}+unknown_key_not_silent_2"; fi
+assert "prose with unknown key is ignored (only known keys gated)" 0 "$LAST_RC" "$extra"
+rm -rf "$LAST_TMP"
+
+# --- Case 24: mixed text-numeric block + prose numbers — both verified ---
+run_numeric_case '# CHANGELOG
+- the suite has 17 donors with diverse shapes.
+
+```text-numeric
+255 probes
+```
+' 'numeric_claim_command() {
+    case "$1" in
+        donors) echo "echo 17" ;;
+        probes) echo "echo 255" ;;
+        *) return 1 ;;
+    esac
+}'
+extra=ok
+grep -q "1 prose numeric claim" "$LAST_TMP/stdout" || extra=missing_prose_count
+grep -q "1 text-numeric claim" "$LAST_TMP/stdout" || extra="${extra}+missing_numeric_count"
+assert "mixed text-numeric block + prose number both verified" 0 "$LAST_RC" "$extra"
+rm -rf "$LAST_TMP"
+
+# --- Case 25: prose-scan respects --skip-live-extract (syntax still parsed, no compare) ---
+tmp=$(mktemp -d)
+printf '%s' '# CHANGELOG
+nothing here but 999 fixtures, which would mismatch live but should not fail under skip.
+' > "$tmp/CHANGELOG.md"
+mkdir -p "$tmp/src"
+printf 'fn main() {}\n' > "$tmp/src/main.rs"
+# Default table — would actually try to run `find` in this tmp dir, fail.
+# --skip-live-extract bypasses run; result should be exit 0 (key is known).
+CHANGELOG="$tmp/CHANGELOG.md" SRC_DIR="$tmp/src" \
+    bash "$GATE" --skip-live-extract > "$tmp/stdout" 2> "$tmp/stderr"
+rc=$?
+extra=ok
+grep -q "live extract SKIPPED" "$tmp/stdout" || extra=missing_skip_msg
+grep -q "1 prose numeric claim" "$tmp/stdout" || extra="${extra}+missing_prose_count"
+assert "prose scan honors --skip-live-extract" 0 "$rc" "$extra"
+rm -rf "$tmp"
+
 echo
 echo "Test summary: $pass passed, $fail failed"
 if [ "$fail" -ne 0 ]; then

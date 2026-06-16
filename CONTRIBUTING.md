@@ -224,12 +224,32 @@ Known claim keys (defined in `scripts/changelog-grep.sh::numeric_claim_command`)
 | `fixtures` | `find ../pykrete-tests/cross-codebase \( -path '*annotated*' -name '*.pyk' -o -path '*probes_negative*' -name '*.pyk' \) \| wc -l` |
 | `tests` | `cargo test --release --workspace 2>&1 \| grep -oE '[0-9]+ passed' \| awk '{s+=$1} END {print s}'` |
 | `donors` | `find ../pykrete-tests/cross-codebase -maxdepth 1 -mindepth 1 -type d \| wc -l` |
+| `positive` | `... probes.py extract ... \| jq '[.probes[] \| select(.kind != "EXPECTS")] \| length'` |
+| `negative` | `... probes.py extract ... \| jq '[.probes[] \| select(.kind == "EXPECTS")] \| length'` |
 
 Unknown keys fail with `MISMATCH: ... unknown numeric-claim key: '<key>'`. To add a new key, extend `numeric_claim_command` in `scripts/changelog-grep.sh` in the same PR that adds the CHANGELOG line using it (mirrors the sibling-arm-grep discipline elsewhere in the codebase).
 
-PR CI runs the gate with `--skip-live-extract` (the `pykrete-tests` sibling repo isn't checked out beside `pykrete` on the GitHub Actions runner). The skip mode still validates fenced-block syntax + the known-key allowlist; only command execution is bypassed. Release-time runs (PR-F + manual local verification) run the full gate with live extracts.
+PR CI runs the gate with `--skip-live-extract` (the `pykrete-tests` sibling repo isn't checked out beside `pykrete` on the GitHub Actions runner). The skip mode still validates fenced-block syntax + the known-key allowlist; only command execution is bypassed. Release-time runs use the dedicated `release-gate.yml` workflow (push to `release/v*`, PR labeled `release-ready`, or manual `workflow_dispatch`) which checks out `pykrete-tests` as a sibling and runs the full gate with live extracts.
 
 This catches the v1.8-class drift where a trust-claim number quoted in CHANGELOG (e.g. "106 fixtures") silently diverges from the live extract (which was 112) — closes v1.8 retro rule 7.
+
+### Prose-paragraph numeric scan (gate v3, v1.10+)
+
+Gate v3 extends the live-extract verification to **prose paragraphs** — text outside fenced blocks. Any prose digit-sequence followed (after whitespace) by a known claim key is verified against the same live-extract table. This catches the v1.9 PR-F drift class where "183 positive + 72 negative" landed in a paragraph trust-claim, OUTSIDE any fenced block, and the v2 gate missed it.
+
+Concretely: `Cross-codebase coverage lifts to 255 probes (185 positive + 70 negative).` is a prose claim and is gated automatically.
+
+**Escape hatch — single-backtick wrap**: if you need to mention a number that should NOT be auto-verified (a historical number from a prior release, a number quoted from external documentation, an inline code example), wrap it in single backticks:
+
+```
+The v1.8 pin had `183 positive` probes; v1.9 lifted to 185 positive.
+```
+
+The scanner skips matches inside single-backtick spans. The `185 positive` outside the backticks is still verified.
+
+Pre-Unreleased release-notes sections in `CHANGELOG.md` use this escape hatch heavily — historical release-pinned numbers (e.g. `` `127 probes` `` in the v1.2 section) are immutable by construction and shouldn't gate on current live extract. The current `[Unreleased]` section's numbers (and the latest released section's numbers that PR-F pinned to live at tag time) are NOT backticked so the gate verifies them.
+
+**Scope boundary**: only `CHANGELOG.md`. README, docs-site prose, and other Markdown surfaces are out of scope (different drift profile).
 
 ## Filing issues
 
