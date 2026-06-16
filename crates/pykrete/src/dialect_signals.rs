@@ -112,6 +112,14 @@ pub const SPARK_DISCRIMINATORS: &[&str] = &[
     "rdd",
     "isStreaming",
     "sparkSession",
+    // v1.10 PR-D1: Spark-only DataFrame attribute surface added to the
+    // property table; mirrored here so the v1.10 PR-A1 tripwire
+    // (SPARK_DISCRIMINATOR_PROPERTIES ⊂ SPARK_DISCRIMINATORS) holds.
+    // Each carries an entry in NO_SUGGESTION_ALLOWLIST_SPARK; see
+    // `operations/expr.rs` for rationale.
+    "na",
+    "write",
+    "storageLevel",
 ];
 
 /// Pandas-discriminating method and attribute names. A
@@ -156,6 +164,15 @@ pub const PANDAS_ONLY_SIGNALS: &[&str] = &[
     // column-level free function — NOT a DataFrame method — so the name
     // is pandas-discriminating on DataFrame receivers.
     "stack",
+    // v1.10 PR-D1: pandas-only DataFrame attribute surface added to the
+    // property table; mirrored here so the v1.10 PR-A1 tripwire
+    // (PANDAS_INHERITED_PROPERTIES ⊂ PANDAS_ONLY_SIGNALS) holds.
+    // Each carries an entry in NO_SUGGESTION_ALLOWLIST_PANDAS; see
+    // `operations/expr.rs` for rationale.
+    "index",
+    "values",
+    "shape",
+    "T",
 ];
 
 /// Shared-with-Spark method names that have a pandas-specific
@@ -186,7 +203,32 @@ pub const PANDAS_INHERITED_ARMS: &[&str] = &["head", "tail", "first", "take", "d
 /// dispatch on AST shape. Bare-attribute access needs its own list so
 /// adding a Spark-only property to the adjudicator doesn't silently fail
 /// to fire D0091.
-pub const SPARK_DISCRIMINATOR_PROPERTIES: &[&str] = &["rdd", "isStreaming", "sparkSession"];
+pub const SPARK_DISCRIMINATOR_PROPERTIES: &[&str] = &[
+    "rdd",
+    "isStreaming",
+    "sparkSession",
+    // v1.10 PR-D1 (closes v1.9 spark-I1): Spark-only DataFrame property
+    // surface. Each is verified against the pandas DataFrame API as
+    // having no same-spelled attribute (collision check in PR body).
+    //   - `na`            DataFrameNaFunctions accessor (`sdf.na.fill(0)`).
+    //                     Pandas uses `df.fillna(0)` directly; no `.na`
+    //                     namespace.
+    //   - `write`         DataFrameWriter accessor (`sdf.write.parquet(...)`).
+    //                     Pandas uses top-level `df.to_parquet(...)`; no
+    //                     `.write` namespace.
+    //   - `writeStream`   Spark Structured Streaming writer. No pandas
+    //                     equivalent (pandas has no streaming surface).
+    //                     Already in `SPARK_DISCRIMINATORS` as a method-
+    //                     style discriminator; bare-attribute path needed
+    //                     its own entry.
+    //   - `storageLevel`  Spark RDD persistence info (`sdf.storageLevel`).
+    //                     No pandas analog (pandas is eager; no caching
+    //                     surface).
+    "na",
+    "write",
+    "writeStream",
+    "storageLevel",
+];
 
 /// v1.9 PR-D2 — Pandas-only DataFrame **property/indexer** names. Used
 /// by the `Expr::Attribute` arm in `operations::expr::analyze_expr` to
@@ -199,7 +241,20 @@ pub const SPARK_DISCRIMINATOR_PROPERTIES: &[&str] = &["rdd", "isStreaming", "spa
 /// [`SPARK_DISCRIMINATOR_PROPERTIES`]: the adjudicator and the D0091
 /// arms have separate dispatch shapes, so each maintains its own
 /// inventory.
-pub const PANDAS_INHERITED_PROPERTIES: &[&str] = &["loc", "iloc", "iat", "at"];
+pub const PANDAS_INHERITED_PROPERTIES: &[&str] = &[
+    "loc", "iloc", "iat", "at",
+    // v1.10 PR-D1 (closes v1.9 spark-I2): pandas-only DataFrame property
+    // surface. Each is verified against the Spark DataFrame API as
+    // having no same-spelled attribute (collision check in PR body).
+    //   - `index`   pandas Index object. Spark DataFrames have no row-
+    //               index concept.
+    //   - `values`  numpy-backed array of values. Spark uses `.collect()`
+    //               which returns `list[Row]`.
+    //   - `shape`   `(rows, cols)` tuple. Spark uses `.count()` +
+    //               `len(df.columns)`.
+    //   - `T`       transpose alias. Spark has no DataFrame transpose.
+    "index", "values", "shape", "T",
+];
 
 // v1.8 PR-A1 — `PANDAS_INHERITED_ARM_METHODS_GENERATED` is produced by
 // `crates/pykrete/build.rs` at compile time. The constant lives in

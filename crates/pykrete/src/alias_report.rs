@@ -77,7 +77,10 @@ impl AckFilter {
         }
     }
 
-    fn matches(self, status: MigrationStatus) -> bool {
+    /// True when `status` survives this filter. Public so the CLI
+    /// (v1.10 PR-D1 `--fail-on-nonempty`) can compute the post-filter
+    /// site count without re-rendering or re-parsing the JSON envelope.
+    pub fn matches(self, status: MigrationStatus) -> bool {
         matches!(
             (self, status),
             (AckFilter::Pending, MigrationStatus::Pending)

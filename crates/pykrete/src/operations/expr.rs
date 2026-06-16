@@ -2936,6 +2936,22 @@ const NO_SUGGESTION_ALLOWLIST_SPARK: &[&str] = &[
     "rdd",
     "isStreaming",
     "sparkSession",
+    // v1.10 PR-D1: Spark-only DataFrame attribute namespaces with no
+    // clean pandas analog. Each surfaces D0091 via the bare-attribute
+    // arm (Expr::Attribute) on a PandasFrame receiver; the message
+    // reads as a bare mismatch note without a "did you mean" hint
+    // because none of the four has a one-attribute pandas equivalent.
+    //   `na`            DataFrameNaFunctions namespace; pandas's
+    //                   equivalents are loose methods (`fillna`, `dropna`)
+    //                   not a single attribute.
+    //   `write`         DataFrameWriter namespace; pandas writes via
+    //                   top-level `df.to_csv` / `df.to_parquet` per
+    //                   sink — no single attribute swap.
+    //   `storageLevel`  Spark caching/persistence info; pandas is
+    //                   eager and has no caching surface.
+    "na",
+    "write",
+    "storageLevel",
     // `collect` materializes to a list of `Row` on Spark; pandas's
     // `to_dict(orient='records')` is the closest analog but the shape
     // diverges enough that a bare suggestion would mislead. Allowlisted
@@ -2974,6 +2990,23 @@ const NO_SUGGESTION_ALLOWLIST_PANDAS: &[&str] = &[
     "iloc",
     "iat",
     "at",
+    // v1.10 PR-D1: pandas-only DataFrame attributes with no clean Spark
+    // one-attribute analog. D0091 fires via the bare-attribute arm on a
+    // SparkFrame receiver; the message reads as a bare mismatch note.
+    //   `index`   pandas Index object; Spark has no row-index concept.
+    //   `values`  pandas's numpy-backing array; Spark's `.collect()` is
+    //             the closest call-form analog but the shape (numpy
+    //             array vs `list[Row]`) diverges sharply — a bare
+    //             "did you mean collect" misleads.
+    //   `shape`   pandas's `(rows, cols)` tuple; Spark needs
+    //             `(df.count(), len(df.columns))` — a composite
+    //             expression, not a single attribute, so no clean swap.
+    //   `T`       pandas transpose; Spark has no DataFrame transpose
+    //             primitive.
+    "index",
+    "values",
+    "shape",
+    "T",
     // `pivot_table` is in the v1.6 spec backlog as a v1.10+ candidate
     // (aggfunc=); no clean Spark analog for the kwarg shape pandas
     // accepts. Allowlisted rather than suggest a shape-mismatched
