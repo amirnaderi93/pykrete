@@ -54,8 +54,8 @@ Ninth minor release on the v1.0 line. v1.9's headline: **v2.0 migration is plann
 
 The trust suite verifies, on every release:
 
-- **Column resolution** through the Spark v1.0 surface plus the pandas analogues — 183 positive probes across 47 annotated fixtures.
-- **Diagnostic firing** on broken fixtures — 72 negative probes across 66 `probes_negative/` fixtures pinning D0030 `unknownColumn`, D0040 `unionSchemaMismatch` / D0050 `returnColumnsMismatch` / D0051 `argumentColumnsMismatch`, D0060 `missingJoinKey`, D0073 `transformInputMismatch`, D0081 `nonNumericArithmetic`, D0082 `crossTypeComparison`, D0083 `nullabilityMismatch`, D0084 `enumValueMismatch`, D0090 `deprecatedDataFrameAlias`, and D0091 `crossDialectMethodMismatch` (v1.9 cross-codebase coverage via the PR-P1 pandera + delta probes).
+- **Column resolution** through the Spark v1.0 surface plus the pandas analogues — 185 positive probes across 47 annotated fixtures (153 `RESOLVES` + 24 `TYPE-IS` + 4 `FILE-COUNT` + 4 `FILE-CLEAN-OF`).
+- **Diagnostic firing** on broken fixtures — 70 negative probes across 66 `probes_negative/` fixtures pinning D0030 `unknownColumn`, D0040 `unionSchemaMismatch` / D0050 `returnColumnsMismatch` / D0051 `argumentColumnsMismatch`, D0060 `missingJoinKey`, D0073 `transformInputMismatch`, D0081 `nonNumericArithmetic`, D0082 `crossTypeComparison`, D0083 `nullabilityMismatch`, D0084 `enumValueMismatch`, D0090 `deprecatedDataFrameAlias`, and D0091 `crossDialectMethodMismatch` (v1.9 cross-codebase coverage via the PR-P1 pandera + delta probes).
 - **Spark type tracking** through transformations, scoped to D0081 via the `PROBE-TYPE-IS` synth-shape path (shipped v1.2).
 - **Pandas type tracking** through dispatched chains (shipped v1.4) on `PandasFrame[X]`, scoped to D0081 via the assign-arithmetic synth — 24 `PROBE-TYPE-IS` markers across 10 of the 17 donors.
 - **Cross-dialect handoff** (shipped v1.5, `.take()` closure v1.6): `.toPandas()` re-tags `SparkFrame[X]` to `PandasFrame[X]`; `spark.createDataFrame(pdf)` re-tags back when a schema source is present; pandas `.head` / `.tail` / `.first` / `.take` are dialect-gated.

@@ -210,9 +210,9 @@ This catches the v1.7-class drift where a binary-emitted string quoted in CHANGE
 For trust-claim numbers — probe counts, fixture counts, test totals, donor counts — wrap them in a `text-numeric` block. Each line is `<number> <key>` where `<key>` is one of the known claims below. The gate runs the live-extract command for the key and fails if the live value differs from the claimed number.
 
     ```text-numeric
-    253 probes
-    112 fixtures
-    1553 tests
+    255 probes
+    114 fixtures
+    1650 tests
     17 donors
     ```
 
