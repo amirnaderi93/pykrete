@@ -233,3 +233,103 @@ fn envelope_unchanged_by_fail_on_nonempty() {
         "--fail-on-nonempty MUST be exit-code-only; envelope bytes must match"
     );
 }
+
+// ---------------------------------------------------------------------
+// Cross-flag composition: --snapshot (PR-V1) × --fail-on-nonempty (PR-D1).
+// The two flags are orthogonal: --snapshot picks the envelope destination
+// (file vs stdout), --fail-on-nonempty shapes the exit code. Both must
+// be able to fire on the same invocation.
+// ---------------------------------------------------------------------
+
+// `--snapshot` + `--fail-on-nonempty` + 1 pending site:
+// → envelope written to file AND exit 1.
+#[test]
+fn snapshot_with_fail_on_nonempty_writes_file_and_exits_1() {
+    let dir = tmpdir("snap-fail-one");
+    let p = write_pyk(
+        &dir,
+        "x.pyk",
+        "def f(df: DataFrame[Sale]) -> int:\n    return 0\n",
+    );
+    let snap = dir.join("out.json");
+
+    let out = Command::new(bin())
+        .args([
+            "check",
+            "--deprecation-report",
+            &format!("--snapshot={}", snap.display()),
+            "--fail-on-nonempty",
+        ])
+        .arg(&p)
+        .output()
+        .expect("run pykrete");
+    let exit = out.status.code().unwrap_or(-1);
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+
+    assert_eq!(
+        exit, 1,
+        "non-empty filtered envelope + --fail-on-nonempty MUST exit 1, \
+         regardless of --snapshot redirect"
+    );
+    assert_eq!(
+        stdout, "",
+        "stdout MUST be empty when --snapshot redirects the envelope, \
+         even on exit 1"
+    );
+    assert!(
+        snap.exists(),
+        "snapshot file MUST be written before the gate fires"
+    );
+
+    let on_disk = fs::read_to_string(&snap).expect("read snapshot");
+    let v: serde_json::Value =
+        serde_json::from_str(&on_disk).expect("snapshot is valid JSON on exit 1");
+    assert_eq!(v["summary"]["totalSites"], 1);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// `--snapshot` + `--fail-on-nonempty` + `--ack=acknowledged` filtering
+// the one pending site to zero:
+// → envelope written to file AND exit 0. Filter takes precedence over
+// raw site count, identical to the stdout path's behavior.
+#[test]
+fn snapshot_with_fail_on_nonempty_zero_sites_exits_0() {
+    let dir = tmpdir("snap-fail-zero");
+    let p = write_pyk(
+        &dir,
+        "x.pyk",
+        "def f(df: DataFrame[Sale]) -> int:\n    return 0\n",
+    );
+    let snap = dir.join("out.json");
+
+    let out = Command::new(bin())
+        .args([
+            "check",
+            "--deprecation-report",
+            "--ack=acknowledged",
+            &format!("--snapshot={}", snap.display()),
+            "--fail-on-nonempty",
+        ])
+        .arg(&p)
+        .output()
+        .expect("run pykrete");
+    let exit = out.status.code().unwrap_or(-1);
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+
+    assert_eq!(
+        exit, 0,
+        "--ack=acknowledged filters the pending site to zero; gate MUST NOT fire"
+    );
+    assert_eq!(stdout, "");
+    assert!(
+        snap.exists(),
+        "snapshot file MUST still be written on exit 0"
+    );
+
+    let on_disk = fs::read_to_string(&snap).expect("read snapshot");
+    let v: serde_json::Value = serde_json::from_str(&on_disk).expect("snapshot is valid JSON");
+    assert_eq!(v["summary"]["totalSites"], 0);
+
+    let _ = fs::remove_dir_all(&dir);
+}
