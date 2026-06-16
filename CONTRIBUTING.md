@@ -139,6 +139,10 @@ Closes #N
 
 If a commit closes an issue, end with `Closes #N` or `Fixes #N`. Co-authored work uses standard `Co-Authored-By:` trailers.
 
+### Version bumps (v1.9+)
+
+For the v1.9 cycle, version bumps are **centralized in the cycle-close PR (PR-F)** — workspace `Cargo.toml` and `editors/vscode/package.json` + `package-lock.json` are both bumped once, by PR-F, at the end of the cycle. Per-PR developers do NOT bump versions; an extension-version-guard CI check enforces this. The mechanic exists to eliminate the per-PR-bump rebase ladder that hit v1.7 and v1.8. See `docs/design/v1.9-spec.md` §9.2 for the trial details and revert path; v1.10 will keep or revert based on the trial outcome.
+
 ### Submitting a change
 
 1. Branch off `main`: `git checkout -b feat/your-change`.
