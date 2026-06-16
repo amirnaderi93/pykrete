@@ -232,5 +232,15 @@ def f(pdf: PandasFrame[Orders]):
     return again.assign(amount=col("statuss"))
 "#,
     );
-    assert_no_diagnostics(&result);
+    // The schema-erasure pin: a wrong fall-through that returned the
+    // receiver schema would let `col("statuss")` resolve against
+    // Orders and fire D0030 on the typo. The correct fall-through
+    // erases the schema; the typo never registers.
+    assert_does_not_have_code(&result, "D0030");
+    // v1.8 PR-D1: `pdf.toPandas()` on a pandas receiver is a no-op
+    // semantically, but the cross-dialect mismatch warning fires
+    // because `toPandas` is a Spark-only method (pandas has no
+    // `.toPandas()`). The fall-through gate is what this test
+    // exercises; D0091 is the orthogonal new surface and doesn't
+    // affect the receiver-erasure semantics.
 }

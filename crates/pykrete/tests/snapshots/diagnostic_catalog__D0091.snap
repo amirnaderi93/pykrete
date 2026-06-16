@@ -1,0 +1,5 @@
+---
+source: crates/pykrete/tests/diagnostic_catalog.rs
+expression: captured
+---
+d0091_cross_dialect_method_mismatch.pyk:6:16-6:26 warning D0091 crossDialectMethodMismatch: 'withColumn' is a Spark-only DataFrame method but the receiver is a PandasFrame. Use '.assign(...)' instead.  suggestion: assign

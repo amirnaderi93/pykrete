@@ -10,7 +10,7 @@ use super::column_methods::{
     parse_string_list, report_column_refs,
 };
 use super::context::{BodyContext, MAX_INFER_DEPTH};
-use super::driver::{check_function_body, inherited_dialect};
+use super::driver::{check_function_body, inherited_dialect, inherited_is_deprecated_alias};
 use super::shapes::{
     column_method_shape, is_spark_opaque_source_call, is_terminal_method, two_df_method,
 };
@@ -27,7 +27,7 @@ use ruff_text_size::{Ranged, TextRange};
 
 use crate::dataframe::{self, DataFrameAnnotation, Dialect};
 use crate::diagnostics::{Diagnostic, Severity};
-use crate::dialect_signals::PANDAS_INHERITED_ARMS;
+use crate::dialect_signals::{PANDAS_INHERITED_ARMS, PANDAS_ONLY_SIGNALS, SPARK_DISCRIMINATORS};
 use crate::registry::{MethodParam, ParamKind};
 use crate::schema::{
     DerivedField, FieldPathResult, Schema, SchemaView, resolve_path, suggest_field_name,
@@ -815,6 +815,72 @@ fn analyze_method_call_inner<'a>(
     // build fails. See `tests/v17_pr_a1_dialect_signals_guard.rs` for
     // the tripwire test that catches drift.
     let receiver_is_pandas_inherited = receiver_dialect == Some(Dialect::Pandas);
+
+    // v1.8 PR-D1 — spark-D2 cross-dialect method-mismatch warning
+    // (D0091). Fires when the receiver's dialect tag and the called
+    // method's dialect vocabulary disagree:
+    //
+    //   - Pandas receiver calling a `SPARK_DISCRIMINATORS` method
+    //     (`pdf.withColumn(...)`, `pdf.selectExpr(...)`, …).
+    //   - Spark receiver calling a `PANDAS_ONLY_SIGNALS` method
+    //     (`sdf.assign(...)`, `sdf.melt(id_vars=...)`, …).
+    //
+    // Shared methods (`head`, `tail`, `first`, `take`, `drop`) live in
+    // `PANDAS_INHERITED_ARMS` and are explicitly excluded — they're
+    // legitimately callable on either dialect.
+    //
+    // Back-compat carve-outs:
+    //
+    //   - Deprecated-alias receivers (`df: DataFrame[X]`) skip the
+    //     gate. Spec §3.5: D0091 fires only on adjudicated receivers
+    //     (`SparkFrame[X]` / `PandasFrame[X]`) — the v2.0 migration
+    //     narrative is "adjudicate, then enforce". Untagged bindings
+    //     (no annotation) also skip via the `receiver_dialect.is_some()`
+    //     gate above.
+    //
+    //   - The existing un-gated `column_method_shape` arm at
+    //     `:1245-1283` continues to typecheck `pdf.withColumn(...)` as
+    //     Spark — schema flows through unchanged. D0091 is
+    //     informational warning ALONGSIDE the existing behavior, not a
+    //     replacement. This is deliberate: today (verified on
+    //     `2df580f`) the arm doesn't gate on receiver dialect, so a
+    //     codebase with `pdf.withColumn(...)` calls already silently
+    //     typechecks; flipping to error in one cycle would break those
+    //     users. Spec §3.2 "back-compat preservation": ship warning,
+    //     gather signal, escalate in v1.9.
+    //
+    // Severity is hardcoded `Warning` — no strict-mode escalation this
+    // cycle (v1.9 lands the strict-mode arm; see v1.7 retro §10.3
+    // deferral closed by this PR).
+    if let Some(d) = receiver_dialect
+        && !inherited_is_deprecated_alias(&attr.value, ctx)
+        && !PANDAS_INHERITED_ARMS.contains(&method)
+        && let Some((wrong_dialect, suggestion)) = cross_dialect_mismatch(d, method)
+    {
+        let receiver_label = match d {
+            Dialect::Spark => "SparkFrame",
+            Dialect::Pandas => "PandasFrame",
+        };
+        let message = format!(
+            "'{method}' is a {wrong_dialect}-only DataFrame method but the receiver is a \
+             {receiver_label}.{}",
+            suggestion
+                .as_ref()
+                .map(|s| format!(" Use '.{s}(...)' instead."))
+                .unwrap_or_default(),
+        );
+        diagnostics.push(
+            Diagnostic::at_range(
+                Severity::Warning,
+                "D0091",
+                message,
+                attr.attr.range,
+                source,
+                line_index,
+            )
+            .with_suggestion(suggestion.map(String::from)),
+        );
+    }
 
     // `df.createOrReplaceTempView("name")` — register `df`'s schema
     // against `name` in the file's tempView registry, so a later
@@ -2663,6 +2729,85 @@ pub(super) fn aggregate_output_type(
             ColumnType::Nullable(_) => None,
         },
         "max" | "min" => unwrapped.cloned(),
+        _ => None,
+    }
+}
+
+/// v1.8 PR-D1 — classify a `(receiver_dialect, method)` pair for the
+/// D0091 cross-dialect mismatch warning. Returns
+/// `(other_dialect_label, suggestion)` when the method's vocabulary
+/// disagrees with the receiver, else `None`.
+///
+/// `suggestion` is the canonical cross-dialect equivalent for the
+/// method, used for both the message and the LSP quick-fix
+/// `Diagnostic::suggestion` field. Only the high-traffic pairs carry
+/// suggestions today; methods without a clean equivalent return
+/// `None` (the message reads as a bare mismatch note). Spec §3.2
+/// names `withColumn` as the lead case; `assign` is its pandas mirror
+/// and gets a symmetric suggestion.
+///
+/// **Spark-direction carve-outs** ([`SHARED_NAMES_NOT_PANDAS_ONLY_ON_SPARK`]):
+/// a handful of names appear in [`PANDAS_ONLY_SIGNALS`] because the
+/// adjudicator treats their pandas spelling as a discriminator, but
+/// Spark ALSO has a legitimate same-spelled surface for them
+/// (`pivot` via `groupBy().pivot()`; `melt` via Spark 3.4+). Firing
+/// D0091 on Spark receivers calling those would false-positive valid
+/// Spark code (regression-guarded by `schema_cast` /
+/// `pivot_groupby_chain` integration tests). The pandas-direction
+/// check has no equivalent carve-out — every Spark discriminator is
+/// genuinely absent from the pandas DataFrame surface.
+fn cross_dialect_mismatch(
+    receiver: Dialect,
+    method: &str,
+) -> Option<(&'static str, Option<&'static str>)> {
+    match receiver {
+        Dialect::Pandas => SPARK_DISCRIMINATORS
+            .contains(&method)
+            .then(|| ("Spark", cross_dialect_suggestion_pandas_target(method))),
+        Dialect::Spark => (PANDAS_ONLY_SIGNALS.contains(&method)
+            && !SHARED_NAMES_NOT_PANDAS_ONLY_ON_SPARK.contains(&method))
+        .then(|| ("pandas", cross_dialect_suggestion_spark_target(method))),
+    }
+}
+
+/// Pandas-only signal names that have a legitimate same-spelled
+/// Spark surface. v1.8 PR-D1 excludes these from the
+/// Spark-receiver direction of D0091 to avoid false positives on
+/// idiomatic Spark code. The pandas direction (`pdf.MELT(...)`) still
+/// fires because pandas has no other same-spelled API — these names
+/// are pandas-discriminating but not pandas-exclusive.
+///
+/// - `pivot`: Spark exposes `groupBy(...).pivot(...)`; firing on
+///   `raw.groupBy("city").pivot("month")` would false-positive a
+///   schema_cast integration test.
+/// - `melt`: Spark 3.4+ ships `df.melt(ids, values, ...)` (positional
+///   form). The pandas kwargs form (`id_vars=`, `value_vars=`) goes
+///   through a separate dispatch arm; the cross-dialect warning
+///   would over-fire on legitimate Spark positional melts.
+const SHARED_NAMES_NOT_PANDAS_ONLY_ON_SPARK: &[&str] = &["pivot", "melt"];
+
+/// Pandas-side equivalent for a Spark-only method called on a pandas
+/// receiver. Returns `None` when the cross-dialect equivalent isn't
+/// a clean one-method swap.
+fn cross_dialect_suggestion_pandas_target(method: &str) -> Option<&'static str> {
+    match method {
+        "withColumn" | "withColumns" => Some("assign"),
+        "withColumnRenamed" | "withColumnsRenamed" => Some("rename"),
+        "selectExpr" => Some("eval"),
+        "toPandas" => Some("copy"),
+        _ => None,
+    }
+}
+
+/// Spark-side equivalent for a pandas-only method called on a Spark
+/// receiver. Returns `None` when the equivalent has different shape
+/// (e.g. `melt`'s positional vs kwargs split) or no clean rewrite.
+fn cross_dialect_suggestion_spark_target(method: &str) -> Option<&'static str> {
+    match method {
+        "assign" => Some("withColumn"),
+        "rename" => Some("withColumnRenamed"),
+        "groupby" => Some("groupBy"),
+        "merge" => Some("join"),
         _ => None,
     }
 }

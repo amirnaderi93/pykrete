@@ -147,6 +147,15 @@ pub(crate) struct BodyContext<'a> {
     /// chain results carry no dialect — `lookup_dialect` returns None
     /// and the v1.3 piece (b) Name-receiver bound naturally skips).
     df_dialects: HashMap<&'a str, Dialect>,
+    /// Names whose dialect tag originated from the deprecated
+    /// `DataFrame[X]` alias annotation (which `recognize_with_dialect`
+    /// maps to `Dialect::Spark` for D0090's sake). v1.8 PR-D1 uses
+    /// this to skip D0091 firing on such bindings — the spec
+    /// (`docs/design/v1.8-spec.md` §3.5) treats deprecated-alias
+    /// receivers as unadjudicated for cross-dialect mismatch
+    /// purposes; the v2.0 migration narrative is "adjudicate, then
+    /// enforce".
+    df_deprecated_alias_names: HashSet<&'a str>,
     /// SQL-style aliases registered via `df.alias("L")`. Maps the alias
     /// string (the argument to `.alias`, NOT the local-variable name on
     /// the LHS of the assignment) to the schema of the aliased
@@ -256,6 +265,7 @@ impl<'a> BodyContext<'a> {
         Self {
             df_bindings: HashMap::new(),
             df_dialects: HashMap::new(),
+            df_deprecated_alias_names: HashSet::new(),
             df_aliases: RefCell::new(HashMap::new()),
             instance_bindings: HashMap::new(),
             local_names: RefCell::new(HashSet::new()),
@@ -383,6 +393,9 @@ impl<'a> BodyContext<'a> {
             };
             if let Some(view) = view {
                 ctx.bind_df(name, view, Some(slot.dialect));
+                if slot.is_deprecated_alias {
+                    ctx.mark_deprecated_alias_name(name);
+                }
             }
         }
 
@@ -441,7 +454,27 @@ impl<'a> BodyContext<'a> {
         } else {
             self.df_dialects.remove(name);
         }
+        // Rebinds clear any prior deprecated-alias flag. Callers that
+        // want to preserve it (e.g. a chain rebind whose RHS walks
+        // back to a deprecated-alias-tagged Name) must follow up with
+        // [`mark_deprecated_alias_name`].
+        self.df_deprecated_alias_names.remove(name);
         self.mark_local(name);
+    }
+
+    /// Tag `name` as having received its dialect from the deprecated
+    /// `DataFrame[X]` alias annotation. v1.8 PR-D1 reads this through
+    /// [`is_name_from_deprecated_alias`] to suppress D0091 on such
+    /// bindings — spec §3.5 carve-out.
+    pub(crate) fn mark_deprecated_alias_name(&mut self, name: &'a str) {
+        self.df_deprecated_alias_names.insert(name);
+    }
+
+    /// Whether `name`'s dialect tag originated from the deprecated
+    /// `DataFrame[X]` alias annotation. Drives D0091's "no firing on
+    /// unadjudicated bindings" gate.
+    pub(crate) fn is_name_from_deprecated_alias(&self, name: &str) -> bool {
+        self.df_deprecated_alias_names.contains(name)
     }
 
     /// Record a SQL-style alias (`df.alias("L")`) → schema mapping so

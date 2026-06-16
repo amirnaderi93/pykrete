@@ -128,6 +128,11 @@ const FIXTURES: &[Fixture] = &[
         files: &["d0090_deprecated_dataframe_alias.pyk"],
         mode: CheckMode::Standard,
     },
+    Fixture {
+        code: "D0091",
+        files: &["d0091_cross_dialect_method_mismatch.pyk"],
+        mode: CheckMode::Standard,
+    },
 ];
 
 fn fixture_dir() -> PathBuf {
@@ -279,3 +284,4 @@ snapshot_case!(d0082, "D0082");
 snapshot_case!(d0083, "D0083");
 snapshot_case!(d0084, "D0084");
 snapshot_case!(d0090, "D0090");
+snapshot_case!(d0091, "D0091");

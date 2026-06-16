@@ -207,6 +207,14 @@ pub const DIAGNOSTIC_CATALOG: &[(&str, &str)] = &[
     // in v1.3 and removed in v2.0. Subject to standard rules-config
     // override (the spec permits suppression).
     ("D0090", "deprecatedDataFrameAlias"),
+    // v1.8 PR-D1 spark-D2: receiver-dialect-gated method-mismatch
+    // diagnostic. Fires as a warning when a method spelled in one
+    // dialect's vocabulary is called on a receiver tagged with the
+    // OTHER dialect (e.g. `pdf.withColumn(...)` on `PandasFrame[X]`,
+    // or `sdf.assign(...)` on `SparkFrame[X]`). Severity is fixed at
+    // warning this cycle; strict-mode escalation is deferred to v1.9
+    // (`docs/design/v1.8-spec.md` §3.2).
+    ("D0091", "crossDialectMethodMismatch"),
 ];
 
 /// The human-readable name for a diagnostic code — what the CLI and
