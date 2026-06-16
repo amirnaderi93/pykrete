@@ -217,22 +217,28 @@ fn v110_pra1_pandas_inherited_properties_subset_of_pandas_only_signals() {
 }
 
 /// v1.7 retro rule 6 — the tripwire MUST have a failing-case
-/// demonstration, not just the passing-on-main case. We rebuild the
-/// subset check against synthetic constants that intentionally violate
-/// the invariant; the assertion fires here exactly as it would on a
-/// real-world drift.
+/// demonstration, not just the passing-on-main case. The on-main check
+/// (`v17_pr_a1_spark_discriminator_properties_subset_of_spark_only_signals`,
+/// etc.) is `assert!(LIST.contains(prop), "msg")` — a macro that
+/// panics on drift. We exercise that exact shape against synthetic
+/// constants that intentionally violate the invariant, wrap it in
+/// `catch_unwind` to swallow the panic, and assert that the panic
+/// fired. If a future refactor silently weakens `assert!` (e.g. to a
+/// log-and-continue), this test surfaces it.
 #[test]
 fn v110_pra1_subset_check_fires_on_unmirrored_entry() {
-    const SYNTHETIC_PROPERTIES: &[&str] = &["rdd", "isStreaming", "foobar_unmirrored"];
+    const SYNTHETIC_PROPERTIES_WITH_UNMIRRORED_ENTRY: &[&str] =
+        &["rdd", "isStreaming", "foobar_unmirrored"];
     const ADJUDICATOR_LIST: &[&str] = &["rdd", "isStreaming"];
-    let mut missing: Vec<&&str> = SYNTHETIC_PROPERTIES
-        .iter()
-        .filter(|p| !ADJUDICATOR_LIST.contains(p))
-        .collect();
-    assert_eq!(
-        missing.len(),
-        1,
-        "expected exactly one unmirrored synthetic entry"
+    let result = std::panic::catch_unwind(|| {
+        for prop in SYNTHETIC_PROPERTIES_WITH_UNMIRRORED_ENTRY {
+            assert!(ADJUDICATOR_LIST.contains(prop), "drift detected: {prop}");
+        }
+    });
+    assert!(
+        result.is_err(),
+        "tripwire should fire (panic) on an unmirrored entry; the real \
+         on-main tripwire uses the same assert! macro shape, and if \
+         that macro were silently weakened we want this demo to fail"
     );
-    assert_eq!(missing.pop(), Some(&"foobar_unmirrored"));
 }

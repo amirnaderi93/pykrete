@@ -196,12 +196,12 @@ impl<'a> SourceOrderVisitor<'a> for AliasVisitor<'a> {
 /// v1.9 PR-V1 + v1.10 PR-A1 — mirrors the v1.6 `# pykrete: ambiguous`
 /// line-above lookup. Returns `true` when the marker
 /// `# pykrete: ack-deprecation` sits on the line immediately above the
-/// enclosing `def`/`async def` (or, for module-level annotations with
-/// no enclosing def, the line immediately above the annotation
-/// itself). Case-sensitive; leading whitespace tolerated; trailing
-/// whitespace tolerated. The annotation's offset is the byte position
-/// of the `DataFrame` token inside `DataFrame[X]` (or the bare
-/// `DataFrame` annotation).
+/// enclosing `def`/`async def` (walking past any decorator stack), or,
+/// for module-level annotations with no enclosing def, the line
+/// immediately above the annotation itself. Case-sensitive; leading
+/// whitespace tolerated; trailing whitespace tolerated. The
+/// annotation's offset is the byte position of the `DataFrame` token
+/// inside `DataFrame[X]` (or the bare `DataFrame` annotation).
 ///
 /// v1.10 PR-A1 closes v1.9 arch-I1: pre-fix, the lookup checked the
 /// line immediately above the annotation's byte offset, which on a
@@ -210,6 +210,21 @@ impl<'a> SourceOrderVisitor<'a> for AliasVisitor<'a> {
 /// continuation line instead of the user-intended marker line above
 /// `def f(`. The walk now anchors at the enclosing `def` line so the
 /// "line above" answer is invariant under signature line breaks.
+///
+/// The "enclosing" check is indentation-aware: the candidate `def`
+/// must sit at strictly less leading whitespace than the annotation
+/// line. Without this, a module-level annotation that appears below
+/// an earlier sibling `def` would mis-anchor at that sibling and
+/// regress the v1.9 module-level "line directly above annotation"
+/// behavior. Module-level annotations (zero leading whitespace) never
+/// find an enclosing def regardless of what `def`s precede them.
+///
+/// The walk also steps past any contiguous `@decorator` lines sitting
+/// directly above the `def`, so
+/// `# pykrete: ack-deprecation\n@cached\ndef f(a: DataFrame[X]) ...`
+/// reads as acknowledged. Only single-line decorators are recognized;
+/// multi-line decorator calls require the marker on the line directly
+/// above the `def`.
 fn line_above_has_ack_marker(source: &str, offset: usize) -> bool {
     const MARKER: &str = "# pykrete: ack-deprecation";
     if source.is_empty() {
@@ -222,8 +237,12 @@ fn line_above_has_ack_marker(source: &str, offset: usize) -> bool {
         .rposition(|&b| b == b'\n')
         .map(|i| i + 1)
         .unwrap_or(0);
-    let anchor_start =
-        find_enclosing_def_line_start(source, annot_line_start).unwrap_or(annot_line_start);
+    let annot_indent = leading_indent(source, annot_line_start);
+    let def_anchor = find_enclosing_def_line_start(source, annot_line_start, annot_indent);
+    let anchor_start = match def_anchor {
+        Some(def_start) => walk_past_decorators(source, def_start),
+        None => annot_line_start,
+    };
     if anchor_start == 0 {
         return false;
     }
@@ -238,10 +257,17 @@ fn line_above_has_ack_marker(source: &str, offset: usize) -> bool {
 
 /// Walk backwards from `from_line_start` (a line's first-byte offset)
 /// looking for the nearest line whose trimmed content matches
-/// `def NAME(` or `async def NAME(`. Returns the line's first-byte
-/// offset, or `None` for module-level annotations with no enclosing
-/// def in the file's prefix.
-fn find_enclosing_def_line_start(source: &str, from_line_start: usize) -> Option<usize> {
+/// `def NAME(` or `async def NAME(` AND whose leading indentation is
+/// strictly less than `annot_indent` — i.e. the candidate def actually
+/// encloses the annotation. Returns the line's first-byte offset, or
+/// `None` when no enclosing def exists (module-level annotations, or
+/// annotations whose only preceding `def` is at equal/greater indent
+/// and therefore sibling/inner rather than enclosing).
+fn find_enclosing_def_line_start(
+    source: &str,
+    from_line_start: usize,
+    annot_indent: usize,
+) -> Option<usize> {
     let bytes = source.as_bytes();
     let mut line_start = from_line_start;
     loop {
@@ -249,8 +275,18 @@ fn find_enclosing_def_line_start(source: &str, from_line_start: usize) -> Option
             .find('\n')
             .map(|p| line_start + p)
             .unwrap_or(source.len());
-        if is_def_signature_line(&source[line_start..line_end]) {
-            return Some(line_start);
+        let line = &source[line_start..line_end];
+        if is_def_signature_line(line) {
+            let candidate_indent = leading_indent(source, line_start);
+            // The annot is on the def line itself (single-line
+            // signature: `def f(df: DataFrame[X]) ...`) → trivially
+            // enclosing. Otherwise the def must sit at strictly less
+            // indent than the annotation line to qualify as enclosing
+            // (a same-indent or deeper def is a sibling/inner, not an
+            // ancestor).
+            if line_start == from_line_start || candidate_indent < annot_indent {
+                return Some(line_start);
+            }
         }
         if line_start == 0 {
             return None;
@@ -263,6 +299,56 @@ fn find_enclosing_def_line_start(source: &str, from_line_start: usize) -> Option
             .unwrap_or(0);
         line_start = prev_line_start;
     }
+}
+
+/// Given the first-byte offset of a `def`/`async def` line, walk upward
+/// past any contiguous decorator lines (lines whose first non-whitespace
+/// character is `@`) and return the topmost line's first-byte offset.
+/// The marker check then asks "what's the line above the decorator
+/// stack?" instead of "what's the line above the def?", so
+///
+/// ```text
+/// # pykrete: ack-deprecation
+/// @decorator
+/// def f(a: DataFrame[X]) -> int: ...
+/// ```
+///
+/// reads as acknowledged. Only single-line decorators (`@deco`,
+/// `@deco(...)`) are recognized — multi-line decorator calls
+/// (`@deco(\n    arg,\n)`) are rare and treated as non-decorator lines,
+/// so the marker must sit on the line directly above the `def` in that
+/// case.
+fn walk_past_decorators(source: &str, def_line_start: usize) -> usize {
+    let bytes = source.as_bytes();
+    let mut anchor = def_line_start;
+    while anchor > 0 {
+        let prev_line_end = anchor - 1;
+        let prev_line_start = bytes[..prev_line_end]
+            .iter()
+            .rposition(|&b| b == b'\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let prev_line = &source[prev_line_start..prev_line_end];
+        if prev_line.trim_start().starts_with('@') {
+            anchor = prev_line_start;
+        } else {
+            break;
+        }
+    }
+    anchor
+}
+
+/// Count of leading ASCII space/tab bytes on the line beginning at
+/// `line_start`. Tabs count as 1 byte each — pykrete doesn't model
+/// tab-stop width because the indentation-aware comparison only needs
+/// the relative ordering "annotation is deeper than candidate def,"
+/// which holds under any consistent tab/space treatment as long as the
+/// source file is itself self-consistent.
+fn leading_indent(source: &str, line_start: usize) -> usize {
+    source[line_start..]
+        .bytes()
+        .take_while(|b| *b == b' ' || *b == b'\t')
+        .count()
 }
 
 /// True when `line` (no trailing newline) reads as the opening line of
@@ -732,6 +818,171 @@ def f(
         let sites = collect(src);
         assert_eq!(sites.len(), 1);
         assert_eq!(sites[0].migration_status, MigrationStatus::Pending);
+    }
+
+    // v1.10 PR-A1 R2 — indentation-aware enclosing-def walk + decorator
+    // walk-past. The R1 walker was indentation-blind and regressed v1.9
+    // module-level behavior when an earlier sibling `def` preceded a
+    // module-level annotation (Cases J/K below). The decorator support
+    // addresses the spec-silent but real adopter case where the marker
+    // sits above an `@decorator` stack on top of the `def`.
+
+    #[test]
+    fn v110_pra1_case_j_single_preceding_def_module_level_annotation_acknowledged() {
+        // Case J: one earlier function defined above a module-level
+        // annotation. The indentation-blind R1 walker mis-anchored at
+        // `def earlier_fn(`, found start-of-file above it, and reported
+        // `pending`. With the indentation check, the module-level
+        // annotation (col 0) cannot be enclosed by any def (also col 0
+        // or deeper), so the walker falls through to "line above the
+        // annotation."
+        let src = "\
+def earlier_fn():
+    return 1
+
+# pykrete: ack-deprecation
+x: DataFrame[Sale] = read_sales()
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v110_pra1_case_k_multiple_preceding_defs_module_level_annotation_acknowledged() {
+        // Case K: several earlier functions above a module-level
+        // annotation. Same regression class as Case J, with more
+        // candidate def lines to mis-anchor on.
+        let src = "\
+def first():
+    return 1
+
+def second():
+    return 2
+
+def third():
+    return 3
+
+# pykrete: ack-deprecation
+x: DataFrame[Sale] = read_sales()
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v110_pra1_module_level_annotation_with_no_marker_is_pending() {
+        // Indentation-aware fallthrough must NOT silently acknowledge
+        // module-level annotations — only when the line directly above
+        // is the marker.
+        let src = "\
+def earlier_fn():
+    return 1
+
+x: DataFrame[Sale] = read_sales()
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Pending);
+    }
+
+    #[test]
+    fn v110_pra1_sibling_def_does_not_anchor_later_def_annotation() {
+        // Two sibling top-level defs. Marker above the second def
+        // must acknowledge the second def's annotation; the walker
+        // must not anchor at `def first(` and treat the marker as
+        // "two defs above."
+        let src = "\
+def first(a: int) -> int:
+    return a
+
+# pykrete: ack-deprecation
+def second(df: DataFrame[Sale]) -> int:
+    return 0
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v110_pra1_decorator_simple_marker_above_decorator_is_acknowledged() {
+        // Decorator support: marker above a single `@deco` line above a
+        // `def` reads as acknowledged.
+        let src = "\
+# pykrete: ack-deprecation
+@decorator
+def f(df: DataFrame[Sale]) -> int:
+    return 0
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v110_pra1_decorator_with_args_marker_above_is_acknowledged() {
+        let src = "\
+# pykrete: ack-deprecation
+@decorator(arg=1)
+def f(df: DataFrame[Sale]) -> int:
+    return 0
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v110_pra1_decorator_stack_marker_above_top_is_acknowledged() {
+        // Multiple decorators on the def — marker above the topmost
+        // decorator anchors correctly.
+        let src = "\
+# pykrete: ack-deprecation
+@outer
+@inner
+def f(df: DataFrame[Sale]) -> int:
+    return 0
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v110_pra1_decorator_marker_between_decorator_and_def_still_acknowledges() {
+        // The walker steps past decorators only when they sit directly
+        // above the `def` — if a marker interrupts the decorator/def
+        // adjacency, the walker stops at the def line and the marker
+        // is read as "line directly above the def." This case stays
+        // acknowledged for v1.9 compatibility: pre-PR, v1.9 anchored
+        // at the def line and saw the marker on the line above.
+        let src = "\
+@decorator
+# pykrete: ack-deprecation
+def f(df: DataFrame[Sale]) -> int:
+    return 0
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v110_pra1_decorator_multi_line_def_marker_above_decorator_is_acknowledged() {
+        // Decorator + multi-line def both involved.
+        let src = "\
+# pykrete: ack-deprecation
+@decorator
+def f(
+    a: DataFrame[Sale],
+) -> int:
+    return 0
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
     }
 
     #[test]
