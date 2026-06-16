@@ -139,9 +139,9 @@ Closes #N
 
 If a commit closes an issue, end with `Closes #N` or `Fixes #N`. Co-authored work uses standard `Co-Authored-By:` trailers.
 
-### Version bumps (v1.9+)
+### Version bumps (v1.10+; standing)
 
-For the v1.9 cycle, version bumps are **centralized in the cycle-close PR (PR-F)** — workspace `Cargo.toml` and `editors/vscode/package.json` + `package-lock.json` are both bumped once, by PR-F, at the end of the cycle. Per-PR developers do NOT bump versions; an extension-version-guard CI check enforces this. The mechanic exists to eliminate the per-PR-bump rebase ladder that hit v1.7 and v1.8. See `docs/design/v1.9-spec.md` §9.2 for the trial details and revert path; v1.10 will keep or revert based on the trial outcome.
+Version bumps are **centralized in the cycle-close PR (PR-F)** — workspace `Cargo.toml` and `editors/vscode/package.json` + `package-lock.json` are both bumped once, by PR-F, at the end of the cycle. Per-PR developers do NOT bump versions; an extension-version-guard CI check enforces this. The mechanic exists to eliminate the per-PR-bump rebase ladder that hit v1.7 and v1.8. The v1.9 trial succeeded (zero rebase-ladder collisions across Wave 1); v1.10 promotes the practice to standing. See `docs/design/v1.10-spec.md` §10.2 for the standing rule and the marker-mechanism escape hatch (`.github/centralized-bump-cycle.marker`) for cycles that need per-PR bumps.
 
 ### Submitting a change
 
