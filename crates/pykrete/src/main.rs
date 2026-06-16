@@ -44,12 +44,19 @@ Options:
                            for the v2.0 alias removal); suppresses normal
                            diagnostic output and always exits 0.
         --deprecation-report
-                           Emit a JSON envelope listing every D0090-firing
-                           site (file, line, column, raw annotation,
-                           adjudicated dialect, suggested rewrite) for CI
-                           gating and migration dashboards; suppresses
-                           normal diagnostic output and always exits 0.
-                           Mutually exclusive with --report-aliases.
+                           Emit a JSON envelope (v2) listing every D0090-
+                           firing site (file, line, column, raw annotation,
+                           adjudicated dialect, suggested rewrite,
+                           migration status) for CI gating and migration
+                           dashboards; suppresses normal diagnostic output
+                           and always exits 0. Mutually exclusive with
+                           --report-aliases.
+        --ack <VALUE>      Filter --deprecation-report sites by
+                           migration status: 'pending' (default — no
+                           ack marker), 'acknowledged' (line-above
+                           '# pykrete: ack-deprecation' marker). Without
+                           this flag, every site emits. Requires
+                           --deprecation-report.
     -h, --help             Show this help and exit.
 
 Example:
@@ -57,6 +64,7 @@ Example:
     pykrete check --format json examples/orders.pyk
     pykrete check --report-aliases src/
     pykrete check --deprecation-report src/
+    pykrete check --deprecation-report --ack=pending src/
 ";
 
 const TRANSPILE_HELP: &str = "\
@@ -160,6 +168,7 @@ struct CheckArgs {
     format: OutputFormat,
     report_aliases: bool,
     deprecation_report: bool,
+    ack_filter: Option<pykrete::AckFilter>,
     paths: Vec<String>,
 }
 
@@ -168,6 +177,7 @@ fn parse_check_args(args: &[String]) -> Result<CheckArgs, String> {
     let mut format = OutputFormat::Text;
     let mut report_aliases = false;
     let mut deprecation_report = false;
+    let mut ack_filter: Option<pykrete::AckFilter> = None;
     let mut paths: Vec<String> = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -187,6 +197,17 @@ fn parse_check_args(args: &[String]) -> Result<CheckArgs, String> {
             }
             "--report-aliases" => report_aliases = true,
             "--deprecation-report" => deprecation_report = true,
+            "--ack" => {
+                i += 1;
+                let value = args
+                    .get(i)
+                    .ok_or_else(|| "--ack requires a value (pending|acknowledged)".to_string())?;
+                ack_filter = Some(parse_ack(value)?);
+            }
+            s if s.starts_with("--ack=") => {
+                let value = &s["--ack=".len()..];
+                ack_filter = Some(parse_ack(value)?);
+            }
             s if s.starts_with('-') => {
                 return Err(format!("unknown option '{s}'; see `pykrete check --help`"));
             }
@@ -200,12 +221,25 @@ fn parse_check_args(args: &[String]) -> Result<CheckArgs, String> {
                 .to_string(),
         );
     }
+    if ack_filter.is_some() && !deprecation_report {
+        return Err("--ack requires --deprecation-report".to_string());
+    }
     Ok(CheckArgs {
         verbose,
         format,
         report_aliases,
         deprecation_report,
+        ack_filter,
         paths,
+    })
+}
+
+fn parse_ack(value: &str) -> Result<pykrete::AckFilter, String> {
+    pykrete::AckFilter::parse(value).ok_or_else(|| {
+        format!(
+            "unknown --ack value '{value}'; expected 'pending' or 'acknowledged' (pykrete never \
+             emits 'resolved'; it's a stateful-delta sentinel for external consumers)"
+        )
     })
 }
 
@@ -232,6 +266,7 @@ fn run_check(args: &[String]) -> ExitCode {
         format,
         report_aliases,
         deprecation_report,
+        ack_filter,
         paths,
     } = match parse_check_args(args) {
         Ok(v) => v,
@@ -299,7 +334,7 @@ fn run_check(args: &[String]) -> ExitCode {
     if deprecation_report {
         let mut sites = pykrete::collect_alias_sites(&sources);
         pykrete::adjudicate_alias_sites(&sources, &mut sites);
-        let rendered = pykrete::render_deprecation_report_json(&sites);
+        let rendered = pykrete::render_deprecation_report_json(&sites, ack_filter);
         println!("{rendered}");
         return ExitCode::SUCCESS;
     }
