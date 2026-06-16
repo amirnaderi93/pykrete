@@ -27,7 +27,10 @@ use ruff_text_size::{Ranged, TextRange};
 
 use crate::dataframe::{self, DataFrameAnnotation, Dialect};
 use crate::diagnostics::{Diagnostic, Severity};
-use crate::dialect_signals::{PANDAS_INHERITED_ARMS, PANDAS_ONLY_SIGNALS, SPARK_DISCRIMINATORS};
+use crate::dialect_signals::{
+    PANDAS_INHERITED_ARMS, PANDAS_INHERITED_PROPERTIES, PANDAS_ONLY_SIGNALS,
+    SPARK_DISCRIMINATOR_PROPERTIES, SPARK_DISCRIMINATORS,
+};
 use crate::registry::{MethodParam, ParamKind};
 use crate::schema::{
     DerivedField, FieldPathResult, Schema, SchemaView, resolve_path, suggest_field_name,
@@ -153,6 +156,51 @@ pub(super) fn analyze_expr<'a>(
                 && let Some(schema) = ctx.find_schema(constant.schema_name)
             {
                 return Some(SchemaView::Declared(schema));
+            }
+            // v1.9 PR-D2 — D0091 bare-attribute cross-dialect mismatch.
+            // Mirrors the `Expr::Call` arm at `:858`: Pandas receiver
+            // reaching for a Spark-only property (`pdf.rdd`) or Spark
+            // receiver reaching for a pandas-only indexer (`sdf.loc`)
+            // fires D0091 as a warning. Shared-with-Spark method names
+            // in `PANDAS_INHERITED_ARMS` (`head`/`tail`/…) are explicitly
+            // excluded — a bare `df.head` (no call) is a method reference
+            // legitimately on either dialect.
+            //
+            // Deprecated-alias receivers (`df: DataFrame[X]`) skip the
+            // gate; the v2.0 migration narrative is "adjudicate, then
+            // enforce" per spec §3.5 / mirrors PR-D1.
+            //
+            // Severity is hardcoded `Warning` this PR. D1 owns the
+            // strict-mode escalation surface in `Expr::Call` and the
+            // shared mechanism lands at rebase time (spec §3.2.1
+            // "Severity matches PR-D1's policy").
+            let attr_name = a.attr.id.as_str();
+            if let Some(d) = inherited_dialect(&a.value, ctx)
+                && !inherited_is_deprecated_alias(&a.value, ctx)
+                && !PANDAS_INHERITED_ARMS.contains(&attr_name)
+            {
+                let mismatch = match d {
+                    Dialect::Pandas => SPARK_DISCRIMINATOR_PROPERTIES
+                        .contains(&attr_name)
+                        .then_some(("Spark", "PandasFrame")),
+                    Dialect::Spark => PANDAS_INHERITED_PROPERTIES
+                        .contains(&attr_name)
+                        .then_some(("pandas", "SparkFrame")),
+                };
+                if let Some((wrong_dialect, receiver_label)) = mismatch {
+                    let message = format!(
+                        "'{attr_name}' is a {wrong_dialect}-only DataFrame attribute but the \
+                         receiver is a {receiver_label}."
+                    );
+                    diagnostics.push(Diagnostic::at_range(
+                        Severity::Warning,
+                        "D0091",
+                        message,
+                        a.attr.range,
+                        source,
+                        line_index,
+                    ));
+                }
             }
             // Otherwise this is a column access (`<chain>.colname`) — not
             // a DataFrame itself, but analyze the receiver so a call in

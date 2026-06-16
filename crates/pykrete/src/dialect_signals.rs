@@ -167,6 +167,35 @@ pub const PANDAS_ONLY_SIGNALS: &[&str] = &[
 /// [`PANDAS_ONLY_SIGNALS`].
 pub const PANDAS_INHERITED_ARMS: &[&str] = &["head", "tail", "first", "take", "drop"];
 
+/// v1.9 PR-D2 — Spark-only DataFrame **property** names (not methods).
+/// Used by the `Expr::Attribute` arm in
+/// `operations::expr::analyze_expr` to fire D0091 when a Pandas-tagged
+/// receiver accesses a Spark-only property (`pdf.rdd`,
+/// `pdf.isStreaming`). The `Expr::Call` arm uses [`SPARK_DISCRIMINATORS`]
+/// for the method case; this list is the property mirror.
+///
+/// These names also appear in [`SPARK_DISCRIMINATORS`] (the adjudicator
+/// treats `rdd` / `isStreaming` / `sparkSession` as Spark-side signals
+/// regardless of access shape). The duplication is deliberate: the
+/// adjudicator scans every binding-downstream access; the D0091 arms
+/// dispatch on AST shape. Bare-attribute access needs its own list so
+/// adding a Spark-only property to the adjudicator doesn't silently fail
+/// to fire D0091.
+pub const SPARK_DISCRIMINATOR_PROPERTIES: &[&str] = &["rdd", "isStreaming", "sparkSession"];
+
+/// v1.9 PR-D2 — Pandas-only DataFrame **property/indexer** names. Used
+/// by the `Expr::Attribute` arm in `operations::expr::analyze_expr` to
+/// fire D0091 when a Spark-tagged receiver accesses a pandas-only
+/// property (`sdf.loc`, `sdf.iloc`, `sdf.iat`, `sdf.at`). The
+/// `Expr::Call` arm uses [`PANDAS_ONLY_SIGNALS`] for the method case;
+/// this list is the property mirror.
+///
+/// These names also appear in [`PANDAS_ONLY_SIGNALS`]. Same rationale as
+/// [`SPARK_DISCRIMINATOR_PROPERTIES`]: the adjudicator and the D0091
+/// arms have separate dispatch shapes, so each maintains its own
+/// inventory.
+pub const PANDAS_INHERITED_PROPERTIES: &[&str] = &["loc", "iloc", "iat", "at"];
+
 // v1.8 PR-A1 — `PANDAS_INHERITED_ARM_METHODS_GENERATED` is produced by
 // `crates/pykrete/build.rs` at compile time. The constant lives in
 // `$OUT_DIR/pandas_inherited_arm_methods.rs` and lists every method
