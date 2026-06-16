@@ -74,7 +74,7 @@ fn single_spark_adjudicated_site_emits_one_record() {
         !stderr.contains("D0090"),
         "stderr must not leak D0090 in report mode: {stderr:?}"
     );
-    assert_eq!(v["deprecationReportVersion"], "1");
+    assert_eq!(v["deprecationReportVersion"], "2");
     let sites = v["sites"].as_array().expect("sites array");
     assert_eq!(sites.len(), 1, "exactly one site: {sites:?}");
     let s = &sites[0];
@@ -181,7 +181,7 @@ fn no_dataframe_annotations_emits_empty_envelope() {
     let (exit, v, stderr) = run_deprecation_report_json(&p);
     assert_eq!(exit, 0);
     assert!(stderr.is_empty() || !stderr.contains("D0090"));
-    assert_eq!(v["deprecationReportVersion"], "1");
+    assert_eq!(v["deprecationReportVersion"], "2");
     assert_eq!(v["sites"].as_array().unwrap().len(), 0);
     assert_eq!(v["summary"]["totalSites"], 0);
     assert_eq!(v["summary"]["byDialect"]["spark"], 0);
@@ -266,7 +266,7 @@ fn deprecation_report_suppresses_normal_diagnostic_output() {
         "no text-mode summary line on stdout: {stdout:?}"
     );
     let v: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
-    assert_eq!(v["deprecationReportVersion"], "1");
+    assert_eq!(v["deprecationReportVersion"], "2");
 }
 
 // ---------------------------------------------------------------

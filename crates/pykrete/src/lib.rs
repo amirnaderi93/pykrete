@@ -46,8 +46,8 @@ pub use alias_adjudicate::{
     adjudicate as adjudicate_alias_sites, ambiguous_site_offsets, has_ambiguous_in_file,
 };
 pub use alias_report::{
-    AdjudicatedDialect, AliasSite, collect_alias_sites, render_alias_report_json,
-    render_deprecation_report_json,
+    AckFilter, AdjudicatedDialect, AliasSite, MigrationStatus, collect_alias_sites,
+    render_alias_report_json, render_deprecation_report_json,
 };
 pub use completion::{CompletionItem, CompletionItemKind, completions};
 pub use config::Config;

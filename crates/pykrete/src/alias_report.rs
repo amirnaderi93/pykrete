@@ -32,6 +32,60 @@ pub enum AdjudicatedDialect {
     Ambiguous,
 }
 
+/// v1.9 PR-V1 — per-site migration tracking for the
+/// `--deprecation-report` v2 envelope. The pykrete binary emits only
+/// `Pending` (no marker) and `Acknowledged` (line-above
+/// `# pykrete: ack-deprecation` marker). `Resolved` is a value reserved
+/// in the schema for stateful delta tracking by external consumers: a
+/// consumer that retains the prior report can mark sites that no longer
+/// appear in the current envelope as `resolved`. The binary itself
+/// never emits `Resolved`; it only reports the state it currently
+/// sees.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MigrationStatus {
+    Pending,
+    Acknowledged,
+}
+
+impl MigrationStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            MigrationStatus::Pending => "pending",
+            MigrationStatus::Acknowledged => "acknowledged",
+        }
+    }
+}
+
+/// v1.9 PR-V1 — `--ack=<value>` filter for the deprecation envelope.
+/// `resolved` is rejected at parse time per spec §4.7: pykrete never
+/// emits sites with that status (it's a consumer-side stateful-delta
+/// sentinel), so accepting the value here would only mask user
+/// confusion (`--ack=resolved` always returns an empty array, which
+/// looks the same as "no migration work left"). Out-of-domain → exit 2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AckFilter {
+    Pending,
+    Acknowledged,
+}
+
+impl AckFilter {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "pending" => Some(AckFilter::Pending),
+            "acknowledged" => Some(AckFilter::Acknowledged),
+            _ => None,
+        }
+    }
+
+    fn matches(self, status: MigrationStatus) -> bool {
+        matches!(
+            (self, status),
+            (AckFilter::Pending, MigrationStatus::Pending)
+                | (AckFilter::Acknowledged, MigrationStatus::Acknowledged)
+        )
+    }
+}
+
 /// One reported alias site. `file` / `line` / `column` together form the
 /// stable identifier downstream tooling (e.g. v1.6 `pykrete migrate`)
 /// keys against; positions are 1-indexed to match the `--format json`
@@ -63,6 +117,12 @@ pub struct AliasSite {
     /// sites the adjudicator didn't visit (module-level annotations,
     /// return slots).
     pub binding_name: Option<String>,
+    /// v1.9 PR-V1 — per-site migration state for the v2
+    /// `--deprecation-report` envelope. `Acknowledged` when a
+    /// `# pykrete: ack-deprecation` comment sits on the line immediately
+    /// above this site (mirroring the v1.6 ambiguous-marker mechanic);
+    /// `Pending` otherwise. Set by the walker at site-collection time.
+    pub migration_status: MigrationStatus,
 }
 
 /// Walk every analyzed file's AST and collect every `DataFrame[X]`
@@ -105,6 +165,11 @@ impl<'a> SourceOrderVisitor<'a> for AliasVisitor<'a> {
             let range = expr.range();
             let start = self.line_index.line_column(range.start(), self.source);
             let raw_text = &self.source[range];
+            let migration_status = if line_above_has_ack_marker(self.source, range.start().into()) {
+                MigrationStatus::Acknowledged
+            } else {
+                MigrationStatus::Pending
+            };
             self.sites.push(AliasSite {
                 file: self.file.to_string(),
                 line: start.line.get(),
@@ -115,6 +180,7 @@ impl<'a> SourceOrderVisitor<'a> for AliasVisitor<'a> {
                 verdict: None,
                 raw_text: raw_text.to_string(),
                 binding_name: None,
+                migration_status,
             });
             // Don't descend into a recognized alias — the inner bare
             // `DataFrame` of `DataFrame[Sales]` would otherwise be
@@ -125,6 +191,39 @@ impl<'a> SourceOrderVisitor<'a> for AliasVisitor<'a> {
         }
         walk_expr(self, expr);
     }
+}
+
+/// v1.9 PR-V1 — mirrors the v1.6 `# pykrete: ambiguous` line-above
+/// lookup. Returns `true` when the line immediately preceding the byte
+/// offset trims to exactly `# pykrete: ack-deprecation`. Case-
+/// sensitive; leading whitespace tolerated; trailing whitespace
+/// tolerated. The annotation's offset is the byte position of the
+/// `DataFrame` token inside `DataFrame[X]` (or the bare `DataFrame`
+/// annotation).
+fn line_above_has_ack_marker(source: &str, offset: usize) -> bool {
+    if offset == 0 {
+        return false;
+    }
+    let bytes = source.as_bytes();
+    let upper = offset.min(bytes.len());
+    let line_start = bytes[..upper]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    if line_start == 0 {
+        return false;
+    }
+    // `line_start - 1` is the '\n' ending the previous line. The
+    // previous line starts at the byte after the prior '\n' (or 0).
+    let prev_line_end = line_start - 1;
+    let prev_line_start = bytes[..prev_line_end]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let prev_line = &source[prev_line_start..prev_line_end];
+    prev_line.trim() == "# pykrete: ack-deprecation"
 }
 
 /// Serialize an in-memory alias inventory to the spec §5.1 JSON shape.
@@ -167,20 +266,39 @@ pub fn render_alias_report_json(sites: &[AliasSite]) -> String {
         .expect("alias report JSON is composed of types that always serialize")
 }
 
-/// Serialize an in-memory alias inventory to the v1.8 PR-V1
-/// `--deprecation-report` envelope. Every alias site is by definition
-/// a D0090-firing site, so the filter is structural: every member of
-/// `sites` is included. Versioned envelope so downstream CI gates can
-/// pin (`deprecationReportVersion: "1"`). The per-site verdict mirrors
-/// the alias report's adjudication; `suggestedRewrite` is `null` for
-/// ambiguous sites because the migrator leaves them intact for human
-/// review.
-pub fn render_deprecation_report_json(sites: &[AliasSite]) -> String {
+/// Serialize an in-memory alias inventory to the v1.9 PR-V1
+/// `--deprecation-report` v2 envelope. Every alias site is a D0090-
+/// firing site, so the structural filter is "every member of `sites`."
+/// `ack_filter` (the `--ack=<value>` CLI flag) narrows further:
+/// `Some(AckFilter::Pending)` keeps only `migration_status == "pending"`,
+/// `Some(AckFilter::Acknowledged)` keeps only `migration_status ==
+/// "acknowledged"`, and `None` keeps all. `summary` counts reflect the
+/// filtered set so consumers consume `summary.totalSites` directly.
+///
+/// v2 schema additions over v1 (v1.8 PR-V1):
+/// - `deprecationReportVersion` bumped `"1"` → `"2"`.
+/// - Per-site `migrationStatus`: `"pending"` (default — alias still in
+///   source, no marker) or `"acknowledged"` (line-above marker present).
+///   The pykrete binary never emits `"resolved"`; that value is
+///   reserved in the schema for stateful delta tracking by external
+///   consumers maintaining a prior-report cache.
+///
+/// Per spec §4.5 carve-out: NO `target_version` field. NO calendar
+/// quarter. NO date marker. The envelope is a planning instrument;
+/// the ship-date is product fork, not committee fork.
+pub fn render_deprecation_report_json(
+    sites: &[AliasSite],
+    ack_filter: Option<AckFilter>,
+) -> String {
     let mut spark = 0usize;
     let mut pandas = 0usize;
     let mut ambiguous = 0usize;
     let site_values: Vec<serde_json::Value> = sites
         .iter()
+        .filter(|s| match ack_filter {
+            Some(f) => f.matches(s.migration_status),
+            None => true,
+        })
         .map(|s| {
             let (verdict_str, suggested) = match s.verdict {
                 Some(AdjudicatedDialect::Spark) => {
@@ -219,14 +337,16 @@ pub fn render_deprecation_report_json(sites: &[AliasSite]) -> String {
                 "rawAnnotation": s.raw_text,
                 "adjudicatedDialect": verdict_str,
                 "suggestedRewrite": suggested,
+                "migrationStatus": s.migration_status.as_str(),
             })
         })
         .collect();
+    let total = site_values.len();
     let payload = serde_json::json!({
-        "deprecationReportVersion": "1",
+        "deprecationReportVersion": "2",
         "sites": site_values,
         "summary": {
-            "totalSites": sites.len(),
+            "totalSites": total,
             "byDialect": {
                 "spark": spark,
                 "pandas": pandas,
@@ -348,5 +468,78 @@ def f(df: DataFrame) -> DataFrame:
         let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
         assert_eq!(v["aliasReportVersion"], "2");
         assert!(v["aliases"].as_array().expect("array").is_empty());
+    }
+
+    // v1.9 PR-V1 — migration_status walker behavior
+
+    #[test]
+    fn no_ack_marker_means_pending() {
+        let src = "def f(df: DataFrame[Sale]) -> int: ...\n";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Pending);
+    }
+
+    #[test]
+    fn ack_marker_on_line_above_means_acknowledged() {
+        let src = "# pykrete: ack-deprecation\ndef f(df: DataFrame[Sale]) -> int: ...\n";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn ack_marker_two_lines_above_is_pending() {
+        let src = "# pykrete: ack-deprecation\n\ndef f(df: DataFrame[Sale]) -> int: ...\n";
+        let sites = collect(src);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Pending);
+    }
+
+    #[test]
+    fn ack_filter_parse_accepts_pending_and_acknowledged_only() {
+        assert_eq!(AckFilter::parse("pending"), Some(AckFilter::Pending));
+        assert_eq!(
+            AckFilter::parse("acknowledged"),
+            Some(AckFilter::Acknowledged)
+        );
+        assert_eq!(AckFilter::parse("resolved"), None);
+        assert_eq!(AckFilter::parse("garbage"), None);
+        assert_eq!(AckFilter::parse(""), None);
+    }
+
+    #[test]
+    fn deprecation_report_v2_envelope_has_version_2() {
+        let src = "def f(df: DataFrame[Sale]) -> int: ...\n";
+        let sites = collect(src);
+        let json = render_deprecation_report_json(&sites, None);
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert_eq!(v["deprecationReportVersion"], "2");
+    }
+
+    #[test]
+    fn deprecation_report_v2_per_site_has_migration_status() {
+        let src = "def f(df: DataFrame[Sale]) -> int: ...\n";
+        let sites = collect(src);
+        let json = render_deprecation_report_json(&sites, None);
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert_eq!(v["sites"][0]["migrationStatus"], "pending");
+    }
+
+    #[test]
+    fn deprecation_report_v2_filters_summary_matches_filtered_sites() {
+        // Two sites, one acknowledged via marker. Filter to pending →
+        // summary.totalSites == 1.
+        let src = "\
+# pykrete: ack-deprecation
+def a(df: DataFrame[Sale]) -> int: ...
+
+def b(df: DataFrame[Sale]) -> int: ...
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 2);
+        let json = render_deprecation_report_json(&sites, Some(AckFilter::Pending));
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert_eq!(v["sites"].as_array().unwrap().len(), 1);
+        assert_eq!(v["summary"]["totalSites"], 1);
     }
 }
