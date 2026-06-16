@@ -866,7 +866,13 @@ fn analyze_method_call_inner<'a>(
              {receiver_label}.{}",
             suggestion
                 .as_ref()
-                .map(|s| format!(" Use '.{s}(...)' instead."))
+                .map(|s| {
+                    if s.shape_changes {
+                        format!(" Use '.{}(...)' instead — note arg shape differs.", s.name)
+                    } else {
+                        format!(" Use '.{}(...)' instead.", s.name)
+                    }
+                })
                 .unwrap_or_default(),
         );
         diagnostics.push(
@@ -878,7 +884,7 @@ fn analyze_method_call_inner<'a>(
                 source,
                 line_index,
             )
-            .with_suggestion(suggestion.map(String::from)),
+            .with_suggestion(suggestion.map(|s| s.name.to_string())),
         );
     }
 
@@ -2759,7 +2765,7 @@ pub(super) fn aggregate_output_type(
 fn cross_dialect_mismatch(
     receiver: Dialect,
     method: &str,
-) -> Option<(&'static str, Option<&'static str>)> {
+) -> Option<(&'static str, Option<CrossDialectSuggestion>)> {
     match receiver {
         Dialect::Pandas => SPARK_DISCRIMINATORS
             .contains(&method)
@@ -2769,6 +2775,138 @@ fn cross_dialect_mismatch(
         .then(|| ("pandas", cross_dialect_suggestion_spark_target(method))),
     }
 }
+
+/// v1.9 PR-D1 — cross-dialect rewrite suggestion enriched with a
+/// shape-change flag. Bare `&'static str` from v1.8 was actively
+/// misleading on suggestions like `withColumnRenamed` → `rename` where
+/// Spark's positional `(old, new)` doesn't translate to pandas's
+/// `rename(columns={old: new})` shape. The flag lets D0091 append a
+/// `— note arg shape differs` hint so the suggestion isn't mechanical.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CrossDialectSuggestion {
+    pub name: &'static str,
+    pub shape_changes: bool,
+}
+
+/// v1.9 PR-D1 — methods in [`SPARK_DISCRIMINATORS`] that legitimately
+/// have no clean pandas rewrite. Each entry must carry an inline
+/// rationale; the tripwire test in `tests` below asserts every Spark
+/// discriminator is either mapped in
+/// [`cross_dialect_suggestion_pandas_target`] or listed here.
+#[allow(dead_code)]
+const NO_SUGGESTION_ALLOWLIST_SPARK: &[&str] = &[
+    // Spark execution-plan controls (no pandas analog — pandas is eager).
+    "repartition",
+    "coalesce",
+    "persist",
+    "unpersist",
+    "cache",
+    "checkpoint",
+    "foreachPartition",
+    // Spark catalog / view registration (no pandas analog — pandas has no
+    // session-scoped catalog).
+    "createOrReplaceTempView",
+    "createOrReplaceGlobalTempView",
+    "createTempView",
+    "createGlobalTempView",
+    // Spark debug / inspection surfaces. `printSchema` → pandas
+    // `df.dtypes` / `df.info()` is shape-different and verb-different;
+    // `show` is REPL-style with no clean pandas equivalent.
+    "printSchema",
+    "show",
+    // Spark-side I/O sinks (no pandas analog — pandas writes via
+    // top-level `to_*` functions, not DataFrame-method sinks named
+    // identically).
+    "writeTo",
+    "writeStream",
+    // Spark set-algebra and sampling that don't map one-to-one onto
+    // pandas DataFrame methods.
+    "crossJoin",
+    "unionByName",
+    "subtract",
+    "exceptAll",
+    "intersectAll",
+    "sampleBy",
+    // Spark statistical surfaces. `freqItems` / `approxQuantile` /
+    // `crosstab` exist on pandas only as top-level functions (or not at
+    // all); `colRegex` / `summary` have no pandas analog.
+    "freqItems",
+    "approxQuantile",
+    "crosstab",
+    "colRegex",
+    "summary",
+    // Spark-only execution arms.
+    "mapInPandas",
+    "mapInArrow",
+    "unpivot",
+    // Spark-only DataFrame attributes (consumed in this list because
+    // they appear in `SPARK_DISCRIMINATORS` for the adjudicator; D0091
+    // on the `Expr::Call` path doesn't fire on them, but the tripwire
+    // covers the whole list).
+    "rdd",
+    "isStreaming",
+    "sparkSession",
+    // `collect` materializes to a list of `Row` on Spark; pandas's
+    // `to_dict(orient='records')` is the closest analog but the shape
+    // diverges enough that a bare suggestion would mislead. Allowlisted
+    // to keep the message clean rather than ship "did you mean copy"-
+    // style noise.
+    "collect",
+    // `toDF` re-labels columns positionally on Spark; pandas's
+    // `rename(columns={...})` is the analog but the call shape diverges
+    // sharply (positional list → kwarg dict). Allowlisted rather than
+    // suggest a shape-mismatched rewrite.
+    "toDF",
+];
+
+/// v1.9 PR-D1 — methods in [`PANDAS_ONLY_SIGNALS`] that legitimately
+/// have no clean Spark rewrite. Mirror of
+/// [`NO_SUGGESTION_ALLOWLIST_SPARK`] for the pandas direction.
+#[allow(dead_code)]
+const NO_SUGGESTION_ALLOWLIST_PANDAS: &[&str] = &[
+    // pandas-only execution/data arms with no clean Spark equivalent.
+    "applymap",
+    "to_dict",
+    "idxmax",
+    "idxmin",
+    "copy",
+    "astype",
+    "set_index",
+    "reset_index",
+    "value_counts",
+    "nlargest",
+    "nsmallest",
+    // pandas-only DataFrame attributes (consumed in this list because
+    // they appear in `PANDAS_ONLY_SIGNALS` for the adjudicator; D0091
+    // on the `Expr::Call` path doesn't fire on them, but the tripwire
+    // covers the whole list).
+    "loc",
+    "iloc",
+    "iat",
+    "at",
+    // `pivot_table` is in the v1.6 spec backlog as a v1.10+ candidate
+    // (aggfunc=); no clean Spark analog for the kwarg shape pandas
+    // accepts. Allowlisted rather than suggest a shape-mismatched
+    // rewrite.
+    "pivot_table",
+    // `pivot` / `melt` are in `SHARED_NAMES_NOT_PANDAS_ONLY_ON_SPARK`
+    // and never reach this allowlist on a Spark receiver (the gate
+    // upstream of `cross_dialect_suggestion_spark_target` excludes them
+    // from firing). They still appear in `PANDAS_ONLY_SIGNALS` for the
+    // adjudicator, so the tripwire covers them by allowlisting here.
+    "pivot",
+    "melt",
+    // `query` — pandas's SQL-string filter on a DataFrame; Spark's
+    // `filter` accepts a column expression, not a SQL fragment.
+    // `selectExpr` accepts SQL strings but `query` and `selectExpr`
+    // differ enough in semantics that a bare suggestion misleads.
+    "query",
+    // `eval` — pandas's expression-string evaluator; the inverse-direction
+    // mate of `selectExpr` (see pandas allowlist's `query`). The cross-
+    // dialect suggestion would be `selectExpr` but the semantics
+    // (single eval vs select projection) diverge sharply.
+    "eval",
+];
 
 /// Pandas-only signal names that have a legitimate same-spelled
 /// Spark surface. v1.8 PR-D1 excludes these from the
@@ -2789,12 +2927,38 @@ const SHARED_NAMES_NOT_PANDAS_ONLY_ON_SPARK: &[&str] = &["pivot", "melt"];
 /// Pandas-side equivalent for a Spark-only method called on a pandas
 /// receiver. Returns `None` when the cross-dialect equivalent isn't
 /// a clean one-method swap.
-fn cross_dialect_suggestion_pandas_target(method: &str) -> Option<&'static str> {
+///
+/// v1.9 PR-D1: each suggestion carries a `shape_changes` flag
+/// (`true` when the call shape differs between source and target —
+/// positional → kwarg, two args → dict, etc.). When set, D0091 appends
+/// `— note arg shape differs` to the suggestion. Audit table:
+///
+/// | Source | Target | `shape_changes` | Why |
+/// |---|---|---|---|
+/// | `withColumn` | `assign` | `true` | Spark `withColumn(name, expr)` positional → pandas `assign(name=expr)` kwarg |
+/// | `withColumns` | `assign` | `true` | Spark `withColumns({n: e})` dict positional → pandas `assign(**kwargs)` |
+/// | `withColumnRenamed` | `rename` | `true` | Spark `(old, new)` positional → pandas `rename(columns={old: new})` |
+/// | `withColumnsRenamed` | `rename` | `true` | Same shape mismatch as singular form |
+/// | `selectExpr` | `eval` | `true` | SQL fragments → expression strings; arg count and semantics diverge |
+/// | `toPandas` | `copy` | `false` | Both no-arg shape; semantic distinction is the dialect handoff |
+fn cross_dialect_suggestion_pandas_target(method: &str) -> Option<CrossDialectSuggestion> {
     match method {
-        "withColumn" | "withColumns" => Some("assign"),
-        "withColumnRenamed" | "withColumnsRenamed" => Some("rename"),
-        "selectExpr" => Some("eval"),
-        "toPandas" => Some("copy"),
+        "withColumn" | "withColumns" => Some(CrossDialectSuggestion {
+            name: "assign",
+            shape_changes: true,
+        }),
+        "withColumnRenamed" | "withColumnsRenamed" => Some(CrossDialectSuggestion {
+            name: "rename",
+            shape_changes: true,
+        }),
+        "selectExpr" => Some(CrossDialectSuggestion {
+            name: "eval",
+            shape_changes: true,
+        }),
+        "toPandas" => Some(CrossDialectSuggestion {
+            name: "copy",
+            shape_changes: false,
+        }),
         _ => None,
     }
 }
@@ -2802,12 +2966,123 @@ fn cross_dialect_suggestion_pandas_target(method: &str) -> Option<&'static str> 
 /// Spark-side equivalent for a pandas-only method called on a Spark
 /// receiver. Returns `None` when the equivalent has different shape
 /// (e.g. `melt`'s positional vs kwargs split) or no clean rewrite.
-fn cross_dialect_suggestion_spark_target(method: &str) -> Option<&'static str> {
+///
+/// v1.9 PR-D1: each suggestion carries a `shape_changes` flag (see
+/// [`cross_dialect_suggestion_pandas_target`] for the convention).
+/// Audit table:
+///
+/// | Source | Target | `shape_changes` | Why |
+/// |---|---|---|---|
+/// | `assign` | `withColumn` | `true` | pandas `assign(name=expr)` kwarg → Spark `withColumn(name, expr)` positional |
+/// | `rename` | `withColumnRenamed` | `true` | pandas `rename(columns={old: new})` kwarg-dict → Spark `(old, new)` positional |
+/// | `groupby` | `groupBy` | `false` | Case-only rename; positional column-name args carry over |
+/// | `merge` | `join` | `true` | pandas `merge(other, on=...)` → Spark `join(other, on=..., how=...)`; default join semantics differ (inner is shared, but pandas defaults differently elsewhere) |
+fn cross_dialect_suggestion_spark_target(method: &str) -> Option<CrossDialectSuggestion> {
     match method {
-        "assign" => Some("withColumn"),
-        "rename" => Some("withColumnRenamed"),
-        "groupby" => Some("groupBy"),
-        "merge" => Some("join"),
+        "assign" => Some(CrossDialectSuggestion {
+            name: "withColumn",
+            shape_changes: true,
+        }),
+        "rename" => Some(CrossDialectSuggestion {
+            name: "withColumnRenamed",
+            shape_changes: true,
+        }),
+        "groupby" => Some(CrossDialectSuggestion {
+            name: "groupBy",
+            shape_changes: false,
+        }),
+        "merge" => Some(CrossDialectSuggestion {
+            name: "join",
+            shape_changes: true,
+        }),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! v1.9 PR-D1 — suggestion-drift tripwire.
+    //!
+    //! Every entry in [`SPARK_DISCRIMINATORS`] / [`PANDAS_ONLY_SIGNALS`]
+    //! must either map to a suggestion in `cross_dialect_suggestion_*`
+    //! OR appear in `NO_SUGGESTION_ALLOWLIST_*` with an inline rationale.
+    //! Without this guard, adding a new discriminator silently degrades
+    //! the D0091 message to a bare scold (the v1.6 PR-M1 anti-pattern).
+    use super::{
+        NO_SUGGESTION_ALLOWLIST_PANDAS, NO_SUGGESTION_ALLOWLIST_SPARK, PANDAS_ONLY_SIGNALS,
+        SPARK_DISCRIMINATORS, cross_dialect_suggestion_pandas_target,
+        cross_dialect_suggestion_spark_target,
+    };
+
+    #[test]
+    fn every_spark_discriminator_has_suggestion_or_is_allowlisted() {
+        let mut missing = Vec::new();
+        for method in SPARK_DISCRIMINATORS {
+            let has_suggestion = cross_dialect_suggestion_pandas_target(method).is_some();
+            let allowlisted = NO_SUGGESTION_ALLOWLIST_SPARK.contains(method);
+            if !has_suggestion && !allowlisted {
+                missing.push(*method);
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "Every SPARK_DISCRIMINATORS entry must map to a pandas suggestion in \
+             cross_dialect_suggestion_pandas_target OR be listed in \
+             NO_SUGGESTION_ALLOWLIST_SPARK with an inline rationale. \
+             Bare-scold D0091 messages are the v1.6 PR-M1 anti-pattern. \
+             Missing: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn every_pandas_only_signal_has_suggestion_or_is_allowlisted() {
+        let mut missing = Vec::new();
+        for method in PANDAS_ONLY_SIGNALS {
+            let has_suggestion = cross_dialect_suggestion_spark_target(method).is_some();
+            let allowlisted = NO_SUGGESTION_ALLOWLIST_PANDAS.contains(method);
+            if !has_suggestion && !allowlisted {
+                missing.push(*method);
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "Every PANDAS_ONLY_SIGNALS entry must map to a Spark suggestion in \
+             cross_dialect_suggestion_spark_target OR be listed in \
+             NO_SUGGESTION_ALLOWLIST_PANDAS with an inline rationale. \
+             Bare-scold D0091 messages are the v1.6 PR-M1 anti-pattern. \
+             Missing: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn allowlist_and_suggestion_table_do_not_overlap_spark() {
+        let mut overlap = Vec::new();
+        for method in NO_SUGGESTION_ALLOWLIST_SPARK {
+            if cross_dialect_suggestion_pandas_target(method).is_some() {
+                overlap.push(*method);
+            }
+        }
+        assert!(
+            overlap.is_empty(),
+            "An entry must be in EITHER the suggestion table OR the allowlist, \
+             not both — overlap means the allowlist's 'no clean rewrite' rationale \
+             contradicts the suggestion table. Overlap: {overlap:?}"
+        );
+    }
+
+    #[test]
+    fn allowlist_and_suggestion_table_do_not_overlap_pandas() {
+        let mut overlap = Vec::new();
+        for method in NO_SUGGESTION_ALLOWLIST_PANDAS {
+            if cross_dialect_suggestion_spark_target(method).is_some() {
+                overlap.push(*method);
+            }
+        }
+        assert!(
+            overlap.is_empty(),
+            "An entry must be in EITHER the suggestion table OR the allowlist, \
+             not both — overlap means the allowlist's 'no clean rewrite' rationale \
+             contradicts the suggestion table. Overlap: {overlap:?}"
+        );
     }
 }

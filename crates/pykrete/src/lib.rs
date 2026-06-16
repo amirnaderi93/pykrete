@@ -203,13 +203,19 @@ pub fn check_project(files: &[(String, String)]) -> ProjectCheckResult {
 /// strict-mode projects fail the build until `pykrete migrate` is run.
 /// Non-strict modes keep the warning unchanged, preserving the v1.5
 /// behavior for users who haven't opted into strict.
+///
+/// v1.9 PR-D1: same treatment for `D0091 crossDialectMethodMismatch`.
+/// v1.8 shipped D0091 as warning-only; v1.9 escalates under strict (spec
+/// §3.1.1, mirroring the v1.6 PR-M3 D0090 precedent). The cascade hits
+/// any `probes_negative/` fixture exercising cross-dialect method
+/// patterns — flagged for the v1.9.0 catalog pin bump.
 pub fn check_project_with_mode(files: &[(String, String)], mode: CheckMode) -> ProjectCheckResult {
     let mut project = check_project_unfiltered(files);
     for file in &mut project.files {
         file.result.diagnostics.retain(|d| mode.shows(d.min_mode));
         if mode == CheckMode::Strict {
             for d in &mut file.result.diagnostics {
-                if d.code == "D0090" {
+                if d.code == "D0090" || d.code == "D0091" {
                     d.severity = Severity::Error;
                 }
             }
