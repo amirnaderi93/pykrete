@@ -23,6 +23,7 @@
 //! - envelope schema unchanged (`deprecationReportVersion` `"2"`)
 //! - envelope has no `--compare-to`-implying fields
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -137,6 +138,10 @@ fn snapshot_envelope_has_no_compare_to_fields() {
     // MUST NOT pre-allocate fields a future consumer-state-model
     // surface would need (`previous_snapshot_diff`, `resolvedSites`,
     // etc.). v1.11 spec-time owns the consumer surface.
+    //
+    // Exact-keys allowlist (round-2 reviewer): a denylist only catches
+    // the names we anticipate. Asserting the full top-level key set
+    // catches ANY future addition regardless of name — defense in depth.
     let dir = tmpdir("no-compare");
     let p = write_pyk(&dir, "x.pyk", ONE_SITE);
     let snap = dir.join("out.json");
@@ -149,19 +154,14 @@ fn snapshot_envelope_has_no_compare_to_fields() {
     ]);
     let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&snap).unwrap()).unwrap();
     let obj = v.as_object().expect("envelope is an object");
-    for forbidden in [
-        "previous_snapshot_diff",
-        "previousSnapshotDiff",
-        "resolvedSites",
-        "resolved_sites",
-        "compareTo",
-        "compare_to",
-    ] {
-        assert!(
-            !obj.contains_key(forbidden),
-            "envelope MUST NOT contain `{forbidden}` (spec §5.5 carve-out); got {obj:?}"
-        );
-    }
+    let keys: BTreeSet<&str> = obj.keys().map(|s| s.as_str()).collect();
+    let expected: BTreeSet<&str> = ["deprecationReportVersion", "sites", "summary"]
+        .into_iter()
+        .collect();
+    assert_eq!(
+        keys, expected,
+        "envelope must only contain v1.9 keys (spec §5.5 carve-out); got {obj:?}"
+    );
 }
 
 #[test]
@@ -402,5 +402,103 @@ fn snapshot_missing_value_after_space_errors() {
     assert!(
         stderr.contains("--snapshot requires a path"),
         "stderr should reject missing successor: {stderr:?}"
+    );
+}
+
+// -----------------------------------------------------------------
+// Round-2 — `--snapshot <flag>` space form must NOT steal the flag
+// -----------------------------------------------------------------
+//
+// Without this guard, `pykrete check --deprecation-report --snapshot
+// --ack=pending x.pyk` silently consumed `--ack=pending` as the path,
+// dropping the ack filter and writing the report to a file literally
+// named `--ack=pending`. Reject `--`-prefixed values up front.
+
+#[test]
+fn snapshot_space_form_rejects_long_flag_successor() {
+    let dir = tmpdir("flag-successor-ack");
+    let p = write_pyk(&dir, "x.pyk", ONE_SITE);
+
+    let (exit, _, stderr) = run(&[
+        "check",
+        "--deprecation-report",
+        "--snapshot",
+        "--ack=pending",
+        p.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        exit, 2,
+        "flag-shaped successor must error; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("--snapshot: value '--ack=pending' looks like a flag"),
+        "stderr should name the offending value: {stderr:?}"
+    );
+    // The fake "path" must NOT have been created.
+    assert!(
+        !PathBuf::from("--ack=pending").exists(),
+        "no file should be written when the flag is misparsed as a path"
+    );
+}
+
+#[test]
+fn snapshot_space_form_rejects_report_aliases_successor() {
+    let dir = tmpdir("flag-successor-aliases");
+    let p = write_pyk(&dir, "x.pyk", ONE_SITE);
+
+    let (exit, _, stderr) = run(&[
+        "check",
+        "--deprecation-report",
+        "--snapshot",
+        "--report-aliases",
+        p.to_str().unwrap(),
+    ]);
+    assert_eq!(exit, 2);
+    assert!(
+        stderr.contains("looks like a flag"),
+        "stderr should explain the rejection: {stderr:?}"
+    );
+}
+
+#[test]
+fn snapshot_space_form_rejects_snapshot_successor() {
+    // The pathological `--snapshot --snapshot=foo path.pyk`: the first
+    // `--snapshot` must NOT swallow the second as its value.
+    let dir = tmpdir("flag-successor-snapshot");
+    let p = write_pyk(&dir, "x.pyk", ONE_SITE);
+
+    let (exit, _, stderr) = run(&[
+        "check",
+        "--deprecation-report",
+        "--snapshot",
+        "--snapshot=foo",
+        p.to_str().unwrap(),
+    ]);
+    assert_eq!(exit, 2);
+    assert!(
+        stderr.contains("looks like a flag"),
+        "stderr should explain the rejection: {stderr:?}"
+    );
+}
+
+#[test]
+fn snapshot_space_form_rejects_dash_sentinel() {
+    // `-` alone is reserved as a stdin-style sentinel; pykrete doesn't
+    // support stdout-snapshot via `-`, so we reject it explicitly
+    // rather than silently writing to a file literally named `-`.
+    let dir = tmpdir("dash-sentinel");
+    let p = write_pyk(&dir, "x.pyk", ONE_SITE);
+
+    let (exit, _, stderr) = run(&[
+        "check",
+        "--deprecation-report",
+        "--snapshot",
+        "-",
+        p.to_str().unwrap(),
+    ]);
+    assert_eq!(exit, 2);
+    assert!(
+        stderr.contains("'-' is not a valid path"),
+        "stderr should reject single-dash: {stderr:?}"
     );
 }

@@ -221,6 +221,21 @@ fn parse_check_args(args: &[String]) -> Result<CheckArgs, String> {
                 let value = args
                     .get(i)
                     .ok_or_else(|| "--snapshot requires a path".to_string())?;
+                // Reject flag-shaped successors so `--snapshot --ack=pending
+                // path.pyk` doesn't silently consume `--ack=pending` as the
+                // path. `-` alone is reserved as a stdin-style sentinel
+                // and not accepted as a path either.
+                if value.starts_with("--") || (value.starts_with('-') && value.len() > 1) {
+                    return Err(format!(
+                        "--snapshot: value '{value}' looks like a flag; \
+                         use --snapshot=<path> if your path starts with '-'"
+                    ));
+                }
+                if value == "-" {
+                    return Err(
+                        "--snapshot: '-' is not a valid path; use --snapshot=<path>".to_string()
+                    );
+                }
                 snapshot_path = Some(PathBuf::from(value));
             }
             s if s.starts_with("--snapshot=") => {
@@ -375,6 +390,8 @@ fn run_check(args: &[String]) -> ExitCode {
         } else {
             println!("{rendered}");
         }
+        // PR-D1's `--fail-on-nonempty` layers its non-zero exit gate
+        // before this return — keep new exit-shaping flags above this line.
         return ExitCode::SUCCESS;
     }
 
@@ -933,9 +950,20 @@ fn write_snapshot(path: &Path, contents: &str) -> io::Result<()> {
     let file_name = path
         .file_name()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no file name"))?;
+    // PID + nanos so two pykrete invocations from the same PID (e.g.
+    // exec patterns) can't collide on the tempfile name. std-only —
+    // worth avoiding a `rand` dep for one suffix.
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
     let mut tmp_name = std::ffi::OsString::from(".");
     tmp_name.push(file_name);
-    tmp_name.push(format!(".pykrete-snapshot.{}.tmp", std::process::id()));
+    tmp_name.push(format!(
+        ".pykrete-snapshot.{}.{}.tmp",
+        std::process::id(),
+        nanos
+    ));
     let tmp = dir.join(tmp_name);
     if let Err(e) = fs::write(&tmp, contents) {
         let _ = fs::remove_file(&tmp);
