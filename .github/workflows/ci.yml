@@ -33,3 +33,11 @@ jobs:
         run: cargo test --workspace --verbose
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+      # Closes v1.7 retro rule 6: any binary-output string quoted in a
+      # CHANGELOG.md fenced stderr/stdout/text block must grep-anchor to
+      # crates/pykrete/src/. See scripts/changelog-grep.sh + v1.8-spec
+      # §2.2.
+      - name: CHANGELOG-binary string drift gate
+        run: bash scripts/changelog-grep.sh
+      - name: CHANGELOG-binary string drift gate — self-tests
+        run: bash scripts/changelog-grep.test.sh

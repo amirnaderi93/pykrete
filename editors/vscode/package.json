@@ -2,7 +2,7 @@
   "name": "pykrete",
   "displayName": "Pykrete — Static schema checking for Python",
   "description": "Static schema checking for PySpark and pandas .pyk files — diagnostics, hover, completion, go-to-definition, quick-fixes — plus general Python language features from a bundled, multiplexed Python engine, plus the bundled `pykrete migrate` CLI for the v2.0 alias rewrite.",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "publisher": "amirnaderi",
   "license": "MIT",
   "icon": "icon.png",
