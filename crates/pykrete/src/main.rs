@@ -62,6 +62,13 @@ Options:
                            sibling tempfile + rename). Parent directory
                            must exist. Requires --deprecation-report;
                            mutually exclusive with --report-aliases.
+        --fail-on-nonempty
+                           Exit 1 when --deprecation-report emits at
+                           least one site (post --ack filter). Default
+                           is exit 0 regardless of site count. Saves CI
+                           consumers the `jq '.summary.totalSites' |
+                           xargs test 0 -eq` boilerplate. Requires
+                           --deprecation-report.
     -h, --help             Show this help and exit.
 
 Example:
@@ -71,6 +78,7 @@ Example:
     pykrete check --deprecation-report src/
     pykrete check --deprecation-report --ack=pending src/
     pykrete check --deprecation-report --snapshot=migration.json src/
+    pykrete check --deprecation-report --ack=pending --fail-on-nonempty src/
 ";
 
 const TRANSPILE_HELP: &str = "\
@@ -176,6 +184,7 @@ struct CheckArgs {
     deprecation_report: bool,
     ack_filter: Option<pykrete::AckFilter>,
     snapshot_path: Option<PathBuf>,
+    fail_on_nonempty: bool,
     paths: Vec<String>,
 }
 
@@ -186,6 +195,7 @@ fn parse_check_args(args: &[String]) -> Result<CheckArgs, String> {
     let mut deprecation_report = false;
     let mut ack_filter: Option<pykrete::AckFilter> = None;
     let mut snapshot_path: Option<PathBuf> = None;
+    let mut fail_on_nonempty = false;
     let mut paths: Vec<String> = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -245,6 +255,7 @@ fn parse_check_args(args: &[String]) -> Result<CheckArgs, String> {
                 }
                 snapshot_path = Some(PathBuf::from(value));
             }
+            "--fail-on-nonempty" => fail_on_nonempty = true,
             s if s.starts_with('-') => {
                 return Err(format!("unknown option '{s}'; see `pykrete check --help`"));
             }
@@ -269,6 +280,9 @@ fn parse_check_args(args: &[String]) -> Result<CheckArgs, String> {
     if snapshot_path.is_some() && !deprecation_report {
         return Err("--snapshot requires --deprecation-report".to_string());
     }
+    if fail_on_nonempty && !deprecation_report {
+        return Err("--fail-on-nonempty requires --deprecation-report".to_string());
+    }
     Ok(CheckArgs {
         verbose,
         format,
@@ -276,6 +290,7 @@ fn parse_check_args(args: &[String]) -> Result<CheckArgs, String> {
         deprecation_report,
         ack_filter,
         snapshot_path,
+        fail_on_nonempty,
         paths,
     })
 }
@@ -314,6 +329,7 @@ fn run_check(args: &[String]) -> ExitCode {
         deprecation_report,
         ack_filter,
         snapshot_path,
+        fail_on_nonempty,
         paths,
     } = match parse_check_args(args) {
         Ok(v) => v,
@@ -376,8 +392,12 @@ fn run_check(args: &[String]) -> ExitCode {
     // D0090-firing site, so no filter — the envelope mirrors the alias
     // inventory but adds the diagnostic code, rule name, binding name,
     // and a precomputed by-dialect summary so CI gates and migration
-    // dashboards can consume the report without re-aggregating. Exit 0
-    // matches `--report-aliases`: this is an inventory, not a gate.
+    // dashboards can consume the report without re-aggregating.
+    //
+    // v1.10 PR-D1: `--fail-on-nonempty` flips the default exit-0
+    // behavior — when set, the post-`--ack` filtered site count drives
+    // exit 1 / 0. The JSON envelope still emits on stdout regardless so
+    // CI can pipe both gate + report in one invocation.
     if deprecation_report {
         let mut sites = pykrete::collect_alias_sites(&sources);
         pykrete::adjudicate_alias_sites(&sources, &mut sites);
@@ -390,8 +410,21 @@ fn run_check(args: &[String]) -> ExitCode {
         } else {
             println!("{rendered}");
         }
-        // PR-D1's `--fail-on-nonempty` layers its non-zero exit gate
-        // before this return — keep new exit-shaping flags above this line.
+        // `--fail-on-nonempty` is exit-shaping and orthogonal to where the
+        // envelope landed: snapshot path or stdout, the gate fires off the
+        // same post-`--ack` filtered site count.
+        if fail_on_nonempty {
+            let filtered = sites
+                .iter()
+                .filter(|s| match ack_filter {
+                    Some(f) => f.matches(s.migration_status),
+                    None => true,
+                })
+                .count();
+            if filtered > 0 {
+                return ExitCode::from(1);
+            }
+        }
         return ExitCode::SUCCESS;
     }
 
