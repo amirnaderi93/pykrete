@@ -118,45 +118,16 @@ fn declared_return_view<'a>(
 /// indexing like `pandas_frames[0].merge(...)`) stay quiet; resolving
 /// those needs container-element-type tracking the v1.3 tracker doesn't
 /// provide and is explicitly deferred to v1.5+ per v1.4 spec §4 Bug 2.
+///
+/// v1.9 PR-A1 (arch-I5): projects out of the unified
+/// [`inherited_chain_state`] walker. The traversal lives in one place
+/// so the `.toPandas()` / `.createDataFrame()` handoff arms stay in
+/// lockstep across the dialect tag and the deprecated-alias bit.
 pub(crate) fn inherited_dialect<'a>(
     expr: &Expr,
     ctx: &BodyContext<'a>,
 ) -> Option<crate::dataframe::Dialect> {
-    let mut cursor = expr;
-    loop {
-        match cursor {
-            Expr::Name(n) => return ctx.lookup_dialect(n.id.as_str()),
-            Expr::Named(named) => cursor = &named.value,
-            Expr::Call(c) => {
-                let attr = c.func.as_attribute_expr()?;
-                // v1.5 PR-A2 — `<X>.createDataFrame(...)` flips the inherited
-                // dialect to Spark when one of the spec §2.2 schema-source
-                // gates fires (`schema=` kwarg with a Spark-tagged frame
-                // binding, or a positional first arg with a Pandas-tagged
-                // frame). Without this override, walking down to `<X>` would
-                // miss the handoff — `spark` itself has no dialect tag, but
-                // the call's result is `SparkFrame[X]` by spec.
-                if attr.attr.id.as_str() == "createDataFrame"
-                    && cross_dialect_handoff_gate(c, ctx).is_some()
-                {
-                    return Some(crate::dataframe::Dialect::Spark);
-                }
-                // v1.5 PR-A1 — `.toPandas()` flips the inherited dialect
-                // Spark → Pandas while the schema parameter is preserved
-                // by the schema-pass-through arm in `analyze_method_call_inner`.
-                // Pandas receivers, Unknown receivers, and non-DataFrame
-                // receivers fall through unchanged.
-                if attr.attr.id.as_str() == "toPandas"
-                    && inherited_dialect(&attr.value, ctx) == Some(crate::dataframe::Dialect::Spark)
-                {
-                    return Some(crate::dataframe::Dialect::Pandas);
-                }
-                cursor = &attr.value;
-            }
-            Expr::Attribute(a) => cursor = &a.value,
-            _ => return None,
-        }
-    }
+    inherited_chain_state(expr, ctx).0
 }
 
 /// Mirror of [`inherited_dialect`] for the deprecated-alias bit.
@@ -171,36 +142,69 @@ pub(crate) fn inherited_dialect<'a>(
 /// because the v2.0 migration narrative is "adjudicate, then enforce"
 /// — flagging mismatch on a binding that hasn't yet picked its
 /// dialect is noise that pre-dates the migration window.
+///
+/// v1.9 PR-A1 (arch-I5): projects out of the unified
+/// [`inherited_chain_state`] walker.
 pub(crate) fn inherited_is_deprecated_alias(expr: &Expr, ctx: &BodyContext<'_>) -> bool {
+    inherited_chain_state(expr, ctx).1
+}
+
+/// Unified chain walker — single source of truth for the
+/// `inherited_dialect` / `inherited_is_deprecated_alias` pair.
+///
+/// Walks `expr` down to its deepest `Name` receiver (recursing through
+/// `Named` / `Call`-with-attribute / `Attribute`) and returns
+/// `(dialect, deprecated_alias)`. The `.toPandas()` /
+/// `<X>.createDataFrame(...)` handoff arms flip the dialect tag AND
+/// reset the deprecated-alias bit together — the handoff IS the
+/// adjudication, so the originating bit no longer governs the chain
+/// tail.
+///
+/// v1.9 PR-A1 (arch-I5): replaces two near-line-for-line copies that
+/// the v1.8 architecture audit flagged as a within-cycle drift class.
+/// Future handoff arms now land in one place.
+fn inherited_chain_state<'a>(
+    expr: &Expr,
+    ctx: &BodyContext<'a>,
+) -> (Option<crate::dataframe::Dialect>, bool) {
     let mut cursor = expr;
     loop {
         match cursor {
-            Expr::Name(n) => return ctx.is_name_from_deprecated_alias(n.id.as_str()),
+            Expr::Name(n) => {
+                let name = n.id.as_str();
+                return (
+                    ctx.lookup_dialect(name),
+                    ctx.is_name_from_deprecated_alias(name),
+                );
+            }
             Expr::Named(named) => cursor = &named.value,
             Expr::Call(c) => {
                 let Some(attr) = c.func.as_attribute_expr() else {
-                    return false;
+                    return (None, false);
                 };
-                // `.toPandas()` / `<X>.createDataFrame(...)` flip the
-                // dialect tag (Spark↔Pandas) so the originating
-                // deprecated-alias bit no longer governs the chain
-                // tail's adjudication — the handoff IS the
-                // adjudication. Match the `inherited_dialect` flip
-                // points so propagation stays in lockstep.
+                // v1.5 PR-A2 — `<X>.createDataFrame(...)` flips the inherited
+                // dialect to Spark when one of the spec §2.2 schema-source
+                // gates fires. The handoff erases the deprecated-alias bit
+                // because the chain tail adjudicates to Spark regardless of
+                // the receiver's alias provenance.
                 if attr.attr.id.as_str() == "createDataFrame"
                     && cross_dialect_handoff_gate(c, ctx).is_some()
                 {
-                    return false;
+                    return (Some(crate::dataframe::Dialect::Spark), false);
                 }
+                // v1.5 PR-A1 — `.toPandas()` flips the inherited dialect
+                // Spark → Pandas. Like createDataFrame, the handoff erases
+                // the originating deprecated-alias bit.
                 if attr.attr.id.as_str() == "toPandas"
-                    && inherited_dialect(&attr.value, ctx) == Some(crate::dataframe::Dialect::Spark)
+                    && inherited_chain_state(&attr.value, ctx).0
+                        == Some(crate::dataframe::Dialect::Spark)
                 {
-                    return false;
+                    return (Some(crate::dataframe::Dialect::Pandas), false);
                 }
                 cursor = &attr.value;
             }
             Expr::Attribute(a) => cursor = &a.value,
-            _ => return false,
+            _ => return (None, false),
         }
     }
 }
@@ -949,4 +953,123 @@ fn check_return_type<'a>(
         source,
         line_index,
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    //! v1.9 PR-A1 tripwire (arch-I5) — both legacy callers
+    //! `inherited_dialect` / `inherited_is_deprecated_alias` MUST return
+    //! the same answer as the unified `inherited_chain_state` walker
+    //! across the handoff fixture set. The legacy fns are now thin
+    //! projections (`.0` and `.1`), so the equality is by construction —
+    //! this test pins the contract so a future contributor who reshapes
+    //! one projection without the other trips a CI failure.
+    use super::*;
+    use crate::dataframe::Dialect;
+    use crate::registry::Registry;
+    use crate::schema::{Schema, SchemaView};
+    use ruff_python_ast::ModModule;
+    use ruff_python_parser::parse_expression;
+
+    fn parse_expr(src: &str) -> ruff_python_ast::ModExpression {
+        parse_expression(src).expect("parse").into_syntax()
+    }
+
+    fn empty_module() -> ModModule {
+        let parsed = ruff_python_parser::parse_module("").expect("parse empty module");
+        parsed.into_syntax()
+    }
+
+    #[test]
+    fn v19_pra1_unified_walker_projections_agree() {
+        // Fixture set covering every chain shape the v1.5 / v1.8 handoff
+        // arms recognize: direct name binding, `.toPandas()` flip,
+        // `<X>.createDataFrame(...)` flip, attribute access, method-call
+        // chain, walrus, opaque receiver.
+        let empty_module: &'static ModModule = Box::leak(Box::new(empty_module()));
+        let schemas: &'static [Schema<'static>] = Box::leak(Box::new(Vec::new())).as_slice();
+        let registry: &'static Registry<'static> =
+            Box::leak(Box::new(Registry::build(empty_module)));
+
+        let mut ctx = BodyContext::new(schemas, registry);
+        ctx.bind_df(
+            "pdf",
+            SchemaView::derived_untyped(vec![]),
+            Some(Dialect::Pandas),
+        );
+        ctx.bind_df(
+            "sdf",
+            SchemaView::derived_untyped(vec![]),
+            Some(Dialect::Spark),
+        );
+        ctx.bind_df(
+            "depr",
+            SchemaView::derived_untyped(vec![]),
+            Some(Dialect::Spark),
+        );
+        ctx.mark_deprecated_alias_name("depr");
+
+        let fixtures = [
+            "pdf",
+            "sdf",
+            "depr",
+            "pdf.merge(other)",
+            "sdf.toPandas()",
+            "sdf.toPandas().rename(columns={'a': 'b'})",
+            "pdf.attr",
+            "(pdf2 := pdf).rename(columns={'a': 'b'})",
+            "some_unknown_func()",
+            "depr.select('x')",
+        ];
+
+        for src in fixtures {
+            let parsed: &'static ruff_python_ast::ModExpression =
+                Box::leak(Box::new(parse_expr(src)));
+            let expr = &parsed.body;
+            let unified = inherited_chain_state(expr, &ctx);
+            let via_dialect = inherited_dialect(expr, &ctx);
+            let via_alias = inherited_is_deprecated_alias(expr, &ctx);
+            assert_eq!(
+                via_dialect, unified.0,
+                "inherited_dialect projection diverged from unified \
+                 walker on fixture {src:?} — the two legacy callers \
+                 must stay in lockstep with `inherited_chain_state`."
+            );
+            assert_eq!(
+                via_alias, unified.1,
+                "inherited_is_deprecated_alias projection diverged from \
+                 unified walker on fixture {src:?} — the two legacy \
+                 callers must stay in lockstep with \
+                 `inherited_chain_state`."
+            );
+        }
+    }
+
+    #[test]
+    fn v19_pra1_handoff_arms_erase_deprecated_alias_bit() {
+        // Negative-space: a chain rooted in a deprecated-alias-tagged
+        // Spark binding, flipped to Pandas via `.toPandas()`, MUST
+        // report `(Some(Pandas), false)` — the handoff IS the
+        // adjudication, so the originating alias bit is erased. Pins
+        // the lockstep flip points across the unified walker.
+        let empty_module: &'static ModModule = Box::leak(Box::new(empty_module()));
+        let schemas: &'static [Schema<'static>] = Box::leak(Box::new(Vec::new())).as_slice();
+        let registry: &'static Registry<'static> =
+            Box::leak(Box::new(Registry::build(empty_module)));
+
+        let mut ctx = BodyContext::new(schemas, registry);
+        ctx.bind_df(
+            "depr",
+            SchemaView::derived_untyped(vec![]),
+            Some(Dialect::Spark),
+        );
+        ctx.mark_deprecated_alias_name("depr");
+
+        let parsed: &'static ruff_python_ast::ModExpression =
+            Box::leak(Box::new(parse_expr("depr.toPandas()")));
+        let expr = &parsed.body;
+        let (dialect, alias) = inherited_chain_state(expr, &ctx);
+        assert_eq!(dialect, Some(Dialect::Pandas));
+        assert!(!alias, "the .toPandas() handoff erases the alias bit");
+    }
 }

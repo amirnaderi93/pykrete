@@ -172,8 +172,12 @@ fn extract_methods(source: &str) -> Vec<String> {
         // Defensive: if we found NEITHER shape in the predicate region,
         // it likely means a new shape was introduced. Fail the build
         // loudly rather than silently dropping the arm. Skip the
-        // `let receiver_is_pandas_inherited = ...` binding line.
-        if !found_any && !region.contains('=') {
+        // `let receiver_is_pandas_inherited = ...` binding line — the
+        // skip clause checks the bytes immediately PRECEDING the gate
+        // for `let ` so a future arm with an unrelated `=` in its
+        // predicate (e.g. `&& let Some(kw) = ...`) still trips the
+        // panic. v1.9 PR-A1 tightening (arch-I1).
+        if !found_any && !preceded_by_let(source, rel) {
             panic!(
                 "build.rs: found `{GATE}` at byte offset {rel} but neither \
                  `matches!(method, ...)` nor `method == \"...\"` followed. \
@@ -191,6 +195,21 @@ fn extract_methods(source: &str) -> Vec<String> {
 
 fn find_from(haystack: &str, start: usize, needle: &str) -> Option<usize> {
     haystack[start..].find(needle).map(|r| start + r)
+}
+
+/// True when the bytes immediately preceding `at` in `source` are `let `
+/// (with any amount of intervening whitespace). Used by `extract_methods`
+/// to recognize the `let receiver_is_pandas_inherited = ...` binding
+/// line and skip the panic on it — without falsely skipping arm shapes
+/// that happen to contain `=` elsewhere in the predicate.
+fn preceded_by_let(source: &str, at: usize) -> bool {
+    let prefix = &source.as_bytes()[..at];
+    let mut k = prefix.len();
+    while k > 0 && prefix[k - 1].is_ascii_whitespace() {
+        k -= 1;
+    }
+    let kw = b"let";
+    k >= kw.len() && &prefix[k - kw.len()..k] == kw
 }
 
 /// Advance from `i` to the byte index of the next `{` (arm body open) or
@@ -451,6 +470,48 @@ let real = "v";"#;
         let stripped = strip_line_comments(src);
         assert!(stripped.contains("\"// not a comment\""));
         assert!(stripped.contains("\"v\""));
+    }
+
+    // v1.9 PR-A1 — negative-space tests for the §2.1.1 panic-skip hole.
+    //
+    // The v1.8 skip-clause `region.contains('=')` was too loose: any
+    // future arm shape containing `=` anywhere in the predicate region
+    // (e.g. `&& let Some(kw) = pandas_kwarg(...)` with no method-name
+    // predicate) silently skipped the panic AND silently skipped
+    // inventory extraction. The new skip-clause is tight to the literal
+    // `let receiver_is_pandas_inherited` binding-line.
+
+    #[test]
+    #[should_panic(expected = "neither `matches!(method, ...)` nor `method == \"...\"`")]
+    fn negative_space_let_some_kwarg_arm_without_method_predicate_panics() {
+        // A future arm shape with `let Some(kw) = ...` in the predicate
+        // region but NO `matches!(method, …)` and NO `method == "…"` is
+        // invisible to the generator. Under the v1.8 skip-clause, the
+        // `=` from `let Some(kw) =` silently suppressed the panic. With
+        // the v1.9 tightening, this MUST panic loudly.
+        let src = r#"
+            if receiver_is_pandas_inherited
+                && let Some(kw) = pandas_kwarg(call, "columns")
+            {
+                return apply_kw(kw);
+            }
+        "#;
+        let _ = extract_methods(src);
+    }
+
+    #[test]
+    fn negative_space_binding_line_with_let_some_following_still_works() {
+        // Mixed case: the binding line is present, AND a real arm with
+        // a normal `method == "X"` shape follows. The binding line is
+        // skipped; the real arm is extracted; no panic.
+        let src = r#"
+            let receiver_is_pandas_inherited = receiver_dialect == Some(Dialect::Pandas);
+            if receiver_is_pandas_inherited && method == "melt" {
+                return None;
+            }
+        "#;
+        let got = extract_methods(src);
+        assert_eq!(got, vec!["melt"]);
     }
 
     #[test]
