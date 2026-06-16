@@ -79,6 +79,27 @@ jobs:
           echo "Base: $BASE_SHA"
           echo "Head: $HEAD_SHA"
 
+          # Centralized-bump-cycle marker (v1.9 §9.2 amendment).
+          #
+          # When the cycle's spec amends §9.2 to centralize the extension
+          # version bump at PR-F instead of per-PR, a marker file at
+          # `.github/centralized-bump-cycle.marker` is committed at PR-S1
+          # time and removed at PR-F merge time. Its presence tells this
+          # guard "per-PR bumps are suspended for this cycle — accept
+          # this PR's lack of a bump." PR-F's PR itself will bump the
+          # version AND remove the marker, so PR-F passes the guard the
+          # normal way.
+          #
+          # Implementer of v1.9 §9.2 picked this mechanic per the spec's
+          # "Implementer picks" license. Documented in v1.9-spec §9.2.
+          if [ -f ".github/centralized-bump-cycle.marker" ]; then
+            cycle=$(cat .github/centralized-bump-cycle.marker | tr -d '[:space:]')
+            echo "Centralized-bump cycle marker present (cycle: $cycle)."
+            echo "Per-PR extension version bumps suspended for this cycle."
+            echo "PR-F bumps version + removes marker at cycle close."
+            exit 0
+          fi
+
           # Determine the diff range. Prefer "<latest release tag>..HEAD"
           # so the guard reflects whether the *cycle* (since the last
           # published release) bumped the extension version — not just
