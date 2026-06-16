@@ -981,11 +981,24 @@ mod tests {
     }
 
     #[test]
-    fn v19_pra1_unified_walker_projections_agree() {
+    fn v19_pra1_projections_compile_and_route() {
         // Fixture set covering every chain shape the v1.5 / v1.8 handoff
         // arms recognize: direct name binding, `.toPandas()` flip,
         // `<X>.createDataFrame(...)` flip, attribute access, method-call
         // chain, walrus, opaque receiver.
+        //
+        // Two layers of assertion:
+        //   1. projection-wiring tripwire — the legacy callers
+        //      `inherited_dialect` / `inherited_is_deprecated_alias` both
+        //      route through `inherited_chain_state`, so their results
+        //      stay in lockstep across the fixture set. This is true by
+        //      construction today — pinning it catches a future
+        //      contributor who reshapes one projection without the other.
+        //   2. per-fixture semantic pins — the actual `(dialect, alias)`
+        //      tuple each fixture resolves to, so reshaping the walker
+        //      itself (e.g. changing what `.toPandas()` returns) shows up
+        //      as a test failure instead of a silent behavior shift. v1.9
+        //      PR-A1 R2 review feedback.
         let empty_module: &'static ModModule = Box::leak(Box::new(empty_module()));
         let schemas: &'static [Schema<'static>] = Box::leak(Box::new(Vec::new())).as_slice();
         let registry: &'static Registry<'static> =
@@ -1009,26 +1022,48 @@ mod tests {
         );
         ctx.mark_deprecated_alias_name("depr");
 
-        let fixtures = [
-            "pdf",
-            "sdf",
-            "depr",
-            "pdf.merge(other)",
-            "sdf.toPandas()",
-            "sdf.toPandas().rename(columns={'a': 'b'})",
-            "pdf.attr",
-            "(pdf2 := pdf).rename(columns={'a': 'b'})",
-            "some_unknown_func()",
-            "depr.select('x')",
+        let cases: &[(&str, Option<Dialect>, bool)] = &[
+            ("pdf", Some(Dialect::Pandas), false),
+            ("sdf", Some(Dialect::Spark), false),
+            ("depr", Some(Dialect::Spark), true),
+            ("pdf.merge(other)", Some(Dialect::Pandas), false),
+            ("sdf.toPandas()", Some(Dialect::Pandas), false),
+            (
+                "sdf.toPandas().rename(columns={'a': 'b'})",
+                Some(Dialect::Pandas),
+                false,
+            ),
+            ("pdf.attr", Some(Dialect::Pandas), false),
+            (
+                "(pdf2 := pdf).rename(columns={'a': 'b'})",
+                Some(Dialect::Pandas),
+                false,
+            ),
+            ("some_unknown_func()", None, false),
+            ("depr.select('x')", Some(Dialect::Spark), true),
         ];
 
-        for src in fixtures {
+        for (src, expected_dialect, expected_alias) in cases {
             let parsed: &'static ruff_python_ast::ModExpression =
                 Box::leak(Box::new(parse_expr(src)));
             let expr = &parsed.body;
             let unified = inherited_chain_state(expr, &ctx);
             let via_dialect = inherited_dialect(expr, &ctx);
             let via_alias = inherited_is_deprecated_alias(expr, &ctx);
+
+            assert_eq!(
+                unified.0, *expected_dialect,
+                "fixture {src:?}: unified walker returned dialect {:?}, \
+                 expected {:?}",
+                unified.0, expected_dialect
+            );
+            assert_eq!(
+                unified.1, *expected_alias,
+                "fixture {src:?}: unified walker returned alias {}, \
+                 expected {}",
+                unified.1, expected_alias
+            );
+
             assert_eq!(
                 via_dialect, unified.0,
                 "inherited_dialect projection diverged from unified \
