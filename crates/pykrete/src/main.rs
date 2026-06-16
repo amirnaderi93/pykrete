@@ -57,6 +57,11 @@ Options:
                            '# pykrete: ack-deprecation' marker). Without
                            this flag, every site emits. Requires
                            --deprecation-report.
+        --snapshot <PATH>  Write the --deprecation-report JSON envelope
+                           to <PATH> instead of stdout (atomic via a
+                           sibling tempfile + rename). Parent directory
+                           must exist. Requires --deprecation-report;
+                           mutually exclusive with --report-aliases.
     -h, --help             Show this help and exit.
 
 Example:
@@ -65,6 +70,7 @@ Example:
     pykrete check --report-aliases src/
     pykrete check --deprecation-report src/
     pykrete check --deprecation-report --ack=pending src/
+    pykrete check --deprecation-report --snapshot=migration.json src/
 ";
 
 const TRANSPILE_HELP: &str = "\
@@ -169,6 +175,7 @@ struct CheckArgs {
     report_aliases: bool,
     deprecation_report: bool,
     ack_filter: Option<pykrete::AckFilter>,
+    snapshot_path: Option<PathBuf>,
     paths: Vec<String>,
 }
 
@@ -178,6 +185,7 @@ fn parse_check_args(args: &[String]) -> Result<CheckArgs, String> {
     let mut report_aliases = false;
     let mut deprecation_report = false;
     let mut ack_filter: Option<pykrete::AckFilter> = None;
+    let mut snapshot_path: Option<PathBuf> = None;
     let mut paths: Vec<String> = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -208,6 +216,20 @@ fn parse_check_args(args: &[String]) -> Result<CheckArgs, String> {
                 let value = &s["--ack=".len()..];
                 ack_filter = Some(parse_ack(value)?);
             }
+            "--snapshot" => {
+                i += 1;
+                let value = args
+                    .get(i)
+                    .ok_or_else(|| "--snapshot requires a path".to_string())?;
+                snapshot_path = Some(PathBuf::from(value));
+            }
+            s if s.starts_with("--snapshot=") => {
+                let value = &s["--snapshot=".len()..];
+                if value.is_empty() {
+                    return Err("--snapshot requires a path".to_string());
+                }
+                snapshot_path = Some(PathBuf::from(value));
+            }
             s if s.starts_with('-') => {
                 return Err(format!("unknown option '{s}'; see `pykrete check --help`"));
             }
@@ -224,12 +246,21 @@ fn parse_check_args(args: &[String]) -> Result<CheckArgs, String> {
     if ack_filter.is_some() && !deprecation_report {
         return Err("--ack requires --deprecation-report".to_string());
     }
+    if snapshot_path.is_some() && report_aliases {
+        return Err("--snapshot is for the --deprecation-report envelope; \
+             pass --deprecation-report (not --report-aliases)"
+            .to_string());
+    }
+    if snapshot_path.is_some() && !deprecation_report {
+        return Err("--snapshot requires --deprecation-report".to_string());
+    }
     Ok(CheckArgs {
         verbose,
         format,
         report_aliases,
         deprecation_report,
         ack_filter,
+        snapshot_path,
         paths,
     })
 }
@@ -267,6 +298,7 @@ fn run_check(args: &[String]) -> ExitCode {
         report_aliases,
         deprecation_report,
         ack_filter,
+        snapshot_path,
         paths,
     } = match parse_check_args(args) {
         Ok(v) => v,
@@ -335,7 +367,14 @@ fn run_check(args: &[String]) -> ExitCode {
         let mut sites = pykrete::collect_alias_sites(&sources);
         pykrete::adjudicate_alias_sites(&sources, &mut sites);
         let rendered = pykrete::render_deprecation_report_json(&sites, ack_filter);
-        println!("{rendered}");
+        if let Some(path) = snapshot_path {
+            if let Err(e) = write_snapshot(&path, &rendered) {
+                eprintln!("--snapshot: cannot write to {}: {e}", path.display());
+                return ExitCode::from(2);
+            }
+        } else {
+            println!("{rendered}");
+        }
         return ExitCode::SUCCESS;
     }
 
@@ -872,6 +911,41 @@ fn run_migrate(args: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
     }
+}
+
+/// Atomic write for `--snapshot`. The target may not exist yet (first
+/// snapshot), so this can't reuse `atomic_write`'s canonicalize step.
+/// Sibling tempfile + `fs::rename` over the target. Parent must exist
+/// (we don't `mkdir -p` — that's a user error worth surfacing). Existing
+/// targets are overwritten silently per snapshot semantics. Tempfile
+/// is cleaned up on every failure path.
+fn write_snapshot(path: &Path, contents: &str) -> io::Result<()> {
+    let dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    if !dir.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("directory does not exist: {}", dir.display()),
+        ));
+    }
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no file name"))?;
+    let mut tmp_name = std::ffi::OsString::from(".");
+    tmp_name.push(file_name);
+    tmp_name.push(format!(".pykrete-snapshot.{}.tmp", std::process::id()));
+    let tmp = dir.join(tmp_name);
+    if let Err(e) = fs::write(&tmp, contents) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    if let Err(e) = fs::rename(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// Write `contents` to `path` atomically: canonicalize through any
