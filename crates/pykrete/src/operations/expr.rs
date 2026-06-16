@@ -1360,6 +1360,48 @@ fn analyze_method_call_inner<'a>(
         });
         return Some(SchemaView::Derived(out_fields));
     }
+    // v1.10 PR-D2 — `pdf.stack(level=, dropna=)` literal-form arm
+    // (spec §4.1). Pandas's `stack` reshapes wide-to-long by moving
+    // column levels into the index. Spark's `stack` is
+    // `pyspark.sql.functions.stack` (a column free function), NOT a
+    // DataFrame method — the receiver-dialect gate keeps Spark
+    // receivers out so the dispatch never misroutes.
+    //
+    // The arm validates literal `level=` references (single string,
+    // single int, or a list of strings/ints) against the receiver's
+    // column schema, firing D0030 on unknown names. Non-literal
+    // `level=` (a Name, a call, anything else) falls through silently
+    // — the user wrote opaque code; we trust it. `dropna=` accepts
+    // any bool literal and never validates.
+    //
+    // Result-schema scope (v1.10 minimum viable): pandas `stack` on a
+    // single-level columns DataFrame returns a Series, which isn't a
+    // PandasFrame schema in pykrete's model. Full MultiIndex tracking
+    // is deferred to v1.11+. The arm returns Unknown (None) for the
+    // result — the chain dies gracefully on the next method call
+    // rather than mis-tracking schema. This matches v1.6 PR-D1
+    // `pivot_table` (Unknown result) and is more conservative than
+    // v1.7 PR-D1 `melt` (synthesized schema).
+    if receiver_is_pandas_inherited && method == "stack" {
+        if let Some(level_expr) = pandas_kwarg_value(call, "level") {
+            let mut refs: Vec<(Option<&'a str>, &'a str, TextRange)> = Vec::new();
+            if let Some(lit) = level_expr.as_string_literal_expr() {
+                refs.push((None, lit.value.to_str(), lit.range()));
+            } else if let Some(list) = parse_string_list(level_expr) {
+                refs.extend(list.into_iter().map(|(n, r)| (None, n, r)));
+            }
+            // Int / int-list / None / non-literal: no column refs to
+            // check; fall through to the report (no-op when refs is
+            // empty) and return Unknown.
+            //
+            // We validate `level=` against column names here because (a) we
+            // don't model MultiIndex column-level names yet (v1.11+) and (b)
+            // on single-level DataFrames the user is typically typoing a
+            // column anyway.
+            report_column_refs(&refs, &receiver, ctx, source, line_index, diagnostics);
+        }
+        return None;
+    }
     if matches!(method, "melt" | "unpivot") {
         return Some(apply_melt(
             call,
@@ -2954,6 +2996,13 @@ const NO_SUGGESTION_ALLOWLIST_PANDAS: &[&str] = &[
     // dialect suggestion would be `selectExpr` but the semantics
     // (single eval vs select projection) diverge sharply.
     "eval",
+    // v1.10 PR-D2 — pandas `stack` reshapes wide-to-long on the DataFrame
+    // surface. Spark's `stack` is `pyspark.sql.functions.stack` (a column
+    // free function called via `select(stack(...))`), not a DataFrame
+    // method — so there's no clean Spark DataFrame-method rewrite to
+    // suggest. Listed here rather than mapped in
+    // `cross_dialect_suggestion_spark_target`.
+    "stack",
 ];
 
 /// Pandas-only signal names that have a legitimate same-spelled

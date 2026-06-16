@@ -151,6 +151,11 @@ pub const PANDAS_ONLY_SIGNALS: &[&str] = &[
     "nlargest",
     "nsmallest",
     "copy",
+    // v1.10 PR-D2 — pandas `stack` is a DataFrame method (wide-to-long
+    // reshape). Spark's `stack` is `pyspark.sql.functions.stack`, a
+    // column-level free function — NOT a DataFrame method — so the name
+    // is pandas-discriminating on DataFrame receivers.
+    "stack",
 ];
 
 /// Shared-with-Spark method names that have a pandas-specific
