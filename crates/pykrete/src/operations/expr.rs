@@ -1393,6 +1393,11 @@ fn analyze_method_call_inner<'a>(
             // Int / int-list / None / non-literal: no column refs to
             // check; fall through to the report (no-op when refs is
             // empty) and return Unknown.
+            //
+            // We validate `level=` against column names here because (a) we
+            // don't model MultiIndex column-level names yet (v1.11+) and (b)
+            // on single-level DataFrames the user is typically typoing a
+            // column anyway.
             report_column_refs(&refs, &receiver, ctx, source, line_index, diagnostics);
         }
         return None;

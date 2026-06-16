@@ -316,6 +316,80 @@ def f(sdf: SparkFrame[Sales]):
 }
 
 // ---------------------------------------------------------------------------
+// V110D2_int_list_level_falls_through:
+//
+// Negative-space — `pdf.stack(level=[0, 1])` (int-list level selector,
+// the MultiIndex shape). Arm matches the method but int entries have no
+// column-name shape to validate; refs collection is empty, no
+// diagnostic. Closes the literal-shape matrix.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn V110D2_int_list_level_falls_through() {
+    let result = check(
+        r#"
+class Sales(Schema):
+    id: string
+    a: int
+    b: int
+
+def f(pdf: PandasFrame[Sales]):
+    return pdf.stack(level=[0, 1])
+"#,
+    );
+    assert_does_not_have_code(&result, "D0030");
+}
+
+// ---------------------------------------------------------------------------
+// V110D2_none_level_falls_through:
+//
+// Negative-space — `pdf.stack(level=None)` (pandas accepts None as
+// "stack all levels"). Arm matches the method but None has no
+// column-name shape; refs collection is empty, no diagnostic.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn V110D2_none_level_falls_through() {
+    let result = check(
+        r#"
+class Sales(Schema):
+    id: string
+    a: int
+    b: int
+
+def f(pdf: PandasFrame[Sales]):
+    return pdf.stack(level=None)
+"#,
+    );
+    assert_does_not_have_code(&result, "D0030");
+}
+
+// ---------------------------------------------------------------------------
+// V110D2_string_tuple_level_typo_fires_D0030:
+//
+// Negative — `pdf.stack(level=("typo",))` (tuple-of-strings form). The
+// arm's string-list parser treats tuples the same as lists; the typo
+// fires D0030. Closes the literal-shape matrix on the container axis.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn V110D2_string_tuple_level_typo_fires_D0030() {
+    let result = check(
+        r#"
+class Sales(Schema):
+    id: string
+    a: int
+    b: int
+
+def f(pdf: PandasFrame[Sales]):
+    return pdf.stack(level=("typo",))
+"#,
+    );
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "typo");
+}
+
+// ---------------------------------------------------------------------------
 // V110D2_chain_from_pandas_arm_after_stack:
 //
 // Positive regression — composing with existing pandas arms. A
