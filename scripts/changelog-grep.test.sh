@@ -211,9 +211,13 @@ assert "missing SRC_DIR returns exit 2" 2 "$rc" "$extra"
 rm -f /tmp/stdout.$$ /tmp/stderr.$$
 rm -rf "$tmp"
 
-# --- Case 12 (self-verify regression): the v1.7 PR-G blocker shape ---
-# v1.7 PR-F's CHANGELOG quoted a stderr that didn't exist in main.rs:660.
-# This case emulates that exact drift class.
+# --- Case 12 (self-verify regression): v1.7 PR-G drift class — fenced-block variant ---
+# v1.7 PR-F's CHANGELOG quoted a stderr that didn't exist in main.rs:660. The
+# actual v1.7 drift used INLINE backticks at CHANGELOG L24 (which this gate
+# does NOT cover by design — see CONTRIBUTING.md "CHANGELOG conventions").
+# This case emulates the same drift CLASS normalized to the fenced-block shape
+# this gate covers: future CHANGELOG editors who follow the fenced-block
+# convention get drift caught; editors who use inline backticks do not.
 run_case '# CHANGELOG
 ```stderr
 pykrete: migrate default is now --check; pass --apply to rewrite in place (v1.7+)
@@ -225,7 +229,7 @@ pykrete: migrate default is now --check; pass --apply to rewrite in place (v1.7+
 extra=ok
 grep -q "MISMATCH" "$LAST_TMP/stderr" || extra=missed_drift
 grep -q "v1.7 retro rule 6" "$LAST_TMP/stderr" || extra="${extra}+missing_rule_pointer"
-assert "v1.7 PR-G blocker class is caught" 1 "$LAST_RC" "$extra"
+assert "v1.7 PR-G drift class (fenced-block variant) is caught" 1 "$LAST_RC" "$extra"
 rm -rf "$LAST_TMP"
 
 echo

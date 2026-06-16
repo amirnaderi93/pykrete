@@ -189,6 +189,18 @@ Conventions:
 - Name the test as a sentence describing what it verifies.
 - Add a brief comment above the test if the scenario isn't self-evident.
 
+## CHANGELOG conventions
+
+When the CHANGELOG quotes a string that comes from the pykrete binary — a stderr warning, a stdout-emitted text, a CLI help fragment — wrap it in a fenced code block labeled `stderr`, `stdout`, or `text`. Example for a stderr warning:
+
+    ```stderr
+    pykrete: migrate default is now --check; pass --apply to rewrite in place (v1.7+)
+    ```
+
+The CI step `scripts/changelog-grep.sh` (v1.8 PR-A2; closes v1.7 retro rule 6) verifies that any string inside one of those fenced blocks appears in `crates/pykrete/src/`. If it doesn't, CI fails with a `MISMATCH` line naming the offending CHANGELOG entry.
+
+This catches the v1.7-class drift where a binary-emitted string quoted in CHANGELOG silently diverges from the actual code. **Inline single-backtick quotes are NOT checked by the gate** — fence the block (with `stderr` / `stdout` / `text`) to opt in. Other fence labels (`python`, `bash`, `rust`, no label) are ignored.
+
 ## Filing issues
 
 Pick the matching template when you open a new issue on GitHub (defined under `.github/ISSUE_TEMPLATE/`):
