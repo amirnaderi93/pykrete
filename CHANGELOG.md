@@ -17,7 +17,7 @@ Ninth minor release on the v1.0 line. v1.9's headline: **v2.0 migration is plann
 - **D0091 bare-attribute path** (PR-D2 #151; spec §3.2). NEW inference arm on `Expr::Attribute` catches `pdf.rdd`, `sdf.loc`, `pdf.iloc`, `sdf.toPandas` (bare, no call) and the rest of the cross-dialect attribute surface that the v1.8 `Expr::Call` path missed. Two new property tables drive the check: `SPARK_DISCRIMINATOR_PROPERTIES` (3 entries — `rdd`, `isStreaming`, `sparkSession`) and `PANDAS_INHERITED_PROPERTIES` (4 entries — `loc`, `iloc`, `at`, `iat`). Receiver-dialect-gated like the `Expr::Call` path: untagged bindings skip the gate; deprecated `DataFrame[X]` alias receivers skip to avoid double-warning with D0090.
 - **`PANDAS_INHERITED_ARM_METHODS` inventory now backed by CI-running tests** (PR-A1 #155; spec §2.1). The v1.8 PR-A1 shipped the `build.rs`-generated inventory as a tripwire backed by an inline `mod tests` block — which, per the v1.8 retro, didn't actually run in CI. v1.9 extracts a `build_helpers.rs` module (the extraction step is in `crates/pykrete/build.rs`); `cargo test --test build_helpers` exercises the drift-catching mechanic that v1.8 advertised. No behavior change in the production binary; the test plumbing now executes.
 - **CHANGELOG grep gate v2 — `text-numeric` label** (PR-A2 #150; spec §2.2). The v1.8 PR-A2 gate grep-anchored fenced `stderr` / `stdout` / `text` blocks against `crates/pykrete/src/`. v1.9 adds a fourth label, `text-numeric`: lines inside the block are `<number> <key>` pairs (e.g. `255 probes`) and the gate runs the key's live-extract command — `python3 scripts/probes.py extract cross-codebase | jq -r .totals.probes` for `probes`, `find ... | wc -l` for `fixtures` / `donors`, `cargo test --release --workspace` for `tests` — and fails CI loudly if the claimed number doesn't match. Closes v1.8 retro rule 7 ("PR-F live-extracts ALL numeric claims"). PR CI runs with `--skip-live-extract` (the `pykrete-tests` sibling repo isn't checked out alongside `pykrete` on the runner); release PRs and local verification run the full gate.
-- **2 new cross-codebase D0091 probes in pykrete-tests** (PR-P1 #32 in pykrete-tests). 1 negative probe each on **pandera** (pandas→Spark misuse: `pdf.withColumn(...)` on a pandera-tagged pandas binding) and **delta** (Spark→pandas misuse: `sdf.assign(...)` on a Delta-table Spark binding). Cross-codebase probe coverage lifts from 253 to 255. D0091 joins the negative-probe pin matrix.
+- **2 new cross-codebase D0091 probes in pykrete-tests** (PR-P1 #32 in pykrete-tests). `1 negative` probe each on **pandera** (pandas→Spark misuse: `pdf.withColumn(...)` on a pandera-tagged pandas binding) and **delta** (Spark→pandas misuse: `sdf.assign(...)` on a Delta-table Spark binding). Cross-codebase probe coverage lifts from 253 to 255. D0091 joins the negative-probe pin matrix.
 - **Centralized-bump-cycle marker mechanism** (chore #153; spec §9.2 amendment). New `.github/workflows/extension-version-guard.yml` step honors a `.github/centralized-bump-cycle.marker` file: when the marker is present, the per-PR extension version bump is suspended for that cycle. Reusable for future cycles that want to trial centralized bumping. The marker file is **removed in this PR** — PR-F bumps the version, the guard sees the bump, the marker isn't needed post-cycle. v1.10's first PR re-adds the marker (if §9.2 amendment continues) or the amendment is reverted in v1.10 spec.
 
 ### Changed
@@ -26,9 +26,9 @@ Ninth minor release on the v1.0 line. v1.9's headline: **v2.0 migration is plann
 - **D0091 default-mode severity**: warning (unchanged from v1.8). **D0091 strict-mode severity**: error (new in v1.9, PR-D1 #154). Cascade trigger for any `probes_negative/` fixture that exercises cross-dialect method patterns under `"typeCheckingMode": "strict"` — those fixtures will newly emit D0091 as error. Forward-flagged for the catalog-pin PR. v1.6 retro rule 13 (severity-flipping cascade) applied.
 - **D0091 message text**: appends "— note arg shape differs" for asymmetric-shape mappings (PR-D1 #154). Cascade trigger for any `probes_negative/` fixture that pins the D0091 message verbatim on a `withColumnRenamed` / `rename`, `assign` / `withColumn`, or other shape-changing pair. The full emitted text is centralized via `CrossDialectSuggestion::format` so the diagnostic emitter and any hover-aside renderer can't drift.
 - **Spec §9.2 amendment** — per-PR extension version bumps are **SUSPENDED for the v1.9 cycle** and centralized to PR-F at cycle close. The trial mechanism is the `.github/centralized-bump-cycle.marker` file plus the new check in `.github/workflows/extension-version-guard.yml`. v1.10 spec decides whether to continue (re-add the marker) or revert the amendment.
-- **Trust-claim surfaces** swept end-to-end for v1.9 reality: README "Reliability and trust" + "Today / Next" lines; the docs-site splash; `about/production-readiness`; `about/pykrete-tests`; the docs-site roadmap; the canonical `docs/roadmap.md`; the pandas roadmap; the diagnostics reference (D0090 entry now mentions `--ack` + the v2 envelope's `migrationStatus`; D0091 entry documents strict-mode escalation, the `shape_changes` hint, and the new bare-attribute firing site); the cookbook recipe 6 (gains a `--ack` filter step for CI gating); the VS Code extension README; and `editors/vscode/CHANGELOG.md`. All refresh to live extracts per the new PR-A2 `text-numeric` gate (NOT `grep -c` per the v1.4 rule):
+- **Trust-claim surfaces** swept end-to-end for v1.9 reality: README "Reliability and trust" + "Today / Next" lines; the docs-site splash; `about/production-readiness`; `about/pykrete-tests`; the docs-site roadmap; the canonical `docs/roadmap.md`; the pandas roadmap; the diagnostics reference (D0090 entry now mentions `--ack` + the v2 envelope's `migrationStatus`; D0091 entry documents strict-mode escalation, the `shape_changes` hint, and the new bare-attribute firing site); the cookbook recipe 6 (gains a `--ack` filter step for CI gating); the VS Code extension README; and `editors/vscode/CHANGELOG.md`. Pinned to live extracts at the v1.9.0 tag (the `text-numeric-historical` label is skipped by the gate — release-pinned numbers are immutable by construction; see CONTRIBUTING.md "CHANGELOG conventions"):
 
-```text-numeric
+```text-numeric-historical
 255 probes
 114 fixtures
 1650 tests
@@ -54,10 +54,10 @@ Ninth minor release on the v1.0 line. v1.9's headline: **v2.0 migration is plann
 
 The trust suite verifies, on every release:
 
-- **Column resolution** through the Spark v1.0 surface plus the pandas analogues — 185 positive probes across 47 annotated fixtures (153 `RESOLVES` + 24 `TYPE-IS` + 4 `FILE-COUNT` + 4 `FILE-CLEAN-OF`).
-- **Diagnostic firing** on broken fixtures — 70 negative probes across 66 `probes_negative/` fixtures pinning D0030 `unknownColumn`, D0040 `unionSchemaMismatch` / D0050 `returnColumnsMismatch` / D0051 `argumentColumnsMismatch`, D0060 `missingJoinKey`, D0073 `transformInputMismatch`, D0081 `nonNumericArithmetic`, D0082 `crossTypeComparison`, D0083 `nullabilityMismatch`, D0084 `enumValueMismatch`, D0090 `deprecatedDataFrameAlias`, and D0091 `crossDialectMethodMismatch` (v1.9 cross-codebase coverage via the PR-P1 pandera + delta probes).
+- **Column resolution** through the Spark v1.0 surface plus the pandas analogues — `185 positive` probes across 47 annotated fixtures (153 `RESOLVES` + 24 `TYPE-IS` + 4 `FILE-COUNT` + 4 `FILE-CLEAN-OF`).
+- **Diagnostic firing** on broken fixtures — `70 negative` probes across 66 `probes_negative/` fixtures pinning D0030 `unknownColumn`, D0040 `unionSchemaMismatch` / D0050 `returnColumnsMismatch` / D0051 `argumentColumnsMismatch`, D0060 `missingJoinKey`, D0073 `transformInputMismatch`, D0081 `nonNumericArithmetic`, D0082 `crossTypeComparison`, D0083 `nullabilityMismatch`, D0084 `enumValueMismatch`, D0090 `deprecatedDataFrameAlias`, and D0091 `crossDialectMethodMismatch` (v1.9 cross-codebase coverage via the PR-P1 pandera + delta probes).
 - **Spark type tracking** through transformations, scoped to D0081 via the `PROBE-TYPE-IS` synth-shape path (shipped v1.2).
-- **Pandas type tracking** through dispatched chains (shipped v1.4) on `PandasFrame[X]`, scoped to D0081 via the assign-arithmetic synth — 24 `PROBE-TYPE-IS` markers across 10 of the 17 donors.
+- **Pandas type tracking** through dispatched chains (shipped v1.4) on `PandasFrame[X]`, scoped to D0081 via the assign-arithmetic synth — 24 `PROBE-TYPE-IS` markers across 10 of the `17 donors`.
 - **Cross-dialect handoff** (shipped v1.5, `.take()` closure v1.6): `.toPandas()` re-tags `SparkFrame[X]` to `PandasFrame[X]`; `spark.createDataFrame(pdf)` re-tags back when a schema source is present; pandas `.head` / `.tail` / `.first` / `.take` are dialect-gated.
 - **Cross-dialect method-mismatch warning** (shipped v1.8, matured v1.9): D0091 fires when a pandas-only method is called on a Spark receiver, or a Spark-only method on a pandas receiver. v1.9 escalates to error under strict mode and extends the gate to bare-attribute access (`pdf.rdd`, `sdf.loc`, …).
 
@@ -105,7 +105,7 @@ Eighth minor release on the v1.0 line. v1.8's headline: **`pykrete check --depre
 - **`D0091 crossDialectMethodMismatch` warning** (PR-D1; spec §3). Fires when the receiver's dialect tag and the called method's vocabulary disagree: pandas receivers calling a Spark-only method (`pdf.withColumn(...)`, `pdf.selectExpr(...)`) and Spark receivers calling a pandas-only method (`sdf.assign(...)`, `sdf.merge(...)`). Severity hardcoded warning this cycle. The diagnostic carries a *use `.x(...)` instead* suggestion for the high-traffic pairs (`withColumn` ↔ `assign`, `withColumnRenamed` ↔ `rename`, `selectExpr` → `eval`, `toPandas` → `copy` on the Spark→pandas direction; `groupby` → `groupBy`, `merge` → `join` on the pandas→Spark direction) — methods without a clean cross-dialect equivalent render a bare mismatch note. Receiver-dialect-gated: untagged bindings (no annotation) skip the gate entirely. **Carve-outs**: deprecated `DataFrame[X]` alias receivers skip the gate (avoids double-warning with D0090 — the v2.0 migration narrative is "adjudicate, then enforce"); `pivot` and `melt` on Spark receivers don't fire because Spark exposes legitimate same-spelled surfaces (`groupBy(...).pivot(...)` and the 3.4+ positional-form `df.melt(ids, values, ...)`). The pandas-direction check has no equivalent carve-out — every Spark discriminator is genuinely absent from the pandas DataFrame surface. **Back-compat preservation**: the existing un-gated `column_method_shape` arm continues to typecheck `pdf.withColumn(...)` as Spark — schema flows through unchanged. D0091 is informational warning ALONGSIDE the existing behavior, not a replacement. Spec §3.2: ship warning, gather signal, escalate in v1.9 (the back-compat surface is genuinely larger than D0090's was, because the dispatch is silent-success today rather than already-deprecated).
 - **`build.rs`-generated `PANDAS_INHERITED_ARM_METHODS` inventory** (PR-A1; spec §2.1). Closes the v1.7 retro rule 4 audit-debt class: the hand-maintained inventory list in `dialect_signals.rs` is now structurally pinned to `expr.rs`'s actual `receiver_is_pandas_inherited` arm by an extraction step in `crates/pykrete/build.rs`. The build script parses `expr.rs` source, extracts the method strings from the two recognized arm shapes (`receiver_is_pandas_inherited && matches!(method, "A" | "B" | ...)` and `receiver_is_pandas_inherited && method == "X"`), and writes the extracted set to `OUT_DIR` as `PANDAS_INHERITED_ARM_METHODS_GENERATED`. A test asserts the hand-maintained `PANDAS_INHERITED_ARM_METHODS` equals the generated set. Within-cycle inventory drift is now structurally impossible. Adding a new arm shape requires a parallel update to `build.rs::extract_methods` or the build fails — surfaced loudly rather than silently.
 - **`scripts/changelog-grep.sh` CI gate** (PR-A2; spec §2.2). Closes the v1.7 retro rule 6 audit-debt class: any string inside a CHANGELOG fenced block labeled `stderr`, `stdout`, or `text` is grep-anchored against `crates/pykrete/src/`. If the string doesn't appear in the source, CI fails with a `MISMATCH` line naming the offending CHANGELOG entry. Inline single-backtick quotes are NOT checked by design — the contributor opts into the gate by choosing the fence label. Other fence labels (`python`, `bash`, `rust`, no label) are ignored. CONTRIBUTING.md gains a new "CHANGELOG conventions" section documenting the discipline.
-- **4 new cross-codebase negative probes in pykrete-tests** (PR-P1 #30 in pykrete-tests). 2 negative probes each for **D0073 `transformInputMismatch`** (pandera + great-expectations) and **D0083 `nullabilityMismatch`** (mlflow + delta). Cross-codebase probe coverage lifts from 249 to 253 (183 positive + 70 negative under `probes_negative/`). Closes the v1.7 deferral of D0073 / D0083 cross-codebase coverage — D0073 and D0083 join D0040 / D0050 / D0051 (v1.7), D0060 / D0081 / D0082 / D0084 (earlier), D0030 / D0090 (always) in the negative-probe pin matrix.
+- **4 new cross-codebase negative probes in pykrete-tests** (PR-P1 #30 in pykrete-tests). `2 negative` probes each for **D0073 `transformInputMismatch`** (pandera + great-expectations) and **D0083 `nullabilityMismatch`** (mlflow + delta). Cross-codebase probe coverage lifts from 249 to 253 (`183 positive` + `70 negative` under `probes_negative/`). Closes the v1.7 deferral of D0073 / D0083 cross-codebase coverage — D0073 and D0083 join D0040 / D0050 / D0051 (v1.7), D0060 / D0081 / D0082 / D0084 (earlier), D0030 / D0090 (always) in the negative-probe pin matrix.
 
 ### Changed
 
@@ -116,7 +116,7 @@ Eighth minor release on the v1.0 line. v1.8's headline: **`pykrete check --depre
 
   Diagnostic JSON shape unchanged — `schemaVersion` stays `"1"`; only the human-readable `message` field changes. Forward-flag for the v1.8.0 catalog-pin chore PR (see Coordinated with): the message-text change cascades into any pykrete-tests `probes_negative/` fixture that pins the D0090 message verbatim. The full emitted text (substituted with the user's actual annotation) is centralized via `format_d0090_message` at `crates/pykrete/src/dataframe.rs:190` so signature renderer and ann-assign emitter cannot drift apart.
 
-- **Trust-claim surfaces** swept end-to-end for v1.8 reality: README "Reliability and trust" + "Today / Next" lines; the docs-site splash; `about/production-readiness`; `about/pykrete-tests`; the docs-site roadmap; the canonical `docs/roadmap.md`; the pandas roadmap; the diagnostics reference (D0090 message text + new D0091 entry); the cookbook recipe 6; the VS Code extension README; and `editors/vscode/CHANGELOG.md`. All refresh to **253 schema-tracking probes across 111 of 112 fixtures from 17 donors** (183 positive + 70 negative under `probes_negative/`, including the 4 PR-P1 D0073/D0083 negative probes from pykrete-tests PR-P1 #30 and the 2 PR-D1 pandas `melt` probes from PR-D1 #28 that landed in the v1.7.0 → v1.8.0 catalog window). Counts are extracted via `python3 scripts/probes.py extract cross-codebase | jq` per the v1.4 rule, NOT `grep -c`.
+- **Trust-claim surfaces** swept end-to-end for v1.8 reality: README "Reliability and trust" + "Today / Next" lines; the docs-site splash; `about/production-readiness`; `about/pykrete-tests`; the docs-site roadmap; the canonical `docs/roadmap.md`; the pandas roadmap; the diagnostics reference (D0090 message text + new D0091 entry); the cookbook recipe 6; the VS Code extension README; and `editors/vscode/CHANGELOG.md`. All refresh to **253 schema-tracking probes across 111 of `112 fixtures` from `17 donors`** (`183 positive` + `70 negative` under `probes_negative/`, including the 4 PR-P1 D0073/D0083 negative probes from pykrete-tests PR-P1 #30 and the 2 PR-D1 pandas `melt` probes from PR-D1 #28 that landed in the v1.7.0 → v1.8.0 catalog window). Counts are extracted via `python3 scripts/probes.py extract cross-codebase | jq` per the v1.4 rule, NOT `grep -c`.
 - **Pandas roadmap** updated: `--deprecation-report` and D0091 move from "v1.8 horizon" to shipped; broader pandas reshape (`stack` / `unstack` / `groupby.agg`, full `pivot_table` / `melt` output schema-tracking, `.loc` non-literal forms + `.iloc`, the `.query` / `.eval` mini-DSLs, pandas I/O entry points, polars) stay tracked for v1.9+. D0091 strict-mode escalation explicitly carved out to v1.9.
 
 ### Fixed
@@ -133,10 +133,10 @@ Eighth minor release on the v1.0 line. v1.8's headline: **`pykrete check --depre
 
 The trust suite verifies, on every release:
 
-- **Column resolution** through the Spark v1.0 surface plus the pandas analogues — 183 positive probes across 47 annotated fixtures.
-- **Diagnostic firing** on broken fixtures — 70 negative probes across 64 `probes_negative/` fixtures pinning D0030 `unknownColumn`, D0040 `unionSchemaMismatch` / D0050 `returnColumnsMismatch` / D0051 `argumentColumnsMismatch` (v1.7 cross-codebase coverage), D0060 `missingJoinKey`, D0073 `transformInputMismatch` (v1.8 cross-codebase coverage), D0081 `nonNumericArithmetic`, D0082 `crossTypeComparison`, D0083 `nullabilityMismatch` (v1.8 cross-codebase coverage), D0084 `enumValueMismatch`, and D0090 `deprecatedDataFrameAlias`.
+- **Column resolution** through the Spark v1.0 surface plus the pandas analogues — `183 positive` probes across 47 annotated fixtures.
+- **Diagnostic firing** on broken fixtures — `70 negative` probes across 64 `probes_negative/` fixtures pinning D0030 `unknownColumn`, D0040 `unionSchemaMismatch` / D0050 `returnColumnsMismatch` / D0051 `argumentColumnsMismatch` (v1.7 cross-codebase coverage), D0060 `missingJoinKey`, D0073 `transformInputMismatch` (v1.8 cross-codebase coverage), D0081 `nonNumericArithmetic`, D0082 `crossTypeComparison`, D0083 `nullabilityMismatch` (v1.8 cross-codebase coverage), D0084 `enumValueMismatch`, and D0090 `deprecatedDataFrameAlias`.
 - **Spark type tracking** through transformations, scoped to D0081 via the `PROBE-TYPE-IS` synth-shape path (shipped v1.2).
-- **Pandas type tracking** through dispatched chains (shipped v1.4) on `PandasFrame[X]`, scoped to D0081 via the assign-arithmetic synth — 24 `PROBE-TYPE-IS` markers across 10 of the 17 donors.
+- **Pandas type tracking** through dispatched chains (shipped v1.4) on `PandasFrame[X]`, scoped to D0081 via the assign-arithmetic synth — 24 `PROBE-TYPE-IS` markers across 10 of the `17 donors`.
 - **Cross-dialect handoff** (shipped v1.5, `.take()` closure v1.6): `.toPandas()` re-tags `SparkFrame[X]` to `PandasFrame[X]`; `spark.createDataFrame(pdf)` re-tags back when a schema source is present; pandas `.head` / `.tail` / `.first` / `.take` are dialect-gated.
 - **Cross-dialect method-mismatch warning** (new v1.8): D0091 fires when a pandas-only method is called on a Spark receiver, or a Spark-only method on a pandas receiver. Warning-only this cycle.
 
@@ -186,7 +186,7 @@ Seventh minor release on the v1.0 line. With v1.7, **v2.0 is one command away**:
 ### Changed
 
 - **`pykrete migrate` default mode is now `--check`** (PR-M1; spec §1.1). v1.6 shipped `pykrete migrate src/` as a rewrite-in-place default with `--check` and `--diff` as opt-in preview modes. v1.7 flips: `pykrete migrate src/` runs check-mode (preview verdicts on stdout, exit 1 if any site needs attention, 0 otherwise) and `--apply` is the new opt-in for the in-place rewrite. `--check` and `--diff` keep working as explicit flags. The flip lands two cycles after `pykrete migrate` first shipped; the v1.6 release notes explicitly flagged the CLI surface as pre-stable per the "`pykrete migrate` CLI surface is new and isn't yet part of the SemVer-major contract; flag names and stdout shape may evolve in v1.7+" compatibility note. **Release-notes callout for adopters**: any CI invocation that ran `pykrete migrate src/` and expected an in-place rewrite needs to switch to `pykrete migrate --apply src/`. The cookbook recipe 6 update spells out the migration. A first-run on v1.7 with no flag also emits a one-line `pykrete: migrate default is now --check; pass --apply to rewrite in place (v1.7+)` warning to stderr so adopters discover the change without reading release notes.
-- **Trust-claim surfaces** swept end-to-end for v1.7 reality: README "Reliability and trust" + "Today / Next" lines; the docs-site splash; `about/production-readiness`; `about/pykrete-tests`; the docs-site roadmap; the canonical `docs/roadmap.md`; the pandas roadmap; the operations ref (pandas `melt` literal-form); the cookbook recipe 6 (the migrate `--check`-default flip); the VS Code extension README; and `editors/vscode/CHANGELOG.md`. All refresh to **247 schema-tracking probes across 106 fixtures from 17 donors** (182 positive + 65 negative under `probes_negative/`, including the 6 PR-P1 D0040/D0050/D0051 negative probes from pykrete-tests PR-P1 #27); the 2 new pandas `melt` probes from pykrete-tests PR-D1 #28 land when the v1.7.0 catalog pin bumps post-tag. Counts are extracted via `python scripts/probes.py extract cross-codebase | jq` per the v1.4 rule, NOT `grep -c`.
+- **Trust-claim surfaces** swept end-to-end for v1.7 reality: README "Reliability and trust" + "Today / Next" lines; the docs-site splash; `about/production-readiness`; `about/pykrete-tests`; the docs-site roadmap; the canonical `docs/roadmap.md`; the pandas roadmap; the operations ref (pandas `melt` literal-form); the cookbook recipe 6 (the migrate `--check`-default flip); the VS Code extension README; and `editors/vscode/CHANGELOG.md`. All refresh to **247 schema-tracking probes across `106 fixtures` from `17 donors`** (`182 positive` + `65 negative` under `probes_negative/`, including the 6 PR-P1 D0040/D0050/D0051 negative probes from pykrete-tests PR-P1 #27); the 2 new pandas `melt` probes from pykrete-tests PR-D1 #28 land when the v1.7.0 catalog pin bumps post-tag. Counts are extracted via `python scripts/probes.py extract cross-codebase | jq` per the v1.4 rule, NOT `grep -c`.
 - **Pandas roadmap** updated: `melt` literal-form moves from "v1.7 horizon" to shipped; full `pivot_table` schema-tracking, `stack` / `unstack` / `groupby.agg`, `reset_index` / `set_index`, `.loc` non-literal forms + `.iloc`, the `.query` / `.eval` mini-DSLs, pandas I/O entry points, and polars stay tracked for v1.8+.
 
 ### Fixed
@@ -202,10 +202,10 @@ Seventh minor release on the v1.0 line. With v1.7, **v2.0 is one command away**:
 
 The trust suite verifies, on every release:
 
-- **Column resolution** through the Spark v1.0 surface plus the pandas analogues — 182 positive probes across 46 annotated fixtures (now including pandas `melt` literal-form per PR-D1).
-- **Diagnostic firing** on broken fixtures — 65 negative probes across 54 `probes_negative/` fixtures pinning D0030 `unknownColumn` (now including pandas `melt` literal-arg typos per PR-D1), D0040 / D0050 / D0051 enum / range / nullability checks (now covered cross-codebase per pykrete-tests PR-P1), D0060 `missingJoinKey`, D0081 `nonNumericArithmetic`, D0082 `crossTypeComparison`, D0084 `enumValueMismatch`, and D0090 `deprecatedDataFrameAlias`.
+- **Column resolution** through the Spark v1.0 surface plus the pandas analogues — `182 positive` probes across 46 annotated fixtures (now including pandas `melt` literal-form per PR-D1).
+- **Diagnostic firing** on broken fixtures — `65 negative` probes across 54 `probes_negative/` fixtures pinning D0030 `unknownColumn` (now including pandas `melt` literal-arg typos per PR-D1), D0040 / D0050 / D0051 enum / range / nullability checks (now covered cross-codebase per pykrete-tests PR-P1), D0060 `missingJoinKey`, D0081 `nonNumericArithmetic`, D0082 `crossTypeComparison`, D0084 `enumValueMismatch`, and D0090 `deprecatedDataFrameAlias`.
 - **Spark type tracking** through transformations, scoped to D0081 via the `PROBE-TYPE-IS` synth-shape path (shipped v1.2).
-- **Pandas type tracking** through dispatched chains (shipped v1.4) on `PandasFrame[X]`, scoped to D0081 via the assign-arithmetic synth — 24 `PROBE-TYPE-IS` markers across 10 of the 17 donors.
+- **Pandas type tracking** through dispatched chains (shipped v1.4) on `PandasFrame[X]`, scoped to D0081 via the assign-arithmetic synth — 24 `PROBE-TYPE-IS` markers across 10 of the `17 donors`.
 - **Cross-dialect handoff** (shipped v1.5, `.take()` closure v1.6): `.toPandas()` re-tags `SparkFrame[X]` to `PandasFrame[X]`; `spark.createDataFrame(pdf)` re-tags back when a schema source is present; pandas `.head` / `.tail` / `.first` / `.take` are dialect-gated.
 
 ### Deferred (v1.8 trackers)
@@ -259,7 +259,7 @@ Sixth minor release on the v1.0 line. The headline change is **`pykrete migrate`
 
 - **`pykrete check --report-aliases` JSON envelope `resolvedDialect`** field now reports `"pandas"` and `"ambiguous"` discriminators in addition to `"spark"`. v1.5 reported every site as `"spark"` because adjudication wasn't yet wired; v1.6 lights the call-graph adjudicator (PR-M3) into the same envelope so the report distinguishes pure-Spark / pure-pandas / mixed bindings before the rewrite step. `aliasReportVersion` bumps from `"1"` to `"2"`: the field shape is unchanged, but the `resolvedDialect` value set expanded — per the envelope-version policy in `main.rs` ("changing its meaning: breaking — bump"), the value-set expansion is a breaking change for consumers that switched on `"spark"` only.
 - **`pykrete migrate --check` per-site output** lands on **stdout** (not stderr), so `pykrete migrate --check src/ > report.txt` and standard `| jq` pipelines work without redirection gymnastics. Exit code remains the gate signal (0 = clean, 1 = sites need attention).
-- **Trust-claim surfaces** swept end-to-end for v1.6 reality: README "Reliability and trust" + "Today / Next" lines; the docs-site splash; `about/production-readiness`; `about/pykrete-tests`; the docs-site roadmap; the canonical `docs/roadmap.md`; the pandas roadmap; the diagnostics ref D0090 entry (replaces the v1.5 forward-ref with delivered behavior); the operations ref (pandas `pivot_table` literal-form + `.take()` dialect-gate); the cookbook recipe 6 (already shipped in PR-M3, re-verified for accuracy); the VS Code extension README; and `editors/vscode/CHANGELOG.md`. All refresh to **241 schema-tracking probes across 99 of 100 fixtures from 17 donors** (182 positive + 59 negative under `probes_negative/`, including the 2 new PR-D1 `pivot_table` probes and 4 v1.5-audit-gap closures from the pykrete-tests PR-P1 cycle); counts are extracted via `python scripts/probes.py extract cross-codebase | jq` per the v1.4 rule, NOT `grep -c`.
+- **Trust-claim surfaces** swept end-to-end for v1.6 reality: README "Reliability and trust" + "Today / Next" lines; the docs-site splash; `about/production-readiness`; `about/pykrete-tests`; the docs-site roadmap; the canonical `docs/roadmap.md`; the pandas roadmap; the diagnostics ref D0090 entry (replaces the v1.5 forward-ref with delivered behavior); the operations ref (pandas `pivot_table` literal-form + `.take()` dialect-gate); the cookbook recipe 6 (already shipped in PR-M3, re-verified for accuracy); the VS Code extension README; and `editors/vscode/CHANGELOG.md`. All refresh to **241 schema-tracking probes across 99 of `100 fixtures` from `17 donors`** (`182 positive` + `59 negative` under `probes_negative/`, including the 2 new PR-D1 `pivot_table` probes and 4 v1.5-audit-gap closures from the pykrete-tests PR-P1 cycle); counts are extracted via `python scripts/probes.py extract cross-codebase | jq` per the v1.4 rule, NOT `grep -c`.
 - **Pandas roadmap** updated: `pivot_table` literal-form moves from "v1.6+ horizon" to shipped; `.take()` dialect-gate and `pdf.loc[mask, "col"]` FP closure move to shipped; `melt` / `stack` / `unstack` / `groupby.agg` / `reset_index` / `set_index` / full `pivot_table` schema-tracking stay tracked for v1.7. Polars, `.query` / `.eval` mini-DSLs, `pd.read_csv` / `pd.read_parquet` / `pd.read_json` / `pd.read_sql` schema-inference, multi-index, dtype subtypes stay tracked for v1.7+.
 - **Diagnostics ref D0090 entry** drops the v1.5 forward-ref "v1.6 will pair the alias-escalation to error under strict mode with the `pykrete migrate` auto-rewriter shipping in the same release" — replaced with the actual delivered behavior, the call-graph adjudication detail, and a pointer to cookbook recipe 6.
 
@@ -271,10 +271,10 @@ Sixth minor release on the v1.0 line. The headline change is **`pykrete migrate`
 
 The trust suite verifies, on every release:
 
-- **Column resolution** through the Spark v1.0 surface plus the pandas analogues — 182 positive probes across 46 annotated fixtures.
-- **Diagnostic firing** on broken fixtures — 59 negative probes across 53 `probes_negative/` fixtures pinning D0030 `unknownColumn` (now including pandas `pivot_table` typos per PR-D1), D0060 `missingJoinKey`, D0081 `nonNumericArithmetic`, D0082 `crossTypeComparison`, D0084 `enumValueMismatch`, and D0090 `deprecatedDataFrameAlias`.
+- **Column resolution** through the Spark v1.0 surface plus the pandas analogues — `182 positive` probes across 46 annotated fixtures.
+- **Diagnostic firing** on broken fixtures — `59 negative` probes across 53 `probes_negative/` fixtures pinning D0030 `unknownColumn` (now including pandas `pivot_table` typos per PR-D1), D0060 `missingJoinKey`, D0081 `nonNumericArithmetic`, D0082 `crossTypeComparison`, D0084 `enumValueMismatch`, and D0090 `deprecatedDataFrameAlias`.
 - **Spark type tracking** through transformations, scoped to D0081 via the `PROBE-TYPE-IS` synth-shape path (shipped v1.2).
-- **Pandas type tracking** through dispatched chains (shipped v1.4) on `PandasFrame[X]`, scoped to D0081 via the assign-arithmetic synth — 24 `PROBE-TYPE-IS` markers across 10 of the 17 donors.
+- **Pandas type tracking** through dispatched chains (shipped v1.4) on `PandasFrame[X]`, scoped to D0081 via the assign-arithmetic synth — 24 `PROBE-TYPE-IS` markers across 10 of the `17 donors`.
 - **Cross-dialect handoff** (shipped v1.5): `.toPandas()` re-tags `SparkFrame[X]` to `PandasFrame[X]`; `spark.createDataFrame(pdf)` re-tags back when a schema source is present; pandas `.head` / `.tail` / `.first` are dialect-gated; v1.6 closes `.take()` on the same path.
 
 ### Deferred (v1.7 trackers)
@@ -319,7 +319,7 @@ Fifth minor release on the v1.0 line. The headline change is **cross-dialect han
 
 ### Changed
 
-- **Trust-claim surfaces** swept end-to-end for v1.5 reality: README "Reliability and trust", docs-site `about/production-readiness`, `about/pykrete-tests`, the splash page, the docs-site roadmap, the canonical roadmap, and the pandas-roadmap all refresh to **235 probes across 94 fixtures from 17 donors** (cross-dialect handoff added to the "what we verify" list; the pykrete-tests v1.5 cycle ships incremental probe coverage on top of the v1.4 baseline of 223 probes / 83 fixtures).
+- **Trust-claim surfaces** swept end-to-end for v1.5 reality: README "Reliability and trust", docs-site `about/production-readiness`, `about/pykrete-tests`, the splash page, the docs-site roadmap, the canonical roadmap, and the pandas-roadmap all refresh to **`235 probes` across `94 fixtures` from `17 donors`** (cross-dialect handoff added to the "what we verify" list; the pykrete-tests v1.5 cycle ships incremental probe coverage on top of the v1.4 baseline of `223 probes` / `83 fixtures`).
 - **Pandas roadmap** updated: cross-dialect handoff moves from "v1.5+ horizon" to "shipped"; `.loc[:, "col"]` literal-form moves to shipped; `.loc` non-literal forms (boolean mask, column range), `pdf.iloc[...]`, broader pandas reshape, and the `pykrete migrate` binary are tracked for v1.6.
 - **Diagnostics ref** D0090 entry: notes that v1.6 will pair the alias-escalation to error under strict mode with the `pykrete migrate` auto-rewriter shipping in the same release, so the migration is atomic with the breaking-change signal. Severity stays at `warning` everywhere in v1.5.
 - **Operations ref** updated: `.toPandas` moves from `opaque` to `modeled` (re-tags to `PandasFrame[X]`); pandas section adds `.head` / `.tail` / `.first` as pass-through on `PandasFrame[X]`, `.loc[:, "col"]` as `column-check only` with the literal-form gate documented; `spark.createDataFrame(pdf)` documented as re-tagging back to Spark when a schema source is present.
@@ -329,10 +329,10 @@ Fifth minor release on the v1.0 line. The headline change is **cross-dialect han
 
 The trust suite verifies, on every release:
 
-- **Column resolution** through the Spark v1.0 surface plus the pandas analogues — 181 positive probes across 45 of 46 annotated fixtures.
-- **Diagnostic firing** on broken fixtures — 54 negative probes across 48 `probes_negative/` fixtures pinning D0030 `unknownColumn`, D0060 `missingJoinKey`, D0081 `nonNumericArithmetic`, D0082 `crossTypeComparison`, D0084 `enumValueMismatch`, and D0090 `deprecatedDataFrameAlias`.
+- **Column resolution** through the Spark v1.0 surface plus the pandas analogues — `181 positive` probes across 45 of 46 annotated fixtures.
+- **Diagnostic firing** on broken fixtures — `54 negative` probes across 48 `probes_negative/` fixtures pinning D0030 `unknownColumn`, D0060 `missingJoinKey`, D0081 `nonNumericArithmetic`, D0082 `crossTypeComparison`, D0084 `enumValueMismatch`, and D0090 `deprecatedDataFrameAlias`.
 - **Spark type tracking** through transformations, scoped to D0081 via the `PROBE-TYPE-IS` synth-shape path (shipped v1.2), with raw-mutation coverage on D0080 `returnTypeMismatch` and D0082 `crossTypeComparison` until follow-up synth shapes ship.
-- **Pandas type tracking** through dispatched chains (shipped v1.4) on `PandasFrame[X]`, scoped to D0081 via the assign-arithmetic synth — 24 `PROBE-TYPE-IS` markers across 10 of the 17 donors — the v1.2 Spark side and the v1.4 pandas side.
+- **Pandas type tracking** through dispatched chains (shipped v1.4) on `PandasFrame[X]`, scoped to D0081 via the assign-arithmetic synth — 24 `PROBE-TYPE-IS` markers across 10 of the `17 donors` — the v1.2 Spark side and the v1.4 pandas side.
 
 ### Deferred (v1.6 trackers)
 
@@ -349,7 +349,7 @@ The trust suite verifies, on every release:
 
 ### Coordinated with
 
-- pykrete-tests: PR-G of the v1.5 cycle [shipped](https://github.com/amirnaderi93/pykrete-tests/pull/23) dbt-spark + python-deequ negative coverage (closes the v1.1 retro rule that cross-codebase tests must verify correctness, not just absence of false positives). The pykrete-tests catalog is pinned to pykrete `6a763b2739ab8db3f0074511dcc945c7ad41bd52` (current main with all v1.5 PRs), and the cycle now totals 94 fixtures / 235 probes / 54 negative-probes (PR-G adds dbt-spark + python-deequ; a follow-up [pykrete-tests #24](https://github.com/amirnaderi93/pykrete-tests/pull/24) adds the first PR-C `.loc[:, "col"]` cross-codebase probes on yfinance).
+- pykrete-tests: PR-G of the v1.5 cycle [shipped](https://github.com/amirnaderi93/pykrete-tests/pull/23) dbt-spark + python-deequ negative coverage (closes the v1.1 retro rule that cross-codebase tests must verify correctness, not just absence of false positives). The pykrete-tests catalog is pinned to pykrete `6a763b2739ab8db3f0074511dcc945c7ad41bd52` (current main with all v1.5 PRs), and the cycle now totals `94 fixtures` / `235 probes` / `54 negative`-probes (PR-G adds dbt-spark + python-deequ; a follow-up [pykrete-tests #24](https://github.com/amirnaderi93/pykrete-tests/pull/24) adds the first PR-C `.loc[:, "col"]` cross-codebase probes on yfinance).
 
 ### Compatibility
 
@@ -441,9 +441,9 @@ policy.
 - **Trust-claim surfaces** swept end-to-end for v1.4 reality:
   README "Reliability and trust", docs-site
   `about/production-readiness`, `about/pykrete-tests`, the splash
-  page, and the docs-site / canonical roadmaps all refresh to 223
-  probes across 83 fixtures from 17 donors; pandas check-site +
-  type-tracking coverage in 10 of 17 donors split into 3 hybrid + 3
+  page, and the docs-site / canonical roadmaps all refresh to
+  `223 probes` across `83 fixtures` from `17 donors`; pandas check-site +
+  type-tracking coverage in 10 of `17 donors` split into 3 hybrid + 3
   direct-dispatch + 4 canonical-fixture-only classes; the v1.5+
   deferral list (cross-dialect handoffs, `.query` / `.eval` mini-DSLs,
   broader pandas method modeling, I/O entry points) re-stated under
@@ -462,8 +462,8 @@ policy.
   on already-corrupted negative inputs
   (`mlflow/probes_negative/withColumn_arith_on_string.pyk` adds a
   D0081 at L21; `spark/probes_negative/cross_type_comparison.pyk`
-  adds a D0082 at L21). The 81 unchanged fixtures across the 17
-  donors confirm v1.4's checker work didn't introduce silent
+  adds a D0082 at L21). The 81 unchanged fixtures across the `17
+  donors` confirm v1.4's checker work didn't introduce silent
   positive-fixture regressions.
 
 ### Verified properties (cumulative)
@@ -471,9 +471,9 @@ policy.
 The trust suite verifies, on every release:
 
 - **Column resolution** through the Spark v1.0 surface plus the
-  pandas analogues — 180 positive probes across 45 annotated
+  pandas analogues — `180 positive` probes across 45 annotated
   fixtures.
-- **Diagnostic firing** on broken fixtures — 43 negative probes
+- **Diagnostic firing** on broken fixtures — `43 negative` probes
   across 37 `probes_negative/` fixtures pinning D0030
   `unknownColumn`, D0060 `missingJoinKey`, D0081
   `nonNumericArithmetic` (v1.4 widened to subscript-on-name
@@ -597,8 +597,8 @@ mass-refreshed to absorb the new `D0090` warnings on existing
   `df["typo"]` subscripts and D0090 on the deprecated
   `DataFrame[X]` alias.
 - **Probe count: 130 → 149 (+19).** Pandas check-site coverage adds
-  9 positive probes (column resolution across the new operations)
-  and 10 negative probes (D0030 + D0090 on probes_negative shapes)
+  `9 positive` probes (column resolution across the new operations)
+  and `10 negative` probes (D0030 + D0090 on probes_negative shapes)
   across the three new donor fixtures.
 - **Fixture count: 47 → 59 (+12).** 38 annotated (was 35) + 21
   `probes_negative/` (was 12). Donor count stays at 10.
@@ -613,8 +613,8 @@ mass-refreshed to absorb the new `D0090` warnings on existing
 - **Trust-claim surfaces.** README "Reliability and trust",
   docs-site `about/production-readiness`, `about/pykrete-tests`,
   the splash page, and the pykrete-tests README all refresh to the
-  v1.3 reality: 149 probes across 59 fixtures from 10 donors;
-  pandas check-site coverage in 3 of 10 donors; D0090 in the
+  v1.3 reality: `149 probes` across `59 fixtures` from `10 donors`;
+  pandas check-site coverage in 3 of `10 donors`; D0090 in the
   D-code list; honest scoping that pandas **positive type-tracking**
   via `PROBE-TYPE-IS` is deferred to v1.4 (parallel to how v1.2
   added Spark type-tracking after v1.1 introduced Spark column
@@ -653,8 +653,8 @@ The trust suite verifies, on every release:
   `.withColumn` / `.drop` / `.join` / `.groupBy` and the rest of
   the Spark v1.0 surface, plus the pandas analogues `df[col_list]`
   / `df[mask]` / `df["new"] = expr` / `df.drop` / `df.merge` /
-  `df.rename` — 122 positive probes across 37 annotated fixtures.
-- **Diagnostic firing** on broken fixtures — 27 negative probes
+  `df.rename` — `122 positive` probes across 37 annotated fixtures.
+- **Diagnostic firing** on broken fixtures — `27 negative` probes
   across all 21 `probes_negative/` fixtures pinning D0030
   `unknownColumn`, D0060 `missingJoinKey`, D0081
   `nonNumericArithmetic`, D0082 `crossTypeComparison`, D0084
@@ -703,8 +703,8 @@ trust-system extension, not a checker behavior change: the
 turns the v1.1-reserved-but-silent type-tracking marker class into a
 working release-blocking gate. Three donor fixtures pick up
 `PROBE-TYPE-IS` coverage in this release (quinn, mlflow,
-python-deequ), the cross-codebase suite grows to **130 probes (113
-positive + 17 negative)**, and a new CI gate plus two test classes
+python-deequ), the cross-codebase suite grows to
+**`130 probes` (`113 positive` + `17 negative`)**, and a new CI gate plus two test classes
 pin the new coverage so it can't silently regress. The pykrete-core
 Rust workspace is bit-identical to v1.1.0 — every change in this
 release lives in pykrete-tests and the docs surface.
@@ -757,7 +757,7 @@ release lives in pykrete-tests and the docs surface.
   unchanged at 17).** The three new `PROBE-TYPE-IS` markers each
   ship a positive assertion. Fixture count, donor count, negative
   count, and D-code coverage by the negative probes are unchanged
-  from v1.1: 47 fixtures (35 annotated + 12 negative), 10 donors,
+  from v1.1: `47 fixtures` (35 annotated + `12 negative`), `10 donors`,
   46-of-47 covered (the feast `spark_kafka_processor` streaming
   fixture is annotated but probe-free), D0030 / D0081 / D0082 /
   D0084 firing on negative probes.
@@ -770,8 +770,8 @@ release lives in pykrete-tests and the docs surface.
   the three new v1.2 markers verify clean.
 - **Trust-claim surfaces.** README "Reliability and trust",
   docs-site `about/production-readiness`, `about/pykrete-tests`,
-  and the index splash all refresh to the v1.2 reality: 130
-  probes across 47 fixtures, 10 donors, 3-of-10 with enum
+  and the index splash all refresh to the v1.2 reality:
+  `130 probes` across `47 fixtures`, `10 donors`, 3-of-10 with enum
   vocabulary verification, **3-of-10 with `PROBE-TYPE-IS`
   type-tracking coverage** scoped to D0081 via the synth-shape
   path. Honest scoping noted on all four surfaces: numeric
@@ -786,9 +786,9 @@ The trust suite now verifies, on every release:
 
 - **Column resolution** through `.select` / `.filter` /
   `.withColumn` / `.drop` / `.join` / `.groupBy` and the rest of
-  the v1.0 surface — 113 positive probes across 34 annotated
+  the v1.0 surface — `113 positive` probes across 34 annotated
   fixtures.
-- **Diagnostic firing** on broken fixtures — 17 negative probes
+- **Diagnostic firing** on broken fixtures — `17 negative` probes
   across all 12 `probes_negative/` fixtures pinning D0030
   `unknownColumn`, D0081 `nonNumericArithmetic`, D0082
   `crossTypeComparison`, and D0084 `enumValueMismatch`.
@@ -886,12 +886,12 @@ the existing v1.0 checks against 47 real-codebase fixtures.
   when their output flows into an enum-typed sink.
 - **Schema-tracking probe suite** vendored in
   [pykrete-tests](https://github.com/amirnaderi93/pykrete-tests).
-  127 probes (110 positive + 17 negative) across 47 fixtures (35
+  `127 probes` (`110 positive` + `17 negative`) across `47 fixtures` (35
   annotated + 12 deliberately-corrupted under `probes_negative/`)
-  from the same 10 donors the v1.0 golden-diff suite uses: Apache
+  from the same `10 donors` the v1.0 golden-diff suite uses: Apache
   Spark, Delta Lake, Apache Iceberg, Apache Hudi, MLflow, Feast,
-  Kedro, quinn, dbt-spark, python-deequ. Probes cover 46 of the 47
-  fixtures (the feast `spark_kafka_processor` streaming fixture is
+  Kedro, quinn, dbt-spark, python-deequ. Probes cover 46 of the `47
+  fixtures` (the feast `spark_kafka_processor` streaming fixture is
   annotated but probe-free — no typed-DataFrame slot to anchor on).
   Positive probes assert columns resolve cleanly after `.select` /
   `.filter` / `.withColumn` chains; negative probes assert specific
@@ -901,7 +901,7 @@ the existing v1.0 checks against 47 real-codebase fixtures.
   [pykrete-tests README](https://github.com/amirnaderi93/pykrete-tests#schema-tracking-probes-v11)
   and
   [`scripts/PROBES.md`](https://github.com/amirnaderi93/pykrete-tests/blob/main/scripts/PROBES.md).
-- **Enum value vocabulary verification in 3 of 10 donors.** Delta
+- **Enum value vocabulary verification in 3 of `10 donors`.** Delta
   CDC `_change_type` (`{"insert", "update_preimage",
   "update_postimage", "delete"}`), Hudi `_hoodie_operation`
   (`{"I", "-U", "U", "D"}` — per `HoodieOperation.java`, not the
@@ -914,17 +914,17 @@ the existing v1.0 checks against 47 real-codebase fixtures.
 ### Changed
 
 - **README "Reliability and trust" section** now states the v1.1
-  probe coverage alongside the v1.0 golden-diff coverage: 47
-  fixtures total (35 annotated + 12 negative), 127 probes (110
-  positive + 17 negative), enum vocabulary verification in 3 of 10
-  donors. Already shipped in
+  probe coverage alongside the v1.0 golden-diff coverage: `47
+  fixtures` total (35 annotated + `12 negative`), `127 probes` (`110
+  positive` + `17 negative`), enum vocabulary verification in 3 of `10
+  donors`. Already shipped in
   [#77](https://github.com/amirnaderi93/pykrete/pull/77).
 - **`docs-site` reference + splash sweep**: `reference/schemas`
   documents the new `enum[...]` type and its preservation /
   drop-side rules; `reference/diagnostics` adds the `D0084` row to
   the catalog and a prose entry under the type-checking section;
   the index splash refreshes the trust line from "32 annotated
-  snapshots" to "127 schema-tracking probes across 47 fixtures from
+  snapshots" to "127 schema-tracking probes across `47 fixtures` from
   10 real PySpark codebases" so every surface agrees with the
   README and production-readiness pages.
 
@@ -951,7 +951,7 @@ the existing v1.0 checks against 47 real-codebase fixtures.
 
 ### Coordinated with
 
-- pykrete-tests v1.1.0: vendors the 47 fixtures + 127 probes +
+- pykrete-tests v1.1.0: vendors the `47 fixtures` + `127 probes` +
   refreshed `diagnostic_catalog.json` with the new `D0084` entry.
 
 ## [1.0.0] - 2026-05-31
@@ -1044,7 +1044,7 @@ work.
 - pykrete-tests v0.1.40 (PR amirnaderi93/pykrete-tests#3, merged):
   refreshed the six v0.1.37-baseline goldens (which together carried
   seven findings) that v0.1.39 cleaned up, plus the two restored
-  pilots, bringing the suite to 32 fixtures all emitting
+  pilots, bringing the suite to `32 fixtures` all emitting
   `diagnostics: []` against v0.1.39 and v0.1.40.
 
 ### Versions
@@ -1621,7 +1621,7 @@ files under `crates/pykrete/src/operations/`:
 - `col_refs.rs` — `col(...)` / `df.X` / `df["X"]` / `F.<fn>("x")`
   reference discovery.
 
-All 985 tests pass unchanged; visibility tightened on the public
+All `985 tests` pass unchanged; visibility tightened on the public
 surface (`BodyContext` and its trace types are now `pub(crate)` rather
 than `pub`); cross-section helpers default to `pub(super)` so each
 sibling exposes only what the others need.
@@ -2155,7 +2155,7 @@ identifier in the query (projection, `WHERE`, `GROUP BY`, `ORDER BY`,
 within-file only. Marketplace README image URLs absolutized; the
 extension-version-guard CI now compares against the last release tag
 rather than the PR diff so subsequent feature PRs in a cycle pass
-cleanly after the first ext bump. 712 tests (+31 since v0.1.12). See
+cleanly after the first ext bump. `712 tests` (+31 since v0.1.12). See
 the [v0.1.13 release](https://github.com/amirnaderi93/pykrete/releases/tag/v0.1.13).
 
 ## [0.1.12]
@@ -2213,7 +2213,7 @@ editor never got a hover popup. Adds a 2-second timeout backstop on
 every fanned-out request. When the child stays silent, pykrete's
 standalone result is sent to the editor unchanged. Diagnostics,
 definition, references, rename, and completion all benefit from the
-same backstop. 655 tests (up from 650). See the
+same backstop. `655 tests` (up from 650). See the
 [v0.1.9 release](https://github.com/amirnaderi93/pykrete/releases/tag/v0.1.9).
 
 ## [0.1.8]

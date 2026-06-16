@@ -224,12 +224,51 @@ Known claim keys (defined in `scripts/changelog-grep.sh::numeric_claim_command`)
 | `fixtures` | `find ../pykrete-tests/cross-codebase \( -path '*annotated*' -name '*.pyk' -o -path '*probes_negative*' -name '*.pyk' \) \| wc -l` |
 | `tests` | `cargo test --release --workspace 2>&1 \| grep -oE '[0-9]+ passed' \| awk '{s+=$1} END {print s}'` |
 | `donors` | `find ../pykrete-tests/cross-codebase -maxdepth 1 -mindepth 1 -type d \| wc -l` |
+| `positive` | `... probes.py extract ... \| jq '[.probes[] \| select(.kind != "EXPECTS")] \| length'` |
+| `negative` | `... probes.py extract ... \| jq '[.probes[] \| select(.kind == "EXPECTS")] \| length'` |
 
 Unknown keys fail with `MISMATCH: ... unknown numeric-claim key: '<key>'`. To add a new key, extend `numeric_claim_command` in `scripts/changelog-grep.sh` in the same PR that adds the CHANGELOG line using it (mirrors the sibling-arm-grep discipline elsewhere in the codebase).
 
-PR CI runs the gate with `--skip-live-extract` (the `pykrete-tests` sibling repo isn't checked out beside `pykrete` on the GitHub Actions runner). The skip mode still validates fenced-block syntax + the known-key allowlist; only command execution is bypassed. Release-time runs (PR-F + manual local verification) run the full gate with live extracts.
+PR CI runs the gate with `--skip-live-extract` (the `pykrete-tests` sibling repo isn't checked out beside `pykrete` on the GitHub Actions runner). The skip mode still validates fenced-block syntax + the known-key allowlist; only command execution is bypassed. Release-time runs use the dedicated `release-gate.yml` workflow (push to `release/v*`, PR labeled `release-ready`, or manual `workflow_dispatch`) which checks out `pykrete-tests` as a sibling and runs the full gate with live extracts.
 
 This catches the v1.8-class drift where a trust-claim number quoted in CHANGELOG (e.g. "106 fixtures") silently diverges from the live extract (which was 112) — closes v1.8 retro rule 7.
+
+#### Historical pin labels (`text-numeric-historical`, v1.10+)
+
+Once `pykrete-tests` ships a new probe/fixture after a `pykrete` tag, the live counts drift above the pinned trust-claim numbers in the released-CHANGELOG section. The pinned numbers are correct AT THE TAG (release-pinned, immutable) but no longer match live. The release-cycle convention is: at v1.10 release time (PR-F), the v1.9.0 section's `text-numeric` block gets relabeled to `text-numeric-historical`. The gate parses but does NOT live-verify `text-numeric-historical` blocks — they render normally and skip the gate. Digits inside historical blocks are also stripped before the prose scan, so they can't trip gate v3 either.
+
+    ```text-numeric-historical
+    255 probes
+    114 fixtures
+    ```
+
+Mid-cycle, if `pykrete-tests` releases a probe-adding PR before the current cycle's `pykrete` release lands (the v1.9 / v1.10 window saw this with pykrete-tests PR-P1 bumping 255 → 261 probes pre-tag), relabel the prior-release block early — the gate would otherwise fail on the drift.
+
+### Prose-paragraph numeric scan (gate v3, v1.10+)
+
+Gate v3 extends the live-extract verification to **prose paragraphs** — text outside fenced blocks. Any prose digit-sequence followed (after whitespace) by a known claim key is verified against the same live-extract table. This catches the v1.9 PR-F drift class where "183 positive + 72 negative" landed in a paragraph trust-claim, OUTSIDE any fenced block, and the v2 gate missed it.
+
+Concretely: `Cross-codebase coverage lifts to 255 probes (185 positive + 70 negative).` is a prose claim and is gated automatically.
+
+The regex is leading-word-boundary anchored — digits immediately following an identifier prefix (e.g. `0091` inside `D0091 probes`) are rejected so D-code mentions don't trip the gate.
+
+**Escape hatch — single-backtick wrap**: if you need to mention a number that should NOT be auto-verified (a historical number from a prior release, a per-PR contribution count from a prior cycle, a number quoted from external documentation, an inline code example), wrap it in single backticks:
+
+```
+The v1.8 pin had `183 positive` probes; v1.9 lifted to 185 positive.
+```
+
+The scanner skips matches inside single-backtick spans. The `185 positive` outside the backticks is still verified.
+
+#### Final semantic — when does the gate verify a number?
+
+The full rule, after R2 of v1.10 PR-A2:
+
+- **`[Unreleased]` section + the current release's `text-numeric` (NON-historical) fenced block**: gated against live. PR-F at cycle close updates this block to live counts at tag time.
+- **Older `text-numeric-historical` fenced blocks**: skipped by gate. Relabeled from `text-numeric` to `text-numeric-historical` either at the NEXT release's PR-F, or earlier if upstream `pykrete-tests` drifts the live counts forward mid-cycle.
+- **Prose**: gated against live unless backtick-wrapped. Backtick-wrap covers historical claims ("the v1.8 pin had `183 positive`"), per-PR contribution counts ("`1 negative` probe each on pandera and delta"), and any other legitimate edge case where a number should NOT chase live.
+
+**Scope boundary**: only `CHANGELOG.md`. README, docs-site prose, and other Markdown surfaces are out of scope (different drift profile).
 
 ## Filing issues
 
