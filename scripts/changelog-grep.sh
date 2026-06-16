@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # v1.8 PR-A2 — CHANGELOG-binary string drift CI gate.
 # v1.9 PR-A2 — extended with `text-numeric` blocks (live-extract numeric trust-claim verification).
-# v1.10 PR-A2 — extended with prose-paragraph numeric scan (gate v3).
+# v1.10 PR-A2 — extended with prose-paragraph numeric scan (gate v3) +
+#               `text-numeric-historical` label (skipped by the gate, for
+#               release-pinned blocks whose numbers are immutable by design).
 #
 # Closes v1.7 retro rule 6 (v1.7 PR-F's CHANGELOG quoted a warning text
 # different from the actual main.rs:660 emission; PR-G patched after the
@@ -112,19 +114,29 @@ with open(path, "r", encoding="utf-8") as f:
 # Spec keeps the label optional; the script narrows to the four allow-
 # listed labels for the gate so unlabeled fences don't get checked (a
 # fenced unlabeled block is typically a code snippet, not binary output).
+#
+# `text-numeric-historical` is intentionally NOT in the alternation —
+# blocks with that label render in the rendered CHANGELOG but skip the
+# live-extract gate. Use it for release-pinned trust-claim blocks whose
+# numbers are immutable by design (e.g. the v1.9.0 section pinned at the
+# v1.9.0 tag commit). The `any_fence` regex below still strips these from
+# prose-scan input, so digits inside historical blocks won't trip gate v3.
 pattern = re.compile(
     r"^```(stderr|stdout|text-numeric|text)\n([\s\S]*?)^```",
     re.MULTILINE,
 )
-# Strip ALL fenced blocks (any label, labeled or not) before prose scan, so
-# prose-scan never doubles up on `text-numeric` lines and never trips on
-# code-snippet digits.
+# Strip ALL fenced blocks (any label, labeled or not — including
+# `text-numeric-historical`) before prose scan, so prose-scan never
+# doubles up on `text-numeric` lines and never trips on code-snippet
+# or historical-pin digits.
 any_fence = re.compile(r"^```[^\n]*\n[\s\S]*?^```", re.MULTILINE)
 
 # v1.10 PR-A2 gate v3 — prose-paragraph numeric scan.
 # Pattern from v1.10-spec.md §2.2.2 — case-sensitive on the key per spec.
+# Leading `(?<![A-Za-z0-9_])` rejects digits glued to an identifier prefix
+# (e.g. `0091` inside `D0091 probes`) so D-code mentions don't trip the gate.
 prose_pat = re.compile(
-    r"(\d+)\s+(positive|negative|probes|fixtures|tests|donors)\b"
+    r"(?<![A-Za-z0-9_])(\d+)\s+(positive|negative|probes|fixtures|tests|donors)\b"
 )
 # Single-backtick escape hatch. The pattern matches a span between two
 # single backticks (not double / triple); newlines disallowed so a stray
@@ -180,7 +192,11 @@ PY
 )
 
 if [ -z "$parsed" ]; then
-    echo "changelog-grep: no fenced stderr/stdout/text/text-numeric blocks and no prose numeric claims in $CHANGELOG (0 candidates; gate is a no-op)."
+    # Prose-scan ran and found 0 unbacktick-wrapped known-key matches (all
+    # prose numeric mentions are either escape-hatched or out of allow-
+    # list); no fenced blocks were present either. Distinct from "gate
+    # didn't run" — the scan happened, the candidate set was empty.
+    echo "changelog-grep: scanned $CHANGELOG; 0 fenced stderr/stdout/text/text-numeric blocks + 0 prose numeric claims to verify (all prose claims are backtick-escape-hatched or historical)."
     exit 0
 fi
 

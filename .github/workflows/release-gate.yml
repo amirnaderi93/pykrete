@@ -81,6 +81,12 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.95.0
 
+      # Cache scope is isolated from `ci.yml`'s cache by `workspaces: pykrete`
+      # (the path subdirectory differs — daily CI checks out at repo root, this
+      # workflow checks out under `pykrete/`). First release-gate run on a
+      # given commit is therefore cold; subsequent runs hit the cache.
+      # Acceptable since release-gate runs only on release branches +
+      # `release-ready`-labeled PRs + manual dispatch, not every push.
       - name: Cache cargo & target
         uses: Swatinem/rust-cache@v2
         with:
@@ -102,6 +108,11 @@ jobs:
       # Tag-time test verification. release/v* branches gate on the full
       # release-mode test suite passing — same shape as a pre-tag developer
       # would run locally per CONTRIBUTING.md "Releases".
+      #
+      # Cost note: release-mode tests take ~5-10min on a cold runner (slower
+      # codegen than debug). Acceptable for the release-gate cadence
+      # (release branches + `release-ready` labels + manual dispatch only,
+      # not every push). Daily PR `ci.yml` continues to use debug-mode tests.
       - name: Cargo test (release mode)
         working-directory: pykrete
         run: cargo test --release --workspace

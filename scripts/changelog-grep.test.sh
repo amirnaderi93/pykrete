@@ -93,7 +93,7 @@ this line does not exist anywhere in source
 }
 '
 extra=ok
-grep -q "no fenced stderr/stdout/text/text-numeric blocks" "$LAST_TMP/stdout" || extra=should_be_no_op
+grep -q "0 fenced stderr/stdout/text/text-numeric blocks + 0 prose numeric claims" "$LAST_TMP/stdout" || extra=should_be_no_op
 assert "unlabeled fenced block is ignored" 0 "$LAST_RC" "$extra"
 rm -rf "$LAST_TMP"
 
@@ -103,7 +103,7 @@ A `nonexistent inline string never in source` quoted inline.
 ' 'fn main() {}
 '
 extra=ok
-grep -q "no fenced stderr/stdout/text/text-numeric blocks" "$LAST_TMP/stdout" || extra=should_be_no_op
+grep -q "0 fenced stderr/stdout/text/text-numeric blocks + 0 prose numeric claims" "$LAST_TMP/stdout" || extra=should_be_no_op
 assert "inline backtick string is ignored" 0 "$LAST_RC" "$extra"
 rm -rf "$LAST_TMP"
 
@@ -149,7 +149,7 @@ run_case '# CHANGELOG
 ' 'fn main() {}
 '
 extra=ok
-grep -q "checked 0 block(s)" "$LAST_TMP/stdout" || grep -q "no fenced stderr/stdout/text/text-numeric blocks" "$LAST_TMP/stdout" || extra=unexpected_summary
+grep -q "checked 0 block(s)" "$LAST_TMP/stdout" || grep -q "0 fenced stderr/stdout/text/text-numeric blocks + 0 prose numeric claims" "$LAST_TMP/stdout" || extra=unexpected_summary
 assert "empty fenced block produces no false alarm" 0 "$LAST_RC" "$extra"
 rm -rf "$LAST_TMP"
 
@@ -162,7 +162,7 @@ def code_snippet_not_binary_output():
 ' 'fn main() {}
 '
 extra=ok
-grep -q "no fenced stderr/stdout/text/text-numeric blocks" "$LAST_TMP/stdout" || extra=python_label_not_ignored
+grep -q "0 fenced stderr/stdout/text/text-numeric blocks + 0 prose numeric claims" "$LAST_TMP/stdout" || extra=python_label_not_ignored
 assert "python-labeled fenced block is ignored" 0 "$LAST_RC" "$extra"
 rm -rf "$LAST_TMP"
 
@@ -497,6 +497,83 @@ grep -q "live extract SKIPPED" "$tmp/stdout" || extra=missing_skip_msg
 grep -q "1 prose numeric claim" "$tmp/stdout" || extra="${extra}+missing_prose_count"
 assert "prose scan honors --skip-live-extract" 0 "$rc" "$extra"
 rm -rf "$tmp"
+
+# v1.10 PR-A2 R2 — regex-anchor + text-numeric-historical cases.
+
+# --- Case 26: D-code identifiers must NOT trigger prose scan ---
+# v1.10 PR-A2 R2 B2 + I1: `(\d+)\s+<key>` previously matched `0091 probes`
+# inside `D0091 probes`, forcing 7 mechanical backtick wraps that corrupted
+# the D-code identifiers. Anchored regex `(?<![A-Za-z0-9_])(\d+)...` rejects
+# digits glued to an identifier prefix. This case pins the negative-space
+# behavior.
+run_numeric_case '# CHANGELOG
+the suite covers D0091 probes and D0083 negative probes across the matrix.
+' 'numeric_claim_command() {
+    case "$1" in
+        probes) echo "echo 999" ;;
+        negative) echo "echo 999" ;;
+        *) return 1 ;;
+    esac
+}'
+extra=ok
+# Live numbers are 999, so if the regex falsely matched `0091 probes` or
+# `0083 negative` the claimed `0091`/`0083` would mismatch and fire PROSE-MISMATCH.
+if grep -q "PROSE-MISMATCH" "$LAST_TMP/stderr"; then extra=d_code_falsely_matched; fi
+grep -q "0 prose numeric claim" "$LAST_TMP/stdout" || extra="${extra}+nonzero_prose_count"
+assert "D-code identifiers (D0091 probes / D0083 negative) do not match prose pattern" 0 "$LAST_RC" "$extra"
+rm -rf "$LAST_TMP"
+
+# --- Case 27: text-numeric-historical fenced block is skipped by the gate ---
+# v1.10 PR-A2 R2 B1 Option A: release-pinned blocks whose numbers are
+# immutable by design use the `text-numeric-historical` label. The gate
+# parses but does NOT live-verify these blocks. The any-fence pre-strip
+# also keeps prose-scan from re-grabbing the digits.
+run_numeric_case '# CHANGELOG
+release pin baseline.
+
+```text-numeric-historical
+255 probes
+114 fixtures
+```
+' 'numeric_claim_command() {
+    case "$1" in
+        probes) echo "echo 261" ;;
+        fixtures) echo "echo 120" ;;
+        *) return 1 ;;
+    esac
+}'
+extra=ok
+# Live is 261/120 vs claimed 255/114 — would fail if gated. Must pass (skipped).
+if grep -q "MISMATCH" "$LAST_TMP/stderr"; then extra=historical_block_gated; fi
+# Verify prose-scan also did NOT pick the digits up (any_fence strips it).
+if grep -q "PROSE-MISMATCH" "$LAST_TMP/stderr"; then extra="${extra}+historical_digits_in_prose"; fi
+assert "text-numeric-historical fenced block is skipped by the gate" 0 "$LAST_RC" "$extra"
+rm -rf "$LAST_TMP"
+
+# --- Case 28: text-numeric (non-historical) still gated alongside historical block ---
+# Ensures Case 27's escape hatch is targeted to `text-numeric-historical`
+# only — `text-numeric` still gates as before.
+run_numeric_case '# CHANGELOG
+mixed.
+
+```text-numeric-historical
+99 probes
+```
+
+```text-numeric
+261 probes
+```
+' 'numeric_claim_command() {
+    case "$1" in
+        probes) echo "echo 261" ;;
+        *) return 1 ;;
+    esac
+}'
+extra=ok
+grep -q "1 text-numeric claim" "$LAST_TMP/stdout" || extra=wrong_numeric_count
+if grep -q "MISMATCH" "$LAST_TMP/stderr"; then extra="${extra}+unexpected_mismatch"; fi
+assert "text-numeric (non-historical) still gated; text-numeric-historical skipped" 0 "$LAST_RC" "$extra"
+rm -rf "$LAST_TMP"
 
 echo
 echo "Test summary: $pass passed, $fail failed"

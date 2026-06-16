@@ -233,13 +233,26 @@ PR CI runs the gate with `--skip-live-extract` (the `pykrete-tests` sibling repo
 
 This catches the v1.8-class drift where a trust-claim number quoted in CHANGELOG (e.g. "106 fixtures") silently diverges from the live extract (which was 112) — closes v1.8 retro rule 7.
 
+#### Historical pin labels (`text-numeric-historical`, v1.10+)
+
+Once `pykrete-tests` ships a new probe/fixture after a `pykrete` tag, the live counts drift above the pinned trust-claim numbers in the released-CHANGELOG section. The pinned numbers are correct AT THE TAG (release-pinned, immutable) but no longer match live. The release-cycle convention is: at v1.10 release time (PR-F), the v1.9.0 section's `text-numeric` block gets relabeled to `text-numeric-historical`. The gate parses but does NOT live-verify `text-numeric-historical` blocks — they render normally and skip the gate. Digits inside historical blocks are also stripped before the prose scan, so they can't trip gate v3 either.
+
+    ```text-numeric-historical
+    255 probes
+    114 fixtures
+    ```
+
+Mid-cycle, if `pykrete-tests` releases a probe-adding PR before the current cycle's `pykrete` release lands (the v1.9 / v1.10 window saw this with pykrete-tests PR-P1 bumping 255 → 261 probes pre-tag), relabel the prior-release block early — the gate would otherwise fail on the drift.
+
 ### Prose-paragraph numeric scan (gate v3, v1.10+)
 
 Gate v3 extends the live-extract verification to **prose paragraphs** — text outside fenced blocks. Any prose digit-sequence followed (after whitespace) by a known claim key is verified against the same live-extract table. This catches the v1.9 PR-F drift class where "183 positive + 72 negative" landed in a paragraph trust-claim, OUTSIDE any fenced block, and the v2 gate missed it.
 
 Concretely: `Cross-codebase coverage lifts to 255 probes (185 positive + 70 negative).` is a prose claim and is gated automatically.
 
-**Escape hatch — single-backtick wrap**: if you need to mention a number that should NOT be auto-verified (a historical number from a prior release, a number quoted from external documentation, an inline code example), wrap it in single backticks:
+The regex is leading-word-boundary anchored — digits immediately following an identifier prefix (e.g. `0091` inside `D0091 probes`) are rejected so D-code mentions don't trip the gate.
+
+**Escape hatch — single-backtick wrap**: if you need to mention a number that should NOT be auto-verified (a historical number from a prior release, a per-PR contribution count from a prior cycle, a number quoted from external documentation, an inline code example), wrap it in single backticks:
 
 ```
 The v1.8 pin had `183 positive` probes; v1.9 lifted to 185 positive.
@@ -247,7 +260,13 @@ The v1.8 pin had `183 positive` probes; v1.9 lifted to 185 positive.
 
 The scanner skips matches inside single-backtick spans. The `185 positive` outside the backticks is still verified.
 
-Pre-Unreleased release-notes sections in `CHANGELOG.md` use this escape hatch heavily — historical release-pinned numbers (e.g. `` `127 probes` `` in the v1.2 section) are immutable by construction and shouldn't gate on current live extract. The current `[Unreleased]` section's numbers (and the latest released section's numbers that PR-F pinned to live at tag time) are NOT backticked so the gate verifies them.
+#### Final semantic — when does the gate verify a number?
+
+The full rule, after R2 of v1.10 PR-A2:
+
+- **`[Unreleased]` section + the current release's `text-numeric` (NON-historical) fenced block**: gated against live. PR-F at cycle close updates this block to live counts at tag time.
+- **Older `text-numeric-historical` fenced blocks**: skipped by gate. Relabeled from `text-numeric` to `text-numeric-historical` either at the NEXT release's PR-F, or earlier if upstream `pykrete-tests` drifts the live counts forward mid-cycle.
+- **Prose**: gated against live unless backtick-wrapped. Backtick-wrap covers historical claims ("the v1.8 pin had `183 positive`"), per-PR contribution counts ("`1 negative` probe each on pandera and delta"), and any other legitimate edge case where a number should NOT chase live.
 
 **Scope boundary**: only `CHANGELOG.md`. README, docs-site prose, and other Markdown surfaces are out of scope (different drift profile).
 
