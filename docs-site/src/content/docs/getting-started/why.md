@@ -52,6 +52,6 @@ It **isn't** a runtime validator, a query planner, or a replacement for tests. I
 
 ## Where it's going
 
-PySpark is feature-complete; pandas check-site coverage shipped in v1.3 (column-reference recognition, the six dispatched operations, and the D0090 deprecation), with positive type-tracking probes shipped in v1.4 and cross-dialect handoff shipped in v1.5. v1.6 ships `pykrete migrate` (the auto-rewriter for `DataFrame[X]` → `SparkFrame[X]` / `PandasFrame[X]` with call-graph dialect adjudication, paired atomically with D0090 strict-mode escalation) plus pandas `pivot_table` literal-form column checking. Broader pandas reshape is next, then polars. The [roadmap](/pykrete/about/roadmap/) has the detail.
+PySpark is feature-complete; pandas check-site coverage shipped in v1.3, type-tracking in v1.4, cross-dialect handoff in v1.5, the `pykrete migrate` rewriter in v1.6, migrator UX hardening + pandas `melt` in v1.7, and the v2.0 deprecation runway (`pykrete check --deprecation-report` + D0091 cross-dialect mismatch warning) in v1.8. Broader pandas reshape is next, then polars. The [roadmap](/pykrete/about/roadmap/) has the detail.
 
 Ready to try it? [Install](/pykrete/getting-started/install/) takes a minute; the [quickstart](/pykrete/getting-started/quickstart/) gets a real function under checking in five.

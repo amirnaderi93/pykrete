@@ -243,6 +243,7 @@ accepts either).
 | `D0083` | `nullabilityMismatch` | A nullable column declared non-nullable by the return type (advisory; `strict` only). |
 | `D0084` | `enumValueMismatch` | A string literal flowing into an enum-typed column is off-vocabulary. |
 | `D0090` | `deprecatedDataFrameAlias` | `DataFrame[X]` annotation (v1.x deprecated alias for `SparkFrame[X]`; removed in v2.0). Warning. |
+| `D0091` | `crossDialectMethodMismatch` | Pandas-only method called on `SparkFrame[X]` receiver, or Spark-only method called on `PandasFrame[X]` receiver. Warning (warning-only v1.8; strict escalation deferred to v1.9). |
 
 ## Column-type checking
 
