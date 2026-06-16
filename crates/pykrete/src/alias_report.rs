@@ -51,6 +51,18 @@ pub struct AliasSite {
     pub would_be_replacement: String,
     pub range: TextRange,
     pub verdict: Option<AdjudicatedDialect>,
+    /// Raw source text of the alias annotation (`DataFrame[Sale]`,
+    /// `DataFrame`, etc.) — the exact bytes the walker saw. v1.8 PR-V1's
+    /// `--deprecation-report` JSON envelope surfaces this so consumers
+    /// don't have to reconstruct it from `would_be_replacement` + the
+    /// verdict.
+    pub raw_text: String,
+    /// Name of the binding the alias annotates (parameter name or
+    /// ann-assign target). Populated by v1.6 PR-M3's `apply_verdict`
+    /// when the adjudicator visits an enclosing function; `None` for
+    /// sites the adjudicator didn't visit (module-level annotations,
+    /// return slots).
+    pub binding_name: Option<String>,
 }
 
 /// Walk every analyzed file's AST and collect every `DataFrame[X]`
@@ -101,6 +113,8 @@ impl<'a> SourceOrderVisitor<'a> for AliasVisitor<'a> {
                 would_be_replacement: dataframe::spark_frame_rewrite(raw_text),
                 range,
                 verdict: None,
+                raw_text: raw_text.to_string(),
+                binding_name: None,
             });
             // Don't descend into a recognized alias — the inner bare
             // `DataFrame` of `DataFrame[Sales]` would otherwise be
@@ -151,6 +165,77 @@ pub fn render_alias_report_json(sites: &[AliasSite]) -> String {
     });
     serde_json::to_string_pretty(&payload)
         .expect("alias report JSON is composed of types that always serialize")
+}
+
+/// Serialize an in-memory alias inventory to the v1.8 PR-V1
+/// `--deprecation-report` envelope. Every alias site is by definition
+/// a D0090-firing site, so the filter is structural: every member of
+/// `sites` is included. Versioned envelope so downstream CI gates can
+/// pin (`deprecationReportVersion: "1"`). The per-site verdict mirrors
+/// the alias report's adjudication; `suggestedRewrite` is `null` for
+/// ambiguous sites because the migrator leaves them intact for human
+/// review.
+pub fn render_deprecation_report_json(sites: &[AliasSite]) -> String {
+    let mut spark = 0usize;
+    let mut pandas = 0usize;
+    let mut ambiguous = 0usize;
+    let site_values: Vec<serde_json::Value> = sites
+        .iter()
+        .map(|s| {
+            let (verdict_str, suggested) = match s.verdict {
+                Some(AdjudicatedDialect::Spark) => {
+                    spark += 1;
+                    (
+                        "spark",
+                        serde_json::Value::String(s.would_be_replacement.clone()),
+                    )
+                }
+                Some(AdjudicatedDialect::Pandas) => {
+                    pandas += 1;
+                    (
+                        "pandas",
+                        serde_json::Value::String(s.would_be_replacement.clone()),
+                    )
+                }
+                Some(AdjudicatedDialect::Ambiguous) => {
+                    ambiguous += 1;
+                    ("ambiguous", serde_json::Value::Null)
+                }
+                None => {
+                    spark += 1;
+                    (
+                        "spark",
+                        serde_json::Value::String(s.would_be_replacement.clone()),
+                    )
+                }
+            };
+            serde_json::json!({
+                "file": s.file,
+                "line": s.line,
+                "column": s.column,
+                "code": "D0090",
+                "ruleName": "deprecatedDataFrameAlias",
+                "bindingName": s.binding_name,
+                "rawAnnotation": s.raw_text,
+                "adjudicatedDialect": verdict_str,
+                "suggestedRewrite": suggested,
+            })
+        })
+        .collect();
+    let payload = serde_json::json!({
+        "deprecationReportVersion": "1",
+        "sites": site_values,
+        "summary": {
+            "totalSites": sites.len(),
+            "byDialect": {
+                "spark": spark,
+                "pandas": pandas,
+                "ambiguous": ambiguous,
+            }
+        }
+    });
+    serde_json::to_string_pretty(&payload)
+        .expect("deprecation report JSON is composed of types that always serialize")
 }
 
 #[cfg(test)]

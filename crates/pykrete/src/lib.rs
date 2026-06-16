@@ -45,6 +45,7 @@ pub use alias_adjudicate::{
 };
 pub use alias_report::{
     AdjudicatedDialect, AliasSite, collect_alias_sites, render_alias_report_json,
+    render_deprecation_report_json,
 };
 pub use completion::{CompletionItem, CompletionItemKind, completions};
 pub use config::Config;
