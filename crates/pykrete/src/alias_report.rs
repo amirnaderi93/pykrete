@@ -193,37 +193,194 @@ impl<'a> SourceOrderVisitor<'a> for AliasVisitor<'a> {
     }
 }
 
-/// v1.9 PR-V1 — mirrors the v1.6 `# pykrete: ambiguous` line-above
-/// lookup. Returns `true` when the line immediately preceding the byte
-/// offset trims to exactly `# pykrete: ack-deprecation`. Case-
-/// sensitive; leading whitespace tolerated; trailing whitespace
-/// tolerated. The annotation's offset is the byte position of the
-/// `DataFrame` token inside `DataFrame[X]` (or the bare `DataFrame`
-/// annotation).
+/// v1.9 PR-V1 + v1.10 PR-A1 — mirrors the v1.6 `# pykrete: ambiguous`
+/// line-above lookup. Returns `true` when the marker
+/// `# pykrete: ack-deprecation` sits on the line immediately above the
+/// enclosing `def`/`async def` (walking past any decorator stack), or,
+/// for module-level annotations with no enclosing def, the line
+/// immediately above the annotation itself. Case-sensitive; leading
+/// whitespace tolerated; trailing whitespace tolerated. The
+/// annotation's offset is the byte position of the `DataFrame` token
+/// inside `DataFrame[X]` (or the bare `DataFrame` annotation).
+///
+/// v1.10 PR-A1 closes v1.9 arch-I1: pre-fix, the lookup checked the
+/// line immediately above the annotation's byte offset, which on a
+/// multi-line signature
+/// (`def f(\n    a: DataFrame[X],\n) -> int:`) landed on the `def f(`
+/// continuation line instead of the user-intended marker line above
+/// `def f(`. The walk now anchors at the enclosing `def` line so the
+/// "line above" answer is invariant under signature line breaks.
+///
+/// The "enclosing" check is indentation-aware: the candidate `def`
+/// must sit at strictly less leading whitespace than the annotation
+/// line. Without this, a module-level annotation that appears below
+/// an earlier sibling `def` would mis-anchor at that sibling and
+/// regress the v1.9 module-level "line directly above annotation"
+/// behavior. Module-level annotations (zero leading whitespace) never
+/// find an enclosing def regardless of what `def`s precede them.
+///
+/// The walk also steps past any contiguous `@decorator` lines sitting
+/// directly above the `def`, so
+/// `# pykrete: ack-deprecation\n@cached\ndef f(a: DataFrame[X]) ...`
+/// reads as acknowledged. Only single-line decorators are recognized;
+/// multi-line decorator calls require the marker on the line directly
+/// above the `def`.
 fn line_above_has_ack_marker(source: &str, offset: usize) -> bool {
-    if offset == 0 {
+    const MARKER: &str = "# pykrete: ack-deprecation";
+    if source.is_empty() {
         return false;
     }
     let bytes = source.as_bytes();
     let upper = offset.min(bytes.len());
-    let line_start = bytes[..upper]
+    let annot_line_start = bytes[..upper]
         .iter()
         .rposition(|&b| b == b'\n')
         .map(|i| i + 1)
         .unwrap_or(0);
-    if line_start == 0 {
+    let annot_indent = leading_indent(source, annot_line_start);
+    let def_anchor = find_enclosing_def_line_start(source, annot_line_start, annot_indent);
+    let anchor_start = match def_anchor {
+        Some(def_start) => walk_past_decorators(source, def_start),
+        None => annot_line_start,
+    };
+    if anchor_start == 0 {
         return false;
     }
-    // `line_start - 1` is the '\n' ending the previous line. The
-    // previous line starts at the byte after the prior '\n' (or 0).
-    let prev_line_end = line_start - 1;
+    let prev_line_end = anchor_start - 1;
     let prev_line_start = bytes[..prev_line_end]
         .iter()
         .rposition(|&b| b == b'\n')
         .map(|i| i + 1)
         .unwrap_or(0);
-    let prev_line = &source[prev_line_start..prev_line_end];
-    prev_line.trim() == "# pykrete: ack-deprecation"
+    source[prev_line_start..prev_line_end].trim() == MARKER
+}
+
+/// Walk backwards from `from_line_start` (a line's first-byte offset)
+/// looking for the nearest line whose trimmed content matches
+/// `def NAME(` or `async def NAME(` AND whose leading indentation is
+/// strictly less than `annot_indent` — i.e. the candidate def actually
+/// encloses the annotation. Returns the line's first-byte offset, or
+/// `None` when no enclosing def exists (module-level annotations, or
+/// annotations whose only preceding `def` is at equal/greater indent
+/// and therefore sibling/inner rather than enclosing).
+fn find_enclosing_def_line_start(
+    source: &str,
+    from_line_start: usize,
+    annot_indent: usize,
+) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let mut line_start = from_line_start;
+    loop {
+        let line_end = source[line_start..]
+            .find('\n')
+            .map(|p| line_start + p)
+            .unwrap_or(source.len());
+        let line = &source[line_start..line_end];
+        if is_def_signature_line(line) {
+            let candidate_indent = leading_indent(source, line_start);
+            // The annot is on the def line itself (single-line
+            // signature: `def f(df: DataFrame[X]) ...`) → trivially
+            // enclosing. Otherwise the def must sit at strictly less
+            // indent than the annotation line to qualify as enclosing
+            // (a same-indent or deeper def is a sibling/inner, not an
+            // ancestor).
+            if line_start == from_line_start || candidate_indent < annot_indent {
+                return Some(line_start);
+            }
+        }
+        if line_start == 0 {
+            return None;
+        }
+        let prev_line_end = line_start - 1;
+        let prev_line_start = bytes[..prev_line_end]
+            .iter()
+            .rposition(|&b| b == b'\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        line_start = prev_line_start;
+    }
+}
+
+/// Given the first-byte offset of a `def`/`async def` line, walk upward
+/// past any contiguous decorator lines (lines whose first non-whitespace
+/// character is `@`) and return the topmost line's first-byte offset.
+/// The marker check then asks "what's the line above the decorator
+/// stack?" instead of "what's the line above the def?", so
+///
+/// ```text
+/// # pykrete: ack-deprecation
+/// @decorator
+/// def f(a: DataFrame[X]) -> int: ...
+/// ```
+///
+/// reads as acknowledged. Only single-line decorators (`@deco`,
+/// `@deco(...)`) are recognized — multi-line decorator calls
+/// (`@deco(\n    arg,\n)`) are rare and treated as non-decorator lines,
+/// so the marker must sit on the line directly above the `def` in that
+/// case.
+fn walk_past_decorators(source: &str, def_line_start: usize) -> usize {
+    let bytes = source.as_bytes();
+    let mut anchor = def_line_start;
+    while anchor > 0 {
+        let prev_line_end = anchor - 1;
+        let prev_line_start = bytes[..prev_line_end]
+            .iter()
+            .rposition(|&b| b == b'\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let prev_line = &source[prev_line_start..prev_line_end];
+        if prev_line.trim_start().starts_with('@') {
+            anchor = prev_line_start;
+        } else {
+            break;
+        }
+    }
+    anchor
+}
+
+/// Count of leading ASCII space/tab bytes on the line beginning at
+/// `line_start`. Tabs count as 1 byte each — pykrete doesn't model
+/// tab-stop width because the indentation-aware comparison only needs
+/// the relative ordering "annotation is deeper than candidate def,"
+/// which holds under any consistent tab/space treatment as long as the
+/// source file is itself self-consistent.
+fn leading_indent(source: &str, line_start: usize) -> usize {
+    source[line_start..]
+        .bytes()
+        .take_while(|b| *b == b' ' || *b == b'\t')
+        .count()
+}
+
+/// True when `line` (no trailing newline) reads as the opening line of
+/// a `def NAME(` or `async def NAME(` signature. Allows leading
+/// whitespace and any content after the open paren — the line need not
+/// contain the matching close paren, so multi-line param lists qualify.
+fn is_def_signature_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let rest = trimmed
+        .strip_prefix("async ")
+        .map(str::trim_start)
+        .unwrap_or(trimmed);
+    let Some(after_def_keyword) = rest.strip_prefix("def ") else {
+        return false;
+    };
+    let after_name = after_def_keyword.trim_start();
+    let mut chars = after_name.char_indices();
+    let Some((_, first)) = chars.next() else {
+        return false;
+    };
+    if !(first.is_alphabetic() || first == '_') {
+        return false;
+    }
+    let mut last_name_end = first.len_utf8();
+    for (i, c) in chars {
+        if c.is_alphanumeric() || c == '_' {
+            last_name_end = i + c.len_utf8();
+            continue;
+        }
+        break;
+    }
+    after_name[last_name_end..].trim_start().starts_with('(')
 }
 
 /// Serialize an in-memory alias inventory to the spec §5.1 JSON shape.
@@ -523,6 +680,309 @@ def f(df: DataFrame) -> DataFrame:
         let json = render_deprecation_report_json(&sites, None);
         let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
         assert_eq!(v["sites"][0]["migrationStatus"], "pending");
+    }
+
+    // v1.10 PR-A1 — multi-line ack-marker walker (arch-I1 closure).
+
+    #[test]
+    fn v110_pra1_single_line_def_marker_above_is_acknowledged() {
+        // Regression guard for v1.9 single-line behavior.
+        let src = "# pykrete: ack-deprecation\ndef f(df: DataFrame[Sale]) -> int: ...\n";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v110_pra1_multi_line_def_marker_above_def_is_acknowledged() {
+        let src = "\
+# pykrete: ack-deprecation
+def f(
+    a: DataFrame[Sale],
+) -> int:
+    ...
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1, "param: {sites:?}");
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v110_pra1_multi_line_def_marker_inside_signature_is_pending() {
+        // Marker on the line above the annotation (NOT above `def f(`)
+        // must NOT acknowledge — the marker contract is "line above the
+        // def line."
+        let src = "\
+def f(
+# pykrete: ack-deprecation
+    a: DataFrame[Sale],
+) -> int:
+    ...
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Pending);
+    }
+
+    #[test]
+    fn v110_pra1_multi_line_def_multi_line_annotation_is_acknowledged() {
+        let src = "\
+# pykrete: ack-deprecation
+def f(
+    a: DataFrame[
+        LongSchemaName
+    ],
+) -> int:
+    ...
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1, "param: {sites:?}");
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v110_pra1_module_level_annotation_marker_above_is_acknowledged() {
+        // Regression guard for v1.9 module-level behavior — when there
+        // is no enclosing def, the walker falls back to "line above the
+        // annotation."
+        let src = "\
+# pykrete: ack-deprecation
+x: DataFrame[Sale] = read_sales()
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v110_pra1_non_continuation_line_above_def_is_pending() {
+        // The walk terminates at the `def` line, NOT arbitrarily upward —
+        // the marker two lines above the def (with an unrelated comment
+        // in between) is ignored.
+        let src = "\
+# pykrete: ack-deprecation
+# unrelated comment
+def f(
+    a: DataFrame[Sale],
+) -> int:
+    ...
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Pending);
+    }
+
+    #[test]
+    fn v110_pra1_multi_line_return_type_acknowledged() {
+        let src = "\
+# pykrete: ack-deprecation
+def f(a: int) -> \\
+        DataFrame[Sale]:
+    ...
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1, "return: {sites:?}");
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v110_pra1_async_def_multi_line_marker_above_is_acknowledged() {
+        let src = "\
+# pykrete: ack-deprecation
+async def f(
+    a: DataFrame[Sale],
+) -> int:
+    ...
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1, "async: {sites:?}");
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v110_pra1_marker_with_trailing_whitespace_is_acknowledged() {
+        let src = "# pykrete: ack-deprecation   \ndef f(df: DataFrame[Sale]) -> int: ...\n";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v110_pra1_no_marker_anywhere_is_pending() {
+        let src = "\
+def f(
+    a: DataFrame[Sale],
+) -> int:
+    ...
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Pending);
+    }
+
+    // v1.10 PR-A1 R2 — indentation-aware enclosing-def walk + decorator
+    // walk-past. The R1 walker was indentation-blind and regressed v1.9
+    // module-level behavior when an earlier sibling `def` preceded a
+    // module-level annotation (Cases J/K below). The decorator support
+    // addresses the spec-silent but real adopter case where the marker
+    // sits above an `@decorator` stack on top of the `def`.
+
+    #[test]
+    fn v110_pra1_case_j_single_preceding_def_module_level_annotation_acknowledged() {
+        // Case J: one earlier function defined above a module-level
+        // annotation. The indentation-blind R1 walker mis-anchored at
+        // `def earlier_fn(`, found start-of-file above it, and reported
+        // `pending`. With the indentation check, the module-level
+        // annotation (col 0) cannot be enclosed by any def (also col 0
+        // or deeper), so the walker falls through to "line above the
+        // annotation."
+        let src = "\
+def earlier_fn():
+    return 1
+
+# pykrete: ack-deprecation
+x: DataFrame[Sale] = read_sales()
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v110_pra1_case_k_multiple_preceding_defs_module_level_annotation_acknowledged() {
+        // Case K: several earlier functions above a module-level
+        // annotation. Same regression class as Case J, with more
+        // candidate def lines to mis-anchor on.
+        let src = "\
+def first():
+    return 1
+
+def second():
+    return 2
+
+def third():
+    return 3
+
+# pykrete: ack-deprecation
+x: DataFrame[Sale] = read_sales()
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v110_pra1_module_level_annotation_with_no_marker_is_pending() {
+        // Indentation-aware fallthrough must NOT silently acknowledge
+        // module-level annotations — only when the line directly above
+        // is the marker.
+        let src = "\
+def earlier_fn():
+    return 1
+
+x: DataFrame[Sale] = read_sales()
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Pending);
+    }
+
+    #[test]
+    fn v110_pra1_sibling_def_does_not_anchor_later_def_annotation() {
+        // Two sibling top-level defs. Marker above the second def
+        // must acknowledge the second def's annotation; the walker
+        // must not anchor at `def first(` and treat the marker as
+        // "two defs above."
+        let src = "\
+def first(a: int) -> int:
+    return a
+
+# pykrete: ack-deprecation
+def second(df: DataFrame[Sale]) -> int:
+    return 0
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v110_pra1_decorator_simple_marker_above_decorator_is_acknowledged() {
+        // Decorator support: marker above a single `@deco` line above a
+        // `def` reads as acknowledged.
+        let src = "\
+# pykrete: ack-deprecation
+@decorator
+def f(df: DataFrame[Sale]) -> int:
+    return 0
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v110_pra1_decorator_with_args_marker_above_is_acknowledged() {
+        let src = "\
+# pykrete: ack-deprecation
+@decorator(arg=1)
+def f(df: DataFrame[Sale]) -> int:
+    return 0
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v110_pra1_decorator_stack_marker_above_top_is_acknowledged() {
+        // Multiple decorators on the def — marker above the topmost
+        // decorator anchors correctly.
+        let src = "\
+# pykrete: ack-deprecation
+@outer
+@inner
+def f(df: DataFrame[Sale]) -> int:
+    return 0
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v110_pra1_decorator_marker_between_decorator_and_def_still_acknowledges() {
+        // The walker steps past decorators only when they sit directly
+        // above the `def` — if a marker interrupts the decorator/def
+        // adjacency, the walker stops at the def line and the marker
+        // is read as "line directly above the def." This case stays
+        // acknowledged for v1.9 compatibility: pre-PR, v1.9 anchored
+        // at the def line and saw the marker on the line above.
+        let src = "\
+@decorator
+# pykrete: ack-deprecation
+def f(df: DataFrame[Sale]) -> int:
+    return 0
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v110_pra1_decorator_multi_line_def_marker_above_decorator_is_acknowledged() {
+        // Decorator + multi-line def both involved.
+        let src = "\
+# pykrete: ack-deprecation
+@decorator
+def f(
+    a: DataFrame[Sale],
+) -> int:
+    return 0
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
     }
 
     #[test]
