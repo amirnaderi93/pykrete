@@ -52,8 +52,8 @@ pub use alias_report::{
 pub use completion::{CompletionItem, CompletionItemKind, completions};
 pub use config::Config;
 pub use dialect_signals::{
-    PANDAS_INHERITED_ARM_METHODS_GENERATED, PANDAS_INHERITED_ARMS, PANDAS_ONLY_SIGNALS,
-    SPARK_DISCRIMINATORS,
+    PANDAS_INHERITED_ARM_METHODS_GENERATED, PANDAS_INHERITED_ARMS, PANDAS_INHERITED_PROPERTIES,
+    PANDAS_ONLY_SIGNALS, SPARK_DISCRIMINATOR_PROPERTIES, SPARK_DISCRIMINATORS,
 };
 pub use hover::{HoverInfo, hover};
 pub use symbols::{
