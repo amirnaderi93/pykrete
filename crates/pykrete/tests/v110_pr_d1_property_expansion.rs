@@ -301,3 +301,15 @@ fn V110D1_new_property_entries_disjoint_from_inherited_arms() {
         );
     }
 }
+
+#[test]
+fn V110D1_spark_and_pandas_property_lists_disjoint() {
+    use pykrete::{PANDAS_INHERITED_PROPERTIES, SPARK_DISCRIMINATOR_PROPERTIES};
+    for p in SPARK_DISCRIMINATOR_PROPERTIES {
+        assert!(
+            !PANDAS_INHERITED_PROPERTIES.contains(p),
+            "property '{p}' must not be in both \
+             SPARK_DISCRIMINATOR_PROPERTIES and PANDAS_INHERITED_PROPERTIES"
+        );
+    }
+}
