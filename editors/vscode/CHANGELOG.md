@@ -1,6 +1,51 @@
 # Changelog
 
 
+## 0.7.0
+
+Tracks the v1.9.0 pykrete release — **`pykrete check
+--deprecation-report` makes v2.0 migration plannable**. The
+envelope bumps to `deprecationReportVersion: "2"` with per-site
+`migrationStatus` (`pending` / `acknowledged`) driven by a
+`# pykrete: ack-deprecation` comment marker on the line above the
+alias annotation — site-level opt-in, no JSON edit, no separate
+state file. A new `--ack=<pending|acknowledged>` filter flag
+narrows the envelope to one cohort for CI gating:
+`pykrete check --deprecation-report --ack=pending src/` exits
+non-zero with the unacked-site inventory; `--ack=acknowledged`
+runs the inverse for "did anything regress" checks. The envelope
+deliberately ships **without** `targetVersion` / `removalVersion`
+/ `shipDate` — pykrete tracks per-site migration progress; the
+user picks the v2.0 ship date. **D0091 matures**: strict-mode
+escalation lands (warning → error under `"typeCheckingMode":
+"strict"`, mirroring the v1.6 D0090 precedent); a suggestion
+drift guard pins the cross-dialect suggestion table at build
+time so adding a pair on one side without the other fails the
+build; `CrossDialectSuggestion` gains a `shape_changes: bool`
+field — pairs with asymmetric call-site shape
+(`withColumnRenamed` → `rename`, `assign` → `withColumn`) append
+"— note arg shape differs" to the suggestion text. A NEW
+bare-attribute inference arm on `Expr::Attribute` catches
+`pdf.rdd`, `sdf.loc`, `pdf.iloc`, `sdf.toPandas` (bare, no call)
+and the rest of the cross-dialect attribute surface that the
+v1.8 `Expr::Call` path missed — new property tables
+`SPARK_DISCRIMINATOR_PROPERTIES` (3 entries) +
+`PANDAS_INHERITED_PROPERTIES` (4 entries) drive the gate. The
+v1.8 `build.rs`-generated `PANDAS_INHERITED_ARM_METHODS`
+inventory tripwire is now backed by CI-running tests via the
+extracted `build_helpers.rs` module — closes the v1.8 retro
+rule that the inline `mod tests` block shipped without actually
+executing. The CHANGELOG grep gate v2 ships a `text-numeric`
+fenced-block label that live-verifies numeric trust-claims
+(probes / fixtures / tests / donors) against live extracts.
+Cross-codebase probe coverage adds 2 D0091 negative probes
+(pandera + delta) via pykrete-tests PR-P1 #32 — 253 → 255
+probes. The v1.9 cycle also trial-ran centralized version
+bumping per spec §9.2 amendment: PR-F is the only commit that
+bumps `Cargo.toml` / `package.json`; per-PR devs deferred to the
+release PR via a `.github/centralized-bump-cycle.marker` file
+honored by the extension-version-guard workflow.
+
 ## 0.6.0
 
 Tracks the v1.8.0 pykrete release — **`pykrete check --deprecation-report`

@@ -176,9 +176,43 @@ probes each via pykrete-tests PR-P1 #30) — 247 → 249 → 253 probes
 (PR-D1 #28 melt fills 247 → 249 in the v1.7 → v1.8 catalog window;
 PR-P1 #30 D0073 / D0083 lifts 249 → 253).
 
+**v2.0 migration plannability + D0091 maturity shipped in v1.9**:
+the v1.9 headline is **`pykrete check --deprecation-report` makes
+the v2.0 migration plannable**. The envelope bumps to
+`deprecationReportVersion: "2"` with per-site `migrationStatus`
+(`pending` / `acknowledged`) driven by a `# pykrete: ack-deprecation`
+comment marker on the line above the alias annotation — site-level
+opt-in, no JSON edit, no separate state file. A new
+`--ack=<pending|acknowledged>` filter flag narrows the envelope to
+one cohort for CI gating:
+`pykrete check --deprecation-report --ack=pending src/` exits
+non-zero with the unacked-site inventory; `--ack=acknowledged` runs
+the inverse. The envelope deliberately ships without `targetVersion`
+/ `removalVersion` / `shipDate` — pykrete tracks per-site migration
+progress; the user picks the v2.0 ship date. D0091 matures:
+strict-mode escalation (warning → error under `"typeCheckingMode":
+"strict"`, mirroring the v1.6 D0090 precedent), a suggestion drift
+guard pinning the cross-dialect suggestion table at build time, a
+`shape_changes` hint that appends "— note arg shape differs" to
+asymmetric mappings (`withColumnRenamed` → `rename`, `assign` →
+`withColumn`), and a NEW bare-attribute inference arm on
+`Expr::Attribute` that catches `pdf.rdd`, `sdf.loc`, `pdf.iloc`,
+`sdf.toPandas` and the rest of the cross-dialect attribute surface
+that v1.8's `Expr::Call` path missed (new property tables:
+`SPARK_DISCRIMINATOR_PROPERTIES` + `PANDAS_INHERITED_PROPERTIES`).
+The v1.8 `build.rs`-generated `PANDAS_INHERITED_ARM_METHODS`
+inventory tripwire is now backed by CI-running tests via the
+extracted `build_helpers.rs` module — closes the v1.8 retro rule
+that the inline `mod tests` block shipped without actually
+executing. The CHANGELOG grep gate gains a `text-numeric` label
+that live-verifies numeric trust-claims (probes / fixtures / tests
+/ donors) against live extracts. Cross-codebase probe coverage adds
+2 D0091 negative probes (pandera + delta) via pykrete-tests PR-P1
+#32 — 253 → 255 probes.
+
 ## Next up
 
-### v1.9 — broader pandas reshape + LSP polish + `--include-py` / `--changed-only` migrate flags + D0091 strict-mode
+### v1.10 — broader pandas reshape + LSP polish + `--include-py` / `--changed-only` migrate flags + omitted-edit CI-guard
 
 Broader pandas reshape: `stack` / `unstack` / `groupby.agg`,
 `reset_index` / `set_index`, plus full `pivot_table` and `melt`
@@ -199,10 +233,14 @@ helper consolidation, suggester threshold. `--include-py` flag for
 `pykrete migrate` to walk the multiplexer cohort's `.py` files
 alongside `.pyk`, plus a `--changed-only` flag for both
 `pykrete migrate` and `pykrete check` that walks only files changed
-against HEAD. D0091 strict-mode escalation (warning → error under
-`"typeCheckingMode": "strict"`) once v1.8 usage signal lands.
-CI-guard widened to catch the "omitted-edit" drift class on top of
-v1.8's structural build.rs closure for the parallel-edit class.
+against HEAD. CI-guard widened to catch the "omitted-edit" drift
+class on top of v1.8's structural build.rs closure for the
+parallel-edit class (v1.9 backed the v1.8 closure with CI-running
+tests; v1.10 extends to the omitted-edit class). v1.10 spec also
+decides whether the v1.9 centralized-version-bump trial (per spec
+§9.2 amendment) continues — either re-adds the
+`.github/centralized-bump-cycle.marker` file or reverts the
+amendment.
 
 ## PyCharm support
 
@@ -393,11 +431,15 @@ literal-form + `dialect_signals` shared module + Spark-D1 audit
 closure (done, v1.7) → v2.0 deprecation runway (`pykrete check
 --deprecation-report` JSON envelope + D0090 message amend) +
 spark-D2 D0091 cross-dialect mismatch warning + build.rs-generated
-inventory + CHANGELOG-binary CI gate (done, v1.8) → broader pandas
-reshape (`stack` / `unstack` / `groupby.agg`) + `.loc` / `.iloc`
-non-literal forms + `.query` / `.eval` mini-DSLs + D0091 strict-mode
-escalation + `--include-py` / `--changed-only` migrate flags + LSP
-polish (v1.9) → polars** → others (DuckDB, Dask, …).
+inventory + CHANGELOG-binary CI gate (done, v1.8) → v2.0 migration
+plannability (`--deprecation-report` v2 envelope with per-site
+`migrationStatus` + `--ack` filter) + D0091 maturity (strict-mode
+escalation + suggestion drift guard + `shape_changes` hint + new
+bare-attribute inference arm) + `text-numeric` CHANGELOG gate
+(done, v1.9) → broader pandas reshape (`stack` / `unstack` /
+`groupby.agg`) + `.loc` / `.iloc` non-literal forms + `.query` /
+`.eval` mini-DSLs + `--include-py` / `--changed-only` migrate flags
++ LSP polish (v1.10) → polars** → others (DuckDB, Dask, …).
 
 The core type model — `SparkFrame[Schema]` / `PandasFrame[Schema]` /
 `DataFrame[Schema]`, the `Schema` class, column checks, return-type

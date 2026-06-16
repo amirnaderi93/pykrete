@@ -256,7 +256,28 @@ test "$(jq '.summary.totalSites' < deprecation.json)" -eq 0 \
   || { echo "v2.0 readiness gate failed; see deprecation.json"; exit 1; }
 ```
 
-The envelope's shape is `{deprecationReportVersion: "1", sites: [...], summary: {totalSites, byDialect: {spark, pandas, ambiguous}}}`. Per-site fields include `file`, `line`, `column`, `code` (always `D0090`), `ruleName`, `bindingName`, `rawAnnotation`, `adjudicatedDialect`, and `suggestedRewrite` (null for ambiguous sites). Mutually exclusive with `--report-aliases` (passing both exits 2). See the [D0090 diagnostics reference](/pykrete/reference/diagnostics/#deprecateddataframealias--d0090) for the full schema.
+The envelope's shape (v1.9+) is `{deprecationReportVersion: "2", sites: [...], summary: {totalSites, byDialect: {spark, pandas, ambiguous}}}`. Per-site fields include `file`, `line`, `column`, `code` (always `D0090`), `ruleName`, `bindingName`, `rawAnnotation`, `adjudicatedDialect`, `suggestedRewrite` (null for ambiguous sites), and `migrationStatus` (`"pending"` or `"acknowledged"`). Mutually exclusive with `--report-aliases` (passing both exits 2). See the [D0090 diagnostics reference](/pykrete/reference/diagnostics/#deprecateddataframealias--d0090) for the full schema.
+
+**Step 5 — site-by-site gating with `--ack` (v1.9+).** A full all-or-nothing CI gate is unrealistic for large codebases. v1.9 adds per-site acknowledgement: drop a `# pykrete: ack-deprecation` comment on the line above an annotation to flip its `migrationStatus` from `pending` to `acknowledged`, then filter the envelope with `--ack=<pending|acknowledged>` to gate one cohort at a time.
+
+```pyk
+# pykrete: ack-deprecation
+def revenue(sales: DataFrame[Sale]) -> DataFrame[Sale]:
+    ...
+```
+
+```bash
+# Fail CI on any unacked D0090 site:
+pykrete check --deprecation-report --ack=pending src/ > pending.json
+test "$(jq '.summary.totalSites' < pending.json)" -eq 0 \
+  || { echo "Unacked v2.0 migration sites remain; see pending.json"; exit 1; }
+
+# Inverse: catch regressions where a site flipped acked → pending (the
+# marker was removed or the annotation moved):
+pykrete check --deprecation-report --ack=acknowledged src/ > acked.json
+```
+
+The two-step workflow lets a team land migration in waves: acknowledge an alias site as "we know about this; the migration is intentional and tracked", and the CI gate stops blocking on it while still failing on any site that hasn't been adjudicated yet. The envelope deliberately ships **without** `targetVersion` / `removalVersion` / `shipDate` — pykrete tracks per-site migration progress; you pick the v2.0 ship date.
 
 **Pitfall — ambiguous sites are real signal.** A binding used as both a Spark and a pandas dataframe almost always means the code is wrong (the two dialects don't share an API surface; one branch will fail at runtime). The migrator leaves them alone deliberately. Decide which dialect that path takes and pick the right annotation by hand.
 

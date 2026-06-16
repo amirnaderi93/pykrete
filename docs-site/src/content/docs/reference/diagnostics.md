@@ -41,7 +41,7 @@ The **rule name** (`unknownColumn`) is what the CLI prints and what the editor s
 | `D0083` | `nullabilityMismatch` | A nullable column flows into a slot the return schema declares non-null. Strict mode only. |
 | `D0084` | `enumValueMismatch` | A string literal compared against, or written into, a column declared `enum[...]` is not in the column's vocabulary. |
 | `D0090` | `deprecatedDataFrameAlias` | `DataFrame[X]` is used instead of the dialect-specific `SparkFrame[X]` / `PandasFrame[X]`. Warning. |
-| `D0091` | `crossDialectMethodMismatch` | A pandas-only method is called on a `SparkFrame[X]` receiver, or a Spark-only method on a `PandasFrame[X]` receiver. Warning. |
+| `D0091` | `crossDialectMethodMismatch` | A pandas-only method or attribute is accessed on a `SparkFrame[X]` receiver, or a Spark-only one on a `PandasFrame[X]` receiver. Warning; error in strict mode (v1.9+). |
 
 ## The ones you'll see most
 
@@ -230,7 +230,28 @@ pykrete check --report-aliases src/ > aliases.json
 
 The flag is invocation-only: it suppresses normal diagnostic output and always exits 0, since the report is informational rather than a diagnostic.
 
-**Inventorying for CI gates (v1.8+).** `pykrete check --deprecation-report` is the v1.8 sibling envelope, purpose-built for v2.0 readiness gating. It emits the same per-site shape `--report-aliases` does (file, line, column, binding name, raw annotation, adjudicated dialect, suggested rewrite) plus an explicit `code: "D0090"` / `ruleName: "deprecatedDataFrameAlias"` on every site and a `summary: {totalSites, byDialect: {spark, pandas, ambiguous}}` block, so a CI step can decide whether to block a merge without re-parsing diagnostic text. The envelope's own version is `deprecationReportVersion: "1"`. The flag is mutually exclusive with `--report-aliases`; passing both exits 2 with a usage error.
+**Inventorying for CI gates (v1.8+).** `pykrete check --deprecation-report` is the v1.8 sibling envelope, purpose-built for v2.0 readiness gating. It emits the same per-site shape `--report-aliases` does (file, line, column, binding name, raw annotation, adjudicated dialect, suggested rewrite) plus an explicit `code: "D0090"` / `ruleName: "deprecatedDataFrameAlias"` on every site and a `summary: {totalSites, byDialect: {spark, pandas, ambiguous}}` block, so a CI step can decide whether to block a merge without re-parsing diagnostic text. The flag is mutually exclusive with `--report-aliases`; passing both exits 2 with a usage error.
+
+**v1.9 — v2 envelope: `migrationStatus` + `--ack` filter.** Starting in v1.9, `deprecationReportVersion` bumps from `"1"` to `"2"`. Each per-site record gains `migrationStatus: "pending" | "acknowledged"` driven by a `# pykrete: ack-deprecation` comment marker on the line above the alias annotation — site-level opt-in, no JSON edit, no separate state file. A new `--ack=<pending|acknowledged>` filter flag narrows the envelope to one cohort so CI can gate site-by-site:
+
+```bash
+# Fail CI on any unacked D0090 site:
+pykrete check --deprecation-report --ack=pending src/ > pending.json
+test "$(jq '.summary.totalSites' < pending.json)" -eq 0
+
+# Inverse: catch regressions where a site flipped acked → pending:
+pykrete check --deprecation-report --ack=acknowledged src/ > acked.json
+```
+
+To mark a site acknowledged, drop the comment marker on the line above the annotation:
+
+```pyk
+# pykrete: ack-deprecation
+def revenue(sales: DataFrame[Sale]) -> DataFrame[Sale]:
+    ...
+```
+
+The envelope deliberately ships **without** `targetVersion` / `removalVersion` / `shipDate` fields: pykrete tracks per-site migration progress; the user picks the v2.0 ship date.
 
 ```bash
 pykrete check --deprecation-report src/ > deprecation.json
@@ -246,7 +267,7 @@ Like `--report-aliases`, the flag is invocation-only — diagnostic output is su
 
 ### `crossDialectMethodMismatch` — D0091
 
-A method whose vocabulary belongs to one dialect is being called on a receiver tagged as the other dialect. Pandas-only methods called on `SparkFrame[X]` receivers (`sdf.assign(...)`, `sdf.merge(...)`, `sdf.rename(columns=...)`), and Spark-only methods called on `PandasFrame[X]` receivers (`pdf.withColumn(...)`, `pdf.selectExpr(...)`, `pdf.createOrReplaceTempView(...)`), both fire D0091 as a **warning** starting in v1.8.
+A method whose vocabulary belongs to one dialect is being called on a receiver tagged as the other dialect. Pandas-only methods called on `SparkFrame[X]` receivers (`sdf.assign(...)`, `sdf.merge(...)`, `sdf.rename(columns=...)`), and Spark-only methods called on `PandasFrame[X]` receivers (`pdf.withColumn(...)`, `pdf.selectExpr(...)`, `pdf.createOrReplaceTempView(...)`), both fire D0091 as a **warning** starting in v1.8. **In v1.9, D0091 escalates to error under `"typeCheckingMode": "strict"`** (mirroring the v1.6 D0090 precedent). Non-strict modes keep the warning unchanged.
 
 ```pyk
 class Sale(Schema):
@@ -264,22 +285,26 @@ sales.pyk:5:18 - warning crossDialectMethodMismatch: 'withColumn' is a Spark-onl
 
 **Suggestions.** D0091 carries a *use `.x(...)` instead* hint for the high-traffic cross-dialect pairs:
 
-| Receiver dialect | Method called | Suggested replacement |
-|---|---|---|
-| `PandasFrame[X]` | `withColumn`, `withColumns` | `assign` |
-| `PandasFrame[X]` | `withColumnRenamed`, `withColumnsRenamed` | `rename` |
-| `PandasFrame[X]` | `selectExpr` | `eval` |
-| `PandasFrame[X]` | `toPandas` | `copy` |
-| `SparkFrame[X]` | `assign` | `withColumn` |
-| `SparkFrame[X]` | `rename` | `withColumnRenamed` |
-| `SparkFrame[X]` | `groupby` | `groupBy` |
-| `SparkFrame[X]` | `merge` | `join` |
+| Receiver dialect | Method called | Suggested replacement | Shape changes |
+|---|---|---|---|
+| `PandasFrame[X]` | `withColumn`, `withColumns` | `assign` | yes (kwarg vs positional) |
+| `PandasFrame[X]` | `withColumnRenamed`, `withColumnsRenamed` | `rename` | yes (dict vs positional) |
+| `PandasFrame[X]` | `selectExpr` | `eval` | yes |
+| `PandasFrame[X]` | `toPandas` | `copy` | no |
+| `SparkFrame[X]` | `assign` | `withColumn` | yes (positional vs kwarg) |
+| `SparkFrame[X]` | `rename` | `withColumnRenamed` | yes (positional vs dict) |
+| `SparkFrame[X]` | `groupby` | `groupBy` | no |
+| `SparkFrame[X]` | `merge` | `join` | yes |
+
+**`shape_changes` hint (v1.9).** Pairs whose call-site argument shape differs across dialects append "— note arg shape differs" to the suggestion text. For example, `withColumnRenamed("old", "new")` (Spark, two positionals) maps to `rename(columns={"old": "new"})` (pandas, kwarg with a dict) — pykrete still suggests the cross-dialect name, but the hint tells adopters that a name swap isn't enough on its own. The pair table above marks which pairs carry the hint. A suggestion-drift guard test pins the table at build time so adding a pair on one side without the other fails the build.
+
+**Bare-attribute path (v1.9).** D0091 also fires on bare attribute access (no call), catching `pdf.rdd`, `sdf.loc`, `pdf.iloc`, `sdf.toPandas` and other cross-dialect attribute surfaces that the v1.8 `Expr::Call` path missed. The check is driven by two new property tables: `SPARK_DISCRIMINATOR_PROPERTIES` (`rdd`, `isStreaming`, `sparkSession`) and `PANDAS_INHERITED_PROPERTIES` (`loc`, `iloc`, `at`, `iat`). The bare-attribute path inherits the same carve-outs as the call path: untagged receivers skip the gate; deprecated `DataFrame[X]` alias receivers skip to avoid double-warning with D0090.
 
 Methods without a clean cross-dialect equivalent (`mapInPandas`, `freqItems`, `pivot_table`, …) render a bare mismatch note without a suggestion. The suggestion field is also exposed via the LSP `Diagnostic.suggestion` slot, so editors that support `textDocument/codeAction` can light up a quick-fix.
 
 **Carve-outs.** D0091 fires only on adjudicated receivers (`SparkFrame[X]` / `PandasFrame[X]`). Untagged bindings (parameters without a frame annotation) skip the gate. The deprecated `DataFrame[X]` alias also skips, so D0090 and D0091 don't double-fire on the same line — the v2.0 migration narrative is "adjudicate, then enforce". Two pandas-discriminator method names — `pivot` and `melt` — are excluded from the Spark-receiver direction because Spark exposes legitimate same-spelled surfaces (`groupBy(...).pivot(...)`, Spark 3.4+ positional `df.melt(ids, values, ...)`); firing on those would false-positive idiomatic Spark code. The pandas-direction check has no equivalent carve-out — every Spark discriminator is genuinely absent from the pandas DataFrame surface.
 
-**Back-compat preservation.** Pre-v1.8, `pdf.withColumn(...)` typechecked silently as Spark — the existing un-gated `column_method_shape` arm still handles the call, schema flows through unchanged. D0091 is informational warning **alongside** the existing behavior, not a replacement. Adopters who want the warning quieted today can downgrade D0091 to `off` in `pykrete.json`'s `rules` block. Strict-mode escalation (warning → error under `"typeCheckingMode": "strict"`) is deferred to v1.9 because the back-compat surface is genuinely larger than D0090's was.
+**Back-compat preservation.** Pre-v1.8, `pdf.withColumn(...)` typechecked silently as Spark — the existing un-gated `column_method_shape` arm still handles the call, schema flows through unchanged. D0091 is informational warning **alongside** the existing behavior in non-strict modes, not a replacement. Adopters who want the strict-mode escalation (v1.9) softened can downgrade D0091 to `warning` or `off` in `pykrete.json`'s `rules` block (`{"rules": {"crossDialectMethodMismatch": "warning"}}`).
 
 **Fix.** Replace the method call with the dialect-appropriate spelling from the table above. If the receiver is genuinely the wrong dialect (the call won't work at runtime in the called library), fix the upstream chain — `.toPandas()` to convert a Spark receiver to pandas, `spark.createDataFrame(pdf)` to go the other way (v1.5+ cross-dialect handoff).
 
