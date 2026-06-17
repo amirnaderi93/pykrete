@@ -1,6 +1,47 @@
 # Changelog
 
 
+## 0.9.0
+
+Tracks the v1.11.0 pykrete release — **closing the v1.10 D0091
+PR-D1 cross-codebase carve-out** and shipping the pandas
+`unstack` literal-form arm + the audit-tooling block. The bundled
+`pykrete` and `pykrete-lsp` binaries gain a NEW pandas inference
+arm for `df.unstack(level=, fill_value=)` (mirror of v1.10
+`stack`, continuing the one-reshape-arm-per-cycle cadence from
+v1.6 `pivot_table` and v1.7 `melt`): receiver-dialect-gated to
+`PandasFrame[X]`, literal `level=` (single string, list / tuple of
+strings) validates against the receiver schema and fires D0030 on
+a typo with a *did you mean*; int / int-list / `None` /
+non-literal forms fall through to Unknown. The v1.10 PR-D1 carve-
+out closes upstream: cross-codebase property probes for the 8 new
+v1.10 D0091 properties (`na`, `write`, `writeStream`,
+`storageLevel`, `index`, `values`, `shape`, `T`) ship in pykrete-
+tests PR-P1 #39 — every property the v1.10 checker added now has
+a deliberately-broken cross-codebase fixture verifying it actually
+fires. The release also lands the **audit-tooling block** closing
+5 cycles of v1.10 retro rules: `trust-claim-sweep-checklist.sh`
+(docs-vs-history sweep gate with a 17-test self-test suite),
+`changelog-cite-check.sh` (resolves CHANGELOG `path:LINE` cites
+against the working tree), and `auto-label-release-pr.yml`
+(auto-applies `release-ready` label to release-PR branches). Devs
+run the sweep checklist locally before opening PR-F; CI-side
+release-gate label-trigger wiring stays tracked for v1.12 (the
+default GITHUB_TOKEN doesn't fire downstream workflows on label
+changes). LSP test tempdir-per-test isolation lands (sentinel
+`pykrete.json` boundary anchored per-test, closing the v1.10
+probe-density audit flake under parallel test execution). Walker
+polish: mixed-indent + decorator-with-comment edges + tab/space
+test + counter-semantics comment. The cross-codebase suite
+matures further: 261 → 271 probes across 130 fixtures from 17
+donors. No new D-codes, no new annotation forms; SemVer-minor
+under the `tighteningDiagnostics` policy and the established
+alias-report-style JSON-additive policy. Cycle-close minor bump
+aligns the extension with the v1.11.0 tag per the version-guard
+contract. See the
+[main CHANGELOG](../../CHANGELOG.md#1110---2026-06-17) for details.
+
+
 ## 0.8.0
 
 Tracks the v1.10.0 pykrete release — **`pykrete check
