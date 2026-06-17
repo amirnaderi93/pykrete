@@ -16,7 +16,8 @@
 # -------------
 # A PR is treated as release-cycle if EITHER:
 #   - the title matches `^chore\(release\):` (PR-F canonical subject), OR
-#   - the source branch matches `release/v.*` (release branch).
+#   - the source branch matches `release/v\d.*` (release branch; the
+#     `\d` after `v` rejects placeholder names like `release/v` itself).
 # If neither matches, the label is NOT applied; the dev can always
 # apply it manually.
 #
@@ -47,7 +48,7 @@ jobs:
             const title = pr.title || '';
             const headRef = pr.head && pr.head.ref ? pr.head.ref : '';
             const titleMatches = /^chore\(release\):/.test(title);
-            const branchMatches = /^release\/v.*/.test(headRef);
+            const branchMatches = /^release\/v\d/.test(headRef);
             if (!titleMatches && !branchMatches) {
               core.info(`Discriminator did not match (title='${title}', head='${headRef}'); skipping.`);
               return;
@@ -57,10 +58,14 @@ jobs:
               core.info('Label `release-ready` already applied; skipping.');
               return;
             }
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: pr.number,
-              labels: ['release-ready'],
-            });
-            core.info(`Applied label \`release-ready\` to PR #${pr.number} (title='${title}', head='${headRef}').`);
+            try {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                labels: ['release-ready'],
+              });
+              core.info(`Applied label \`release-ready\` to PR #${pr.number} (title='${title}', head='${headRef}').`);
+            } catch (e) {
+              core.warning(`Failed to apply 'release-ready' label: ${e.message}. Was it deleted? Recreate via: gh label create release-ready --color 0E8A16`);
+            }

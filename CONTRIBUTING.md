@@ -270,6 +270,10 @@ The full rule, after R2 of v1.10 PR-A2:
 
 **Scope boundary**: only `CHANGELOG.md`. README, docs-site prose, and other Markdown surfaces are out of scope (different drift profile).
 
+### File:line cite convention (`scripts/changelog-cite-check.sh`, v1.11+)
+
+CHANGELOG citations may use bare basenames (e.g., `alias_report.rs:446`); the cite-check resolves these via single-match search across `crates/`, `scripts/`, `editors/`, `.github/`. Ambiguous matches fail loudly. Qualified paths (e.g., `crates/pykrete/src/main.rs:972`) are also accepted and resolved literally.
+
 ## Filing issues
 
 Pick the matching template when you open a new issue on GitHub (defined under `.github/ISSUE_TEMPLATE/`):

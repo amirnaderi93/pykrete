@@ -112,6 +112,7 @@ STOP = {
     'yaml', 'json', 'toml', 'check', 'file', 'line', 'lines', 'spec',
     'docs', 'design', 'rule', 'arm', 'shape', 'kind', 'name', 'side',
     'gate', 'flag', 'block', 'blocks', 'mode', 'path', 'paths', 'self',
+    'see', 'details', 'here', 'note', 'via', 'per', 'also',
 }
 
 errors = []
@@ -133,6 +134,10 @@ for i, line in enumerate(lines):
             # Bare-basename fallback: if the cite has no path separator,
             # search a small set of source roots for a unique match.
             # Ambiguous matches (or no matches) fail.
+            # Carve-out: bare-basename cites are deliberate (PR-G #157
+            # convention); ambiguous matches still fail loudly. Strict
+            # repo-root mode would require a CHANGELOG cleanup;
+            # pre-adoption phase doesn't justify the churn.
             if os.sep not in path and '/' not in path:
                 matches = []
                 for src_root in ('crates', 'scripts', 'editors', '.github'):
