@@ -248,13 +248,13 @@ def either(df: DataFrame[Sale]) -> int:
 
 **Step 3 — verify.** Re-run `pykrete check src/` (or `pykrete migrate src/` to re-run check-mode). Both should exit 0 once every site is migrated, including under strict mode.
 
-**Step 4 — gate CI on the inventory (v1.8+).** `pykrete check --deprecation-report src/` emits a JSON envelope listing every D0090-firing site with its adjudicated dialect and suggested rewrite. Drop it into a CI step to fail the build whenever the inventory is non-empty, so v2.0 readiness becomes a measurable invariant rather than a checklist item:
+**Step 4 — gate CI on the inventory (v1.8+, simplified in v1.10).** `pykrete check --deprecation-report src/` emits a JSON envelope listing every D0090-firing site with its adjudicated dialect and suggested rewrite. v1.10 adds `--fail-on-nonempty` so the CI gate is a single flag rather than a shell pipeline:
 
 ```bash
-pykrete check --deprecation-report src/ > deprecation.json
-test "$(jq '.summary.totalSites' < deprecation.json)" -eq 0 \
-  || { echo "v2.0 readiness gate failed; see deprecation.json"; exit 1; }
+pykrete check --deprecation-report --fail-on-nonempty src/
 ```
+
+`--fail-on-nonempty` exits non-zero when the envelope's `sites` array is non-empty (it still prints the JSON to stdout, so you can capture it on failure for the build log). It replaces the v1.8–v1.9 `jq | test` boilerplate adopters were writing by hand. Compatible with `--ack` (gates only on the filtered cohort) and with `--snapshot=<path>` (the gate decision is independent of the file write).
 
 The envelope's shape (v1.9+) is `{deprecationReportVersion: "2", sites: [...], summary: {totalSites, byDialect: {spark, pandas, ambiguous}}}`. Per-site fields include `file`, `line`, `column`, `code` (always `D0090`), `ruleName`, `bindingName`, `rawAnnotation`, `adjudicatedDialect`, `suggestedRewrite` (null for ambiguous sites), and `migrationStatus` (`"pending"` or `"acknowledged"`). Mutually exclusive with `--report-aliases` (passing both exits 2). See the [D0090 diagnostics reference](/pykrete/reference/diagnostics/#deprecateddataframealias--d0090) for the full schema.
 
@@ -268,9 +268,7 @@ def revenue(sales: DataFrame[Sale]) -> DataFrame[Sale]:
 
 ```bash
 # Fail CI on any unacked D0090 site:
-pykrete check --deprecation-report --ack=pending src/ > pending.json
-test "$(jq '.summary.totalSites' < pending.json)" -eq 0 \
-  || { echo "Unacked v2.0 migration sites remain; see pending.json"; exit 1; }
+pykrete check --deprecation-report --ack=pending --fail-on-nonempty src/
 
 # Inverse: catch regressions where a site flipped acked → pending (the
 # marker was removed or the annotation moved):
@@ -278,6 +276,18 @@ pykrete check --deprecation-report --ack=acknowledged src/ > acked.json
 ```
 
 The two-step workflow lets a team land migration in waves: acknowledge an alias site as "we know about this; the migration is intentional and tracked", and the CI gate stops blocking on it while still failing on any site that hasn't been adjudicated yet. The envelope deliberately ships **without** `targetVersion` / `removalVersion` / `shipDate` — pykrete tracks per-site migration progress; you pick the v2.0 ship date.
+
+**Step 6 — snapshot the envelope across releases (v1.10+).** Migration is rarely a single-PR landing; it stretches across release windows. v1.10 adds `--snapshot=<path>` so the v2 envelope can be written to disk as a release-pinned artifact — your CI persists it as a build output (or commits it to a tracking branch) and later compares against the prior snapshot to confirm progress.
+
+```bash
+# Write the v2 envelope to disk:
+pykrete check --deprecation-report --snapshot=migration.json src/
+
+# Pair with --ack to snapshot only the unacked cohort:
+pykrete check --deprecation-report --ack=pending --snapshot=pending-migration.json src/
+```
+
+`--snapshot` performs an atomic write — tempfile-plus-rename in the destination directory, nanosecond-suffixed temp name to avoid concurrent-writer collision, cleanup-on-error guard across every error path — so a half-written `migration.json` never lands on disk. Exit code stays at 0 on a successful write (gating lives on `--fail-on-nonempty`; you can combine both: `--snapshot=migration.json --fail-on-nonempty`). The persisted file is bit-identical to what `--deprecation-report` would have printed to stdout, so a `diff` between two release snapshots is the same diff a script would compute over the live invocations. Snapshot-vs-snapshot comparison via a built-in `--compare-to <snapshot>` flag is tracked for v1.11+; until then, `diff -u previous.json migration.json | jq ...` is the manual primitive.
 
 **Pitfall — ambiguous sites are real signal.** A binding used as both a Spark and a pandas dataframe almost always means the code is wrong (the two dialects don't share an API surface; one branch will fail at runtime). The migrator leaves them alone deliberately. Decide which dialect that path takes and pick the right annotation by hand.
 

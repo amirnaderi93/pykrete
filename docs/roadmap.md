@@ -210,37 +210,87 @@ that live-verifies numeric trust-claims (probes / fixtures / tests
 2 D0091 negative probes (pandera + delta) via pykrete-tests PR-P1
 #32 — 253 → 255 probes.
 
+**v2.0 migration archivability + D0091 surface completion + pandas
+`stack` arm + v1.9 audit-debt closure shipped in v1.10**: the v1.10
+headline is **`pykrete check --deprecation-report --snapshot=<path>`
+makes v2.0 migration archivable in CI**. File-write surface for the
+v2 envelope: atomic write via tempfile-plus-rename, nanosecond-
+suffixed temp name to avoid concurrent-writer collision, cleanup-
+on-error guard across every error path. Compatible with `--ack`;
+exit code stays at 0 (gating lives on D1's `--fail-on-nonempty`).
+**`pykrete check --deprecation-report --fail-on-nonempty`** (closes
+v1.9 arch-I4): CI gate flag exits non-zero when `sites` is non-
+empty, replacing the `jq '.sites | length' | test ... -eq 0`
+boilerplate adopters were writing by hand. **D0091 surface
+completion**: `SPARK_DISCRIMINATOR_PROPERTIES` gains `na`, `write`,
+`writeStream`, `storageLevel` (closes v1.9 spark-I1);
+`PANDAS_INHERITED_PROPERTIES` gains `index`, `values`, `shape`, `T`
+(closes v1.9 spark-I2) — both via the v1.9 bare-attribute path.
+v1.10 PR-D1's 8 new properties are unit-test-covered at v1.10.0;
+cross-codebase fixture probes filed for v1.11. **Pandas
+`df.stack(level=, dropna=)` literal-form** lands as a NEW inference
+arm (continuing the one-reshape-arm-per-cycle cadence from v1.6
+`pivot_table` and v1.7 `melt`); receiver-dialect-gated to fire only
+on `PandasFrame[X]` receivers because Spark's `stack` is a column-
+free-function. **v1.9 architecture audit-debt closes structurally**:
+ack-marker multi-line signature support (the v1.9 walker silently
+skipped past `def foo(` when the signature ran onto a continuation
+line; v1.10 lands an indentation-aware walker + decorator-stack
+skip — closes v1.9.1 #2 / v1.9 arch-I1), property / method tripwire
+(build-time invariant: `SPARK_DISCRIMINATOR_PROPERTIES ⊂
+SPARK_DISCRIMINATORS`; mirror for `PANDAS_INHERITED_PROPERTIES ⊂
+PANDAS_ONLY_SIGNALS` — closes v1.9 arch-I3),
+`.github/workflows/release-gate.yml` (full CHANGELOG grep gate
+including live-extract step against the `pykrete-tests` sibling
+checkout — closes v1.9 arch-I2), and CHANGELOG grep gate v3 prose
+number scan (extends the v1.9 v2 gate to scan prose paragraphs;
+single-backtick-wrapped numbers are the escape hatch — closes v1.9
+retro rule 12). **§9.2 centralized version bump promoted to
+standing practice** (closes v1.9 retro rule 1): trial verdict
+SUCCESS — zero rebase-ladder collisions across Wave 1 of v1.9. The
+`.github/centralized-bump-cycle.marker` mechanism stays in the
+guard workflow as a reusable cycle-trial primitive. Cross-codebase
+probe coverage adds 6 D0091 strict-mode / bare-attribute /
+shape-changes probes on `mlflow` / `dbt-spark` / `pandera` / `delta`
+(pykrete-tests PR-P1 #34) plus the seaborn `stack(level=)` arm
+(pykrete-tests #35) — 255 → `261 probes` across `120 fixtures` from
+`17 donors`.
+
 ## Next up
 
-### v1.10 — broader pandas reshape + LSP polish + `--include-py` / `--changed-only` migrate flags + omitted-edit CI-guard
+### v1.11 — broader pandas reshape + `--include-py` / `--changed-only` / `--compare-to` migrate flags + omitted-edit CI-guard
 
-Broader pandas reshape: `stack` / `unstack` / `groupby.agg`,
-`reset_index` / `set_index`, plus full `pivot_table` and `melt`
-output schema-tracking (the wide / long output schemas — variable
-column values become column names of the result frame; `var_name` /
-`value_name` become columns of the long frame). `.loc` non-literal
-forms (`.loc[mask, "col"]` boolean-mask row keys, `.loc[:, "a":"b"]`
-column-range slicing) and `pdf.iloc[...]` integer-position indexing.
-The `df.query("…")` and `df.eval("…")` mini-DSLs (numexpr-influenced
-syntax, separate parser from the SQL path used by `selectExpr`).
-`pd.read_csv(...)` and other pandas I/O entry points if scope allows
-(schema inference from file headers / SQL / type-stubs is a separate
-design surface). Retrofitting pandas `PROBE-TYPE-IS` to the v1.3
-hybrid donors (MLflow, Feast, iceberg-python). Canonical-vs-direct
-CI gate (I3 from the v1.4 architecture audit). LSP polish block:
-visitor name-shadowing M3 round-2, hover_timeout flake, col-ref
-helper consolidation, suggester threshold. `--include-py` flag for
+Broader pandas reshape: `unstack` / `groupby.agg`, `reset_index` /
+`set_index`, plus full `pivot_table` / `melt` / `stack` output
+schema-tracking (v1.10 shipped `stack` literal-form on the input;
+the long-format output schemas pair with the rest of pandas
+reshape). `.loc` non-literal forms (`.loc[mask, "col"]` boolean-
+mask row keys, `.loc[:, "a":"b"]` column-range slicing) and
+`pdf.iloc[...]` integer-position indexing. The `df.query("…")` and
+`df.eval("…")` mini-DSLs (numexpr-influenced syntax, separate
+parser from the SQL path used by `selectExpr`). `pd.read_csv(...)`
+and other pandas I/O entry points if scope allows (schema inference
+from file headers / SQL / type-stubs is a separate design surface).
+Retrofitting pandas `PROBE-TYPE-IS` to the v1.3 hybrid donors
+(MLflow, Feast, iceberg-python). Canonical-vs-direct CI gate (I3
+from the v1.4 architecture audit). `--include-py` flag for
 `pykrete migrate` to walk the multiplexer cohort's `.py` files
 alongside `.pyk`, plus a `--changed-only` flag for both
 `pykrete migrate` and `pykrete check` that walks only files changed
-against HEAD. CI-guard widened to catch the "omitted-edit" drift
-class on top of v1.8's structural build.rs closure for the
-parallel-edit class (v1.9 backed the v1.8 closure with CI-running
-tests; v1.10 extends to the omitted-edit class). v1.10 spec also
-decides whether the v1.9 centralized-version-bump trial (per spec
-§9.2 amendment) continues — either re-adds the
-`.github/centralized-bump-cycle.marker` file or reverts the
-amendment.
+against HEAD. `--compare-to <snapshot>` for `--deprecation-report`
+to consume the v1.10 `--snapshot` file-write surface as a snapshot-
+vs-snapshot diff primitive (consumer-state model is a product fork;
+deferred per v1.9 author-boundary carve-out at
+`alias_report.rs:446-448`). CI-guard widened to catch the "omitted-
+edit" drift class on top of v1.10's structural build.rs +
+property / method tripwire closures. Cross-codebase fixture probes
+for v1.10 PR-D1's 8 new D0091 properties (`na`, `write`,
+`writeStream`, `storageLevel`, `index`, `values`, `shape`, `T`) —
+unit-test-covered at v1.10.0; cross-codebase probes filed for the
+v1.11 batch. **LSP polish formally rescoped to v2.0.1 / discrete
+LSP-feature work** per v1.10 spec §10.10, NOT a v1.x bundle — three
+cycles (v1.7 / v1.8 / v1.9) of "carry forward to next minor" was
+the signal that LSP polish doesn't fit the v1.x cadence.
 
 ## PyCharm support
 
@@ -436,10 +486,18 @@ plannability (`--deprecation-report` v2 envelope with per-site
 `migrationStatus` + `--ack` filter) + D0091 maturity (strict-mode
 escalation + suggestion drift guard + `shape_changes` hint + new
 bare-attribute inference arm) + `text-numeric` CHANGELOG gate
-(done, v1.9) → broader pandas reshape (`stack` / `unstack` /
+(done, v1.9) → v2.0 migration archivability
+(`--deprecation-report --snapshot=<path>` file-write +
+`--fail-on-nonempty` CI gate) + D0091 surface completion (8 new
+properties — 4 Spark-direction, 4 pandas-direction) + pandas
+`df.stack(level=, dropna=)` literal-form + v1.9 audit-debt
+closure (done, v1.10) → broader pandas reshape (`unstack` /
 `groupby.agg`) + `.loc` / `.iloc` non-literal forms + `.query` /
-`.eval` mini-DSLs + `--include-py` / `--changed-only` migrate flags
-+ LSP polish (v1.10) → polars** → others (DuckDB, Dask, …).
+`.eval` mini-DSLs + `--include-py` / `--changed-only` /
+`--compare-to` migrate flags + cross-codebase fixture probes for
+the 8 v1.10 D0091 properties (v1.11; LSP polish formally rescoped
+to v2.0.1 / discrete LSP-feature work per v1.10 spec §10.10) →
+polars** → others (DuckDB, Dask, …).
 
 The core type model — `SparkFrame[Schema]` / `PandasFrame[Schema]` /
 `DataFrame[Schema]`, the `Schema` class, column checks, return-type
