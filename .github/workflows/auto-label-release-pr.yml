@@ -30,9 +30,12 @@
 # The workflow checks the PR's current labels before calling the
 # add-labels API. If `release-ready` is already on the PR, the addLabels
 # call is skipped (no API write, no noise in the audit log). The
-# release-gate dispatch is independent of this skip and ALWAYS fires
-# when the discriminator matches — a manual prior label-apply may not
-# have triggered the gate, so we re-dispatch to be sure.
+# release-gate dispatch fires when the discriminator matches AND the
+# label is on the PR (either pre-applied or just applied) — a manual
+# prior label-apply may not have triggered the gate, so we re-dispatch
+# to be sure. If addLabels fails (label deleted upstream, transient
+# error), dispatch is skipped to avoid running the gate on a PR that
+# does not actually carry the label.
 #
 # CROSS-WORKFLOW TRIGGER
 # ----------------------
@@ -69,9 +72,11 @@ jobs:
               core.info(`Discriminator did not match (title='${title}', head='${headRef}'); skipping.`);
               return;
             }
+            let labelApplied = false;
             const existing = (pr.labels || []).map(l => l.name);
             if (existing.includes('release-ready')) {
               core.info('Label `release-ready` already applied; skipping addLabels (idempotent).');
+              labelApplied = true;
             } else {
               try {
                 await github.rest.issues.addLabels({
@@ -80,10 +85,15 @@ jobs:
                   issue_number: pr.number,
                   labels: ['release-ready'],
                 });
+                labelApplied = true;
                 core.info(`Applied label \`release-ready\` to PR #${pr.number} (title='${title}', head='${headRef}').`);
               } catch (e) {
                 core.warning(`Failed to apply 'release-ready' label: ${e.message}. Was it deleted? Recreate via: gh label create release-ready --color 0E8A16`);
               }
+            }
+            if (!labelApplied) {
+              core.warning(`Skipping release-gate dispatch because 'release-ready' label is not on PR #${pr.number} (addLabels failed).`);
+              return;
             }
             try {
               await github.rest.actions.createWorkflowDispatch({
