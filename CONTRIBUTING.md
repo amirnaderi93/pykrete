@@ -274,6 +274,14 @@ The full rule, after R2 of v1.10 PR-A2:
 
 CHANGELOG citations may use bare basenames (e.g., `alias_report.rs:446`); the cite-check resolves these via single-match search across `crates/`, `scripts/`, `editors/`, `.github/`. Ambiguous matches fail loudly. Qualified paths (e.g., `crates/pykrete/src/main.rs:972`) are also accepted and resolved literally.
 
+### Multi-line ack-marker rationale block (v1.12+)
+
+v1.12 extends `# pykrete: ack-deprecation` recognition to the entire contiguous comment block above the anchor. v1.10's `marker → non-matching comment → def` pending semantic is now acknowledged. Spec §6.1.4.
+
+### Release-gate `cargo test` memoization (v1.12+)
+
+The release-gate workflow memoizes `cargo test --release --workspace` output via the `PYKRETE_TESTS_COUNT_FILE` env var. Local dev path (env var unset) preserves the cargo invocation; CI path (env var set) reads from the file written by an earlier cargo-test step. Eliminates v1.11 PR-F's 34-min double-build stall.
+
 ## Filing issues
 
 Pick the matching template when you open a new issue on GitHub (defined under `.github/ISSUE_TEMPLATE/`):
