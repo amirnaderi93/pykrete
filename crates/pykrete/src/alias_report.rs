@@ -1065,11 +1065,10 @@ def outer():
     #[test]
     fn v111_prd2_mixed_indent_tab_def_marker_above_acknowledges() {
         // Tab-indented inner def with a tab-indented marker on the line
-        // immediately above it. The marker check trims indentation
-        // before matching, and the indentation-aware enclosing-def
-        // walk finds `def tab_indented(` as enclosing the annotation
-        // (annotation is on the def signature line itself → trivially
-        // enclosing). Result: acknowledged.
+        // immediately above it. The annotation is on the def signature
+        // line itself, so `find_enclosing_def_line_start` takes the
+        // trivially-enclosing branch (line 290) without needing the
+        // indent comparison. Result: acknowledged.
         let src = "\
 def outer():
 \tdef inner_a():
@@ -1083,16 +1082,16 @@ def outer():
     }
 
     #[test]
-    fn v111_prd2_mixed_indent_space_above_tab_def_pending() {
+    fn v111_prd2_mixed_indent_space_marker_above_tab_def_acknowledges() {
         // Tab-indented inner def with a SPACE-indented marker on the
         // line immediately above. The marker text `.trim()`s to the
         // exact marker string regardless of leading-whitespace flavor,
         // so the marker check still matches and the site is
         // acknowledged. Documents the deliberate indent-agnostic
         // matching: pykrete pins on text content, not whitespace
-        // shape. Per project conventions this means a marker line's
-        // indent is irrelevant — the contract is "what does the line
-        // above the def line say after trimming."
+        // shape. The contract is "what does the line above the anchor
+        // (post-decorator-walk) say after trimming"; with no
+        // decorators here the anchor is the def line itself.
         let src = "\
 def outer():
 \tdef inner_a():
