@@ -6,6 +6,111 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-06-17
+
+Tenth minor release on the v1.0 line. v1.10's headline: **v2.0 migration is plannable AND archivable** — `pykrete check --deprecation-report --snapshot=<path>` writes the v2 envelope to disk so CI can persist a prior-report cache, diff between releases, and reduce the v2.0 deprecation runway to a tracked file. v1.8 made migration measurable; v1.9 made it plannable; v1.10 makes it archivable. Paired with **D0091 surface completion** — the four remaining Spark-direction discriminator properties (`na`, `write`, `writeStream`, `storageLevel`) and the four pandas-direction inherited properties (`index`, `values`, `shape`, `T`) close the v1.9 spark-I1 / spark-I2 firing-site coverage gap on `Expr::Attribute` — plus **`--fail-on-nonempty`** on `--deprecation-report` so CI consumers can gate without `jq | test` boilerplate. The release lands the **pandas `df.stack(level=, dropna=)` literal-form arm** (continuing the one-reshape-arm-per-cycle cadence from v1.6's `pivot_table` and v1.7's `melt`), closes the v1.9 architecture audit-debt class (ack-marker multi-line signature support, property/method tripwire, release-gate CI workflow, CHANGELOG grep gate v3 prose scan), and **promotes the v1.9 §9.2 centralized version-bump trial to standing practice** — zero rebase-ladder collisions across the Wave 1 PRs of v1.9 was the SUCCESS signal, and v1.10 ships the standing-rule codification with a reusable marker mechanism. No new annotation forms; SemVer-minor under the `tighteningDiagnostics` policy and the established alias-report-style JSON-additive policy.
+
+### Added
+
+- **`pykrete check --deprecation-report --snapshot=<path>`** (PR-V1 #160; spec §5). File-write surface for the v2 envelope: atomic write via tempfile-plus-rename, nanosecond-suffixed temp name to avoid concurrent-writer collision, cleanup-on-error guard across every error path. Compatible with `--ack`; exit code stays at 0 (snapshot writes are not gating — gating lives on D1's `--fail-on-nonempty`). Flag-shaped successor guard + exact-keys allowlist enforce the v1.9 §4.5 envelope contract on the persisted file. NO `--compare-to <snapshot>` — deferred to v1.11 per the v1.9 author-boundary carve-out at `alias_report.rs:282-284` (`"resolved"` is consumer-side state; consumer state model is a product fork).
+- **D0091 surface completion — Spark-direction properties** (PR-D1 #162; spec §3). `SPARK_DISCRIMINATOR_PROPERTIES` gains `na`, `write`, `writeStream`, `storageLevel` (closes v1.9 spark-I1). `pdf.na`, `pdf.write`, `pdf.writeStream`, `pdf.storageLevel` on a pandas-tagged binding now fire D0091 via the bare-attribute path shipped in v1.9 PR-D2.
+- **D0091 surface completion — pandas-direction properties** (PR-D1 #162; spec §3). `PANDAS_INHERITED_PROPERTIES` gains `index`, `values`, `shape`, `T` (closes v1.9 spark-I2). `sdf.index`, `sdf.values`, `sdf.shape`, `sdf.T` on a Spark-tagged binding now fire D0091 via the bare-attribute path.
+- **`pykrete check --deprecation-report --fail-on-nonempty`** (PR-D1 #162; spec §3, closes v1.9 arch-I4). CI gate flag: exits non-zero when the envelope's `sites` array is non-empty. Replaces the `jq '.sites | length' | test ... -eq 0` boilerplate adopters were writing by hand. Compatible with `--ack` (gates only on the filtered cohort).
+- **Pandas `df.stack(level=, dropna=)` literal-form arm** (PR-D2 #161; spec §4). NEW inference arm on the `stack` reshape method (continuing the one-per-cycle cadence from v1.6 `pivot_table` and v1.7 `melt`). Receiver-dialect-gated: fires only on `PandasFrame[X]` receivers (Spark's `stack` is a column-free-function, not a method). Validates literal `level=` (single string, list / tuple of strings); falls through silently to `Unknown` on int / int-list / `None` / non-literal forms. `stack` added to `PANDAS_ONLY_SIGNALS`.
+- **Ack-marker multi-line signature support** (PR-A1 #159, closes v1.9.1 #2 / v1.9 arch-I1). `# pykrete: ack-deprecation` marker now correctly resolves to the enclosing `def`/`async def` when the signature spans multiple lines and / or carries decorators. `find_enclosing_def_line_start` is indentation-aware; `walk_past_decorators` skips back over `@decorator` lines so the marker lands on the conceptual definition line.
+- **Property / method tripwire** (PR-A1 #159, closes v1.9 arch-I3). Build-time invariant: `SPARK_DISCRIMINATOR_PROPERTIES ⊂ SPARK_DISCRIMINATORS`; mirror for `PANDAS_INHERITED_PROPERTIES ⊂ PANDAS_INHERITED_ARM_METHODS`. Catches the drift class where a name is added to one table but not the other.
+- **`.github/workflows/release-gate.yml`** (PR-A2 #163, closes v1.9 arch-I2). Standalone workflow that runs the full CHANGELOG grep gate (including the live-extract step against the `pykrete-tests` sibling checkout) on release-PR branches; the standard CI gate runs with `--skip-live-extract` because PR runners do not have the sibling repo checked out. Closes the structural gap where release-time prose / numeric drift could land if the developer skipped the local gate.
+- **CHANGELOG grep gate v3 — prose number scan** (PR-A2 #163, closes v1.9 retro rule 12). Extends the v1.9 v2 gate to scan prose paragraphs (everything outside fenced blocks) for `<digit> <known-key>` patterns (keys: `positive`, `negative`, `probes`, `fixtures`, `tests`, `donors`). Single-backtick-wrapped numbers are the editor's escape hatch. Leading `(?<![A-Za-z0-9_])` rejects digits glued to an identifier prefix so D-code mentions like `D0091 probes` do not false-trip. Also adds the `text-numeric-historical` label — release-pinned blocks whose numbers are immutable by design are skipped by the gate.
+- **§9.2 centralized version bump — promoted to standing practice** (PR-S1 #158, closes v1.9 retro rule 1). v1.9 trialed centralizing per-PR extension version bumps to the release PR via the `.github/centralized-bump-cycle.marker` file. Trial verdict: SUCCESS (zero rebase-ladder collisions across Wave 1). v1.10 promotes the rule to standing; the marker mechanism stays in the guard workflow as a reusable cycle-trial primitive for future amendments.
+
+### Changed
+
+- **Trust-claim surfaces** swept end-to-end for v1.10 reality: README "Reliability and trust" + "Today / Next" lines; the docs-site splash; `about/production-readiness`; `about/pykrete-tests`; the docs-site roadmap; the canonical `docs/roadmap.md`; the pandas roadmap; the diagnostics reference (D0091 entry gains the new properties and the `--fail-on-nonempty` gate; pandas reshape entry gains `stack`); the cookbook (new snapshot-and-diff recipe added); the VS Code extension README; `editors/vscode/CHANGELOG.md`; and the operations reference (snapshot file-write idiom for CI). Pinned to live extracts at the v1.10.0 tag (the `text-numeric-historical` label is skipped by the gate — release-pinned numbers are immutable by construction; see CONTRIBUTING.md "CHANGELOG conventions"):
+
+```text-numeric-historical
+261 probes
+186 positive
+75 negative
+120 fixtures
+1735 tests
+17 donors
+```
+
+- **Pandas roadmap** updated: `df.stack(level=, dropna=)` literal-form arm moves from "v1.10 horizon" to shipped; broader pandas reshape (`unstack`, `groupby.agg`, full `pivot_table` / `melt` output schema-tracking, `.loc` non-literal forms + `.iloc`, the `.query` / `.eval` mini-DSLs, pandas I/O entry points, polars) stay tracked for v1.11+.
+- **§9.2 amendment from v1.9** promoted to standing rule. Per-PR developers DO NOT bump versions; PR-F is the sole bump commit per cycle. The `.github/centralized-bump-cycle.marker` mechanism becomes a reusable primitive (used in PR-S1 + removed in PR-F).
+
+### Fixed
+
+- **Ack-marker missed multi-line `def` signatures** (PR-A1 #159; v1.9 arch-I1 / v1.9.1 #2). v1.9 `find_enclosing_def_line_start` walked back to the first non-blank line at column 0 — which silently skipped past `def foo(` and landed on a comment above the function when the `(args)` ran onto a continuation line. v1.10 fixes the walker to be indentation-aware (track the marker's indent column and walk back to the first preceding line at strictly-less indent that begins with `def` / `async def`), then `walk_past_decorators` skips back over any `@decorator` lines so the conceptual definition line is what the marker resolves to.
+- **`SPARK_DISCRIMINATOR_PROPERTIES` could drift from `SPARK_DISCRIMINATORS`** (PR-A1 #159; v1.9 arch-I3). A new property added to the bare-attribute discriminator table without a mirror entry on the call-path discriminator table would silently leave the call path uncovered. v1.10 adds a build-time invariant test pinning the two tables in a strict subset relation; mirror invariant for pandas.
+
+### Internal
+
+- **`--snapshot` atomic write** at `crates/pykrete/src/alias_report.rs`. Tempfile with nanosecond suffix in the destination directory, fsync, rename. Cleanup on every error path (early validation failure, write error, rename error). Exact-keys allowlist on the persisted JSON enforces the v1.9 §4.5 envelope contract.
+- **`PANDAS_ONLY_SIGNALS`** at `crates/pykrete/src/dialect_signals.rs` gains `stack`. Spark's `stack` is a column free function (`pyspark.sql.functions.stack`), not a `DataFrame` method, so the receiver-dialect gate correctly fires only on `PandasFrame[X]` receivers.
+- **`SPARK_DISCRIMINATOR_PROPERTIES`** and **`PANDAS_INHERITED_PROPERTIES`** at `crates/pykrete/src/dialect_signals.rs` each gain four entries; both tables now subset-checked against their call-path siblings.
+- **`find_enclosing_def_line_start` + `walk_past_decorators`** at the ack-marker resolution path. Indentation-aware walker shipped in PR-A1.
+- **`.github/workflows/release-gate.yml`** runs the full CHANGELOG grep gate (live-extract included) on release-PR branches. Standard CI keeps `--skip-live-extract`.
+- **§9.2 marker mechanism** at `.github/workflows/extension-version-guard.yml` remains in place post-cycle as a reusable primitive (the marker file itself is committed at PR-S1 and removed in this PR).
+
+### Verified properties (cumulative)
+
+The trust suite verifies, on every release:
+
+- **Column resolution** through the Spark v1.0 surface plus the pandas analogues — `186 positive` probes across 49 annotated fixtures (154 `RESOLVES` + 24 `TYPE-IS` + 4 `FILE-COUNT` + 4 `FILE-CLEAN-OF`).
+- **Diagnostic firing** on broken fixtures — `75 negative` probes across 71 `probes_negative/` fixtures pinning D0030 `unknownColumn`, D0040 `unionSchemaMismatch` / D0050 `returnColumnsMismatch` / D0051 `argumentColumnsMismatch`, D0060 `missingJoinKey`, D0073 `transformInputMismatch`, D0081 `nonNumericArithmetic`, D0082 `crossTypeComparison`, D0083 `nullabilityMismatch`, D0084 `enumValueMismatch`, D0090 `deprecatedDataFrameAlias`, and D0091 `crossDialectMethodMismatch` (v1.10 cross-codebase coverage extends D0091 via the PR-P1 strict-mode escalation + bare-attribute + shape-changes probes).
+- **Spark type tracking** through transformations, scoped to D0081 via the `PROBE-TYPE-IS` synth-shape path (shipped v1.2).
+- **Pandas type tracking** through dispatched chains (shipped v1.4) on `PandasFrame[X]`, scoped to D0081 via the assign-arithmetic synth — `24 PROBE-TYPE-IS` markers across 10 of the `17 donors`.
+- **Cross-dialect handoff** (shipped v1.5, `.take()` closure v1.6): `.toPandas()` re-tags `SparkFrame[X]` to `PandasFrame[X]`; `spark.createDataFrame(pdf)` re-tags back when a schema source is present; pandas `.head` / `.tail` / `.first` / `.take` are dialect-gated.
+- **Cross-dialect method-mismatch warning** (shipped v1.8, matured v1.9, surface-completed v1.10): D0091 fires on `Expr::Call` and `Expr::Attribute` against the full Spark-direction discriminator set (`na`, `write`, `writeStream`, `storageLevel` added) and the full pandas-direction inherited set (`index`, `values`, `shape`, `T` added). Strict-mode escalates to error.
+
+### Audit-class closures (v1.9 follow-ups)
+
+- ack-marker on multi-line function signatures (v1.9.1 #2 / arch-I1) — PR-A1 #159.
+- release-gate CI workflow with live extract (arch-I2) — PR-A2 #163.
+- property / method tripwire (arch-I3) — PR-A1 #159.
+- `--fail-on-nonempty` flag for `--deprecation-report` (arch-I4) — PR-D1 #162.
+- D0091 Spark-direction property expansion (spark-I1) — PR-D1 #162.
+- D0091 pandas-direction property expansion (spark-I2) — PR-D1 #162.
+- CHANGELOG grep gate v3 prose scan (v1.9 retro rule 12) — PR-A2 #163.
+
+### Deferred (v1.11 trackers)
+
+- **D0080 `returnTypeMismatch` cross-codebase coverage** — carried forward from v1.10 deferral.
+- **`pivot_table aggfunc=` arg support** — carried forward from v1.7 / v1.8 / v1.9 / v1.10 deferral.
+- **`--include-py` flag for `pykrete migrate`** — carried forward from v1.7 / v1.8 / v1.9 / v1.10 deferral.
+- **`--changed-only` flag for `pykrete migrate` / `pykrete check`** — design fork still unresolved; carried forward.
+- **`--dry-run-since=<git-ref>` for `pykrete migrate` / `pykrete check`** — carried forward.
+- **`--compare-to <snapshot>` for `--deprecation-report`** — consumer-state model is a product fork; deferred per v1.9 author-boundary carve-out at `alias_report.rs:282-284`.
+- **CHANGELOG generation tool** — carried forward from v1.9 retro rule 6.
+- **`Box::leak` → `OnceLock` cleanup** — cosmetic; carried forward.
+- **Pandas `unstack` + `groupby.agg` reshape** — paired with `pivot_table aggfunc=`; carried forward.
+- **LSP polish block** — formally rescoped as v2.0.1 / discrete LSP-feature work per v1.10 spec §10.10, NOT a v1.x bundle.
+- **`.loc[mask, "col"]` and `.loc[:, "a":"b"]`** — boolean-mask row keys and column-range slicing still fall through to Unknown.
+- **`pdf.iloc[...]`** — integer-position indexing, tracked for v1.11.
+- **`df.query("…")` / `df.eval("…")` mini-DSLs** — own design surface; v1.11+.
+- **`pd.read_csv(...)` and other pandas I/O entry points** — separate design surface.
+- **Retrofitting pandas `PROBE-TYPE-IS` to the v1.3 hybrid donors** (MLflow, Feast, iceberg-python) — carried forward.
+- **polars** — separate dialect with separate idioms; v1.11+ if user demand surfaces.
+
+### Coordinated with
+
+- pykrete-tests: PR-P1 of the v1.10 cycle [shipped](https://github.com/amirnaderi93/pykrete-tests/pull/34) D0091 strict-mode escalation + bare-attribute + shape-changes cross-codebase coverage (2 strict-mode escalation probes on `mlflow` + `dbt-spark`, 2 bare-attribute probes on `pandera` + `delta`, 2 tightened probes with `match /note arg shape differs/`).
+- pykrete-tests: PR-D2 cascade (pandas `stack` literal-form arm) requires a catalog-pin bump PR post-tag — any fixture exercising `pdf.stack(level='typo')` patterns may newly fire D0030. Forward-flagged for the v1.10.0 catalog-pin chore PR.
+- **The v1.10.0 catalog-pin bump PR** (post-tag chore, same pattern as v1.6.0's #26, v1.7.0's #29, v1.8.0's pin, v1.9.0's #33) will:
+  - Bump the pykrete-tests catalog pin SHA from the v1.9.0 commit SHA to the v1.10.0 commit SHA.
+  - Update goldens for any fixture pattern newly covered by the eight new D0091 property arms (4 Spark + 4 pandas).
+  - Update goldens for any `pdf.stack(level='typo')` pattern newly firing D0030 via the PR-D2 arm.
+- **`.github/centralized-bump-cycle.marker`** removed in this PR; the marker mechanism stays in the guard workflow as a reusable cycle-trial primitive for future amendments.
+
+### Compatibility
+
+- **`DataFrame[X]` source-compatible through v1.x.** Every existing `DataFrame[X]` annotation continues to type-check. Removal is committed for "a future pykrete v2.0" — v1.10 holds the v1.9 stance of no committed ship date. v1.10 keeps `pykrete migrate` shipping (`--check` default; `--apply` opts into the rewrite), the v1.9 v2 envelope, and adds `--snapshot=<path>` (file-write) plus `--fail-on-nonempty` (CI gate) for the migration surface.
+- **JSON output contract.** Diagnostic JSON `schemaVersion` stays at `"1"`. `--report-aliases` envelope `aliasReportVersion` stays at `"2"`. `--deprecation-report` envelope `deprecationReportVersion` stays at `"2"` (no schema bump in v1.10; `--snapshot` writes the same v2 envelope shape to disk). `--snapshot` adds a new CLI surface; no existing flag's behavior changed.
+- **D0091 surface expansion is additive in scope.** Default-mode severity (warning) unchanged; strict-mode (error) unchanged. The new property arms catch firing sites that v1.9 silently missed; adopters who were relying on the silent skip can downgrade D0091 to `warning` or `off` in `pykrete.json`'s `rules` block.
+- **`pykrete migrate` CLI surface — pre-stable callout still applies.** v1.6 flagged the surface as pre-stable; v1.7 / v1.8 / v1.9 / v1.10 hold the surface stable. The pre-stable callout remains for v1.11+; the surface is expected to stabilize once real-world v2.0 migration usage surfaces.
+- **§9.2 centralized version bump promoted to standing.** Per-PR developers DO NOT bump versions. PR-F is the sole bump commit per cycle. The marker mechanism stays in the guard workflow as a reusable cycle-trial primitive.
+
 ## [1.9.0] - 2026-06-16
 
 Ninth minor release on the v1.0 line. v1.9's headline: **v2.0 migration is plannable** — `pykrete check --deprecation-report` now emits per-site `migrationStatus` (`pending` / `acknowledged`) and a `--ack` filter for site-by-site CI gating, all without committing pykrete to a v2.0 ship date. The v1.8 envelope inventoried D0090-firing sites; v1.9 layers the workflow surface on top so adopters can land "this site is migrated, that one's on-deck, the rest aren't yet" as CI signal rather than spreadsheet bookkeeping. Paired with **D0091 maturity** — strict-mode escalation (warning → error under `"typeCheckingMode": "strict"`, mirroring the v1.6 D0090 precedent), a suggestion drift guard, and a `shape_changes` hint for asymmetric mappings (`withColumnRenamed` → `rename` appends "— note arg shape differs") — and a **NEW D0091 bare-attribute inference arm** on `Expr::Attribute` that catches `pdf.rdd`, `sdf.loc`, and friends that the v1.8 `Expr::Call` path missed. The release also closes Rust audit-debt (the v1.8 PR-A1 `mod tests` block that shipped inline and never executed gets extracted to a real test file backed by CI), extends the v1.8 CHANGELOG grep gate with a `text-numeric` label that live-verifies numeric trust-claims, and trial-runs **centralized version bumping** — per the v1.9 spec §9.2 amendment, this PR-F is the only commit in the cycle that bumps `Cargo.toml` / `package.json`; per-PR devs deferred to the release PR. No new annotation forms; SemVer-minor under the `tighteningDiagnostics` policy and the established alias-report-style JSON-additive policy.
