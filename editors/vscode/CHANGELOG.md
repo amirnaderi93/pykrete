@@ -1,6 +1,52 @@
 # Changelog
 
 
+## 0.8.0
+
+Tracks the v1.10.0 pykrete release — **`pykrete check
+--deprecation-report --snapshot=<path>` makes v2.0 migration
+archivable in CI**. The v2 envelope is written to disk via atomic
+tempfile-plus-rename (nanosecond-suffixed temp name to avoid
+concurrent-writer collision, cleanup-on-error guard across every
+error path), so CI can persist a prior-report cache and diff
+between releases — v1.8 made migration measurable; v1.9 made it
+plannable; v1.10 makes it archivable. **`--fail-on-nonempty`**
+exits non-zero when the envelope's `sites` array is non-empty,
+replacing the `jq '.sites | length' | test ... -eq 0` boilerplate
+adopters were writing by hand; compatible with `--ack` (gates
+only on the filtered cohort). **D0091 surface completion**: the
+four remaining Spark-direction discriminator properties (`na`,
+`write`, `writeStream`, `storageLevel`) and the four
+pandas-direction inherited properties (`index`, `values`, `shape`,
+`T`) close the v1.9 spark-I1 / spark-I2 firing-site coverage gap
+on `Expr::Attribute` — `pdf.na`, `pdf.write`, `sdf.index`,
+`sdf.shape` and the rest now fire D0091 via the v1.9 bare-
+attribute path. **Pandas `df.stack(level=, dropna=)` literal-
+form** lands as a NEW inference arm (continuing the one-reshape-
+arm-per-cycle cadence from v1.6 `pivot_table` and v1.7 `melt`);
+receiver-dialect-gated to fire only on `PandasFrame[X]` receivers
+because Spark's `stack` is a column-free-function
+(`pyspark.sql.functions.stack`), not a DataFrame method.
+**v1.9 architecture audit-debt closes structurally**: ack-marker
+multi-line signature support (the v1.9 walker silently skipped
+past `def foo(` when the signature ran onto a continuation line;
+v1.10 lands an indentation-aware walker + decorator-stack skip),
+property / method tripwire (build-time invariant pinning
+`SPARK_DISCRIMINATOR_PROPERTIES ⊂ SPARK_DISCRIMINATORS`; mirror
+for `PANDAS_INHERITED_PROPERTIES ⊂ PANDAS_ONLY_SIGNALS`),
+release-gate CI workflow, and CHANGELOG grep gate v3 prose
+number scan. **§9.2 centralized version bump** trialed in v1.9
+is promoted to standing practice — zero rebase-ladder collisions
+across the Wave 1 PRs was the SUCCESS signal. The cross-codebase
+suite holds at the matured cadence: 6 new D0091 strict-mode /
+bare-attribute / shape-changes probes on
+`mlflow` / `dbt-spark` / `pandera` / `delta` (pykrete-tests
+PR-P1 #34) plus the seaborn `stack(level=)` arm (pykrete-tests
+#35). v1.10 PR-D1's 8 new D0091 properties are unit-test-
+covered at v1.10.0; cross-codebase fixture probes filed for
+v1.11.
+
+
 ## 0.7.0
 
 Tracks the v1.9.0 pykrete release — **`pykrete check

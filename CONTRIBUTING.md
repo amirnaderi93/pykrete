@@ -281,4 +281,10 @@ Include a minimal `.pyk` snippet whenever possible — that's the fastest path t
 
 ## Releases
 
-pykrete follows [semantic versioning](https://semver.org/). To cut a release: bump `version` in the workspace `Cargo.toml`, add a `CHANGELOG.md` entry, commit, then `git tag vX.Y.Z && git push origin vX.Y.Z`. The [release workflow](.github/workflows/release.yml) builds binaries for macOS (arm64/x64) + Linux x64 + Windows (MSI), attaches the `.vsix`, publishes the extension to the Visual Studio Marketplace and Open VSX, and bumps the Homebrew tap — all automatically. See [`packaging/README.md`](packaging/README.md) for the full pipeline.
+pykrete follows [semantic versioning](https://semver.org/).
+
+**§9.2 — Centralized version bumps (standing practice as of v1.10, promoted from the v1.9 trial).** Per-PR developers DO NOT bump versions during a cycle. All version bumps — workspace `Cargo.toml`, `editors/vscode/package.json`, lockfiles — happen in the cycle's release PR (conventionally PR-F). This eliminates rebase-ladder collisions across parallel feature PRs (the v1.9 trial recorded zero collisions across Wave 1 and was promoted to standing in v1.10).
+
+The mechanism is a `.github/centralized-bump-cycle.marker` file committed at the start of the cycle (typically by PR-S1) and removed in the release PR. The [`extension-version-guard.yml`](.github/workflows/extension-version-guard.yml) workflow checks the marker presence to decide whether to enforce the per-PR bump rule or wave it through for the cycle. See lines 82–99 of that workflow for the gate logic. The marker mechanism stays in the guard workflow post-cycle as a reusable cycle-trial primitive for future amendments.
+
+**To cut a release**: in the release PR, bump `version` in the workspace `Cargo.toml` and `editors/vscode/package.json`, regenerate lockfiles, remove the `.github/centralized-bump-cycle.marker` file, add a `CHANGELOG.md` entry, commit, merge, then `git tag vX.Y.Z && git push origin vX.Y.Z`. The [release workflow](.github/workflows/release.yml) builds binaries for macOS (arm64/x64) + Linux x64 + Windows (MSI), attaches the `.vsix`, publishes the extension to the Visual Studio Marketplace and Open VSX, and bumps the Homebrew tap — all automatically. See [`packaging/README.md`](packaging/README.md) for the full pipeline.
