@@ -44,6 +44,14 @@ on:
     types: [labeled, synchronize, opened, reopened]
   workflow_dispatch:
 
+# v1.12 PR-A2 — concurrency cap. A `release-ready`-labeled PR receiving
+# multiple synchronize events (push, label re-apply, re-open) used to queue
+# concurrent runs against the same ref, each independently re-compiling
+# release-mode tests. Cancel in-flight on superseded refs.
+concurrency:
+  group: release-gate-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   release-gate-check:
     # Only run on PR if the PR carries the `release-ready` label. Push +
@@ -102,12 +110,56 @@ jobs:
         working-directory: pykrete
         run: bash scripts/changelog-cite-check.test.sh
 
+      # v1.12 PR-A2 — runner-perf fix. The full live-extract step's `tests`
+      # numeric-claim used to invoke `cargo test --release --workspace`,
+      # then the workflow's final step re-ran the same command. On a cold
+      # runner that doubled the ~5-10 min release build (observed ~34 min
+      # total on run 27698126977). The fix: run the release-mode test suite
+      # ONCE here, tee the output, extract the summed `<N> passed` count to
+      # a file, and pass that path to changelog-grep via
+      # PYKRETE_TESTS_COUNT_FILE so its `tests` claim reads the file
+      # instead of re-invoking cargo. The previous duplicate final step is
+      # removed.
+      - name: Cargo test (release mode) + write test-count for memoization
+        working-directory: pykrete
+        run: |
+          set -o pipefail
+          mkdir -p target
+          cargo test --release --workspace 2>&1 | tee target/release-test-output.log
+          grep -oE '[0-9]+ passed' target/release-test-output.log \
+            | awk '{s+=$1} END {print s}' \
+            > target/release-test-count.txt
+          echo "release-gate: cached release-test count: $(cat target/release-test-count.txt)"
+
       # The release gate. WITHOUT --skip-live-extract: every text-numeric
       # block AND every prose paragraph numeric claim is verified against
       # the live extract commands. Drift fails the build.
+      #
+      # PYKRETE_TESTS_COUNT_FILE points at the file written by the prior
+      # step — changelog-grep reads it instead of re-running cargo, saving
+      # the duplicated release-mode compile.
+      # PYKRETE_GREP_TIMING=1 emits per-claim wall-clock timing on stderr
+      # so a future stall can be localized to a specific key without
+      # adding ad-hoc `set -x`.
       - name: CHANGELOG grep gate — full live extract (v2 + v3)
         working-directory: pykrete
-        run: bash scripts/changelog-grep.sh
+        env:
+          PYKRETE_TESTS_COUNT_FILE: ${{ github.workspace }}/pykrete/target/release-test-count.txt
+          PYKRETE_GREP_TIMING: '1'
+        run: |
+          start=$(date +%s)
+          bash scripts/changelog-grep.sh
+          end=$(date +%s)
+          elapsed=$((end - start))
+          echo "release-gate: changelog-grep.sh wall-clock: ${elapsed}s"
+          # Budget guard: with memoization in place the gate should run in
+          # well under 5 minutes. A hard 600s (10min) ceiling catches a
+          # regression of this fix's invariants without flaking on shared-
+          # runner variance.
+          if [ "$elapsed" -gt 600 ]; then
+            echo "release-gate: changelog-grep.sh exceeded 600s budget (was ${elapsed}s) — investigate per-claim timings above" >&2
+            exit 1
+          fi
 
       # v1.11 PR-A2 — file:line cites in CHANGELOG must resolve to live
       # source. Catches the v1.10 cite-drift class mechanically.
@@ -128,15 +180,3 @@ jobs:
       - name: Trust-claim sweep checklist — full surface scan
         working-directory: pykrete
         run: bash scripts/trust-claim-sweep-checklist.sh
-
-      # Tag-time test verification. release/v* branches gate on the full
-      # release-mode test suite passing — same shape as a pre-tag developer
-      # would run locally per CONTRIBUTING.md "Releases".
-      #
-      # Cost note: release-mode tests take ~5-10min on a cold runner (slower
-      # codegen than debug). Acceptable for the release-gate cadence
-      # (release branches + `release-ready` labels + manual dispatch only,
-      # not every push). Daily PR `ci.yml` continues to use debug-mode tests.
-      - name: Cargo test (release mode)
-        working-directory: pykrete
-        run: cargo test --release --workspace
