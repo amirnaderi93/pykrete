@@ -1,0 +1,66 @@
+# Auto-apply `release-ready` label
+#
+# v1.11 PR-A2 — closes v1.10 retro rule 8 (release-gate trigger boundary).
+#
+# WHY THIS EXISTS
+# ---------------
+# The release-gate workflow (`.github/workflows/release-gate.yml`) gates
+# its full live-extract trust-claim sweep on the `release-ready` label.
+# In v1.10 PR-F (#164), the dev didn't apply the label and the gate
+# never ran on the cycle-close PR; TM had to apply the label manually
+# post-audit. This workflow closes the human-gate structural gap: any
+# PR whose title or source branch identifies it as a release-cycle PR
+# gets the label auto-applied on open / edit / sync.
+#
+# DISCRIMINATOR
+# -------------
+# A PR is treated as release-cycle if EITHER:
+#   - the title matches `^chore\(release\):` (PR-F canonical subject), OR
+#   - the source branch matches `release/v.*` (release branch).
+# If neither matches, the label is NOT applied; the dev can always
+# apply it manually.
+#
+# IDEMPOTENCE
+# -----------
+# The workflow checks the PR's current labels before calling the
+# add-labels API. If `release-ready` is already on the PR, the call is
+# skipped (no API write, no noise in the audit log).
+
+name: Auto-apply release-ready label
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  auto-label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Apply release-ready label when discriminator matches
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const title = pr.title || '';
+            const headRef = pr.head && pr.head.ref ? pr.head.ref : '';
+            const titleMatches = /^chore\(release\):/.test(title);
+            const branchMatches = /^release\/v.*/.test(headRef);
+            if (!titleMatches && !branchMatches) {
+              core.info(`Discriminator did not match (title='${title}', head='${headRef}'); skipping.`);
+              return;
+            }
+            const existing = (pr.labels || []).map(l => l.name);
+            if (existing.includes('release-ready')) {
+              core.info('Label `release-ready` already applied; skipping.');
+              return;
+            }
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              labels: ['release-ready'],
+            });
+            core.info(`Applied label \`release-ready\` to PR #${pr.number} (title='${title}', head='${headRef}').`);
