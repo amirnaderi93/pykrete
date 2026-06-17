@@ -280,45 +280,89 @@ per-test isolation (sentinel `pykrete.json` boundary; closes v1.10
 probe-density audit flake). Walker polish (mixed-indent +
 decorator-with-comment edges + tab/space test + counter-semantics
 comment; closes v1.10 architecture audit polish items). Cross-
-codebase probe coverage climbs 261 → `271 probes` across
+codebase probe coverage climbs 261 → 271 probes across
 `130 fixtures` from `17 donors`.
+
+**v1.11 GITHUB_TOKEN calendared promise closes + D0080 cross-
+codebase trust coverage + `pivot_table(aggfunc=)` allowlist
+shipped in v1.12**: The **auto-label workflow now dispatches
+`release-gate.yml` via the `actions.createWorkflowDispatch` API**
+after applying the `release-ready` label (PR-A1 #176). This
+bypasses GitHub's GITHUB_TOKEN cross-workflow no-trigger rule so
+the release-gate fires non-skipped on labeled PR events end-to-
+end. Closes the v1.11.0 calendared promise. **Release-gate
+runner perf — `cargo test` memoization** via
+`PYKRETE_TESTS_COUNT_FILE` env var (PR-A2 #179): v1.11 PR-F's
+release-gate had a duplicate `cargo test --release --workspace`
+invocation (gate step + workflow step), causing a 34-min cold-
+cache stall; the gate step now reads memoized count from the
+file (~3 sec). Total release-gate cold-cache runtime drops from
+~70min to ~35min. **D0080 returnTypeMismatch cross-codebase
+trust coverage** lands (pykrete-tests PR-P1 #42) — the longest-
+standing trust gap since v1.6 closed; dialect-on-return remains
+a checker carve-out deferred to v1.13. **Pandas
+`pivot_table(aggfunc=)` literal-form recognition** (PR-D1 #177):
+11-string allowlist for the documented canonical aggfunc strings
+(`sum` / `mean` / `count` / `min` / `max` / `median` / `std` /
+`var` / `first` / `last` / `nunique`). Recognition is
+informational — no diagnostic; result schema unchanged. Primes
+v1.13+ aggfunc-driven inference. **Multi-line ack-marker
+rationale block** (PR-V1 #178; spec §6.1.4): `# pykrete:
+ack-deprecation` (shape b) now extends acknowledgement to the
+entire contiguous comment block above the anchor. v1.10's
+`marker → non-matching comment → def` reported `pending`; v1.12
+reports `acknowledged`. Adopters with ack-deprecation tooling
+that depended on v1.10's strict-single-line semantic should
+update. **LSP tempdir parent-dir RAII guard** (PR-D2 #180):
+`TestDir` struct + `Drop` impl wipes the parent sentinel
+directory (including on test panic), closing v1.10 + v1.11
+tempdir cleanup debt. Cross-codebase probe coverage climbs
+271 → `279 probes` across `138 fixtures` from `17 donors`.
 
 ## Next up
 
-### v1.12 — broader pandas reshape + `--include-py` / `--changed-only` / `--compare-to` migrate flags + CI-side release-gate wiring
+### v1.13 — D0080 dialect-on-return arm + broader pandas reshape + `--include-py` / `--changed-only` / `--compare-to` migrate flags
 
-Broader pandas reshape: `groupby.agg`, `reset_index` /
-`set_index`, plus full `pivot_table` / `melt` / `stack` / `unstack`
-output schema-tracking (v1.10 + v1.11 shipped `stack` / `unstack`
-literal-form on the input; the long-format output schemas pair with
-the rest of pandas reshape). `.loc` non-literal forms
-(`.loc[mask, "col"]` boolean-mask row keys, `.loc[:, "a":"b"]`
-column-range slicing) and `pdf.iloc[...]` integer-position
-indexing. The `df.query("…")` and `df.eval("…")` mini-DSLs
-(numexpr-influenced syntax, separate parser from the SQL path used
-by `selectExpr`). `pd.read_csv(...)` and other pandas I/O entry
-points if scope allows (schema inference from file headers / SQL /
-type-stubs is a separate design surface). Retrofitting pandas
-`PROBE-TYPE-IS` to the v1.3 hybrid donors (MLflow, Feast,
-iceberg-python). Canonical-vs-direct CI gate (I3 from the v1.4
-architecture audit). `--include-py` flag for `pykrete migrate` to
-walk the multiplexer cohort's `.py` files alongside `.pyk`, plus a
+D0080 dialect-on-return checker arm: extend `check_return_type`
+in `driver.rs` to compare the Dialect tag of the declared return
+against the inferred body type. v1.12 PR-P1 #42 closed cross-
+codebase trust coverage for D0080; the checker carve-out is the
+v1.13 priority — today `-> SparkFrame[X]` returning `.toPandas()`
+body fires zero diagnostics. Broader pandas reshape:
+`groupby.agg`, `reset_index` / `set_index`, plus full
+`pivot_table` / `melt` / `stack` / `unstack` output schema-
+tracking (v1.10 + v1.11 shipped `stack` / `unstack` literal-form
+on the input; v1.12 shipped `pivot_table(aggfunc=)` allowlist
+scaffolding; the long-format output schemas pair with the rest of
+pandas reshape). Richer `pivot_table` aggfunc-driven inference:
+v1.12 PR-D1 primed recognition against the 11-string allowlist;
+v1.13+ consumes the classifier output so the result schema knows
+`aggfunc="count"` produces int64 columns vs `aggfunc="mean"`
+produces float64. `.loc` non-literal forms (`.loc[mask, "col"]`
+boolean-mask row keys, `.loc[:, "a":"b"]` column-range slicing)
+and `pdf.iloc[...]` integer-position indexing. The
+`df.query("…")` and `df.eval("…")` mini-DSLs (numexpr-influenced
+syntax, separate parser from the SQL path used by `selectExpr`).
+`pd.read_csv(...)` and other pandas I/O entry points if scope
+allows (schema inference from file headers / SQL / type-stubs is
+a separate design surface). Retrofitting pandas `PROBE-TYPE-IS`
+to the v1.3 hybrid donors (MLflow, Feast, iceberg-python).
+Canonical-vs-direct CI gate (I3 from the v1.4 architecture
+audit). `--include-py` flag for `pykrete migrate` to walk the
+multiplexer cohort's `.py` files alongside `.pyk`, plus a
 `--changed-only` flag for both `pykrete migrate` and
 `pykrete check` that walks only files changed against HEAD.
-`--compare-to <snapshot>` for `--deprecation-report` to consume the
-v1.10 `--snapshot` file-write surface as a snapshot-vs-snapshot
-diff primitive (consumer-state model is a product fork; deferred
-per v1.9 author-boundary carve-out at `alias_report.rs:446-448`).
-CI-guard widened to catch the "omitted-edit" drift class on top of
-v1.10's structural build.rs + property / method tripwire closures.
-**CI-side release-gate label-trigger wiring**: PAT or repo-app
-token replaces the GITHUB_TOKEN default for the cross-workflow
-trigger so the v1.11 auto-label workflow actually fires the
-release-gate-check pipeline. **LSP polish formally rescoped to
-v2.0.1 / discrete LSP-feature work** per v1.10 spec §10.10, NOT a
-v1.x bundle — three cycles (v1.7 / v1.8 / v1.9) of "carry forward
-to next minor" was the signal that LSP polish doesn't fit the v1.x
-cadence.
+`--compare-to <snapshot>` for `--deprecation-report` to consume
+the v1.10 `--snapshot` file-write surface as a snapshot-vs-
+snapshot diff primitive (consumer-state model is a product fork;
+deferred per v1.9 author-boundary carve-out at
+`alias_report.rs:446-448`). CI-guard widened to catch the
+"omitted-edit" drift class on top of v1.10's structural build.rs
++ property / method tripwire closures. **LSP polish formally
+rescoped to v2.0.1 / discrete LSP-feature work** per v1.10 spec
+§10.10, NOT a v1.x bundle — three cycles (v1.7 / v1.8 / v1.9) of
+"carry forward to next minor" was the signal that LSP polish
+doesn't fit the v1.x cadence.
 
 ## PyCharm support
 
@@ -523,12 +567,20 @@ closure (done, v1.10) → pandas `df.unstack(level=, fill_value=)`
 literal-form + cross-codebase property probes for the 8 v1.10
 D0091 properties + audit-tooling block (trust-claim sweep checklist
 + CHANGELOG cite-check + auto-label workflow) (done, v1.11) →
-broader pandas reshape (`groupby.agg`) + `.loc` / `.iloc` non-
-literal forms + `.query` / `.eval` mini-DSLs + `--include-py` /
-`--changed-only` / `--compare-to` migrate flags + CI-side release-
-gate label-trigger wiring (v1.12; LSP polish formally rescoped to
-v2.0.1 / discrete LSP-feature work per v1.10 spec §10.10) →
-polars** → others (DuckDB, Dask, …).
+v1.11 GITHUB_TOKEN calendared promise closure (auto-label
+workflow dispatches `release-gate.yml` via
+`actions.createWorkflowDispatch`) + D0080 returnTypeMismatch
+cross-codebase trust coverage (longest-standing trust gap since
+v1.6 closed) + pandas `pivot_table(aggfunc=)` 11-string allowlist
+recognition (informational; primes v1.13+ aggfunc-driven
+inference) + multi-line ack-marker rationale block (spec §6.1.4)
++ release-gate `cargo test` memoization (done, v1.12) →
+D0080 dialect-on-return checker arm + broader pandas reshape
+(`groupby.agg`) + `.loc` / `.iloc` non-literal forms +
+`.query` / `.eval` mini-DSLs + `--include-py` /
+`--changed-only` / `--compare-to` migrate flags (v1.13; LSP
+polish formally rescoped to v2.0.1 / discrete LSP-feature work
+per v1.10 spec §10.10) → polars** → others (DuckDB, Dask, …).
 
 The core type model — `SparkFrame[Schema]` / `PandasFrame[Schema]` /
 `DataFrame[Schema]`, the `Schema` class, column checks, return-type

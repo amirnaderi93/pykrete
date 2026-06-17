@@ -1,6 +1,40 @@
 # Changelog
 
 
+## 0.10.0
+
+Tracks the v1.12.0 pykrete release — **closing the v1.11
+calendared GITHUB_TOKEN promise** and shipping **D0080
+returnTypeMismatch cross-codebase trust coverage** (the longest-
+standing trust gap since v1.6). The bundled `pykrete` and
+`pykrete-lsp` binaries gain `pivot_table(aggfunc=)` literal-form
+recognition against an 11-string allowlist (`sum` / `mean` /
+`count` / `min` / `max` / `median` / `std` / `var` / `first` /
+`last` / `nunique`). Recognition is informational: no diagnostic
+fires; the result schema is unchanged. The recognition pass
+primes v1.13+ aggfunc-driven inference. Multi-line ack-marker
+rationale block lands per spec §6.1.4: `# pykrete:
+ack-deprecation` (shape b) now extends acknowledgement to the
+entire contiguous comment block above the anchor — a behavioral
+change versus v1.10, which reported `pending` when the marker
+sat on a non-matching comment line above the `def`. Adopters
+that depended on the v1.10 strict-single-line semantic should
+update. On the CI side, the v1.11 calendared GITHUB_TOKEN
+promise closes: the auto-label workflow now dispatches
+`release-gate.yml` via the `actions.createWorkflowDispatch` API,
+bypassing GitHub's GITHUB_TOKEN cross-workflow no-trigger rule
+so the release-gate fires non-skipped on labeled PR events end-
+to-end. Release-gate runner perf improves materially: `cargo
+test --release --workspace` is memoized via the
+`PYKRETE_TESTS_COUNT_FILE` env var (gate step reads the memoized
+count rather than re-invoking), dropping total release-gate
+cold-cache runtime from ~70min to ~35min. Cross-codebase
+coverage: 271 → 279 probes across 138 fixtures from 17 donors.
+No new D-codes, no new annotation forms; SemVer-minor under the
+`tighteningDiagnostics` policy and the established alias-report-
+style JSON-additive policy. Cycle-close minor bump aligns the
+extension with the v1.12.0 tag per the version-guard policy.
+
 ## 0.9.0
 
 Tracks the v1.11.0 pykrete release — **closing the v1.10 D0091
