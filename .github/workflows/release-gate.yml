@@ -115,6 +115,20 @@ jobs:
         working-directory: pykrete
         run: bash scripts/changelog-cite-check.sh
 
+      # Trust-claim sweep checklist (v1.11 PR-A1). Sibling to
+      # changelog-grep: where changelog-grep verifies CHANGELOG vs live
+      # source (docs-vs-source), the sweep checklist verifies the docs
+      # surfaces don't still carry the prior release's numbers
+      # (docs-vs-history). Closes the 5-cycle PR-F-miscount pattern
+      # (v1.6 / v1.7 / v1.8 / v1.9 / v1.10).
+      - name: Trust-claim sweep checklist — self-tests
+        working-directory: pykrete
+        run: bash scripts/trust-claim-sweep-checklist.test.sh
+
+      - name: Trust-claim sweep checklist — full surface scan
+        working-directory: pykrete
+        run: bash scripts/trust-claim-sweep-checklist.sh
+
       # Tag-time test verification. release/v* branches gate on the full
       # release-mode test suite passing — same shape as a pre-tag developer
       # would run locally per CONTRIBUTING.md "Releases".
