@@ -147,6 +147,14 @@ jobs:
           PYKRETE_TESTS_COUNT_FILE: ${{ github.workspace }}/pykrete/target/release-test-count.txt
           PYKRETE_GREP_TIMING: '1'
         run: |
+          # Fail loud if the memoized count file is missing — without this
+          # guard, changelog-grep.sh would silently fall back to re-running
+          # `cargo test --release --workspace`, blowing past the 600s budget
+          # ~34 min later with no signal that memoization broke.
+          if [ ! -f "$PYKRETE_TESTS_COUNT_FILE" ]; then
+            echo "release-gate: PYKRETE_TESTS_COUNT_FILE not found at $PYKRETE_TESTS_COUNT_FILE — memoization broken" >&2
+            exit 1
+          fi
           start=$(date +%s)
           bash scripts/changelog-grep.sh
           end=$(date +%s)

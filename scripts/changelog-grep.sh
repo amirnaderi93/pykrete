@@ -121,6 +121,11 @@ run_claim_cmd() {
         start_ns=$(date +%s%N 2>/dev/null || echo "")
         actual=$(bash -c "$cmd" 2>/dev/null || true)
         end_ns=$(date +%s%N 2>/dev/null || echo "")
+        # BSD `date` (macOS) doesn't implement %N — it returns a literal
+        # `<seconds>N`. Guard arithmetic against non-numeric values so the
+        # timing block stays silent on macOS instead of erroring out.
+        case "$start_ns" in *[!0-9]*) start_ns="" ;; esac
+        case "$end_ns" in *[!0-9]*) end_ns="" ;; esac
         if [ -n "$start_ns" ] && [ -n "$end_ns" ]; then
             elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
             echo "changelog-grep: timing: claim=$key elapsed_ms=$elapsed_ms" >&2
