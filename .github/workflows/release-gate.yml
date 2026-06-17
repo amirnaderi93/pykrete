@@ -98,12 +98,22 @@ jobs:
         working-directory: pykrete
         run: bash scripts/changelog-grep.test.sh
 
+      - name: CHANGELOG cite-check — self-tests
+        working-directory: pykrete
+        run: bash scripts/changelog-cite-check.test.sh
+
       # The release gate. WITHOUT --skip-live-extract: every text-numeric
       # block AND every prose paragraph numeric claim is verified against
       # the live extract commands. Drift fails the build.
       - name: CHANGELOG grep gate — full live extract (v2 + v3)
         working-directory: pykrete
         run: bash scripts/changelog-grep.sh
+
+      # v1.11 PR-A2 — file:line cites in CHANGELOG must resolve to live
+      # source. Catches the v1.10 cite-drift class mechanically.
+      - name: CHANGELOG cite-check
+        working-directory: pykrete
+        run: bash scripts/changelog-cite-check.sh
 
       # Tag-time test verification. release/v* branches gate on the full
       # release-mode test suite passing — same shape as a pre-tag developer
