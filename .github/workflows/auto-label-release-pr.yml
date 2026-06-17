@@ -1,6 +1,10 @@
 # Auto-apply `release-ready` label
 #
 # v1.11 PR-A2 — closes v1.10 retro rule 8 (release-gate trigger boundary).
+# v1.12 PR-A1 — closes v1.11.0 GITHUB_TOKEN cross-workflow trigger gap by
+# dispatching release-gate.yml explicitly via the actions API (option (c)
+# per v1.12 spec §2.1.1; pull_request_target was hard-rejected as a
+# supply-chain crack).
 #
 # WHY THIS EXISTS
 # ---------------
@@ -18,14 +22,25 @@
 #   - the title matches `^chore\(release\):` (PR-F canonical subject), OR
 #   - the source branch matches `release/v\d.*` (release branch; the
 #     `\d` after `v` rejects placeholder names like `release/v` itself).
-# If neither matches, the label is NOT applied; the dev can always
-# apply it manually.
+# If neither matches, the label is NOT applied and the release-gate is
+# NOT dispatched; the dev can always apply the label manually.
 #
 # IDEMPOTENCE
 # -----------
 # The workflow checks the PR's current labels before calling the
-# add-labels API. If `release-ready` is already on the PR, the call is
-# skipped (no API write, no noise in the audit log).
+# add-labels API. If `release-ready` is already on the PR, the addLabels
+# call is skipped (no API write, no noise in the audit log). The
+# release-gate dispatch is independent of this skip and ALWAYS fires
+# when the discriminator matches — a manual prior label-apply may not
+# have triggered the gate, so we re-dispatch to be sure.
+#
+# CROSS-WORKFLOW TRIGGER
+# ----------------------
+# GITHUB_TOKEN-issued API calls (including addLabels) do NOT trigger
+# downstream workflows on label events; this is documented behavior
+# (supply-chain protection against runaway recursion). To actually
+# make release-gate.yml run, we call `actions.createWorkflowDispatch`
+# directly. This requires `actions: write` permission below.
 
 name: Auto-apply release-ready label
 
@@ -35,12 +50,13 @@ on:
 
 permissions:
   pull-requests: write
+  actions: write
 
 jobs:
   auto-label:
     runs-on: ubuntu-latest
     steps:
-      - name: Apply release-ready label when discriminator matches
+      - name: Apply release-ready label and dispatch release-gate when discriminator matches
         uses: actions/github-script@v7
         with:
           script: |
@@ -55,17 +71,28 @@ jobs:
             }
             const existing = (pr.labels || []).map(l => l.name);
             if (existing.includes('release-ready')) {
-              core.info('Label `release-ready` already applied; skipping.');
-              return;
+              core.info('Label `release-ready` already applied; skipping addLabels (idempotent).');
+            } else {
+              try {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  labels: ['release-ready'],
+                });
+                core.info(`Applied label \`release-ready\` to PR #${pr.number} (title='${title}', head='${headRef}').`);
+              } catch (e) {
+                core.warning(`Failed to apply 'release-ready' label: ${e.message}. Was it deleted? Recreate via: gh label create release-ready --color 0E8A16`);
+              }
             }
             try {
-              await github.rest.issues.addLabels({
+              await github.rest.actions.createWorkflowDispatch({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: pr.number,
-                labels: ['release-ready'],
+                workflow_id: 'release-gate.yml',
+                ref: headRef,
               });
-              core.info(`Applied label \`release-ready\` to PR #${pr.number} (title='${title}', head='${headRef}').`);
+              core.info(`Dispatched release-gate.yml workflow for PR head ref '${headRef}' (PR #${pr.number}).`);
             } catch (e) {
-              core.warning(`Failed to apply 'release-ready' label: ${e.message}. Was it deleted? Recreate via: gh label create release-ready --color 0E8A16`);
+              core.warning(`Failed to dispatch release-gate: ${e.message}. Manual run via 'gh workflow run release-gate.yml --ref ${headRef}' will work.`);
             }
