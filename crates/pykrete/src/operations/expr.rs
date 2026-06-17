@@ -595,12 +595,14 @@ fn pandas_kwarg_value<'a>(call: &'a ExprCall, name: &str) -> Option<&'a Expr> {
 /// (aggfunc doesn't affect which columns survive given the v1.4
 /// pandas index-modeling carve-out). Primes v1.13+ for richer
 /// aggfunc-driven inference.
-const PIVOT_TABLE_AGGFUNC_ALLOWLIST: &[&str] = &[
+#[doc(hidden)]
+pub const PIVOT_TABLE_AGGFUNC_ALLOWLIST: &[&str] = &[
     "sum", "mean", "count", "min", "max", "median", "std", "var", "first", "last", "nunique",
 ];
 
+#[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PivotTableAggfuncForm {
+pub enum PivotTableAggfuncForm {
     /// `aggfunc=` absent — pandas default (`"mean"`).
     Absent,
     /// Single string literal from the allowlist.
@@ -612,7 +614,8 @@ enum PivotTableAggfuncForm {
     FellThrough,
 }
 
-fn classify_pivot_table_aggfunc(call: &ExprCall) -> PivotTableAggfuncForm {
+#[doc(hidden)]
+pub fn classify_pivot_table_aggfunc(call: &ExprCall) -> PivotTableAggfuncForm {
     let Some(value) = pandas_kwarg_value(call, "aggfunc") else {
         return PivotTableAggfuncForm::Absent;
     };
@@ -1474,7 +1477,7 @@ fn analyze_method_call_inner<'a>(
     // Result-schema scope (v1.11 minimum viable): pandas `unstack` on a
     // single-level columns DataFrame returns a Series, which isn't a
     // PandasFrame schema in pykrete's model. Full MultiIndex tracking
-    // is deferred to v1.12+. The arm returns Unknown (None) for the
+    // is deferred to v1.13+. The arm returns Unknown (None) for the
     // result — the chain dies gracefully on the next method call
     // rather than mis-tracking schema. Matches the v1.10 PR-D2 `stack`
     // precedent.

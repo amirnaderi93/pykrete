@@ -8,7 +8,7 @@
 //! `stack` (Unknown result) directly.
 //!
 //! Result-schema scope (v1.11 minimum viable): the arm returns Unknown
-//! (None). Full MultiIndex schema synthesis is deferred to v1.12+. The
+//! (None). Full MultiIndex schema synthesis is deferred to v1.13+. The
 //! chain dies gracefully on the next method call rather than mis-
 //! tracking schema.
 

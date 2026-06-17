@@ -154,21 +154,35 @@ The v1.11 cycle's headline is **closing the v1.10 D0091 PR-D1 carve-out**: pykre
 
 For the verification posture and per-donor matrix, see [Real-codebase tests](/about/pykrete-tests/) and [Production readiness → Real-codebase testing](/about/production-readiness/#real-codebase-testing). For the full pandas direction across v1.12+ and v2.0, see [Pandas roadmap](/about/pandas-roadmap/).
 
+## Shipped in v1.12 — D0080 cross-codebase trust + GITHUB_TOKEN calendared promise closure + `pivot_table(aggfunc=)` allowlist
+
+The v1.12 cycle's headline is **closing the v1.11 GITHUB_TOKEN calendared promise**: the auto-label workflow now dispatches `release-gate.yml` via the `actions.createWorkflowDispatch` API, bypassing GitHub's GITHUB_TOKEN cross-workflow no-trigger rule so the release-gate fires non-skipped on labeled PR events end-to-end. Paired with **D0080 returnTypeMismatch cross-codebase trust coverage** — the longest-standing trust gap since v1.6 closed (pykrete-tests PR-P1 #42). Dialect-on-return checking is a checker gap deferred to v1.13.
+
+- **Auto-label workflow now dispatches `release-gate.yml` via the actions API** (`actions.createWorkflowDispatch`) after applying the `release-ready` label (PR-A1 #176). Bypasses GitHub's GITHUB_TOKEN cross-workflow no-trigger rule. Closes the v1.11.0 calendared promise.
+- **Release-gate runner perf — `cargo test` memoization** via `PYKRETE_TESTS_COUNT_FILE` env var (PR-A2 #179). Eliminates v1.11 PR-F's duplicate `cargo test --release --workspace` invocation; the gate step now reads the memoized count instead of re-invoking. Total release-gate cold-cache runtime drops from ~70min to ~35min.
+- **D0080 returnTypeMismatch cross-codebase probes** (pykrete-tests PR-P1 #42). Longest-standing trust gap since v1.6 closed.
+- **`pivot_table(aggfunc=)` literal-form recognition** (PR-D1 #177). 11-string allowlist for the documented canonical aggfunc strings (`sum`, `mean`, `count`, `min`, `max`, `median`, `std`, `var`, `first`, `last`, `nunique`). Recognition is informational — no diagnostic; result schema unchanged. Primes v1.13+ aggfunc-driven inference.
+- **Multi-line ack-marker rationale block** (PR-V1 #178; spec §6.1.4). `# pykrete: ack-deprecation` (shape b) now extends acknowledgement to the entire contiguous comment block above the anchor. v1.10's `marker → non-matching comment → def` reported `pending`; v1.12 reports `acknowledged`. Adopters with ack-deprecation tooling that depended on v1.10's strict-single-line semantic should update.
+- **LSP tempdir parent-dir RAII guard** (PR-D2 #180). `TestDir` struct + `Drop` impl wipes the parent sentinel directory (including on test panic), closing v1.10 + v1.11 tempdir cleanup debt.
+
+For the verification posture and per-donor matrix, see [Real-codebase tests](/about/pykrete-tests/) and [Production readiness → Real-codebase testing](/about/production-readiness/#real-codebase-testing). For the full pandas direction across v1.13+ and v2.0, see [Pandas roadmap](/about/pandas-roadmap/).
+
 ## Next up
 
-### v1.12 — broader pandas reshape + `--include-py` / `--changed-only` migrate flags + CI-side release-gate wiring
+### v1.13 — D0080 dialect-on-return arm + broader pandas reshape + `--include-py` / `--changed-only` migrate flags
 
-Now that the v1.10 audit-debt class and the D0091 cross-codebase carve-out are closed, v1.12's focus is the rest of the pandas reshape surface, the migrator's remaining flag surface, and finishing the audit-tooling block on the CI side. LSP polish stays formally rescoped to v2.0.1 / discrete LSP-feature work per v1.10 spec §10.10, NOT a v1.x bundle.
+Now that the v1.11 GITHUB_TOKEN calendared promise is closed and D0080 has cross-codebase trust coverage, v1.13's focus is closing the D0080 dialect-on-return checker carve-out (the comparison currently checks column names + shared-column types but not the Dialect tag — `-> SparkFrame[X]` returning `.toPandas()` body fires zero diagnostics), the rest of the pandas reshape surface, and the migrator's remaining flag surface. LSP polish stays formally rescoped to v2.0.1 / discrete LSP-feature work per v1.10 spec §10.10, NOT a v1.x bundle.
 
+- **D0080 dialect-on-return checker arm**: extend `check_return_type` to compare the Dialect tag of the declared return against the inferred body type. Carve-out from the v1.12 PR-P1 cross-codebase coverage.
 - **Pandas reshape**: `groupby.agg`, `reset_index`, `set_index`, plus full `pivot_table` / `melt` / `stack` / `unstack` output schema-tracking (the wide / long output schemas — variable column values become column names of the result frame; `var_name` / `value_name` become columns of the long frame; index-level promotion / demotion for `stack` / `unstack`).
+- **Richer `pivot_table` aggfunc-driven inference**: v1.12 PR-D1 primed recognition against the 11-string allowlist; v1.13+ consumes the classifier output (e.g., result schema knows `aggfunc="count"` produces int64 columns vs `aggfunc="mean"` produces float64).
 - **`.loc` non-literal forms and `.iloc`**: `.loc[mask, "col"]` (boolean mask), `.loc[:, "a":"b"]` (column range), and `pdf.iloc[...]`.
 - **`df.query("…")` / `df.eval("…")` mini-DSLs**: parse string-fragment column refs separately. numexpr-influenced syntax, not SQL.
 - **`pd.read_csv(...)` and other pandas I/O entry points**: schema inference from file headers / SQL / type-stubs as a separate design surface.
 - **`--include-py` flag for `pykrete migrate`**: let the migrator walk `.py` files in the multiplexer cohort alongside `.pyk`.
 - **`--changed-only` flag** for both `pykrete migrate` and `pykrete check`: walk only files changed against HEAD. Pairs naturally with CI invocations.
 - **`--compare-to <snapshot>` flag for `--deprecation-report`**: consumer-state model is a product fork — pairs with the v1.10 `--snapshot` file-write surface as the diff-between-snapshots primitive.
-- **CI-guard for the omitted-edit drift class**: v1.8's `build.rs` extraction closes the parallel-edit class structurally; v1.9 backed it with CI-running tests; v1.10 lands the property / method tripwire and CHANGELOG grep gate v3; v1.12 extends to catch new arms added without updating either list.
-- **CI-side release-gate label-trigger wiring**: PAT or repo-app token replaces the GITHUB_TOKEN default for the cross-workflow trigger so the v1.11 auto-label workflow actually fires the release-gate.
+- **CI-guard for the omitted-edit drift class**: v1.8's `build.rs` extraction closes the parallel-edit class structurally; v1.9 backed it with CI-running tests; v1.10 lands the property / method tripwire and CHANGELOG grep gate v3; v1.13 extends to catch new arms added without updating either list.
 - **Retrofitting pandas `PROBE-TYPE-IS` to the v1.3 hybrid donors** (MLflow, Feast, iceberg-python).
 - **Canonical-vs-direct CI gate (I3)** from the v1.4 architecture audit.
 

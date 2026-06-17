@@ -296,3 +296,15 @@ The mechanism is a `.github/centralized-bump-cycle.marker` file committed at the
 ### During PR-F: Trust-claim sweep checklist
 
 Before opening PR-F, run `bash scripts/trust-claim-sweep-checklist.sh --current-version X.Y.Z` to catch prior-release number leaks across trust-claim surfaces (README, docs-site, editors/vscode/README.md, pykrete-tests/README.md). This is the structural closure for the 5-cycle PR-F-miscount pattern (v1.6/v1.7/v1.8/v1.9/v1.10). The gate also runs automatically in the `release-gate.yml` workflow when the PR is labeled `release-ready`.
+
+### Wait for dispatched release-gate run before merging PR-F
+
+GitHub Actions' GITHUB_TOKEN limitation means the `release-gate-check` shown on the PR (triggered by `pull_request`) is SKIPPED. PR-A1's auto-label fix dispatches `release-gate.yml` via the `actions.createWorkflowDispatch` API after the `release-ready` label lands — find the dispatched run via:
+
+```sh
+gh run list --repo amirnaderi93/pykrete --workflow=release-gate.yml --limit 5 \
+    --json databaseId,status,event,headBranch \
+    | jq '.[] | select(.event=="workflow_dispatch" and .headBranch=="chore/v1.X-pr-f-trust-claim")'
+```
+
+Wait for `conclusion: success` before merging PR-F. Cold-cache runtime is ~35 min (down from ~70 min after v1.12 PR-A2's `cargo test` memoization). Don't merge until the dispatched run succeeds. (v1.13+ candidate: convert the dispatched run to a required status check so this polling is automated.)

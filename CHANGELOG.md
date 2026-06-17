@@ -6,6 +6,64 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-06-18
+
+**Trust claim**: v1.12 closes the v1.11.0 calendared GITHUB_TOKEN promise (release-gate now fires non-skipped on labeled PR events via workflow_dispatch API) AND adds D0080 cross-codebase trust coverage (the longest-standing gap since v1.6).
+
+### CI / release-gate (closes v1.11.0 calendared promise)
+
+- **Auto-label workflow now dispatches `release-gate.yml` via the actions API** (`actions.createWorkflowDispatch`) after applying the `release-ready` label. This bypasses GitHub's GITHUB_TOKEN cross-workflow no-trigger rule so the release-gate fires non-skipped on labeled PR events end-to-end. Closes the v1.11.0 calendared promise. — PR-A1 #176.
+- **Release-gate runner perf — `cargo test` memoization** via `PYKRETE_TESTS_COUNT_FILE` env var. v1.11 PR-F's release-gate had a duplicate `cargo test --release --workspace` invocation (gate step + workflow step), causing a 34-min cold-cache stall. The gate step now reads memoized count from `PYKRETE_TESTS_COUNT_FILE` (~3 sec). Total release-gate cold-cache runtime drops from ~70min to ~35min. Verified end-to-end via label-and-run on PR-A2 itself. — PR-A2 #179.
+
+### Process / tooling
+
+- **LSP tempdir parent-dir RAII guard.** `TestDir` struct + `Drop` impl now wipes the parent sentinel directory (including on test panic), closing v1.10 + v1.11 tempdir cleanup debt. — PR-D2 #180.
+
+### Changed
+
+- **Multi-line ack-marker rationale block** (`# pykrete: ack-deprecation`, shape b). The recognizer now extends acknowledgement to the entire contiguous comment block above the anchor (per spec §6.1.4). v1.10's `marker → non-matching comment → def` reported `pending`; v1.12 reports `acknowledged`. Adopters with ack-deprecation tooling that depended on v1.10's strict-single-line semantic should update. — PR-V1 #178.
+
+### Internal scaffolding (primes v1.13+)
+
+- PR-D1: `pivot_table(aggfunc=)` recognized against 11-string allowlist (`sum`, `mean`, `count`, `min`, `max`, `median`, `std`, `var`, `first`, `last`, `nunique`). Recognition is informational (no diagnostic; result schema unchanged) and primes v1.13+ aggfunc-driven inference. — PR-D1 #177.
+
+### Test coverage
+
+- pykrete: `1789 tests` total
+- pykrete-tests: `279 probes` (`187 positive` + `92 negative`); `138 fixtures`; `17 donors`
+
+```text-numeric
+279 probes
+187 positive
+92 negative
+138 fixtures
+1789 tests
+17 donors
+```
+
+### Internal
+
+- **`crates/pykrete/src/operations/expr.rs:615`** — `classify_pivot_table_aggfunc` 11-string allowlist (PR-D1).
+- **`crates/pykrete-lsp/src/project.rs:591`** — `TestDir` RAII guard with `Drop` impl wiping parent sentinel dir (PR-D2).
+- **`.github/workflows/auto-label-release-pr.yml`** — `actions.createWorkflowDispatch` call to `release-gate.yml` after applying the `release-ready` label (PR-A1).
+- **`.github/workflows/release-gate.yml:147`** — `PYKRETE_TESTS_COUNT_FILE` env var memoization for `cargo test --release --workspace` output (PR-A2).
+
+### Cross-codebase trust
+
+- **D0080 returnTypeMismatch cross-codebase probes** — longest-standing gap since v1.6 closed. Carve-out: dialect-on-return is a checker gap deferred to v1.13. — PR-P1 (pykrete-tests #42).
+
+### Audit-debt deferred to v1.13
+
+- D0080 dialect-on-return checker arm (PR-P1 carve-out).
+- `--include-py` / `--changed-only` / `--dry-run-since=` for migrate.
+- `--compare-to <snapshot>` for `--deprecation-report` (consumer state model — product fork).
+- `--fail-on-acknowledged-but-pending` flag.
+- Pandas `groupby.agg` reshape arm (new dispatch concept).
+- broader `.loc` non-literal forms.
+- CHANGELOG generation tool.
+- `Box::leak` → `OnceLock` cleanup.
+- Richer `pivot_table` aggfunc-driven inference (the v1.12 PR-D1 allowlist primes; v1.13+ delivers).
+
 ## [1.11.0] - 2026-06-17
 
 **Trust claim**: v1.11 closes D0091 cross-codebase coverage gap AND ships the trust-claim sweep checklist + auto-label workflow that PR-F devs run locally before opening the cycle-close PR. CI-side release-gate wiring is tracked for v1.12 (GITHUB_TOKEN cross-workflow trigger limitation).
@@ -28,10 +86,10 @@ All notable changes to pykrete are documented here. The format follows
 
 ### Test coverage
 
-- pykrete: 1755 total tests
-- pykrete-tests: 271 cross-codebase probes (187 positive + 84 negative); 130 fixtures
+- pykrete: `1755 tests` total
+- pykrete-tests: `271 probes` (`187 positive` + `84 negative`); `130 fixtures`
 
-```text-numeric
+```text-numeric-historical
 271 probes
 187 positive
 84 negative
