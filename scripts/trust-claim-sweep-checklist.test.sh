@@ -220,6 +220,79 @@ grep -qF "no prior-release pins found" "$repo/stdout" || extra=missing_no_pins_n
 assert "missing prior CHANGELOG section short-circuits clean" 0 "$LAST_RC" "$extra"
 rm -rf "$repo"
 
+# --- Case 12: --current-version with no value steals next flag (B1.1) ---
+# Repro of v1.10 PR-V1 R2 flag-stealing: a bare `--current-version` followed
+# by `--skip-pykrete-tests` must NOT silently consume the next flag and
+# exit 0 against an empty prior. Expected exit 2 with the clear error.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README.\n' > "$repo/README.md"
+REPO_ROOT="$repo" bash "$GATE" --current-version --skip-pykrete-tests > "$repo/stdout" 2> "$repo/stderr"
+LAST_RC=$?
+extra=ok
+grep -qF -- "--current-version requires a version value" "$repo/stderr" || extra=missing_value_error
+assert "B1.1: bare --current-version followed by flag exits 2 (not silent 0)" 2 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case 13: --current-version=invalid fails fast (B1.2) ---
+# Repro of v1.10 PR-V1 R2 invalid-value silent-clean: a non-numeric version
+# must NOT pass the emptiness check and then blow up inside arithmetic.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README.\n' > "$repo/README.md"
+REPO_ROOT="$repo" bash "$GATE" --current-version=invalid --skip-pykrete-tests > "$repo/stdout" 2> "$repo/stderr"
+LAST_RC=$?
+extra=ok
+grep -qF -- "--current-version must be X.Y.Z" "$repo/stderr" || extra=missing_xyz_error
+assert "B1.2: --current-version=invalid exits 2 with X.Y.Z error" 2 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case 14: --current-version=1.11 (2-part) fails fast (B1.3) ---
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README.\n' > "$repo/README.md"
+REPO_ROOT="$repo" bash "$GATE" --current-version=1.11 --skip-pykrete-tests > "$repo/stdout" 2> "$repo/stderr"
+LAST_RC=$?
+extra=ok
+grep -qF -- "--current-version must be X.Y.Z" "$repo/stderr" || extra=missing_xyz_error
+assert "B1.3: --current-version=1.11 (2-part) exits 2" 2 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case 15: space-form --current-version 1.11.0 works (B1.4 positive) ---
+# Confirms the new flag-rejection didn't break the well-formed space form.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README with current numbers: 261 probes.\n' > "$repo/README.md"
+REPO_ROOT="$repo" bash "$GATE" --current-version 1.10.0 --skip-pykrete-tests > "$repo/stdout" 2> "$repo/stderr"
+LAST_RC=$?
+extra=ok
+grep -qF "scanned" "$repo/stdout" || extra=missing_summary
+assert "B1.4: space-form --current-version 1.10.0 works as expected" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case 16: malformed CHANGELOG that crashes parser exits 2 (I1) ---
+# Force the Python parser to crash by handing it a non-UTF-8 byte. The
+# tmpfile+exit-code check must turn this into exit 2, NOT silent 0.
+repo=$(new_repo)
+# Write bytes that violate UTF-8 decode strict mode.
+printf '\xff\xfe garbage\n' > "$repo/CHANGELOG.md"
+printf 'README.\n' > "$repo/README.md"
+REPO_ROOT="$repo" bash "$GATE" --current-version=1.10.0 --skip-pykrete-tests > "$repo/stdout" 2> "$repo/stderr"
+LAST_RC=$?
+extra=ok
+grep -qF "CHANGELOG parser failed" "$repo/stderr" || extra=missing_parser_failed_msg
+assert "I1: CHANGELOG parser crash exits 2 (not silent 0)" 2 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case 17: --help lists --current-version + --skip-pykrete-tests (I2) ---
+help_out=$(bash "$GATE" --help 2>&1)
+help_rc=$?
+extra=ok
+printf '%s' "$help_out" | grep -qF -- "--current-version=X.Y.Z" || extra=missing_current_version_in_help
+printf '%s' "$help_out" | grep -qF -- "--skip-pykrete-tests" || extra="${extra}+missing_skip_in_help"
+printf '%s' "$help_out" | grep -qF "Usage:" || extra="${extra}+missing_usage_header"
+assert "I2: --help lists all flags + USAGE header" 0 "$help_rc" "$extra"
+
 # --- summary ---
 echo
 echo "=========================================="

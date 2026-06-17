@@ -33,13 +33,45 @@ while [ "$#" -gt 0 ]; do
             ;;
         --current-version)
             shift
-            CURRENT_VERSION="${1:-}"
+            # Sibling-flag-stealing guard: a space-separated --current-version
+            # with no following value (or a flag-shaped value like
+            # --skip-pykrete-tests) must not silently swallow the next argv
+            # under `set -u`. Reject explicitly so callers see an error
+            # instead of an empty-prior false-clean (v1.10 PR-V1 R2 pattern).
+            next="${1:-}"
+            if [ -z "$next" ] || [ "${next#--}" != "$next" ] || { [ "${next#-}" != "$next" ] && [ "$next" != "-" ]; }; then
+                echo "trust-claim-sweep: --current-version requires a version value (e.g., 1.11.0); got '$next'" >&2
+                exit 2
+            fi
+            CURRENT_VERSION="$next"
             ;;
         --skip-pykrete-tests)
             SKIP_PYKRETE_TESTS=1
             ;;
         -h|--help)
-            sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
+            cat <<'USAGE'
+Usage: trust-claim-sweep-checklist.sh [OPTIONS]
+
+Verifies that docs surfaces (README, docs-site, VS Code extension, sibling
+pykrete-tests README) don't still carry the PRIOR release's pinned numbers
+from CHANGELOG.md. Run by PR-F dev after sweeping vN.(M-1) -> vN.M numbers.
+
+Options:
+  --current-version=X.Y.Z   Override version detection (PR-F passes this).
+                            Also accepts the space form: --current-version X.Y.Z.
+  --skip-pykrete-tests      Skip the sibling pykrete-tests/README.md surface
+                            (used by daily PR CI; release-gate CI doesn't skip).
+  -h, --help                Show this message.
+
+Environment overrides:
+  REPO_ROOT                 Repo root to scan (default: .).
+  CHANGELOG                 CHANGELOG path relative to REPO_ROOT (default: CHANGELOG.md).
+
+Exit codes:
+  0   sweep clean (or no prior pins to compare against).
+  1   one or more PRIOR-RELEASE-NUMBER-LEAKED lines emitted to stderr.
+  2   misuse (bad flag, malformed version, missing CHANGELOG, etc.).
+USAGE
             exit 0
             ;;
         *)
@@ -74,13 +106,18 @@ if [ -z "$CURRENT_VERSION" ]; then
     exit 2
 fi
 
+# Numeric well-formedness: must be X.Y.Z (digits only). Catches both
+# `--current-version=invalid` and `--current-version=1.11` (2-part).
+# Without this, the arithmetic below (CURRENT_MINOR - 1) blows up under
+# `set -u` and the script silently exits 0 via the empty-prior path.
+if ! [[ "$CURRENT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "trust-claim-sweep: --current-version must be X.Y.Z (got '$CURRENT_VERSION')" >&2
+    exit 2
+fi
+
 # Split into major.minor.patch.
 CURRENT_MAJOR=$(printf '%s' "$CURRENT_VERSION" | cut -d. -f1)
 CURRENT_MINOR=$(printf '%s' "$CURRENT_VERSION" | cut -d. -f2)
-if [ -z "$CURRENT_MAJOR" ] || [ -z "$CURRENT_MINOR" ]; then
-    echo "trust-claim-sweep: malformed current version '$CURRENT_VERSION' (expected MAJOR.MINOR.PATCH)" >&2
-    exit 2
-fi
 
 PRIOR_MINOR=$((CURRENT_MINOR - 1))
 PRIOR_VERSION="$CURRENT_MAJOR.$PRIOR_MINOR.0"
@@ -97,7 +134,14 @@ if [ ! -f "$REPO_ROOT/$CHANGELOG" ]; then
     exit 2
 fi
 
-PRIOR_NUMBERS=$(python3 - "$REPO_ROOT/$CHANGELOG" "$PRIOR_VERSION" "$CURRENT_VERSION" <<'PY'
+# Parser crash detection: if the Python parser raises, command-substitution
+# would set PRIOR_NUMBERS="" and the [ -z ] check below would treat it as
+# "no prior pins" and exit 0 (silent false-clean). Capture the exit code
+# explicitly via a tmpfile so a crash is fail-loud.
+_TC_PINS_TMP=$(mktemp 2>/dev/null || mktemp -t trust-claim-sweep)
+trap 'rm -f "$_TC_PINS_TMP"' EXIT
+
+python3 - "$REPO_ROOT/$CHANGELOG" "$PRIOR_VERSION" "$CURRENT_VERSION" > "$_TC_PINS_TMP" <<'PY'
 import re
 import sys
 
@@ -147,7 +191,12 @@ for key, num in prior_pins.items():
         continue
     print(f"{num} {key}")
 PY
-)
+_TC_PINS_RC=$?
+if [ "$_TC_PINS_RC" -ne 0 ]; then
+    echo "trust-claim-sweep: CHANGELOG parser failed (exit $_TC_PINS_RC) for '$REPO_ROOT/$CHANGELOG'" >&2
+    exit 2
+fi
+PRIOR_NUMBERS=$(cat "$_TC_PINS_TMP")
 
 if [ -z "$PRIOR_NUMBERS" ]; then
     echo "trust-claim-sweep: no prior-release pins found for v$PRIOR_VERSION in $CHANGELOG; skipping (nothing to compare against)."
@@ -265,6 +314,13 @@ text = hist_fence.sub(blank_keep_lines, text)
 # historical and masked out. This uniformly handles the root
 # CHANGELOG.md (Unreleased + most-recent) and editors/vscode/CHANGELOG.md
 # (no Unreleased; just versioned sections).
+#
+# NOTE: docs-site tables with version-row layouts (e.g. a "Releases" page
+# listing `1.9.0 | 255 probes` rows) must use backtick-wrap or a
+# `text-numeric-historical` fenced block to flag the row content as
+# intentionally-historical. The header-second-onward mask only fires on
+# files named `CHANGELOG.md`; docs-site `*.md` / `*.mdx` get no implicit
+# historical carve-out.
 if surface_display.endswith("CHANGELOG.md"):
     header_pat = re.compile(r"^## [^\n]*$", re.MULTILINE)
     headers = list(header_pat.finditer(text))
