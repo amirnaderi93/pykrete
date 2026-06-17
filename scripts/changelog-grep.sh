@@ -71,7 +71,19 @@ numeric_claim_command() {
             echo "find ../pykrete-tests/cross-codebase \\( -path '*annotated*' -name '*.pyk' -o -path '*probes_negative*' -name '*.pyk' \\) | wc -l | tr -d ' '"
             ;;
         tests)
-            echo "cargo test --release --workspace 2>&1 | grep -oE '[0-9]+ passed' | awk '{s+=\$1} END {print s}'"
+            # v1.12 PR-A2 — runner-perf fix. The default extract recompiles +
+            # re-executes the full release-mode test suite (~5-10 min cold,
+            # ~30s warm). In release-gate.yml the dedicated `Cargo test
+            # (release mode)` step already runs the same suite and writes the
+            # summed `<N> passed` count to $PYKRETE_TESTS_COUNT_FILE; when
+            # that file is present we read it instead of re-running cargo,
+            # eliminating the ~30 min duplicated cold-cache build. Locally
+            # (no env var set) the fallback runs cargo as before.
+            if [ -n "${PYKRETE_TESTS_COUNT_FILE:-}" ] && [ -f "${PYKRETE_TESTS_COUNT_FILE}" ]; then
+                echo "cat \"${PYKRETE_TESTS_COUNT_FILE}\""
+            else
+                echo "cargo test --release --workspace 2>&1 | grep -oE '[0-9]+ passed' | awk '{s+=\$1} END {print s}'"
+            fi
             ;;
         donors)
             echo "find ../pykrete-tests/cross-codebase -maxdepth 1 -mindepth 1 -type d | wc -l | tr -d ' '"
@@ -96,6 +108,32 @@ numeric_claim_command() {
 if [ -n "${PYKRETE_NUMERIC_CLAIM_TABLE_OVERRIDE:-}" ] && [ -f "${PYKRETE_NUMERIC_CLAIM_TABLE_OVERRIDE}" ]; then
     . "${PYKRETE_NUMERIC_CLAIM_TABLE_OVERRIDE}"
 fi
+
+# v1.12 PR-A2 — optional per-step timing for runner-perf debugging. Set
+# PYKRETE_GREP_TIMING=1 to emit wall-clock seconds per live-extract claim
+# (text-numeric + prose). Default off — silent on routine runs.
+GREP_TIMING="${PYKRETE_GREP_TIMING:-0}"
+run_claim_cmd() {
+    local key="$1"
+    local cmd="$2"
+    if [ "$GREP_TIMING" = "1" ]; then
+        local start_ns end_ns elapsed_ms
+        start_ns=$(date +%s%N 2>/dev/null || echo "")
+        actual=$(bash -c "$cmd" 2>/dev/null || true)
+        end_ns=$(date +%s%N 2>/dev/null || echo "")
+        # BSD `date` (macOS) doesn't implement %N — it returns a literal
+        # `<seconds>N`. Guard arithmetic against non-numeric values so the
+        # timing block stays silent on macOS instead of erroring out.
+        case "$start_ns" in *[!0-9]*) start_ns="" ;; esac
+        case "$end_ns" in *[!0-9]*) end_ns="" ;; esac
+        if [ -n "$start_ns" ] && [ -n "$end_ns" ]; then
+            elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
+            echo "changelog-grep: timing: claim=$key elapsed_ms=$elapsed_ms" >&2
+        fi
+    else
+        actual=$(bash -c "$cmd" 2>/dev/null || true)
+    fi
+}
 
 # Use python3 to parse the fenced blocks because portable awk varies on
 # regex-capture support and base64 line-wrapping. python3 ships with both
@@ -252,7 +290,7 @@ $key" ;;
             # release-gate workflow.
             continue
         fi
-        actual=$(bash -c "$cmd" 2>/dev/null || true)
+        run_claim_cmd "$claim_key" "$cmd"
         actual=$(printf '%s' "$actual" | tr -d '[:space:]')
         if [ -z "$actual" ]; then
             echo "PROSE-MISMATCH: CHANGELOG.md line $start_line live extract produced no output. Command: $cmd" >&2
@@ -297,7 +335,7 @@ $key" ;;
         if [ "$SKIP_LIVE_EXTRACT" = "1" ]; then
             continue
         fi
-        actual=$(bash -c "$cmd" 2>/dev/null || true)
+        run_claim_cmd "$claim_key" "$cmd"
         actual=$(printf '%s' "$actual" | tr -d '[:space:]')
         if [ -z "$actual" ]; then
             echo "MISMATCH: CHANGELOG.md text-numeric '$claim_key' (opened at line $start_line) live extract produced no output. Command: $cmd" >&2

@@ -575,6 +575,80 @@ if grep -q "MISMATCH" "$LAST_TMP/stderr"; then extra="${extra}+unexpected_mismat
 assert "text-numeric (non-historical) still gated; text-numeric-historical skipped" 0 "$LAST_RC" "$extra"
 rm -rf "$LAST_TMP"
 
+# v1.12 PR-A2 — runner-perf cases.
+
+# --- Case 29: PYKRETE_TESTS_COUNT_FILE memoizes the `tests` claim ---
+# Default `tests` extract runs `cargo test --release --workspace`, which is
+# ~5-10 min cold cache. Release-gate.yml writes the live count to a file
+# and points changelog-grep at it via env var; the script then reads the
+# file instead of re-invoking cargo, eliminating the duplicate compile.
+tmp=$(mktemp -d)
+printf '%s' '# CHANGELOG
+```text-numeric
+1755 tests
+```
+' > "$tmp/CHANGELOG.md"
+mkdir -p "$tmp/src"
+printf 'fn main() {}\n' > "$tmp/src/main.rs"
+printf '1755\n' > "$tmp/test-count.txt"
+# No override file: the script's own `numeric_claim_command` reads from the
+# env-var path because PYKRETE_TESTS_COUNT_FILE is set and the file exists.
+CHANGELOG="$tmp/CHANGELOG.md" SRC_DIR="$tmp/src" \
+    PYKRETE_TESTS_COUNT_FILE="$tmp/test-count.txt" \
+    bash "$GATE" > "$tmp/stdout" 2> "$tmp/stderr"
+rc=$?
+extra=ok
+grep -q "1 text-numeric claim" "$tmp/stdout" || extra=missing_numeric_count
+if grep -q "MISMATCH" "$tmp/stderr"; then extra="${extra}+unexpected_mismatch"; fi
+assert "PYKRETE_TESTS_COUNT_FILE memoizes the tests claim (no cargo invocation)" 0 "$rc" "$extra"
+rm -rf "$tmp"
+
+# --- Case 30: PYKRETE_TESTS_COUNT_FILE drift detection ---
+# Pre-computed count must still be compared against the CHANGELOG claim.
+# A mismatched file content still fails the gate loudly.
+tmp=$(mktemp -d)
+printf '%s' '# CHANGELOG
+```text-numeric
+1755 tests
+```
+' > "$tmp/CHANGELOG.md"
+mkdir -p "$tmp/src"
+printf 'fn main() {}\n' > "$tmp/src/main.rs"
+printf '9999\n' > "$tmp/test-count.txt"
+CHANGELOG="$tmp/CHANGELOG.md" SRC_DIR="$tmp/src" \
+    PYKRETE_TESTS_COUNT_FILE="$tmp/test-count.txt" \
+    bash "$GATE" > "$tmp/stdout" 2> "$tmp/stderr"
+rc=$?
+extra=ok
+grep -qF "MISMATCH: text-numeric 'tests' expected 1755 but live was 9999" "$tmp/stderr" || extra=missing_drift_msg
+assert "PYKRETE_TESTS_COUNT_FILE drift still fails the gate" 1 "$rc" "$extra"
+rm -rf "$tmp"
+
+# --- Case 31: PYKRETE_GREP_TIMING=1 emits per-claim timing on stderr ---
+# The instrumentation must not change exit code or perturb the stdout
+# summary — purely additive stderr output.
+run_numeric_case '# CHANGELOG
+```text-numeric
+253 probes
+```
+' 'numeric_claim_command() {
+    case "$1" in
+        probes) echo "echo 253" ;;
+        *) return 1 ;;
+    esac
+}'
+LAST_TMP_TIMING="$LAST_TMP"
+CHANGELOG="$LAST_TMP_TIMING/CHANGELOG.md" SRC_DIR="$LAST_TMP_TIMING/src" \
+    PYKRETE_NUMERIC_CLAIM_TABLE_OVERRIDE="$LAST_TMP_TIMING/override.sh" \
+    PYKRETE_GREP_TIMING=1 \
+    bash "$GATE" > "$LAST_TMP_TIMING/stdout" 2> "$LAST_TMP_TIMING/stderr"
+LAST_RC=$?
+extra=ok
+grep -qE "changelog-grep: timing: claim=probes elapsed_ms=[0-9]+" "$LAST_TMP_TIMING/stderr" || extra=missing_timing_line
+grep -q "1 text-numeric claim" "$LAST_TMP_TIMING/stdout" || extra="${extra}+missing_summary"
+assert "PYKRETE_GREP_TIMING=1 emits per-claim timing on stderr" 0 "$LAST_RC" "$extra"
+rm -rf "$LAST_TMP_TIMING"
+
 echo
 echo "Test summary: $pass passed, $fail failed"
 if [ "$fail" -ne 0 ]; then

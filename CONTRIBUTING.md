@@ -222,7 +222,7 @@ Known claim keys (defined in `scripts/changelog-grep.sh::numeric_claim_command`)
 |---|---|
 | `probes` | `python3 ../pykrete-tests/scripts/probes.py extract ../pykrete-tests/cross-codebase \| jq '.probes \| length'` |
 | `fixtures` | `find ../pykrete-tests/cross-codebase \( -path '*annotated*' -name '*.pyk' -o -path '*probes_negative*' -name '*.pyk' \) \| wc -l` |
-| `tests` | `cargo test --release --workspace 2>&1 \| grep -oE '[0-9]+ passed' \| awk '{s+=$1} END {print s}'` |
+| `tests` | `cargo test --release --workspace 2>&1 \| grep -oE '[0-9]+ passed' \| awk '{s+=$1} END {print s}'` (release-gate workflow memoizes via `PYKRETE_TESTS_COUNT_FILE`) |
 | `donors` | `find ../pykrete-tests/cross-codebase -maxdepth 1 -mindepth 1 -type d \| wc -l` |
 | `positive` | `... probes.py extract ... \| jq '[.probes[] \| select(.kind != "EXPECTS")] \| length'` |
 | `negative` | `... probes.py extract ... \| jq '[.probes[] \| select(.kind == "EXPECTS")] \| length'` |
