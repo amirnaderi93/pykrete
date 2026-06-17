@@ -1402,6 +1402,37 @@ fn analyze_method_call_inner<'a>(
         }
         return None;
     }
+    // v1.11 PR-D1 — `pdf.unstack(level=, fill_value=)` literal-form arm
+    // (spec §4.1). Pandas's `unstack` is the inverse of `stack`: it
+    // reshapes long-to-wide by pivoting an index level into the columns.
+    // Spark has no DataFrame `unstack` method — the receiver-dialect
+    // gate keeps Spark receivers out so the dispatch never misroutes.
+    //
+    // Mirrors v1.10 PR-D2 `stack` exactly: validates literal `level=`
+    // (single string, single int, list/tuple of strings or ints, None)
+    // against the receiver's column schema, firing D0030 on unknown
+    // names. Non-literal `level=` falls through silently. `fill_value=`
+    // accepts anything (scalar literal, non-literal); no validation.
+    //
+    // Result-schema scope (v1.11 minimum viable): pandas `unstack` on a
+    // single-level columns DataFrame returns a Series, which isn't a
+    // PandasFrame schema in pykrete's model. Full MultiIndex tracking
+    // is deferred to v1.12+. The arm returns Unknown (None) for the
+    // result — the chain dies gracefully on the next method call
+    // rather than mis-tracking schema. Matches the v1.10 PR-D2 `stack`
+    // precedent.
+    if receiver_is_pandas_inherited && method == "unstack" {
+        if let Some(level_expr) = pandas_kwarg_value(call, "level") {
+            let mut refs: Vec<(Option<&'a str>, &'a str, TextRange)> = Vec::new();
+            if let Some(lit) = level_expr.as_string_literal_expr() {
+                refs.push((None, lit.value.to_str(), lit.range()));
+            } else if let Some(list) = parse_string_list(level_expr) {
+                refs.extend(list.into_iter().map(|(n, r)| (None, n, r)));
+            }
+            report_column_refs(&refs, &receiver, ctx, source, line_index, diagnostics);
+        }
+        return None;
+    }
     if matches!(method, "melt" | "unpivot") {
         return Some(apply_melt(
             call,
@@ -3036,6 +3067,12 @@ const NO_SUGGESTION_ALLOWLIST_PANDAS: &[&str] = &[
     // suggest. Listed here rather than mapped in
     // `cross_dialect_suggestion_spark_target`.
     "stack",
+    // v1.11 PR-D1 — pandas `unstack` is the inverse of `stack` (long-to-
+    // wide reshape). Spark has no DataFrame `unstack` method and no
+    // single-method analog (`groupBy(...).pivot(...)` is the closest, but
+    // the shape change makes a bare suggestion misleading). Allowlisted
+    // rather than mapped.
+    "unstack",
 ];
 
 /// Pandas-only signal names that have a legitimate same-spelled

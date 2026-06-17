@@ -164,6 +164,11 @@ pub const PANDAS_ONLY_SIGNALS: &[&str] = &[
     // column-level free function — NOT a DataFrame method — so the name
     // is pandas-discriminating on DataFrame receivers.
     "stack",
+    // v1.11 PR-D1 — pandas `unstack` is the inverse of `stack` (long-to-
+    // wide reshape, pivots an index level into the columns). Spark has
+    // no DataFrame `unstack` method, so the name is pandas-
+    // discriminating on DataFrame receivers.
+    "unstack",
     // v1.10 PR-D1: pandas-only DataFrame attribute surface added to the
     // property table; mirrored here so the v1.10 PR-A1 tripwire
     // (PANDAS_INHERITED_PROPERTIES ⊂ PANDAS_ONLY_SIGNALS) holds.
