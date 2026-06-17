@@ -43,7 +43,7 @@ All notable changes to pykrete are documented here. The format follows
 
 ### Internal
 
-- **`crates/pykrete/src/operations/expr.rs:615`** — `classify_pivot_table_aggfunc` 11-string allowlist (PR-D1).
+- **`crates/pykrete/src/operations/expr.rs:599`** — `PIVOT_TABLE_AGGFUNC_ALLOWLIST` 11-string allowlist backing `classify_pivot_table_aggfunc` (PR-D1).
 - **`crates/pykrete-lsp/src/project.rs:591`** — `TestDir` RAII guard with `Drop` impl wiping parent sentinel dir (PR-D2).
 - **`.github/workflows/auto-label-release-pr.yml`** — `actions.createWorkflowDispatch` call to `release-gate.yml` after applying the `release-ready` label (PR-A1).
 - **`.github/workflows/release-gate.yml:147`** — `PYKRETE_TESTS_COUNT_FILE` env var memoization for `cargo test --release --workspace` output (PR-A2).
