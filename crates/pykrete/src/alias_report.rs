@@ -196,15 +196,16 @@ impl<'a> SourceOrderVisitor<'a> for AliasVisitor<'a> {
     }
 }
 
-/// v1.9 PR-V1 + v1.10 PR-A1 — mirrors the v1.6 `# pykrete: ambiguous`
-/// line-above lookup. Returns `true` when the marker
-/// `# pykrete: ack-deprecation` sits on the line immediately above the
-/// enclosing `def`/`async def` (walking past any decorator stack), or,
-/// for module-level annotations with no enclosing def, the line
-/// immediately above the annotation itself. Case-sensitive; leading
-/// whitespace tolerated; trailing whitespace tolerated. The
-/// annotation's offset is the byte position of the `DataFrame` token
-/// inside `DataFrame[X]` (or the bare `DataFrame` annotation).
+/// v1.9 PR-V1 + v1.10 PR-A1 + v1.12 PR-V1 — mirrors the v1.6
+/// `# pykrete: ambiguous` line-above lookup. Returns `true` when the
+/// marker `# pykrete: ack-deprecation` sits on any line of the
+/// contiguous comment block directly above the enclosing
+/// `def`/`async def` (walking past any decorator stack), or, for
+/// module-level annotations with no enclosing def, directly above the
+/// annotation itself. Case-sensitive; leading whitespace tolerated;
+/// trailing whitespace tolerated. The annotation's offset is the byte
+/// position of the `DataFrame` token inside `DataFrame[X]` (or the
+/// bare `DataFrame` annotation).
 ///
 /// v1.10 PR-A1 closes v1.9 arch-I1: pre-fix, the lookup checked the
 /// line immediately above the annotation's byte offset, which on a
@@ -228,6 +229,22 @@ impl<'a> SourceOrderVisitor<'a> for AliasVisitor<'a> {
 /// reads as acknowledged. Only single-line decorators are recognized;
 /// multi-line decorator calls require the marker on the line directly
 /// above the `def`.
+///
+/// v1.12 PR-V1 — multi-line rationale block (shape (b)). The marker
+/// no longer needs to sit on the line directly above the anchor; it
+/// can appear on any line of the contiguous `#`-prefixed comment
+/// block above the anchor:
+///
+/// ```text
+/// # pykrete: ack-deprecation
+/// # rationale: legacy code, will migrate in Q3
+/// x: DataFrame[X] = ...
+/// ```
+///
+/// Walk stops at the first non-comment line (blank line, code line,
+/// or anything else). The marker may appear anywhere in the
+/// contiguous block — top, middle, or bottom — to acknowledge the
+/// site.
 fn line_above_has_ack_marker(source: &str, offset: usize) -> bool {
     const MARKER: &str = "# pykrete: ack-deprecation";
     if source.is_empty() {
@@ -246,16 +263,25 @@ fn line_above_has_ack_marker(source: &str, offset: usize) -> bool {
         Some(def_start) => walk_past_decorators(source, def_start),
         None => annot_line_start,
     };
-    if anchor_start == 0 {
-        return false;
+    let mut cursor = anchor_start;
+    while cursor > 0 {
+        let prev_line_end = cursor - 1;
+        let prev_line_start = bytes[..prev_line_end]
+            .iter()
+            .rposition(|&b| b == b'\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let line = &source[prev_line_start..prev_line_end];
+        let trimmed = line.trim();
+        if trimmed == MARKER {
+            return true;
+        }
+        if !trimmed.starts_with('#') {
+            return false;
+        }
+        cursor = prev_line_start;
     }
-    let prev_line_end = anchor_start - 1;
-    let prev_line_start = bytes[..prev_line_end]
-        .iter()
-        .rposition(|&b| b == b'\n')
-        .map(|i| i + 1)
-        .unwrap_or(0);
-    source[prev_line_start..prev_line_end].trim() == MARKER
+    false
 }
 
 /// Walk backwards from `from_line_start` (a line's first-byte offset)
@@ -760,10 +786,13 @@ x: DataFrame[Sale] = read_sales()
     }
 
     #[test]
-    fn v110_pra1_non_continuation_line_above_def_is_pending() {
-        // The walk terminates at the `def` line, NOT arbitrarily upward —
-        // the marker two lines above the def (with an unrelated comment
-        // in between) is ignored.
+    fn v110_pra1_marker_above_contiguous_comment_is_acknowledged() {
+        // v1.10 PR-A1 originally pinned this case as `Pending` ("the
+        // walk terminates at the def line"). v1.12 PR-V1 ships the
+        // rationale-block walker (shape (b)): the marker can sit
+        // anywhere in the contiguous `#`-prefixed comment block above
+        // the anchor. The unrelated comment line no longer blocks
+        // recognition, so this case is now Acknowledged.
         let src = "\
 # pykrete: ack-deprecation
 # unrelated comment
@@ -774,7 +803,7 @@ def f(
 ";
         let sites = collect(src);
         assert_eq!(sites.len(), 1);
-        assert_eq!(sites[0].migration_status, MigrationStatus::Pending);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
     }
 
     #[test]
@@ -1126,6 +1155,200 @@ def f(x: DataFrame[X]): pass
         let sites = collect(src);
         assert_eq!(sites.len(), 1, "sites: {sites:?}");
         assert_eq!(sites[0].migration_status, MigrationStatus::Pending);
+    }
+
+    // v1.12 PR-V1 — multi-line ack-marker shape (b) rationale block.
+    // Per spec §6.1.2: the marker may sit on any line of the contiguous
+    // `#`-prefixed comment block directly above the anchor (def, post-
+    // decorator-walk; or annotation line for module-level). The walk
+    // stops at the first non-comment line (blank line, code line,
+    // decorator — anything not starting with `#` after trim).
+
+    #[test]
+    fn v112_prv1_marker_then_rationale_acknowledges() {
+        // 2-line block: marker on top, rationale below.
+        let src = "\
+# pykrete: ack-deprecation
+# rationale: legacy code, will migrate in Q3
+x: DataFrame[Sale] = read_sales()
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v112_prv1_rationale_then_marker_acknowledges() {
+        // 2-line block: rationale on top, marker below.
+        let src = "\
+# rationale: legacy code, will migrate in Q3
+# pykrete: ack-deprecation
+x: DataFrame[Sale] = read_sales()
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v112_prv1_marker_middle_of_block_acknowledges() {
+        // 3-line block: marker on the middle line.
+        let src = "\
+# Tracking issue: https://github.com/team/project/issues/123
+# pykrete: ack-deprecation
+# Owner: @amir
+x: DataFrame[Sale] = read_sales()
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v112_prv1_three_line_block_with_no_marker_is_pending() {
+        // 3-line block: no marker anywhere → pending.
+        let src = "\
+# Tracking issue: https://github.com/team/project/issues/123
+# Owner: @amir
+# Migration scheduled: 2026-Q4
+x: DataFrame[Sale] = read_sales()
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Pending);
+    }
+
+    #[test]
+    fn v112_prv1_blank_line_breaks_contiguity_pending() {
+        // Marker, then blank line, then annotation → blank line
+        // breaks the contiguous comment-walk; pending.
+        let src = "\
+# pykrete: ack-deprecation
+
+x: DataFrame[Sale] = read_sales()
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Pending);
+    }
+
+    #[test]
+    fn v112_prv1_non_comment_breaks_contiguity_pending() {
+        // Marker, then bare statement (non-comment, non-decorator),
+        // then annotation → walker stops at the bare statement;
+        // pending.
+        let src = "\
+# pykrete: ack-deprecation
+y = 1
+x: DataFrame[Sale] = read_sales()
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Pending);
+    }
+
+    #[test]
+    fn v112_prv1_empty_comment_preserves_contiguity() {
+        // An "empty" comment line (`#` alone, or `#` + whitespace)
+        // is still `#`-prefixed after `trim_start`, so the walker
+        // treats it as part of the contiguous block. Documents the
+        // choice: an empty comment line does NOT break contiguity.
+        let src = "\
+# pykrete: ack-deprecation
+#
+x: DataFrame[Sale] = read_sales()
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v112_prv1_no_rationale_marker_only_acknowledges() {
+        // Regression guard: shape (a) single-line marker (no
+        // rationale block) still acknowledges, both for module-level
+        // and def-anchored sites.
+        let src = "\
+# pykrete: ack-deprecation
+x: DataFrame[Sale] = read_sales()
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v112_prv1_multi_line_def_still_acknowledges() {
+        // Regression guard for v1.10 PR-A1 shape (a) — multi-line def
+        // signature with single-line marker still works unchanged.
+        let src = "\
+# pykrete: ack-deprecation
+def f(
+    a: DataFrame[Sale],
+) -> int:
+    ...
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v112_prv1_rationale_block_above_multi_line_def_acknowledges() {
+        // Shape (a) + shape (b) composed: rationale block above a
+        // multi-line def signature. The walker first anchors at the
+        // def line (post-decorator-walk; here no decorators), then
+        // walks UP through the contiguous comment block looking for
+        // the marker.
+        let src = "\
+# rationale: legacy code, will migrate in Q3
+# pykrete: ack-deprecation
+def f(
+    a: DataFrame[Sale],
+) -> int:
+    ...
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v112_prv1_rationale_block_above_decorator_acknowledges() {
+        // Decorator + shape (b): walker anchors at the decorator
+        // stack (post-decorator-walk), then walks UP through the
+        // contiguous comment block above the topmost decorator.
+        let src = "\
+# rationale: legacy code, will migrate in Q3
+# pykrete: ack-deprecation
+@decorator
+def f(df: DataFrame[Sale]) -> int:
+    return 0
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v112_prv1_decorator_between_marker_and_def_pending() {
+        // Marker above a decorator that sits above another comment
+        // that sits above the def. `walk_past_decorators` stops at
+        // the comment (non-`@` line), anchoring at the decorator.
+        // The walker then walks UP from the decorator through the
+        // contiguous comment block — but the line immediately above
+        // the decorator is the marker, ACKNOWLEDGED. (This is the
+        // shape (b) extension of the v1.10 walk-past-decorator
+        // behavior.)
+        let src = "\
+# pykrete: ack-deprecation
+@decorator
+def f(df: DataFrame[Sale]) -> int:
+    return 0
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
     }
 
     #[test]
