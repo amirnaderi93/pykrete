@@ -579,46 +579,81 @@ mod tests {
     // produce distinct paths.
     static TMPDIR_SEQ: AtomicUsize = AtomicUsize::new(0);
 
-    /// Each test gets a parent dir + a workspace subdir; the parent
-    /// holds a well-formed sentinel `pykrete.json`. `find_pykrete_json`
-    /// walking up from the workspace hits the sentinel and stops INSIDE
-    /// the per-test boundary — ambient `pykrete.json` files left under
-    /// `$TMPDIR` by other parallel `cargo test --workspace` runs can no
-    /// longer leak into this test's project key. Tests that want a
-    /// specific config write their own `pykrete.json` into the workspace;
-    /// the walk finds that one first and the sentinel stays unused.
-    fn tmpdir() -> PathBuf {
-        let mut parent = std::env::temp_dir();
-        let seq = TMPDIR_SEQ.fetch_add(1, Ordering::Relaxed);
-        parent.push(format!(
-            "pykrete-lsp-test-{}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos(),
-            seq,
-        ));
-        std::fs::create_dir_all(&parent).unwrap();
-        let sentinel = parent.join("pykrete.json");
-        File::create(&sentinel)
-            .and_then(|mut f| f.write_all(b"{}"))
-            .expect("write sentinel pykrete.json");
-        let workspace = parent.join("workspace");
-        std::fs::create_dir_all(&workspace).unwrap();
-        // The walk from `workspace` must terminate at the sentinel. If
-        // it doesn't, an ambient `pykrete.json` deeper inside our parent
-        // path (we just created `parent/` so this shouldn't happen) or
-        // the create_dir_all call silently no-op'd. Surface it loudly.
-        let found = find_pykrete_json(&workspace)
-            .expect("sentinel pykrete.json should be findable by walk-up from workspace");
-        assert_eq!(
-            found,
-            sentinel,
-            "find_pykrete_json walked past the per-test sentinel; ambient pollution at {} broke isolation",
-            found.display(),
-        );
-        workspace
+    /// RAII handle for a per-test parent + workspace dir pair. v1.11 PR-V1
+    /// shipped the sentinel-`pykrete.json` isolation pattern but left
+    /// cleanup as a per-test `remove_dir_all(&root)` call that wiped only
+    /// the workspace — the parent dir (carrying the sentinel) leaked
+    /// under `$TMPDIR` and accumulated across `cargo test --workspace`
+    /// runs. v1.12 PR-D2 wraps both dirs in `TestDir`: callers see
+    /// `&root` / `root.join(...)` unchanged via `Deref<Target=Path>` to
+    /// `workspace`, and `Drop` wipes the PARENT (which contains the
+    /// workspace) so a panicking test still leaves `$TMPDIR` clean.
+    struct TestDir {
+        parent: PathBuf,
+        workspace: PathBuf,
+    }
+
+    impl TestDir {
+        fn new() -> Self {
+            let mut parent = std::env::temp_dir();
+            let seq = TMPDIR_SEQ.fetch_add(1, Ordering::Relaxed);
+            parent.push(format!(
+                "pykrete-lsp-test-{}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos(),
+                seq,
+            ));
+            std::fs::create_dir_all(&parent).unwrap();
+            let sentinel = parent.join("pykrete.json");
+            File::create(&sentinel)
+                .and_then(|mut f| f.write_all(b"{}"))
+                .expect("write sentinel pykrete.json");
+            let workspace = parent.join("workspace");
+            std::fs::create_dir_all(&workspace).unwrap();
+            // The walk from `workspace` must terminate at the sentinel. If
+            // it doesn't, an ambient `pykrete.json` deeper inside our parent
+            // path (we just created `parent/` so this shouldn't happen) or
+            // the create_dir_all call silently no-op'd. Surface it loudly.
+            let found = find_pykrete_json(&workspace)
+                .expect("sentinel pykrete.json should be findable by walk-up from workspace");
+            assert_eq!(
+                found,
+                sentinel,
+                "find_pykrete_json walked past the per-test sentinel; ambient pollution at {} broke isolation",
+                found.display(),
+            );
+            Self { parent, workspace }
+        }
+    }
+
+    impl std::ops::Deref for TestDir {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.workspace
+        }
+    }
+
+    impl AsRef<Path> for TestDir {
+        fn as_ref(&self) -> &Path {
+            &self.workspace
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.parent);
+        }
+    }
+
+    /// Returns a `TestDir` (drops both the parent sentinel dir and its
+    /// workspace subdir on scope exit). Existing callers that took the
+    /// previous `PathBuf` return value see the workspace path via
+    /// `Deref<Target=Path>` — `root.join(...)` and `&root` keep working.
+    fn tmpdir() -> TestDir {
+        TestDir::new()
     }
 
     fn write(path: &Path, content: &str) {
@@ -632,6 +667,39 @@ mod tests {
         let mut docs = HashMap::new();
         docs.insert(uri, "class A(Schema):\n    x: int\n".to_string());
         docs
+    }
+
+    /// v1.12 PR-D2 — closes the v1.10 LSP tempdir parent-dir leak. The
+    /// pre-fix shape was a `PathBuf` workspace + a per-test
+    /// `remove_dir_all(&workspace)` call; the sentinel-bearing PARENT
+    /// stayed under `$TMPDIR` (and any panic between `tmpdir()` and the
+    /// cleanup call left the workspace itself behind too). The post-fix
+    /// `TestDir` owns both dirs and `Drop` wipes the parent on scope
+    /// exit — including the panic path. We pin the cleanup by capturing
+    /// the parent path, dropping the `TestDir`, and asserting the parent
+    /// no longer exists on disk.
+    #[test]
+    fn testdir_drop_removes_parent_dir() {
+        let parent_path = {
+            let root = tmpdir();
+            let parent = root.parent.clone();
+            // Sanity: both dirs exist while `root` is alive.
+            assert!(parent.exists(), "parent dir must exist while TestDir lives");
+            assert!(
+                root.workspace.exists(),
+                "workspace dir must exist while TestDir lives"
+            );
+            assert!(
+                parent.join("pykrete.json").exists(),
+                "sentinel pykrete.json must exist while TestDir lives"
+            );
+            parent
+        };
+        assert!(
+            !parent_path.exists(),
+            "TestDir Drop should have wiped the parent dir at {} — sentinel pykrete.json + workspace are leaking under $TMPDIR",
+            parent_path.display(),
+        );
     }
 
     #[test]
@@ -669,8 +737,6 @@ mod tests {
             a_source.contains("edited"),
             "open doc should override disk contents, got {a_source:?}",
         );
-
-        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
@@ -691,8 +757,6 @@ mod tests {
         let snapshot = cache.snapshot(&docs).expect("snapshot");
         assert!(snapshot.iter().any(|(p, _)| p.ends_with("a.pyk")));
         assert!(snapshot.iter().any(|(p, _)| p.ends_with("b.pyk")));
-
-        std::fs::remove_dir_all(&root).ok();
     }
 
     /// Repeated `snapshot` calls reuse the same cached entries — the
@@ -734,8 +798,6 @@ mod tests {
             Arc::ptr_eq(&first_arc, &second_arc),
             "expected the cached body Arc to be reused on the second snapshot",
         );
-
-        std::fs::remove_dir_all(&root).ok();
     }
 
     /// Editing an open document — represented as a `docs` map mutation
@@ -780,8 +842,6 @@ mod tests {
             Arc::ptr_eq(&first_b_arc, &second_b_arc),
             "didChange to a should not have re-read b",
         );
-
-        std::fs::remove_dir_all(&root).ok();
     }
 
     /// `invalidate()` drops all tiers — the next snapshot re-runs the
@@ -801,8 +861,6 @@ mod tests {
         cache.invalidate();
         assert!(cache.state.is_none());
         assert!(cache.last_cold_walk.is_none());
-
-        std::fs::remove_dir_all(&root).ok();
     }
 
     /// Touching a closed file on disk and forcing a warm sweep refreshes
@@ -853,8 +911,6 @@ mod tests {
             "expected b.pyk to be re-read after the mtime bumped",
         );
         assert!(second_b_arc.contains("string"));
-
-        std::fs::remove_dir_all(&root).ok();
     }
 
     /// Project-root drift (a different open document anchoring to a
@@ -892,9 +948,6 @@ mod tests {
                 .keys()
                 .any(|p| p.ends_with("b.pyk")),
         );
-
-        std::fs::remove_dir_all(&root_a).ok();
-        std::fs::remove_dir_all(&root_b).ok();
     }
 
     /// Bumping `pykrete.json`'s mtime shifts the project key, which
@@ -930,8 +983,6 @@ mod tests {
             config_2.check_mode_override(),
             Some(pykrete::CheckMode::Strict),
         );
-
-        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
@@ -949,8 +1000,6 @@ mod tests {
             config.check_mode_override(),
             Some(pykrete::CheckMode::Strict)
         );
-
-        std::fs::remove_dir_all(&root).ok();
     }
 
     /// Typing burst: 10 didChange + 10 hover style calls in well under
@@ -985,8 +1034,6 @@ mod tests {
             "expected exactly one cold walk in a sub-second burst, ran {}",
             cache.cold_walk_count,
         );
-
-        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
@@ -997,8 +1044,6 @@ mod tests {
         let mut cache = SnapshotCache::new();
         let config = cache.config(&docs);
         assert_eq!(config.check_mode_override(), None);
-
-        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
@@ -1026,8 +1071,6 @@ mod tests {
             cache.take_pending_warning().is_none(),
             "warning should be consumed after the first drain"
         );
-
-        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
@@ -1054,8 +1097,6 @@ mod tests {
             cache.take_pending_warning().is_none(),
             "second cold walk on same-mtime broken file must NOT re-fire the warning"
         );
-
-        std::fs::remove_dir_all(&root).ok();
     }
 
     /// Bump a file's mtime by `secs` seconds without sleeping. The
@@ -1109,8 +1150,6 @@ mod tests {
             cache.take_pending_warning().is_some(),
             "edited-but-still-broken file must surface a fresh warning"
         );
-
-        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
@@ -1143,8 +1182,6 @@ mod tests {
             cache.take_pending_warning().is_none(),
             "second cold walk after invalidate on same-mtime broken file must NOT re-fire the warning"
         );
-
-        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
@@ -1159,8 +1196,6 @@ mod tests {
         let mut cache = SnapshotCache::new();
         let _config = cache.config(&docs);
         assert!(cache.take_pending_warning().is_none());
-
-        std::fs::remove_dir_all(&root).ok();
     }
 
     /// Two-pass cold walk at the cap boundary: every `.pyk` path lands
@@ -1205,8 +1240,6 @@ mod tests {
             "expected at least one entry past the cap, got 0 of {}",
             state.entries.len(),
         );
-
-        std::fs::remove_dir_all(&root).ok();
     }
 
     /// Paired regression for the invalidate-loop: opening a `.pyk` file
@@ -1234,8 +1267,6 @@ mod tests {
         assert!(cache.tracks_path(&root.join("a.pyk")));
         assert!(cache.tracks_path(&root.join("b.pyk")));
         assert!(cache.tracks_path(&root.join("c.pyk")));
-
-        std::fs::remove_dir_all(&root).ok();
     }
 
     /// `ProjectKey` derived from the same `docs` map across multiple
@@ -1271,8 +1302,6 @@ mod tests {
             let again = derive_project_key(&docs).expect("key");
             assert_eq!(again, first);
         }
-
-        std::fs::remove_dir_all(&root).ok();
     }
 
     /// Same project state, different anchor doc → same key. Two files
@@ -1300,7 +1329,5 @@ mod tests {
         let key_a = derive_project_key(&docs_a).expect("key a");
         let key_b = derive_project_key(&docs_b).expect("key b");
         assert_eq!(key_a, key_b);
-
-        std::fs::remove_dir_all(&root).ok();
     }
 }
