@@ -571,30 +571,54 @@ mod tests {
     use super::*;
     use std::fs::File;
     use std::io::Write;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::thread::sleep;
 
+    // Per-process counter so two `tmpdir()` calls at the same nanosecond
+    // (e.g. parallel test threads with coarse mtime resolution) still
+    // produce distinct paths.
+    static TMPDIR_SEQ: AtomicUsize = AtomicUsize::new(0);
+
+    /// Each test gets a parent dir + a workspace subdir; the parent
+    /// holds a well-formed sentinel `pykrete.json`. `find_pykrete_json`
+    /// walking up from the workspace hits the sentinel and stops INSIDE
+    /// the per-test boundary — ambient `pykrete.json` files left under
+    /// `$TMPDIR` by other parallel `cargo test --workspace` runs can no
+    /// longer leak into this test's project key. Tests that want a
+    /// specific config write their own `pykrete.json` into the workspace;
+    /// the walk finds that one first and the sentinel stays unused.
     fn tmpdir() -> PathBuf {
-        let mut dir = std::env::temp_dir();
-        dir.push(format!(
-            "pykrete-lsp-test-{}-{}",
+        let mut parent = std::env::temp_dir();
+        let seq = TMPDIR_SEQ.fetch_add(1, Ordering::Relaxed);
+        parent.push(format!(
+            "pykrete-lsp-test-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            seq,
         ));
-        std::fs::create_dir_all(&dir).unwrap();
-        // Surface ambient pollution loudly: find_pykrete_json walks up to /,
-        // so a stray pykrete.json anywhere on the ancestor chain (e.g. a
-        // user-level /tmp/pykrete.json left over from a CLI experiment)
-        // silently muddles every "no pykrete.json" assertion in this module.
-        if let Some(found) = find_pykrete_json(&dir) {
-            panic!(
-                "pykrete-lsp tests cannot run: ambient pykrete.json at {} pollutes the test environment (find_pykrete_json walks up from temp_dir() to /). Delete or relocate it.",
-                found.display()
-            );
-        }
-        dir
+        std::fs::create_dir_all(&parent).unwrap();
+        let sentinel = parent.join("pykrete.json");
+        File::create(&sentinel)
+            .and_then(|mut f| f.write_all(b"{}"))
+            .expect("write sentinel pykrete.json");
+        let workspace = parent.join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        // The walk from `workspace` must terminate at the sentinel. If
+        // it doesn't, an ambient `pykrete.json` deeper inside our parent
+        // path (we just created `parent/` so this shouldn't happen) or
+        // the create_dir_all call silently no-op'd. Surface it loudly.
+        let found = find_pykrete_json(&workspace)
+            .expect("sentinel pykrete.json should be findable by walk-up from workspace");
+        assert_eq!(
+            found,
+            sentinel,
+            "find_pykrete_json walked past the per-test sentinel; ambient pollution at {} broke isolation",
+            found.display(),
+        );
+        workspace
     }
 
     fn write(path: &Path, content: &str) {
