@@ -161,7 +161,7 @@ def pins_in(version):
         return {}
     section = m.group(1)
     block_pat = re.compile(
-        r"^```text-numeric-historical\n([\s\S]*?)^```",
+        r"^```text-numeric(?:-historical)?\n([\s\S]*?)^```",
         re.MULTILINE,
     )
     out = {}

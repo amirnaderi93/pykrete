@@ -6,6 +6,59 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-06-17
+
+**Trust claim**: v1.11 closes D0091 cross-codebase coverage gap AND ships the trust-claim sweep checklist + auto-label workflow that PR-F devs run locally before opening the cycle-close PR. CI-side release-gate wiring is tracked for v1.12 (GITHUB_TOKEN cross-workflow trigger limitation).
+
+### Audit-tooling block (closes 5-cycle pattern)
+
+- `scripts/trust-claim-sweep-checklist.sh` — docs-vs-history gate; fails CI when prior-release numbers leak into trust-claim surfaces. Closes v1.10 retro rules 1+7. — PR-A1 #170.
+- `.github/workflows/auto-label-release-pr.yml` — auto-applies `release-ready` label to PRs titled `chore(release):` or branched `release/v*`. Eliminates human gate. Closes v1.10 retro rule 8. — PR-A2 #168.
+- `scripts/changelog-cite-check.sh` — verifies CHANGELOG `path/file.rs:LINE` citations resolve to actual code. Closes v1.10 retro rule 3. — PR-A2 #168.
+
+### New features
+
+- Pandas `df.unstack(level=, fill_value=)` literal-form arm. Mirror of v1.10 `stack`. — PR-D1 #172.
+- D0091 cross-codebase property probes for 8 v1.10 properties (`na`, `write`, `writeStream`, `storageLevel`, `index`, `values`, `shape`, `T`). Closes v1.10 PR-D1 carve-out. — PR-P1 (pykrete-tests #39).
+
+### Process / tooling
+
+- LSP test tempdir-per-test isolation (sentinel `pykrete.json` boundary). Closes v1.10 probe-density audit flake. — PR-V1 #171.
+- Walker polish: mixed-indent + decorator-with-comment edges + tab/space test + counter-semantics comment. Closes v1.10 architecture audit polish items. — PR-D2 #169.
+
+### Test coverage
+
+- pykrete: 1755 total tests
+- pykrete-tests: 271 cross-codebase probes (187 positive + 84 negative); 130 fixtures
+
+```text-numeric
+271 probes
+187 positive
+84 negative
+130 fixtures
+1755 tests
+17 donors
+```
+
+### Internal
+
+- **`df.unstack(level=, fill_value=)` literal-form arm** at `crates/pykrete/src/operations/expr.rs:1424`. Mirror of v1.10's `stack` arm; receiver-dialect-gated to `PandasFrame[X]`.
+- **`scripts/trust-claim-sweep-checklist.sh:163`** — block-extraction regex now reads both `text-numeric` and `text-numeric-historical` fenced labels so the current-cycle pinned block is not mis-scanned as a leak (parser fix shipped in PR-G).
+- **`crates/pykrete-lsp/src/project.rs:590`** — sentinel `pykrete.json` walker now anchors at the per-test tempdir root, eliminating the probe-density audit flake under parallel test execution.
+
+### Audit-debt deferred to v1.12
+
+- D0080 returnTypeMismatch cross-codebase coverage.
+- `pivot_table aggfunc=` support.
+- `--include-py` / `--changed-only` / `--dry-run-since=` for migrate.
+- `--compare-to <snapshot>` for `--deprecation-report` (consumer state model — product fork).
+- `--fail-on-acknowledged-but-pending` flag.
+- Pandas `groupby.agg` reshape arm (new dispatch concept).
+- broader `.loc` non-literal forms.
+- CHANGELOG generation tool.
+- `Box::leak` → `OnceLock` cleanup.
+- CI-side release-gate label-trigger wiring (GITHUB_TOKEN cross-workflow limitation; auto-label workflow stays in place, release-gate-check stays as a `workflow_dispatch` path until a PAT or repo-app token replaces the default token).
+
 ## [1.10.0] - 2026-06-17
 
 Tenth minor release on the v1.0 line. v1.10's headline: **v2.0 migration is plannable AND archivable** — `pykrete check --deprecation-report --snapshot=<path>` writes the v2 envelope to disk so CI can persist a prior-report cache, diff between releases, and reduce the v2.0 deprecation runway to a tracked file. v1.8 made migration measurable; v1.9 made it plannable; v1.10 makes it archivable. Paired with **D0091 surface completion** — the four remaining Spark-direction discriminator properties (`na`, `write`, `writeStream`, `storageLevel`) and the four pandas-direction inherited properties (`index`, `values`, `shape`, `T`) close the v1.9 spark-I1 / spark-I2 firing-site coverage gap on `Expr::Attribute` — plus **`--fail-on-nonempty`** on `--deprecation-report` so CI consumers can gate without `jq | test` boilerplate. The release lands the **pandas `df.stack(level=, dropna=)` literal-form arm** (continuing the one-reshape-arm-per-cycle cadence from v1.6's `pivot_table` and v1.7's `melt`), closes the v1.9 architecture audit-debt class (ack-marker multi-line signature support, property/method tripwire, release-gate CI workflow, CHANGELOG grep gate v3 prose scan), and **promotes the v1.9 §9.2 centralized version-bump trial to standing practice** — zero rebase-ladder collisions across the Wave 1 PRs of v1.9 was the SUCCESS signal, and v1.10 ships the standing-rule codification with a reusable marker mechanism. No new annotation forms; SemVer-minor under the `tighteningDiagnostics` policy and the established alias-report-style JSON-additive policy.

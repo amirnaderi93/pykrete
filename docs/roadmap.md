@@ -226,8 +226,7 @@ completion**: `SPARK_DISCRIMINATOR_PROPERTIES` gains `na`, `write`,
 `writeStream`, `storageLevel` (closes v1.9 spark-I1);
 `PANDAS_INHERITED_PROPERTIES` gains `index`, `values`, `shape`, `T`
 (closes v1.9 spark-I2) — both via the v1.9 bare-attribute path.
-v1.10 PR-D1's 8 new properties are unit-test-covered at v1.10.0;
-cross-codebase fixture probes filed for v1.11. **Pandas
+**Pandas
 `df.stack(level=, dropna=)` literal-form** lands as a NEW inference
 arm (continuing the one-reshape-arm-per-cycle cadence from v1.6
 `pivot_table` and v1.7 `melt`); receiver-dialect-gated to fire only
@@ -253,44 +252,73 @@ guard workflow as a reusable cycle-trial primitive. Cross-codebase
 probe coverage adds 6 D0091 strict-mode / bare-attribute /
 shape-changes probes on `mlflow` / `dbt-spark` / `pandera` / `delta`
 (pykrete-tests PR-P1 #34) plus the seaborn `stack(level=)` arm
-(pykrete-tests #35) — 255 → `261 probes` across `120 fixtures` from
+(pykrete-tests #35) — 255 → 261 probes across 120 fixtures from
 `17 donors`.
+
+**v1.10 D0091 PR-D1 cross-codebase carve-out closes + pandas
+`unstack` arm + audit-tooling block shipped in v1.11**: pykrete-
+tests PR-P1 #39 ships cross-codebase property probes for the 8
+v1.10 PR-D1 D0091 properties (`na`, `write`, `writeStream`,
+`storageLevel`, `index`, `values`, `shape`, `T`) — the v1.10 carve-
+out closes. **Pandas `df.unstack(level=, fill_value=)` literal-
+form arm** lands as the v1.11 reshape arm (mirror of v1.10 `stack`;
+continuing the one-per-cycle cadence). Receiver-dialect-gated to
+fire only on `PandasFrame[X]` receivers; literal `level=` (single
+string, list / tuple of strings) validates, int / int-list /
+non-literal forms fall through to `Unknown`. The **audit-tooling
+block** closes 5 cycles of v1.10 retro rules:
+`scripts/trust-claim-sweep-checklist.sh` (docs-vs-history sweep —
+17-test self-test suite; closes v1.10 retro rules 1+7),
+`scripts/changelog-cite-check.sh` (CHANGELOG `path:LINE` cite
+resolution against the working tree; closes v1.10 retro rule 3),
+and `.github/workflows/auto-label-release-pr.yml` (auto-applies
+`release-ready` label to release PRs; closes v1.10 retro rule 8).
+CI-side release-gate label-trigger wiring is tracked for v1.12
+(GITHUB_TOKEN cross-workflow trigger limitation — devs run the
+sweep checklist locally before opening PR-F). LSP test tempdir-
+per-test isolation (sentinel `pykrete.json` boundary; closes v1.10
+probe-density audit flake). Walker polish (mixed-indent +
+decorator-with-comment edges + tab/space test + counter-semantics
+comment; closes v1.10 architecture audit polish items). Cross-
+codebase probe coverage climbs 261 → `271 probes` across
+`130 fixtures` from `17 donors`.
 
 ## Next up
 
-### v1.11 — broader pandas reshape + `--include-py` / `--changed-only` / `--compare-to` migrate flags + omitted-edit CI-guard
+### v1.12 — broader pandas reshape + `--include-py` / `--changed-only` / `--compare-to` migrate flags + CI-side release-gate wiring
 
-Broader pandas reshape: `unstack` / `groupby.agg`, `reset_index` /
-`set_index`, plus full `pivot_table` / `melt` / `stack` output
-schema-tracking (v1.10 shipped `stack` literal-form on the input;
-the long-format output schemas pair with the rest of pandas
-reshape). `.loc` non-literal forms (`.loc[mask, "col"]` boolean-
-mask row keys, `.loc[:, "a":"b"]` column-range slicing) and
-`pdf.iloc[...]` integer-position indexing. The `df.query("…")` and
-`df.eval("…")` mini-DSLs (numexpr-influenced syntax, separate
-parser from the SQL path used by `selectExpr`). `pd.read_csv(...)`
-and other pandas I/O entry points if scope allows (schema inference
-from file headers / SQL / type-stubs is a separate design surface).
-Retrofitting pandas `PROBE-TYPE-IS` to the v1.3 hybrid donors
-(MLflow, Feast, iceberg-python). Canonical-vs-direct CI gate (I3
-from the v1.4 architecture audit). `--include-py` flag for
-`pykrete migrate` to walk the multiplexer cohort's `.py` files
-alongside `.pyk`, plus a `--changed-only` flag for both
-`pykrete migrate` and `pykrete check` that walks only files changed
-against HEAD. `--compare-to <snapshot>` for `--deprecation-report`
-to consume the v1.10 `--snapshot` file-write surface as a snapshot-
-vs-snapshot diff primitive (consumer-state model is a product fork;
-deferred per v1.9 author-boundary carve-out at
-`alias_report.rs:446-448`). CI-guard widened to catch the "omitted-
-edit" drift class on top of v1.10's structural build.rs +
-property / method tripwire closures. Cross-codebase fixture probes
-for v1.10 PR-D1's 8 new D0091 properties (`na`, `write`,
-`writeStream`, `storageLevel`, `index`, `values`, `shape`, `T`) —
-unit-test-covered at v1.10.0; cross-codebase probes filed for the
-v1.11 batch. **LSP polish formally rescoped to v2.0.1 / discrete
-LSP-feature work** per v1.10 spec §10.10, NOT a v1.x bundle — three
-cycles (v1.7 / v1.8 / v1.9) of "carry forward to next minor" was
-the signal that LSP polish doesn't fit the v1.x cadence.
+Broader pandas reshape: `groupby.agg`, `reset_index` /
+`set_index`, plus full `pivot_table` / `melt` / `stack` / `unstack`
+output schema-tracking (v1.10 + v1.11 shipped `stack` / `unstack`
+literal-form on the input; the long-format output schemas pair with
+the rest of pandas reshape). `.loc` non-literal forms
+(`.loc[mask, "col"]` boolean-mask row keys, `.loc[:, "a":"b"]`
+column-range slicing) and `pdf.iloc[...]` integer-position
+indexing. The `df.query("…")` and `df.eval("…")` mini-DSLs
+(numexpr-influenced syntax, separate parser from the SQL path used
+by `selectExpr`). `pd.read_csv(...)` and other pandas I/O entry
+points if scope allows (schema inference from file headers / SQL /
+type-stubs is a separate design surface). Retrofitting pandas
+`PROBE-TYPE-IS` to the v1.3 hybrid donors (MLflow, Feast,
+iceberg-python). Canonical-vs-direct CI gate (I3 from the v1.4
+architecture audit). `--include-py` flag for `pykrete migrate` to
+walk the multiplexer cohort's `.py` files alongside `.pyk`, plus a
+`--changed-only` flag for both `pykrete migrate` and
+`pykrete check` that walks only files changed against HEAD.
+`--compare-to <snapshot>` for `--deprecation-report` to consume the
+v1.10 `--snapshot` file-write surface as a snapshot-vs-snapshot
+diff primitive (consumer-state model is a product fork; deferred
+per v1.9 author-boundary carve-out at `alias_report.rs:446-448`).
+CI-guard widened to catch the "omitted-edit" drift class on top of
+v1.10's structural build.rs + property / method tripwire closures.
+**CI-side release-gate label-trigger wiring**: PAT or repo-app
+token replaces the GITHUB_TOKEN default for the cross-workflow
+trigger so the v1.11 auto-label workflow actually fires the
+release-gate-check pipeline. **LSP polish formally rescoped to
+v2.0.1 / discrete LSP-feature work** per v1.10 spec §10.10, NOT a
+v1.x bundle — three cycles (v1.7 / v1.8 / v1.9) of "carry forward
+to next minor" was the signal that LSP polish doesn't fit the v1.x
+cadence.
 
 ## PyCharm support
 
@@ -491,12 +519,15 @@ bare-attribute inference arm) + `text-numeric` CHANGELOG gate
 `--fail-on-nonempty` CI gate) + D0091 surface completion (8 new
 properties — 4 Spark-direction, 4 pandas-direction) + pandas
 `df.stack(level=, dropna=)` literal-form + v1.9 audit-debt
-closure (done, v1.10) → broader pandas reshape (`unstack` /
-`groupby.agg`) + `.loc` / `.iloc` non-literal forms + `.query` /
-`.eval` mini-DSLs + `--include-py` / `--changed-only` /
-`--compare-to` migrate flags + cross-codebase fixture probes for
-the 8 v1.10 D0091 properties (v1.11; LSP polish formally rescoped
-to v2.0.1 / discrete LSP-feature work per v1.10 spec §10.10) →
+closure (done, v1.10) → pandas `df.unstack(level=, fill_value=)`
+literal-form + cross-codebase property probes for the 8 v1.10
+D0091 properties + audit-tooling block (trust-claim sweep checklist
++ CHANGELOG cite-check + auto-label workflow) (done, v1.11) →
+broader pandas reshape (`groupby.agg`) + `.loc` / `.iloc` non-
+literal forms + `.query` / `.eval` mini-DSLs + `--include-py` /
+`--changed-only` / `--compare-to` migrate flags + CI-side release-
+gate label-trigger wiring (v1.12; LSP polish formally rescoped to
+v2.0.1 / discrete LSP-feature work per v1.10 spec §10.10) →
 polars** → others (DuckDB, Dask, …).
 
 The core type model — `SparkFrame[Schema]` / `PandasFrame[Schema]` /
