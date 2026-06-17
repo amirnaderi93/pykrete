@@ -12,13 +12,13 @@ Tenth minor release on the v1.0 line. v1.10's headline: **v2.0 migration is plan
 
 ### Added
 
-- **`pykrete check --deprecation-report --snapshot=<path>`** (PR-V1 #160; spec §5). File-write surface for the v2 envelope: atomic write via tempfile-plus-rename, nanosecond-suffixed temp name to avoid concurrent-writer collision, cleanup-on-error guard across every error path. Compatible with `--ack`; exit code stays at 0 (snapshot writes are not gating — gating lives on D1's `--fail-on-nonempty`). Flag-shaped successor guard + exact-keys allowlist enforce the v1.9 §4.5 envelope contract on the persisted file. NO `--compare-to <snapshot>` — deferred to v1.11 per the v1.9 author-boundary carve-out at `alias_report.rs:282-284` (`"resolved"` is consumer-side state; consumer state model is a product fork).
+- **`pykrete check --deprecation-report --snapshot=<path>`** (PR-V1 #160; spec §5). File-write surface for the v2 envelope: atomic write via tempfile-plus-rename, nanosecond-suffixed temp name to avoid concurrent-writer collision, cleanup-on-error guard across every error path. Compatible with `--ack`; exit code stays at 0 (snapshot writes are not gating — gating lives on D1's `--fail-on-nonempty`). Flag-shaped successor guard + exact-keys allowlist enforce the v1.9 §4.5 envelope contract on the persisted file. NO `--compare-to <snapshot>` — deferred to v1.11 per the v1.9 author-boundary carve-out at `alias_report.rs:446-448` (`"resolved"` is consumer-side state; consumer state model is a product fork).
 - **D0091 surface completion — Spark-direction properties** (PR-D1 #162; spec §3). `SPARK_DISCRIMINATOR_PROPERTIES` gains `na`, `write`, `writeStream`, `storageLevel` (closes v1.9 spark-I1). `pdf.na`, `pdf.write`, `pdf.writeStream`, `pdf.storageLevel` on a pandas-tagged binding now fire D0091 via the bare-attribute path shipped in v1.9 PR-D2.
 - **D0091 surface completion — pandas-direction properties** (PR-D1 #162; spec §3). `PANDAS_INHERITED_PROPERTIES` gains `index`, `values`, `shape`, `T` (closes v1.9 spark-I2). `sdf.index`, `sdf.values`, `sdf.shape`, `sdf.T` on a Spark-tagged binding now fire D0091 via the bare-attribute path.
 - **`pykrete check --deprecation-report --fail-on-nonempty`** (PR-D1 #162; spec §3, closes v1.9 arch-I4). CI gate flag: exits non-zero when the envelope's `sites` array is non-empty. Replaces the `jq '.sites | length' | test ... -eq 0` boilerplate adopters were writing by hand. Compatible with `--ack` (gates only on the filtered cohort).
 - **Pandas `df.stack(level=, dropna=)` literal-form arm** (PR-D2 #161; spec §4). NEW inference arm on the `stack` reshape method (continuing the one-per-cycle cadence from v1.6 `pivot_table` and v1.7 `melt`). Receiver-dialect-gated: fires only on `PandasFrame[X]` receivers (Spark's `stack` is a column-free-function, not a method). Validates literal `level=` (single string, list / tuple of strings); falls through silently to `Unknown` on int / int-list / `None` / non-literal forms. `stack` added to `PANDAS_ONLY_SIGNALS`.
 - **Ack-marker multi-line signature support** (PR-A1 #159, closes v1.9.1 #2 / v1.9 arch-I1). `# pykrete: ack-deprecation` marker now correctly resolves to the enclosing `def`/`async def` when the signature spans multiple lines and / or carries decorators. `find_enclosing_def_line_start` is indentation-aware; `walk_past_decorators` skips back over `@decorator` lines so the marker lands on the conceptual definition line.
-- **Property / method tripwire** (PR-A1 #159, closes v1.9 arch-I3). Build-time invariant: `SPARK_DISCRIMINATOR_PROPERTIES ⊂ SPARK_DISCRIMINATORS`; mirror for `PANDAS_INHERITED_PROPERTIES ⊂ PANDAS_INHERITED_ARM_METHODS`. Catches the drift class where a name is added to one table but not the other.
+- **Property / method tripwire** (PR-A1 #159, closes v1.9 arch-I3). Build-time invariant: `SPARK_DISCRIMINATOR_PROPERTIES ⊂ SPARK_DISCRIMINATORS`; mirror for `PANDAS_INHERITED_PROPERTIES ⊂ PANDAS_ONLY_SIGNALS`. Catches the drift class where a name is added to one table but not the other.
 - **`.github/workflows/release-gate.yml`** (PR-A2 #163, closes v1.9 arch-I2). Standalone workflow that runs the full CHANGELOG grep gate (including the live-extract step against the `pykrete-tests` sibling checkout) on release-PR branches; the standard CI gate runs with `--skip-live-extract` because PR runners do not have the sibling repo checked out. Closes the structural gap where release-time prose / numeric drift could land if the developer skipped the local gate.
 - **CHANGELOG grep gate v3 — prose number scan** (PR-A2 #163, closes v1.9 retro rule 12). Extends the v1.9 v2 gate to scan prose paragraphs (everything outside fenced blocks) for `<digit> <known-key>` patterns (keys: `positive`, `negative`, `probes`, `fixtures`, `tests`, `donors`). Single-backtick-wrapped numbers are the editor's escape hatch. Leading `(?<![A-Za-z0-9_])` rejects digits glued to an identifier prefix so D-code mentions like `D0091 probes` do not false-trip. Also adds the `text-numeric-historical` label — release-pinned blocks whose numbers are immutable by design are skipped by the gate.
 - **§9.2 centralized version bump — promoted to standing practice** (PR-S1 #158, closes v1.9 retro rule 1). v1.9 trialed centralizing per-PR extension version bumps to the release PR via the `.github/centralized-bump-cycle.marker` file. Trial verdict: SUCCESS (zero rebase-ladder collisions across Wave 1). v1.10 promotes the rule to standing; the marker mechanism stays in the guard workflow as a reusable cycle-trial primitive for future amendments.
@@ -32,7 +32,7 @@ Tenth minor release on the v1.0 line. v1.10's headline: **v2.0 migration is plan
 186 positive
 75 negative
 120 fixtures
-1735 tests
+1738 tests
 17 donors
 ```
 
@@ -46,7 +46,7 @@ Tenth minor release on the v1.0 line. v1.10's headline: **v2.0 migration is plan
 
 ### Internal
 
-- **`--snapshot` atomic write** at `crates/pykrete/src/alias_report.rs`. Tempfile with nanosecond suffix in the destination directory, fsync, rename. Cleanup on every error path (early validation failure, write error, rename error). Exact-keys allowlist on the persisted JSON enforces the v1.9 §4.5 envelope contract.
+- **`--snapshot` atomic write** at `crates/pykrete/src/main.rs:972` (`write_snapshot`). Tempfile with nanosecond suffix in the destination directory, fsync, rename. Cleanup on every error path (early validation failure, write error, rename error). Exact-keys allowlist on the persisted JSON enforces the v1.9 §4.5 envelope contract.
 - **`PANDAS_ONLY_SIGNALS`** at `crates/pykrete/src/dialect_signals.rs` gains `stack`. Spark's `stack` is a column free function (`pyspark.sql.functions.stack`), not a `DataFrame` method, so the receiver-dialect gate correctly fires only on `PandasFrame[X]` receivers.
 - **`SPARK_DISCRIMINATOR_PROPERTIES`** and **`PANDAS_INHERITED_PROPERTIES`** at `crates/pykrete/src/dialect_signals.rs` each gain four entries; both tables now subset-checked against their call-path siblings.
 - **`find_enclosing_def_line_start` + `walk_past_decorators`** at the ack-marker resolution path. Indentation-aware walker shipped in PR-A1.
@@ -81,7 +81,7 @@ The trust suite verifies, on every release:
 - **`--include-py` flag for `pykrete migrate`** — carried forward from v1.7 / v1.8 / v1.9 / v1.10 deferral.
 - **`--changed-only` flag for `pykrete migrate` / `pykrete check`** — design fork still unresolved; carried forward.
 - **`--dry-run-since=<git-ref>` for `pykrete migrate` / `pykrete check`** — carried forward.
-- **`--compare-to <snapshot>` for `--deprecation-report`** — consumer-state model is a product fork; deferred per v1.9 author-boundary carve-out at `alias_report.rs:282-284`.
+- **`--compare-to <snapshot>` for `--deprecation-report`** — consumer-state model is a product fork; deferred per v1.9 author-boundary carve-out at `alias_report.rs:446-448`.
 - **CHANGELOG generation tool** — carried forward from v1.9 retro rule 6.
 - **`Box::leak` → `OnceLock` cleanup** — cosmetic; carried forward.
 - **Pandas `unstack` + `groupby.agg` reshape** — paired with `pivot_table aggfunc=`; carried forward.

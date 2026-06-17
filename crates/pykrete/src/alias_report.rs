@@ -1005,4 +1005,51 @@ def b(df: DataFrame[Sale]) -> int: ...
         assert_eq!(v["sites"].as_array().unwrap().len(), 1);
         assert_eq!(v["summary"]["totalSites"], 1);
     }
+
+    // v1.10 PR-G — class-method + nested-def walker coverage. PR-A1
+    // tests covered top-level `def` / `async def`; these pin the
+    // walker on indented `def`s inside a `class:` body and on `def`s
+    // nested inside another function.
+
+    #[test]
+    fn v110_prg_class_method_marker_above_def_is_acknowledged() {
+        let src = "\
+class Repo:
+    # pykrete: ack-deprecation
+    def fetch(self, df: DataFrame[Sale]) -> int:
+        return 0
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v110_prg_class_method_marker_above_decorator_stack_is_acknowledged() {
+        let src = "\
+class Repo:
+    # pykrete: ack-deprecation
+    @staticmethod
+    @classmethod
+    def fetch(df: DataFrame[Sale]) -> int:
+        return 0
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v110_prg_nested_def_marker_above_inner_def_is_acknowledged() {
+        let src = "\
+def outer():
+    # pykrete: ack-deprecation
+    def inner(x: DataFrame[Sale]) -> int:
+        return 0
+    return inner
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
 }
