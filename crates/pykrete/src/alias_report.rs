@@ -450,6 +450,8 @@ pub fn render_deprecation_report_json(
     sites: &[AliasSite],
     ack_filter: Option<AckFilter>,
 ) -> String {
+    // Counters are post-filter: .map() runs after .filter(), so spark/pandas/ambiguous
+    // reflect the --ack-filtered envelope, not the raw site set. Intentional.
     let mut spark = 0usize;
     let mut pandas = 0usize;
     let mut ambiguous = 0usize;
@@ -1051,5 +1053,98 @@ def outer():
         let sites = collect(src);
         assert_eq!(sites.len(), 1);
         assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    // v1.11 PR-D2 — walker polish: regression guards for the v1.10
+    // architecture-audit edge cases (mixed tab/space indent + decorator
+    // stack with intervening comment) and a documentation-by-test of
+    // the deliberate raw-char-count `leading_indent` semantics. No
+    // walker logic changes: the suite pins current behavior so the next
+    // refactor can't silently shift the edges.
+
+    #[test]
+    fn v111_prd2_mixed_indent_tab_def_marker_above_acknowledges() {
+        // Tab-indented inner def with a tab-indented marker on the line
+        // immediately above it. The marker check trims indentation
+        // before matching, and the indentation-aware enclosing-def
+        // walk finds `def tab_indented(` as enclosing the annotation
+        // (annotation is on the def signature line itself → trivially
+        // enclosing). Result: acknowledged.
+        let src = "\
+def outer():
+\tdef inner_a():
+\t\tpass
+\t# pykrete: ack-deprecation
+\tdef tab_indented(y: DataFrame[Y]): pass
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1, "sites: {sites:?}");
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v111_prd2_mixed_indent_space_above_tab_def_pending() {
+        // Tab-indented inner def with a SPACE-indented marker on the
+        // line immediately above. The marker text `.trim()`s to the
+        // exact marker string regardless of leading-whitespace flavor,
+        // so the marker check still matches and the site is
+        // acknowledged. Documents the deliberate indent-agnostic
+        // matching: pykrete pins on text content, not whitespace
+        // shape. Per project conventions this means a marker line's
+        // indent is irrelevant — the contract is "what does the line
+        // above the def line say after trimming."
+        let src = "\
+def outer():
+\tdef inner_a():
+\t\tpass
+    # pykrete: ack-deprecation
+\tdef tab_indented(y: DataFrame[Y]): pass
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1, "sites: {sites:?}");
+        assert_eq!(sites[0].migration_status, MigrationStatus::Acknowledged);
+    }
+
+    #[test]
+    fn v111_prd2_comment_between_decorators_break_at_comment_documented() {
+        // Decorator stack with an unrelated `# some unrelated comment`
+        // between `@outer_decorator` and `@inner_decorator`. The
+        // walker's `walk_past_decorators` stops at the first non-`@`
+        // line above the def — the comment — and anchors at
+        // `@inner_decorator`'s line. The marker is two lines above the
+        // outer decorator, which is three lines above the anchor's
+        // "line above," so the walker reads the marker as NOT directly
+        // above the anchor and reports pending. Documents the
+        // deliberate carve-out: walk_past_decorators is contiguous-
+        // decorator-lines-only, not "any-non-def line."
+        let src = "\
+# pykrete: ack-deprecation
+@outer_decorator
+# some unrelated comment
+@inner_decorator
+def f(x: DataFrame[X]): pass
+";
+        let sites = collect(src);
+        assert_eq!(sites.len(), 1, "sites: {sites:?}");
+        assert_eq!(sites[0].migration_status, MigrationStatus::Pending);
+    }
+
+    #[test]
+    fn v111_prd2_leading_indent_tab_vs_space_raw_char_count() {
+        // `leading_indent` counts raw whitespace bytes — tab = 1,
+        // 4 spaces = 4. The walker's enclosing-def check compares this
+        // count for relative ordering ("annotation deeper than def"),
+        // which is internally consistent for tab-only or space-only
+        // files. Mixed-indent files where a tab-indented def sits at
+        // 1-char indent and a space-indented annotation sits at
+        // 4-char indent will report different indents (1 vs 4), even
+        // though both visually nest one level deep. This is a
+        // deliberate choice per v1.10 architecture-audit finding #9:
+        // tab-width is editor-configured (2/4/8 are all common), so
+        // raw-char counting is content-agnostic.
+        assert_eq!(leading_indent("\tdef x", 0), 1);
+        assert_eq!(leading_indent("    def x", 0), 4);
+        assert_eq!(leading_indent("\t\tdef x", 0), 2);
+        assert_eq!(leading_indent("def x", 0), 0);
     }
 }
