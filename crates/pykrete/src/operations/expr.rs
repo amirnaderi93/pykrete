@@ -587,6 +587,54 @@ fn pandas_kwarg_value<'a>(call: &'a ExprCall, name: &str) -> Option<&'a Expr> {
         .map(|k| &k.value)
 }
 
+/// v1.12 PR-D1 — pandas `pivot_table(aggfunc=)` literal-form recognition
+/// (spec §4). The allowlist is the pandas-documented canonical aggfunc
+/// string set; values outside it (callable, dict, dynamic, exotic
+/// string) fall through silently. Recognition is informational for
+/// v1.x — the result schema is unchanged either way per spec §4.1
+/// (aggfunc doesn't affect which columns survive given the v1.4
+/// pandas index-modeling carve-out). Primes v1.13+ for richer
+/// aggfunc-driven inference.
+const PIVOT_TABLE_AGGFUNC_ALLOWLIST: &[&str] = &[
+    "sum", "mean", "count", "min", "max", "median", "std", "var", "first", "last", "nunique",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PivotTableAggfuncForm {
+    /// `aggfunc=` absent — pandas default (`"mean"`).
+    Absent,
+    /// Single string literal from the allowlist.
+    AllowlistedString,
+    /// Literal list/tuple of allowlist strings (all members in-list).
+    AllowlistedStringList,
+    /// Anything else: callable, dict, dynamic Name, out-of-allowlist
+    /// string, mixed-literal list, etc. Falls through silently.
+    FellThrough,
+}
+
+fn classify_pivot_table_aggfunc(call: &ExprCall) -> PivotTableAggfuncForm {
+    let Some(value) = pandas_kwarg_value(call, "aggfunc") else {
+        return PivotTableAggfuncForm::Absent;
+    };
+    if let Some(lit) = value.as_string_literal_expr() {
+        if PIVOT_TABLE_AGGFUNC_ALLOWLIST.contains(&lit.value.to_str()) {
+            return PivotTableAggfuncForm::AllowlistedString;
+        }
+        return PivotTableAggfuncForm::FellThrough;
+    }
+    if let Some(list) = parse_string_list(value) {
+        if !list.is_empty()
+            && list
+                .iter()
+                .all(|(n, _)| PIVOT_TABLE_AGGFUNC_ALLOWLIST.contains(n))
+        {
+            return PivotTableAggfuncForm::AllowlistedStringList;
+        }
+        return PivotTableAggfuncForm::FellThrough;
+    }
+    PivotTableAggfuncForm::FellThrough
+}
+
 /// v1.5 PR-A2 — resolve a `<X>.createDataFrame(...)` call's schema-source
 /// per spec §2.2. Returns `Some(view)` only when one of two gates fires
 /// (the call's result is `SparkFrame[X]`); returns `None` when neither
@@ -1264,12 +1312,20 @@ fn analyze_method_call_inner<'a>(
     // literal-form schema check (spec §4). Validates each literal
     // `index`/`columns`/`values` name against the receiver schema
     // (D0030). Non-literal arg shapes (variable, computed) fall through
-    // on that arg only; `aggfunc=` is opaque. Spark's `groupBy().pivot()`
-    // arm at `:976-1015` is NOT reused — its predicate is
-    // `SchemaView::Grouped` (`:984-987`), incompatible with pandas's
-    // DataFrame receiver. Output is Unknown (None) for v1.6; users
-    // re-anchor with `.cast(DataFrame[NewSchema])` for continued tracking
-    // (v1.7 will extend to synthesized output schema).
+    // on that arg only. Spark's `groupBy().pivot()` arm at `:976-1015`
+    // is NOT reused — its predicate is `SchemaView::Grouped`
+    // (`:984-987`), incompatible with pandas's DataFrame receiver.
+    // Output is Unknown (None) for v1.6; users re-anchor with
+    // `.cast(DataFrame[NewSchema])` for continued tracking (v1.7 will
+    // extend to synthesized output schema).
+    //
+    // v1.12 PR-D1 — `aggfunc=` literal-form recognition (spec §4).
+    // Closes the v1.6 "aggfunc= is opaque" carve-out. The recognition
+    // pass classifies `aggfunc` into Allowlisted / FellThrough; result
+    // schema is unchanged (still Unknown) for v1.x per spec §4.1
+    // (aggfunc choice doesn't influence which columns survive given the
+    // v1.4 pandas index-modeling carve-out). Recognition primes v1.13+
+    // for richer aggfunc-driven schema inference.
     if receiver_is_pandas_inherited && method == "pivot_table" {
         let mut refs: Vec<(Option<&'a str>, &'a str, TextRange)> = Vec::new();
         for kw_name in ["index", "columns", "values"] {
@@ -1283,6 +1339,7 @@ fn analyze_method_call_inner<'a>(
             }
         }
         report_column_refs(&refs, &receiver, ctx, source, line_index, diagnostics);
+        let _ = classify_pivot_table_aggfunc(call);
         return None;
     }
     // v1.7 PR-D1 — `pdf.melt(id_vars=, value_vars=, var_name=, value_name=)`
