@@ -244,7 +244,9 @@ impl<'a> SourceOrderVisitor<'a> for AliasVisitor<'a> {
 /// Walk stops at the first non-comment line (blank line, code line,
 /// or anything else). The marker may appear anywhere in the
 /// contiguous block — top, middle, or bottom — to acknowledge the
-/// site.
+/// site. An empty-comment line (`#` alone, or `#` followed by
+/// whitespace) preserves contiguity since it remains `#`-prefixed
+/// after trim.
 fn line_above_has_ack_marker(source: &str, offset: usize) -> bool {
     const MARKER: &str = "# pykrete: ack-deprecation";
     if source.is_empty() {
@@ -1331,15 +1333,13 @@ def f(df: DataFrame[Sale]) -> int:
     }
 
     #[test]
-    fn v112_prv1_decorator_between_marker_and_def_pending() {
-        // Marker above a decorator that sits above another comment
-        // that sits above the def. `walk_past_decorators` stops at
-        // the comment (non-`@` line), anchoring at the decorator.
-        // The walker then walks UP from the decorator through the
-        // contiguous comment block — but the line immediately above
-        // the decorator is the marker, ACKNOWLEDGED. (This is the
-        // shape (b) extension of the v1.10 walk-past-decorator
-        // behavior.)
+    fn v112_prv1_decorator_between_marker_and_def_acknowledges() {
+        // Marker above a decorator that sits above the def.
+        // `walk_past_decorators` consumes the `@` line, anchoring
+        // the comment-walk at the decorator's line. The walker then
+        // walks UP and finds the marker immediately above —
+        // acknowledged. (This is the shape (b) extension of the
+        // v1.10 walk-past-decorator behavior.)
         let src = "\
 # pykrete: ack-deprecation
 @decorator
