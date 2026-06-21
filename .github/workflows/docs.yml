@@ -88,6 +88,29 @@ jobs:
         with:
           path: docs-site/dist
 
+      # actions/upload-pages-artifact@v3 occasionally creates multiple
+      # artifact entries for a single upload (internal chunking/retry).
+      # actions/deploy-pages@v4 errors when artifact count > 1. Prune
+      # duplicates here so the deploy job sees exactly one artifact.
+      # Failure of this step is non-fatal — deploy will still error
+      # loudly if the dedup didn't take.
+      - name: Dedup github-pages artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          ARTIFACTS=$(gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts \
+            --jq '[.artifacts[] | select(.name == "github-pages")] | sort_by(.created_at) | reverse')
+          COUNT=$(echo "$ARTIFACTS" | jq 'length')
+          echo "Found $COUNT artifact(s) named github-pages"
+          if [ "$COUNT" -gt 1 ]; then
+            echo "Pruning $((COUNT-1)) older duplicate(s); keeping newest."
+            echo "$ARTIFACTS" | jq -r '.[1:] | .[].id' | while read id; do
+              gh api -X DELETE repos/${{ github.repository }}/actions/artifacts/$id
+              echo "  deleted artifact id=$id"
+            done
+          fi
+
   deploy:
     needs: build
     runs-on: ubuntu-latest
