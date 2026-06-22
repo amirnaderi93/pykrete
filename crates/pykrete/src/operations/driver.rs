@@ -7,7 +7,9 @@ use ruff_python_ast::{Expr, Stmt};
 use ruff_source_file::LineIndex;
 use ruff_text_size::{Ranged, TextRange};
 
-use crate::dataframe::{self, DataFrameAnnotation, SlotLabel, TypedSlot, typed_slots_for_def};
+use crate::dataframe::{
+    self, DataFrameAnnotation, Dialect, SlotLabel, TypedSlot, typed_slots_for_def,
+};
 use crate::diagnostics::{CheckMode, Diagnostic, Severity};
 use crate::schema::{Schema, SchemaView};
 use crate::types::ColumnType;
@@ -25,7 +27,7 @@ use crate::walk::DiscoveredFunction;
 /// that only want the diagnostics can ignore the result.
 pub(crate) fn check_function_body<'a>(
     func: &DiscoveredFunction<'a>,
-    declared_return: Option<SchemaView<'a>>,
+    declared_return: Option<DeclaredReturn<'a>>,
     ctx: &mut BodyContext<'a>,
     source: &str,
     line_index: &LineIndex,
@@ -44,6 +46,18 @@ pub(crate) fn check_function_body<'a>(
     inferred_return
 }
 
+/// Declared return slot — schema view plus the dialect tag that the
+/// annotation's base name (`SparkFrame` / `PandasFrame` / deprecated
+/// `DataFrame`) resolved to. v1.13 PR-D1 plumbs the dialect into
+/// [`check_return_type`] so a `-> SparkFrame[X]` whose body produces
+/// a `PandasFrame[X]` value (e.g., via `.toPandas()`) fires D0080 with
+/// a dialect-mismatch clause.
+#[derive(Debug, Clone)]
+pub(crate) struct DeclaredReturn<'a> {
+    pub view: SchemaView<'a>,
+    pub dialect: Dialect,
+}
+
 /// Walk a sequence of statements, dispatching per-stmt handling and
 /// recursing into the bodies of control-flow statements (`if`/`for`/
 /// `while`/`with`/`try`/`match`). Every column reference inside a
@@ -56,7 +70,7 @@ pub(crate) fn check_function_body<'a>(
 /// silent blind spot — see v0.1.26.
 fn walk_body<'a>(
     body: &'a [Stmt],
-    declared_return: Option<&SchemaView<'a>>,
+    declared_return: Option<&DeclaredReturn<'a>>,
     ctx: &mut BodyContext<'a>,
     source: &str,
     line_index: &LineIndex,
@@ -83,10 +97,10 @@ fn walk_body<'a>(
 fn declared_return_view<'a>(
     slots: &[TypedSlot<'a>],
     schemas: &'a [Schema<'a>],
-) -> Option<SchemaView<'a>> {
+) -> Option<DeclaredReturn<'a>> {
     for slot in slots {
         if matches!(slot.label, SlotLabel::Return) {
-            return match slot.kind {
+            let view = match slot.kind {
                 DataFrameAnnotation::Typed(name) => schemas
                     .iter()
                     .find(|s| s.name() == name)
@@ -96,6 +110,10 @@ fn declared_return_view<'a>(
                 }
                 _ => None,
             };
+            return view.map(|view| DeclaredReturn {
+                view,
+                dialect: slot.dialect,
+            });
         }
     }
     None
@@ -255,7 +273,7 @@ pub(crate) fn cross_dialect_handoff_gate<'a>(
 
 fn walk_stmt<'a>(
     stmt: &'a Stmt,
-    declared_return: Option<&SchemaView<'a>>,
+    declared_return: Option<&DeclaredReturn<'a>>,
     ctx: &mut BodyContext<'a>,
     source: &str,
     line_index: &LineIndex,
@@ -390,10 +408,12 @@ fn walk_stmt<'a>(
             if inferred_return.is_none() {
                 *inferred_return = actual.clone();
             }
-            if let (Some(declared), Some(actual)) = (declared_return, actual.as_ref()) {
+            if let Some(declared) = declared_return {
+                let actual_dialect = inherited_dialect(value, ctx);
                 check_return_type(
                     declared,
-                    actual,
+                    actual.as_ref(),
+                    actual_dialect,
                     ctx.schemas(),
                     value.range(),
                     source,
@@ -863,9 +883,42 @@ fn types_compatible(a: &ColumnType, b: &ColumnType) -> bool {
     }
 }
 
+fn dialect_name(d: Dialect) -> &'static str {
+    match d {
+        Dialect::Spark => "SparkFrame",
+        Dialect::Pandas => "PandasFrame",
+    }
+}
+
+fn render_dialect_label(d: Dialect, schema_label: &str) -> String {
+    format!("{} {}", dialect_name(d), schema_label)
+}
+
+fn actual_view_label(actual: Option<&SchemaView<'_>>) -> String {
+    match actual {
+        Some(SchemaView::Declared(s)) => format!("schema '{}'", s.name()),
+        Some(view) => format!("[{}]", view.field_names().join(", ")),
+        None => "an unresolved schema".to_string(),
+    }
+}
+
+// I4: when the chain walker pins down a dialect but `analyze_expr`
+// can't resolve a SchemaView, the naive `render_dialect_label(d,
+// actual_view_label(None))` composes to "PandasFrame an unresolved
+// schema" — broken English. Render dialect as an adjective with no
+// schema label instead.
+fn render_actual_side(actual_dialect: Dialect, actual: Option<&SchemaView<'_>>) -> String {
+    match actual {
+        Some(view) => render_dialect_label(actual_dialect, &actual_view_label(Some(view))),
+        None => format!("an unresolved {} value", dialect_name(actual_dialect)),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn check_return_type<'a>(
-    declared: &SchemaView<'a>,
-    actual: &SchemaView<'a>,
+    declared: &DeclaredReturn<'a>,
+    actual: Option<&SchemaView<'a>>,
+    actual_dialect: Option<Dialect>,
     schemas: &'a [Schema<'a>],
     range: TextRange,
     source: &str,
@@ -874,11 +927,47 @@ fn check_return_type<'a>(
 ) {
     // How to name the declared return type in messages: a named schema
     // by name, a `Pick`/`Omit`-derived one by its column list.
-    let declared_label = match declared {
+    let declared_label = match &declared.view {
         SchemaView::Declared(s) => format!("schema '{}'", s.name()),
-        _ => format!("[{}]", declared.field_names().join(", ")),
+        _ => format!("[{}]", declared.view.field_names().join(", ")),
     };
-    let declared_names: HashSet<&str> = declared.field_names().into_iter().collect();
+
+    // v1.13 PR-D1 — dialect-on-return arm. Honest silence per spec
+    // §4.1.3: when the body's inherited dialect is unknown (opaque
+    // receiver, constructor we can't classify), don't fabricate a
+    // mismatch. Only fire when both sides are known and differ. The
+    // dialect clause is independent of the column-set/type checks —
+    // a same-schema cross-dialect return (`-> SparkFrame[X]` body
+    // returns a Pandas-typed `X`) has matching columns AND types, so
+    // the existing checks below stay silent; the dialect clause is
+    // the only fire.
+    //
+    // M2: D0091 carves out deprecated-alias receivers (the adjudication
+    // site is downstream of the alias rebinding); D0080 fires
+    // unconditionally because the return-type annotation IS the
+    // adjudication site — no downstream reader resolves it.
+    if let Some(actual_dialect) = actual_dialect
+        && actual_dialect != declared.dialect
+    {
+        diagnostics.push(Diagnostic::at_range(
+            Severity::Error,
+            "D0080",
+            format!(
+                "Return type mismatch: declared as {} but the body produces {}.",
+                render_dialect_label(declared.dialect, &declared_label),
+                render_actual_side(actual_dialect, actual),
+            ),
+            range,
+            source,
+            line_index,
+        ));
+    }
+
+    let Some(actual) = actual else {
+        return;
+    };
+
+    let declared_names: HashSet<&str> = declared.view.field_names().into_iter().collect();
     let actual_names: HashSet<&str> = actual.field_names().into_iter().collect();
 
     // Type check — a column present in both, with confidently-known but
@@ -892,7 +981,7 @@ fn check_return_type<'a>(
     shared.sort();
     for name in shared {
         if let (Some(declared_ty), Some(actual_ty)) = (
-            declared.field_type(name, schemas),
+            declared.view.field_type(name, schemas),
             actual.field_type(name, schemas),
         ) {
             if !types_compatible(&declared_ty, &actual_ty) {
@@ -1078,6 +1167,24 @@ mod tests {
                  `inherited_chain_state`."
             );
         }
+    }
+
+    // v1.13 PR-D1 R2 I4 — when the chain walker pins down a dialect
+    // (`actual_dialect = Some(_)`) but `analyze_expr` returns no
+    // SchemaView (`actual = None`), the actual-side rendering must
+    // collapse to an adjective-form phrase, not splice "PandasFrame"
+    // in front of "an unresolved schema" (broken English). Unit-test
+    // the formatter directly across the matrix.
+    #[test]
+    fn v113_prd1_render_actual_side_unresolved_view() {
+        assert_eq!(
+            render_actual_side(Dialect::Spark, None),
+            "an unresolved SparkFrame value"
+        );
+        assert_eq!(
+            render_actual_side(Dialect::Pandas, None),
+            "an unresolved PandasFrame value"
+        );
     }
 
     #[test]
