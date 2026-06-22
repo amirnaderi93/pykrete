@@ -323,6 +323,8 @@ The mechanism:
 - **`release-ready`-labeled PR** — the auto-label workflow (`.github/workflows/auto-label-release-pr.yml`) calls `actions.createWorkflowDispatch` on `release-gate.yml` with the PR's head ref. The dispatched run publishes a `release-gate-check` check-run via the `workflow_dispatch` event. When it reports SUCCESS, branch protection unblocks.
 - **Push to `release/v*` branch** — the `push` trigger fires the same `release-gate-check`. Used as a structural pre-tag guard.
 
+The auto-label workflow re-dispatches release-gate on `synchronize` (force-push / new commits) AND on `labeled` events for `release-ready` specifically. So after a rebase + force-push, the gate re-runs automatically — no manual label-toggle needed. If you ever need to force a re-dispatch without pushing (e.g., to recover from a transient API failure), `gh pr edit <num> --remove-label release-ready && gh pr edit <num> --add-label release-ready` works because the `labeled` trigger now fires the workflow. (v1.14 PR-A2; pre-v1.14 the `labeled` event was not in the trigger set and the remove+re-add toggle was a no-op despite operator reflex to the contrary — see v1.13 retrospective rule 11.)
+
 Cold-cache runtime is ~35 min (down from ~70 min after v1.12 PR-A2's `cargo test` memoization).
 
 If you need to find the dispatched run manually (e.g., to inspect failing step output before the required-check status updates on the PR), replace `<your-branch>` with the PR's head branch name:
