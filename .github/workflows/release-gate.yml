@@ -1,6 +1,11 @@
 # Release gate
 #
 # v1.10 PR-A2 — closes v1.9 arch-I2.
+# v1.13 PR-A2 — drop `pull_request` trigger so the dispatched run is the
+# only publisher of the `release-gate-check` check-run name. Closes v1.12
+# retro polling-step manual workaround AND the silent-bypass that the
+# split-by-event design (initial PR-A2 R1) left open. See
+# `docs/design/v1.13-spec.md` §3 + §14.
 #
 # WHY THIS EXISTS
 # ---------------
@@ -13,18 +18,40 @@
 # with stale "N probes" / "N fixtures" / "N positive" claims.
 #
 # This workflow closes the gap structurally: on push to a release branch
-# (release/v*) OR on a PR labeled `release-ready` OR on manual dispatch,
-# it checks out both pykrete + pykrete-tests as siblings and runs the
-# gate WITHOUT --skip-live-extract.
+# (release/v*) OR on manual dispatch (the real gate, normally fired by
+# auto-label-release-pr.yml's `createWorkflowDispatch` API call), it
+# checks out both pykrete + pykrete-tests as siblings and runs the gate
+# WITHOUT --skip-live-extract.
 #
 # TRIGGER MODEL
 # -------------
 # - push to release/v* — pre-tag verification (cycle-close PR-F should
-#   have already run this locally; this is the structural guard).
-# - pull_request with label `release-ready` — apply the label to any PR
-#   you want to run the full live-extract gate against (e.g. PR-F).
-# - workflow_dispatch — manual fallback (operator wants to verify a
-#   particular ref).
+#   have already run this locally; this is the structural guard). Runs
+#   the FULL gate under check-name `release-gate-check`.
+# - workflow_dispatch — the real gate on PRs. v1.12 PR-A1's auto-label
+#   workflow fires `actions.createWorkflowDispatch` against this workflow
+#   when a PR is labeled `release-ready`, OR an operator dispatches
+#   manually. Runs the FULL gate under check-name `release-gate-check`.
+#   Branch protection requires this name.
+#
+# WHY NO `pull_request` TRIGGER (v1.13 PR-A2)
+# -------------------------------------------
+# Branch-protection matches checks BY NAME. Per GitHub docs, *"a job
+# that is skipped will report its status as 'Success'. It will not
+# prevent a pull request from merging, even if it is a required
+# check."* If this workflow listened to `pull_request` events, the
+# pull_request-triggered check (whether skipped via `if:` or run as a
+# no-op) would publish a `release-gate-check` check-run that
+# branch-protection would treat as Success — silently bypassing the
+# required-check on every ordinary PR.
+#
+# The fix: drop `pull_request` entirely. On ordinary PRs the
+# `release-gate-check` check-run NEVER publishes; branch-protection
+# sits in "Expected — Waiting for status to be reported" state.
+# `release-ready`-labeled PRs trigger the auto-label workflow's
+# `createWorkflowDispatch` call, which publishes a `release-gate-check`
+# check-run via the workflow_dispatch event; once that reports SUCCESS
+# branch-protection unblocks.
 #
 # WHY NOT "ALWAYS RUN LIVE-EXTRACT ON EVERY PR"
 # --------------------------------------------
@@ -40,12 +67,10 @@ on:
   push:
     branches:
       - 'release/v*'
-  pull_request:
-    types: [labeled, synchronize, opened, reopened]
   workflow_dispatch:
 
 # v1.12 PR-A2 — concurrency cap. A `release-ready`-labeled PR receiving
-# multiple synchronize events (push, label re-apply, re-open) used to queue
+# multiple dispatched runs (push, label re-apply, re-open) used to queue
 # concurrent runs against the same ref, each independently re-compiling
 # release-mode tests. Cancel in-flight on superseded refs.
 concurrency:
@@ -54,13 +79,8 @@ concurrency:
 
 jobs:
   release-gate-check:
-    # Only run on PR if the PR carries the `release-ready` label. Push +
-    # workflow_dispatch always run.
-    if: |
-      github.event_name == 'push' ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' &&
-       contains(github.event.pull_request.labels.*.name, 'release-ready'))
+    # Real gate: push to release/v* OR workflow_dispatch (auto-label
+    # API or manual). Branch protection REQUIRES this job's name.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout pykrete
