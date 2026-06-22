@@ -35,7 +35,7 @@ The **rule name** (`unknownColumn`) is what the CLI prints and what the editor s
 | `D0071` | `unexportedName` | An imported name isn't exported by the module. |
 | `D0072` | `duplicateSchemaName` | The same schema name is declared in more than one project file. Warning. |
 | `D0073` | `transformInputMismatch` | A `df.transform(fn)` receiver's schema doesn't match `fn`'s declared parameter schema. |
-| `D0080` | `returnTypeMismatch` | A returned column's **type** differs from the declared return schema. |
+| `D0080` | `returnTypeMismatch` | A returned column's **type** differs from the declared return schema. OR the declared dialect (`SparkFrame[X]` / `PandasFrame[X]`) differs from the dialect inferred from the body (new in v1.13). |
 | `D0081` | `nonNumericArithmetic` | Arithmetic on a non-numeric column. Strict mode only. |
 | `D0082` | `crossTypeComparison` | A comparison between unrelated types. Strict mode only. |
 | `D0083` | `nullabilityMismatch` | A nullable column flows into a slot the return schema declares non-null. Strict mode only. |
@@ -111,7 +111,9 @@ A column named as a join key doesn't exist on one (or both) sides of the join.
 
 pykrete checks column **types**, not just existence. How much it checks depends on [`typeCheckingMode`](/pykrete/reference/configuration/#typecheckingmode).
 
-**`returnTypeMismatch` — D0080.** On by default. The returned columns match the declared return schema by name, but a column's *type* doesn't — and both types are confidently known and genuinely incompatible. Numeric widening (`int` → `long` → `double`) is accepted; unknown types are left alone. This is the conservative check: it fires only when it's sure.
+**`returnTypeMismatch` — D0080.** On by default; emitted at `error` severity. The returned columns match the declared return schema by name, but a column's *type* doesn't — and both types are confidently known and genuinely incompatible. Numeric widening (`int` → `long` → `double`) is accepted; unknown types are left alone. The check is conservative on the column-type arm: it stays silent when either side's type is Unknown.
+
+**New in v1.13: dialect mismatch.** When a function is annotated `-> SparkFrame[X]` but the body returns a `.toPandas()` chain (or any other expression that resolves to a `PandasFrame[…]`), D0080 fires with the message: `Return type mismatch: declared as SparkFrame schema 'X' but the body produces PandasFrame schema 'X'.` Honest-silence carve-out: constructor cases (`pd.DataFrame(...)`, `spark.read.parquet(...)`) where the body dialect is unknown don't fire (no fabrication). v1.10's bare-attribute D0091 carve-out for the deprecated `DataFrame[X]` annotation does NOT apply here — the return-type annotation IS the adjudication site. **Adopters with code that incorrectly cross-converts dialects at function boundaries will see new D0080 fires.** Fix: align the annotation with the body, OR rewrite the body to match the annotation.
 
 **Strict mode adds three.** Under `typeCheckingMode: strict`:
 

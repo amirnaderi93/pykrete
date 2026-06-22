@@ -167,24 +167,34 @@ The v1.12 cycle's headline is **closing the v1.11 GITHUB_TOKEN calendared promis
 
 For the verification posture and per-donor matrix, see [Real-codebase tests](/about/pykrete-tests/) and [Production readiness → Real-codebase testing](/about/production-readiness/#real-codebase-testing). For the full pandas direction across v1.13+ and v2.0, see [Pandas roadmap](/about/pandas-roadmap/).
 
+## Shipped in v1.13 — D0080 dialect-on-return arm + pivot_table aggfunc-driven schema inference + audit + CI tooling
+
+The v1.13 cycle's headline is the **D0080 dialect-on-return checker arm**: the longest-standing correctness gap (7 cycles since the v1.6 column-name + shared-column-type comparison shipped) closes. A function annotated `-> SparkFrame[X]` returning a `.toPandas()` chain (or any expression resolving to a `PandasFrame[…]`) now fires D0080 against the dialect tag. The release also lands the first observable aggregate-semantics-informed schema inference (pivot_table `aggfunc=` → Derived envelope), tightens audit tooling, and retires the v1.12 polling-step CI workaround.
+
+- **D0080 dialect-on-return checker arm** (PR-D1 #190). Extends `check_return_type` in `crates/pykrete/src/operations/driver.rs` to compare the Dialect tag of the declared return against the inferred body type. Fires at `Severity::Error` with a dedicated dialect-mismatch message: `Return type mismatch: declared as SparkFrame schema 'X' but the body produces PandasFrame schema 'X'`. Honest-silence carve-out: constructor cases (`pd.DataFrame(...)`, `spark.read.parquet(...)`) where the body dialect is unknown don't fire (no fabrication). Closes the longest-standing 7-cycle correctness gap.
+- **pivot_table aggfunc-driven Derived-schema synthesis** (PR-D2 #189). v1.12 primed recognition against the 11-string allowlist; v1.13 consumes the classifier output so the result schema synthesizes a `Derived` envelope with the named `values=` columns at the aggregate-driven dtype: `count` / `nunique` → int64; `mean` / `std` / `var` / `median` → float64; `sum` / `min` / `max` / `first` / `last` → preserve the receiver column's type; default (no aggfunc) → mean → float64. Multi-values + `columns=` (MultiIndex result) falls through to Unknown. The first observable aggregate-semantics-informed schema inference; v1.14+ pairs with `groupby.agg` convention.
+- **Backtick-preservation tripwire** (PR-A1 #188). Audit-tooling guard preventing the 2-cycle backtick-strip regression class identified in the v1.12 retro from recurring silently. Closes audit gap from v1.11+v1.12 sweep.
+- **Dispatched-run required-status-check + cancel-self** (PR-A2 #186). The release-gate workflow's dispatched run is now wired as a required status check on `chore(release):` PRs; the v1.12 polling-step retires. First live release-gate run on PR-F confirmed end-to-end.
+- **vscode CHANGELOG per-section masking test lock-in** (PR-V1 #187). Pins the per-section masking behavior covering the v1.12 CHANGELOG-cite carve-out so future edits can't silently drift.
+
+For the verification posture and per-donor matrix, see [Real-codebase tests](/about/pykrete-tests/) and [Production readiness → Real-codebase testing](/about/production-readiness/#real-codebase-testing). For the full pandas direction across v1.14+ and v2.0, see [Pandas roadmap](/about/pandas-roadmap/).
+
 ## Next up
 
-### v1.13 — D0080 dialect-on-return arm + broader pandas reshape + `--include-py` / `--changed-only` migrate flags
+### v1.14 — broader pandas reshape + migrator flags + audit-debt closures
 
-Now that the v1.11 GITHUB_TOKEN calendared promise is closed and D0080 has cross-codebase trust coverage, v1.13's focus is closing the D0080 dialect-on-return checker carve-out (the comparison currently checks column names + shared-column types but not the Dialect tag — `-> SparkFrame[X]` returning `.toPandas()` body fires zero diagnostics), the rest of the pandas reshape surface, and the migrator's remaining flag surface. LSP polish stays formally rescoped to v2.0.1 / discrete LSP-feature work per v1.10 spec §10.10, NOT a v1.x bundle.
-
-- **D0080 dialect-on-return checker arm**: extend `check_return_type` to compare the Dialect tag of the declared return against the inferred body type. Carve-out from the v1.12 PR-P1 cross-codebase coverage.
-- **Pandas reshape**: `groupby.agg`, `reset_index`, `set_index`, plus full `pivot_table` / `melt` / `stack` / `unstack` output schema-tracking (the wide / long output schemas — variable column values become column names of the result frame; `var_name` / `value_name` become columns of the long frame; index-level promotion / demotion for `stack` / `unstack`).
-- **Richer `pivot_table` aggfunc-driven inference**: v1.12 PR-D1 primed recognition against the 11-string allowlist; v1.13+ consumes the classifier output (e.g., result schema knows `aggfunc="count"` produces int64 columns vs `aggfunc="mean"` produces float64).
+- **Broader pandas reshape**: `groupby.agg` (now unblocked by the v1.13 pivot_table aggfunc-driven Derived synthesis pattern), `reset_index`, `set_index`, plus full `pivot_table` / `melt` / `stack` / `unstack` output schema-tracking (the wide / long output schemas — variable column values become column names of the result frame; `var_name` / `value_name` become columns of the long frame; index-level promotion / demotion for `stack` / `unstack`).
 - **`.loc` non-literal forms and `.iloc`**: `.loc[mask, "col"]` (boolean mask), `.loc[:, "a":"b"]` (column range), and `pdf.iloc[...]`.
 - **`df.query("…")` / `df.eval("…")` mini-DSLs**: parse string-fragment column refs separately. numexpr-influenced syntax, not SQL.
 - **`pd.read_csv(...)` and other pandas I/O entry points**: schema inference from file headers / SQL / type-stubs as a separate design surface.
 - **`--include-py` flag for `pykrete migrate`**: let the migrator walk `.py` files in the multiplexer cohort alongside `.pyk`.
 - **`--changed-only` flag** for both `pykrete migrate` and `pykrete check`: walk only files changed against HEAD. Pairs naturally with CI invocations.
-- **`--compare-to <snapshot>` flag for `--deprecation-report`**: consumer-state model is a product fork — pairs with the v1.10 `--snapshot` file-write surface as the diff-between-snapshots primitive.
-- **CI-guard for the omitted-edit drift class**: v1.8's `build.rs` extraction closes the parallel-edit class structurally; v1.9 backed it with CI-running tests; v1.10 lands the property / method tripwire and CHANGELOG grep gate v3; v1.13 extends to catch new arms added without updating either list.
-- **Retrofitting pandas `PROBE-TYPE-IS` to the v1.3 hybrid donors** (MLflow, Feast, iceberg-python).
+- **`--compare-to <snapshot>` flag for `--deprecation-report`**: consumer-state model is a product fork — pairs with the v1.10 `--snapshot` file-write surface as the diff-between-snapshots primitive. USER-DECISION calendared for v1.14 spec time per v1.13 PR-S1 §12.
+- **CI-guard for the omitted-edit drift class**: v1.8's `build.rs` extraction closes the parallel-edit class structurally; v1.9 backed it with CI-running tests; v1.10 lands the property / method tripwire and CHANGELOG grep gate v3; v1.14 extends to catch new arms added without updating either list.
+- **PROBE-TYPE-IS retrofit** to the v1.3 hybrid donors (MLflow, Feast, iceberg-python).
 - **Canonical-vs-direct CI gate (I3)** from the v1.4 architecture audit.
+- **`pd.DataFrame.attribute_access` form** for D0030 tracking on the pandas attribute-access surface.
+- **Constructor-arm extension** (`pd.DataFrame(...)`, `spark.read.<format>(...)`, `spark.createDataFrame(rows, schema=)`) in `inherited_chain_state` — closes the D0080 dialect-on-return honest-silence carve-out.
 
 ### Window-key type tracking
 
