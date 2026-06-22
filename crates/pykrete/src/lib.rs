@@ -25,6 +25,7 @@ pub mod alias_adjudicate;
 pub mod alias_report;
 #[doc(hidden)]
 pub mod build_helpers;
+pub mod compare_to;
 pub mod completion;
 pub mod config;
 pub mod dataframe;
@@ -33,6 +34,7 @@ pub mod dialect_signals;
 pub mod hover;
 pub mod imports;
 pub mod operations;
+pub mod provenance;
 pub mod registry;
 pub mod schema;
 pub mod sql;
@@ -49,6 +51,10 @@ pub use alias_report::{
     AckFilter, AdjudicatedDialect, AliasSite, MigrationStatus, collect_alias_sites,
     render_alias_report_json, render_deprecation_report_json,
 };
+pub use compare_to::{
+    Snapshot, SnapshotProvenance, SnapshotSite, added_count, parse_snapshot, render_diff,
+    snapshot_from_current_envelope,
+};
 pub use completion::{CompletionItem, CompletionItemKind, completions};
 pub use config::Config;
 pub use dialect_signals::{
@@ -56,6 +62,10 @@ pub use dialect_signals::{
     PANDAS_ONLY_SIGNALS, SPARK_DISCRIMINATOR_PROPERTIES, SPARK_DISCRIMINATORS,
 };
 pub use hover::{HoverInfo, hover};
+pub use provenance::{
+    capture_current as capture_current_provenance, capture_git_sha, current_timestamp_iso8601,
+    format_unix_secs_as_iso8601,
+};
 pub use symbols::{
     DocumentSymbol, Span, SymbolKind, definition, document_symbols, prepare_rename, references,
     rename,

@@ -278,6 +278,12 @@ CHANGELOG citations may use bare basenames (e.g., `alias_report.rs:446`); the ci
 
 v1.12 extends `# pykrete: ack-deprecation` recognition to the entire contiguous comment block above the anchor. v1.10's `marker → non-matching comment → def` pending semantic is now acknowledged. Spec §6.1.4.
 
+### `--compare-to` SIMPLE diff document (v1.14+)
+
+`pykrete check --deprecation-report --compare-to <prior>.json` emits a SIMPLE three-bucket diff (`added` / `removed` / `unchanged`) against a previously-emitted snapshot file and exits nonzero when `added` is non-empty. Keying is `(file, line)`; a `MigrationStatus` flip at the same key surfaces as remove + add. The flag is mutex with `--ack`, `--snapshot`, and `--fail-on-nonempty` (see spec v1.14 §1.i.1).
+
+The CI pattern: emit a baseline snapshot on `main` (`pykrete check --deprecation-report --snapshot=baseline.json src/`), cache it, then on every PR diff against it (`pykrete check --deprecation-report --compare-to=baseline.json src/`). The exit code gates regressions; the diff document on stdout is the human-readable surface (pipe into a PR comment or a job summary). `snapshot_b.sha` / `snapshot_b.timestamp` are captured live from `git rev-parse HEAD` and the system clock so a saved diff document carries its provenance. `snapshot_a.*` round-trips from the prior snapshot file's `pykreteSourceCommit` and `generatedAt` top-level keys. v1.14+ envelopes emit both (CLI-captured at snapshot time); pre-v1.14 envelopes emit `null` for both. v1.14+ snapshots therefore round-trip provenance through `--compare-to`.
+
 ### `editors/vscode/CHANGELOG.md` numeric-claim convention
 
 The vscode CHANGELOG (`editors/vscode/CHANGELOG.md`) does NOT carry the `text-numeric` fenced-block discipline that the root CHANGELOG enforces. Per-cycle numeric claims (cross-codebase probe counts, fixture counts) live in flowing prose as `<old> → <new> probes across <fixtures> fixtures from <donors> donors`. By convention these are bare (no backticks) — matching the historical style of every prior release entry in the file. The trust-claim sweep checklist's backtick-preservation tripwire (v1.13 PR-A1) snapshots only the surfaces that DO use single backticks (`pykrete-tests/README.md`, root CHANGELOG historical pins); the vscode CHANGELOG is intentionally exempt from the tripwire.

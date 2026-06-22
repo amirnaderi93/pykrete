@@ -69,6 +69,19 @@ Options:
                            consumers the `jq '.summary.totalSites' |
                            xargs test 0 -eq` boilerplate. Requires
                            --deprecation-report.
+        --compare-to <PATH>
+                           Diff the current --deprecation-report
+                           envelope against a previously-emitted
+                           snapshot file. Emits a SIMPLE diff document
+                           ({snapshot_a, snapshot_b, diff: {added,
+                           removed, unchanged}}) on stdout; exits 1 if
+                           the 'added' bucket is non-empty (regression
+                           signal). Keying is (file, line); a binary
+                           MigrationStatus flip surfaces as remove +
+                           add. Requires --deprecation-report; mutually
+                           exclusive with --ack, --snapshot, and
+                           --fail-on-nonempty (different output mode).
+                           Exits 2 on argument or snapshot-parse errors.
     -h, --help             Show this help and exit.
 
 Example:
@@ -79,6 +92,7 @@ Example:
     pykrete check --deprecation-report --ack=pending src/
     pykrete check --deprecation-report --snapshot=migration.json src/
     pykrete check --deprecation-report --ack=pending --fail-on-nonempty src/
+    pykrete check --deprecation-report --compare-to=prior.json src/
 ";
 
 const TRANSPILE_HELP: &str = "\
@@ -185,6 +199,7 @@ struct CheckArgs {
     ack_filter: Option<pykrete::AckFilter>,
     snapshot_path: Option<PathBuf>,
     fail_on_nonempty: bool,
+    compare_to: Option<PathBuf>,
     paths: Vec<String>,
 }
 
@@ -196,6 +211,7 @@ fn parse_check_args(args: &[String]) -> Result<CheckArgs, String> {
     let mut ack_filter: Option<pykrete::AckFilter> = None;
     let mut snapshot_path: Option<PathBuf> = None;
     let mut fail_on_nonempty = false;
+    let mut compare_to: Option<PathBuf> = None;
     let mut paths: Vec<String> = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -256,6 +272,35 @@ fn parse_check_args(args: &[String]) -> Result<CheckArgs, String> {
                 snapshot_path = Some(PathBuf::from(value));
             }
             "--fail-on-nonempty" => fail_on_nonempty = true,
+            "--compare-to" => {
+                i += 1;
+                let value = args
+                    .get(i)
+                    .ok_or_else(|| "--compare-to requires a path".to_string())?;
+                // Same flag-shape rejection as --snapshot: refuse
+                // `--compare-to --ack=pending` silently swallowing the
+                // following flag as the path argument.
+                if value.starts_with("--") || (value.starts_with('-') && value.len() > 1) {
+                    return Err(format!(
+                        "--compare-to: value '{value}' looks like a flag; \
+                         use --compare-to=<path> if your path starts with '-'"
+                    ));
+                }
+                if value == "-" {
+                    return Err(
+                        "--compare-to: '-' is not a valid path; use --compare-to=<path>"
+                            .to_string(),
+                    );
+                }
+                compare_to = Some(PathBuf::from(value));
+            }
+            s if s.starts_with("--compare-to=") => {
+                let value = &s["--compare-to=".len()..];
+                if value.is_empty() {
+                    return Err("--compare-to requires a path".to_string());
+                }
+                compare_to = Some(PathBuf::from(value));
+            }
             s if s.starts_with('-') => {
                 return Err(format!("unknown option '{s}'; see `pykrete check --help`"));
             }
@@ -283,6 +328,30 @@ fn parse_check_args(args: &[String]) -> Result<CheckArgs, String> {
     if fail_on_nonempty && !deprecation_report {
         return Err("--fail-on-nonempty requires --deprecation-report".to_string());
     }
+    if compare_to.is_some() && !deprecation_report {
+        return Err("--compare-to requires --deprecation-report".to_string());
+    }
+    if compare_to.is_some() && ack_filter.is_some() {
+        return Err(
+            "--compare-to and --ack are mutually exclusive; the diff operates on the unfiltered \
+             envelope (filtering on a diff is a v1.15+ extension)"
+                .to_string(),
+        );
+    }
+    if compare_to.is_some() && snapshot_path.is_some() {
+        return Err(
+            "--compare-to and --snapshot are mutually exclusive; --compare-to emits a diff \
+             document on stdout while --snapshot writes the envelope to a file"
+                .to_string(),
+        );
+    }
+    if compare_to.is_some() && fail_on_nonempty {
+        return Err(
+            "--compare-to and --fail-on-nonempty are mutually exclusive; --compare-to has its \
+             own exit-code semantics (nonzero when the 'added' bucket is non-empty)"
+                .to_string(),
+        );
+    }
     Ok(CheckArgs {
         verbose,
         format,
@@ -291,6 +360,7 @@ fn parse_check_args(args: &[String]) -> Result<CheckArgs, String> {
         ack_filter,
         snapshot_path,
         fail_on_nonempty,
+        compare_to,
         paths,
     })
 }
@@ -330,6 +400,7 @@ fn run_check(args: &[String]) -> ExitCode {
         ack_filter,
         snapshot_path,
         fail_on_nonempty,
+        compare_to,
         paths,
     } = match parse_check_args(args) {
         Ok(v) => v,
@@ -401,7 +472,23 @@ fn run_check(args: &[String]) -> ExitCode {
     if deprecation_report {
         let mut sites = pykrete::collect_alias_sites(&sources);
         pykrete::adjudicate_alias_sites(&sources, &mut sites);
-        let rendered = pykrete::render_deprecation_report_json(&sites, ack_filter);
+        // v1.14 PR-D3 — stamp the envelope with live provenance so a
+        // snapshot taken now round-trips its source-of-truth context
+        // through `--compare-to` as `snapshot_a` provenance. The two
+        // top-level keys (`pykreteSourceCommit`, `generatedAt`) are
+        // always present; missing values surface as `null`.
+        let envelope_provenance = pykrete::capture_current_provenance();
+        let rendered =
+            pykrete::render_deprecation_report_json(&sites, ack_filter, &envelope_provenance);
+
+        // v1.14 PR-D3 — `--compare-to <prior>.json` emits a SIMPLE
+        // diff document instead of the v2 envelope (spec §1.i.1).
+        // Mutex with --ack / --snapshot / --fail-on-nonempty enforced
+        // at parse time.
+        if let Some(prior_path) = compare_to {
+            return run_compare_to(&prior_path, &rendered);
+        }
+
         if let Some(path) = snapshot_path {
             if let Err(e) = write_snapshot(&path, &rendered) {
                 eprintln!("--snapshot: cannot write to {}: {e}", path.display());
@@ -1007,6 +1094,56 @@ fn write_snapshot(path: &Path, contents: &str) -> io::Result<()> {
         return Err(e);
     }
     Ok(())
+}
+
+/// v1.14 PR-D3 — drive the `--compare-to` SIMPLE diff document. Reads
+/// the prior snapshot off disk, parses it, parses the current envelope
+/// (already rendered by the caller), captures live provenance for the
+/// current run, builds the diff doc, and emits it to stdout. Exit code
+/// per spec §1.i.1: `added.length > 0` → exit 1 (regression signal);
+/// otherwise exit 0.
+///
+/// `current_envelope_json` is the canonical v2 envelope text — the
+/// caller passes whatever `render_deprecation_report_json` produced.
+/// Re-parsing it here keeps the diff path agnostic to which struct
+/// representation the envelope started from (lib-level export tests
+/// can hand-roll envelopes; the CLI hands real ones).
+fn run_compare_to(prior_path: &Path, current_envelope_json: &str) -> ExitCode {
+    let prior_text = match fs::read_to_string(prior_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("--compare-to: cannot read {}: {e}", prior_path.display());
+            return ExitCode::from(2);
+        }
+    };
+    let snapshot_a = match pykrete::parse_snapshot(&prior_text) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("--compare-to: {}: {e}", prior_path.display());
+            return ExitCode::from(2);
+        }
+    };
+    let snapshot_b = match pykrete::snapshot_from_current_envelope(current_envelope_json) {
+        Ok(s) => s,
+        Err(e) => {
+            // Indicates render_deprecation_report_json drifted from the
+            // shape parse_snapshot accepts — a developer bug, not a
+            // user error. Surface explicitly.
+            eprintln!("--compare-to: failed to re-parse current envelope: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let provenance_b = pykrete::capture_current_provenance();
+
+    let diff = pykrete::render_diff(&snapshot_a, &snapshot_b, &provenance_b);
+    println!("{diff}");
+
+    if pykrete::added_count(&snapshot_a, &snapshot_b) > 0 {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 /// Write `contents` to `path` atomically: canonicalize through any
