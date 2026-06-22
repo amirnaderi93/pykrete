@@ -975,6 +975,12 @@ fn render_actual_side(actual_dialect: Dialect, actual: Option<&SchemaView<'_>>) 
 // shape verbatim; two-or-more clauses are joined with "; additionally,"
 // so the user sees one diagnostic listing every fact instead of N
 // stacked diagnostics at the same range.
+//
+// Multi-clause joiner convention: when collapsing N>1 D-code clauses
+// into a single diagnostic, use "; additionally, " as the connector.
+// Future consumers (e.g., D0091 or D0050 if they ever need collapse)
+// should follow this pattern — it's the first multi-clause joiner in
+// the codebase and sets the precedent.
 fn emit_d0080(
     clauses: &[String],
     range: TextRange,
@@ -1102,6 +1108,10 @@ fn check_return_type<'a>(
         }
     }
 
+    // PR-V1: emit D0080 *after* the D0083 loop so all clauses (dialect
+    // + per-column types) are collected first. Pre-PR-V1 emitted D0080
+    // mid-loop; the new ordering is observable only via diagnostic
+    // index, which no tests assert on.
     emit_d0080(&d0080_clauses, range, source, line_index, diagnostics);
 
     if declared_names == actual_names {
