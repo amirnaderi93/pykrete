@@ -307,7 +307,14 @@ Before opening PR-F, run `bash scripts/trust-claim-sweep-checklist.sh --current-
 
 ### Wait for dispatched release-gate run before merging PR-F
 
-GitHub Actions' GITHUB_TOKEN limitation means the `release-gate-check` shown on the PR (triggered by `pull_request`) is SKIPPED. PR-A1's auto-label fix dispatches `release-gate.yml` via the `actions.createWorkflowDispatch` API after the `release-ready` label lands — find the dispatched run via:
+GitHub Actions' GITHUB_TOKEN limitation means a `pull_request`-event-triggered release-gate job can't be a useful required status check (it would SKIP on every ordinary PR and block merges). v1.13 PR-A2 split the workflow by event:
+
+- `pull_request` event fires `release-gate-check-pr-noop` (exits success immediately; NOT in the required-checks list).
+- `workflow_dispatch` event fires `release-gate-check` (the full live-extract gate). v1.12 PR-A1's auto-label workflow dispatches this via `actions.createWorkflowDispatch` when the `release-ready` label lands.
+
+With branch protection configured (see below), `release-gate-check` is REQUIRED on `main`: a PR labeled `release-ready` cannot merge until the dispatched run completes green. Cold-cache runtime is ~35 min (down from ~70 min after v1.12 PR-A2's `cargo test` memoization).
+
+If you need to find the dispatched run manually (e.g., to inspect failing step output before the required-check status updates on the PR):
 
 ```sh
 gh run list --repo amirnaderi93/pykrete --workflow=release-gate.yml --limit 5 \
@@ -315,4 +322,24 @@ gh run list --repo amirnaderi93/pykrete --workflow=release-gate.yml --limit 5 \
     | jq '.[] | select(.event=="workflow_dispatch" and .headBranch=="chore/v1.X-pr-f-trust-claim")'
 ```
 
-Wait for `conclusion: success` before merging PR-F. Cold-cache runtime is ~35 min (down from ~70 min after v1.12 PR-A2's `cargo test` memoization). Don't merge until the dispatched run succeeds. (v1.13+ candidate: convert the dispatched run to a required status check so this polling is automated.)
+#### Branch-protection configuration (manual one-time step)
+
+The pykrete repo does not currently use a `.github/settings.yml` bot; branch-protection is configured via the GitHub API. To require `release-gate-check` on `main`, run:
+
+```sh
+gh api -X PATCH repos/amirnaderi93/pykrete/branches/main/protection \
+  --input - <<EOF
+{
+  "required_status_checks": {
+    "strict": false,
+    "contexts": ["release-gate-check"]
+  }
+}
+EOF
+```
+
+Notes:
+- `"strict": false` is intentional. `strict: true` requires the PR branch to be up-to-date with `main` before merging, which forces a rebase + re-run of the dispatched gate every time `main` advances. For a release gate that takes ~35 min cold, that's prohibitive. The dispatched-run-passed contract is what we care about, not the up-to-date contract.
+- `contexts` is a flat list; only `release-gate-check` is required. The `release-gate-check-pr-noop` job is NOT in the list, so its existence (it exits success on every PR) is irrelevant to merge gating.
+- Branch protection cannot be expressed alongside other settings (admins, restrictions, etc.) without re-specifying them; if the repo already has a richer branch-protection JSON, fetch it first with `gh api repos/amirnaderi93/pykrete/branches/main/protection`, merge the `required_status_checks` field, and PATCH the full payload back.
+- Direct push to `main` without a PR is not affected by required status checks; that path is gated by separate push-protection settings.

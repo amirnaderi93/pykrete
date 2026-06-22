@@ -1,6 +1,9 @@
 # Release gate
 #
 # v1.10 PR-A2 — closes v1.9 arch-I2.
+# v1.13 PR-A2 — split by event so the dispatched run can be a required
+# status check on `main` (closes v1.12 retro polling-step manual
+# workaround). See `docs/design/v1.13-spec.md` §3 + §14.
 #
 # WHY THIS EXISTS
 # ---------------
@@ -13,18 +16,45 @@
 # with stale "N probes" / "N fixtures" / "N positive" claims.
 #
 # This workflow closes the gap structurally: on push to a release branch
-# (release/v*) OR on a PR labeled `release-ready` OR on manual dispatch,
-# it checks out both pykrete + pykrete-tests as siblings and runs the
-# gate WITHOUT --skip-live-extract.
+# (release/v*) OR on PR labeled-event (no-op, see below) OR on manual
+# dispatch (the real gate), it checks out both pykrete + pykrete-tests
+# as siblings and runs the gate WITHOUT --skip-live-extract.
 #
 # TRIGGER MODEL
 # -------------
 # - push to release/v* — pre-tag verification (cycle-close PR-F should
-#   have already run this locally; this is the structural guard).
-# - pull_request with label `release-ready` — apply the label to any PR
-#   you want to run the full live-extract gate against (e.g. PR-F).
-# - workflow_dispatch — manual fallback (operator wants to verify a
-#   particular ref).
+#   have already run this locally; this is the structural guard). Runs
+#   the FULL gate under check-name `release-gate-check`.
+# - pull_request (labeled/synchronize/opened/reopened) — fires the
+#   `release-gate-check-pr-noop` job. The noop exits success in seconds
+#   and is NOT required by branch protection. The actual gate fires via
+#   workflow_dispatch (see below), not via the pull_request event,
+#   because GitHub Actions' GITHUB_TOKEN limitation skips the
+#   pull_request-triggered job and the SKIPPED status would block a
+#   required-check on every ordinary PR.
+# - workflow_dispatch — the real gate. v1.12 PR-A1's auto-label workflow
+#   fires `actions.createWorkflowDispatch` against this workflow when a
+#   PR is labeled `release-ready`, OR an operator dispatches manually.
+#   Runs the FULL gate under check-name `release-gate-check`. Branch
+#   protection requires this name.
+#
+# WHY SPLIT BY EVENT (v1.13 PR-A2)
+# --------------------------------
+# Branch-protection matches checks BY NAME. The pre-v1.13 single-job
+# layout meant the pull_request-triggered SKIPPED check shared the name
+# `release-gate-check` with the workflow_dispatch-triggered live run.
+# Requiring `release-gate-check` on `main` would have blocked every
+# ordinary PR (no `release-ready` label) on the SKIPPED pull_request
+# arm. The v1.13 fix gives the pull_request arm a DIFFERENT name
+# (`release-gate-check-pr-noop`) that branch protection ignores. Spec
+# §3.1.1 / §3.1.2.
+#
+# WHY NOT DELETE THE pull_request ARM ENTIRELY
+# --------------------------------------------
+# The PR's checks list expects to see at least one check from each
+# workflow. Without a pull_request-triggered job, the release-gate
+# workflow wouldn't appear on the PR at all, hiding the dispatched run
+# from operators. The noop keeps the workflow visible. Spec §3.1.4.
 #
 # WHY NOT "ALWAYS RUN LIVE-EXTRACT ON EVERY PR"
 # --------------------------------------------
@@ -53,14 +83,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # v1.13 PR-A2 — pull_request-event no-op. Exists so the workflow
+  # appears in the PR's checks list; does NOT run the gate. Branch
+  # protection IGNORES this job (not in the required-checks list).
+  # The real gate fires via workflow_dispatch from the auto-label
+  # workflow (.github/workflows/auto-label-release-pr.yml).
+  release-gate-check-pr-noop:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Explain the no-op
+        run: |
+          echo "This is a no-op job for the pull_request event."
+          echo "The real release-gate runs under check-name 'release-gate-check'"
+          echo "triggered by workflow_dispatch (fired by auto-label-release-pr.yml"
+          echo "when 'release-ready' is applied) or by push to release/v*."
+          echo "Branch protection requires 'release-gate-check', not this job."
+
   release-gate-check:
-    # Only run on PR if the PR carries the `release-ready` label. Push +
-    # workflow_dispatch always run.
-    if: |
-      github.event_name == 'push' ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' &&
-       contains(github.event.pull_request.labels.*.name, 'release-ready'))
+    # Real gate: push to release/v* OR workflow_dispatch (auto-label
+    # API or manual). Branch protection REQUIRES this job's name.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout pykrete
