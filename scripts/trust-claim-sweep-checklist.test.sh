@@ -290,8 +290,203 @@ help_rc=$?
 extra=ok
 printf '%s' "$help_out" | grep -qF -- "--current-version=X.Y.Z" || extra=missing_current_version_in_help
 printf '%s' "$help_out" | grep -qF -- "--skip-pykrete-tests" || extra="${extra}+missing_skip_in_help"
+printf '%s' "$help_out" | grep -qF -- "--snapshot" || extra="${extra}+missing_snapshot_in_help"
 printf '%s' "$help_out" | grep -qF "Usage:" || extra="${extra}+missing_usage_header"
 assert "I2: --help lists all flags + USAGE header" 0 "$help_rc" "$extra"
+
+# === v1.13 PR-A1 — backtick-preservation tripwire tests ===
+#
+# These exercise the snapshot/tripwire layer that closes the 2-cycle
+# PR-G regression at v1.11 + v1.12 (PR-G dev unwraps backticks on a
+# historical batch number in pykrete-tests/README.md). The snapshot
+# files are written under the temp repo's `scripts/` dir so the
+# script's default SNAPSHOT_FILE resolves correctly under REPO_ROOT.
+
+BT=$(printf '\140')
+
+write_snapshot() {
+    local repo="$1"
+    shift
+    mkdir -p "$repo/scripts"
+    : > "$repo/scripts/trust-claim-sweep-checklist.snapshot.txt"
+    for line in "$@"; do
+        printf '%s\n' "$line" >> "$repo/scripts/trust-claim-sweep-checklist.snapshot.txt"
+    done
+}
+
+# --- Case T1: pin present in surface + present in snapshot → pass ---
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README with current numbers: 261 probes across 120 fixtures.\n' > "$repo/README.md"
+printf "Historical: %s255 probes%s and %s114 fixtures%s.\n" "$BT" "$BT" "$BT" "$BT" >> "$repo/README.md"
+write_snapshot "$repo" \
+    "README.md:${BT}255 probes${BT}" \
+    "README.md:${BT}114 fixtures${BT}"
+run_gate "$repo" 1.10.0 --skip-pykrete-tests
+extra=ok
+grep -q "BACKTICK-PRESERVATION-FAIL" "$repo/stderr" && extra=tripwire_should_be_clean
+grep -qF "tripwire scanned 2 snapshot pin(s); 0 missing" "$repo/stdout" || extra="${extra}+missing_tripwire_summary"
+assert "T1: pin present in surface + snapshot → tripwire clean" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case T2: pin in snapshot but unwrapped on tree → tripwire fails ---
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+# README mentions the number bare (no backticks). Snapshot says backticks
+# were there at snapshot time. The tripwire fires.
+# Use a number that is NOT a prior-release pin so the prior-release sweep
+# stays clean and the only failure is the tripwire (isolates the check).
+printf 'README with current 261 probes; legacy was 1234 probes (lost backticks).\n' > "$repo/README.md"
+write_snapshot "$repo" \
+    "README.md:${BT}1234 probes${BT}"
+run_gate "$repo" 1.10.0 --skip-pykrete-tests
+extra=ok
+grep -qF "BACKTICK-PRESERVATION-FAIL: README.md" "$repo/stderr" || extra=missing_tripwire_fail_line
+grep -qF "${BT}1234 probes${BT}" "$repo/stderr" || extra="${extra}+missing_pin_in_message"
+grep -qF "Restore the backticks or refresh the snapshot with --snapshot" "$repo/stderr" || extra="${extra}+missing_restore_hint"
+assert "T2: snapshotted pin unwrapped on tree → tripwire fails" 1 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case T3: pin present on tree + absent from snapshot → pass (additive) ---
+# A new backticked pin that isn't yet snapshotted must not trip the
+# tripwire — the snapshot is additive (PR-F's --snapshot refresh sweeps
+# new pins in at cycle close).
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf "README: 261 probes; history mentions %s99 probes%s as a new pin.\n" "$BT" "$BT" > "$repo/README.md"
+# Empty snapshot file (no pins recorded yet) — but tripwire needs SOMETHING
+# in it to be "active". An empty file is the DEGRADED mode (T6); to test
+# the additive case, write a snapshot that contains an UNRELATED pin which
+# IS present on the tree.
+printf "Footnote %s17 donors%s.\n" "$BT" "$BT" >> "$repo/README.md"
+write_snapshot "$repo" \
+    "README.md:${BT}17 donors${BT}"
+run_gate "$repo" 1.10.0 --skip-pykrete-tests
+extra=ok
+grep -q "BACKTICK-PRESERVATION-FAIL" "$repo/stderr" && extra=additive_new_pin_should_not_trip
+assert "T3: new backticked pin not yet snapshotted does NOT trip tripwire" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case T4: --snapshot writes snapshot + skips tripwire + exits 0 ---
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+# Author wants two backticked pins captured.
+printf "Historical: %s99 probes%s and %s88 fixtures%s.\n" "$BT" "$BT" "$BT" "$BT" > "$repo/README.md"
+# Seed an OLD snapshot whose pins are absent on the tree — proves that
+# --snapshot REWRITES (not appends) and does NOT trip on stale entries.
+write_snapshot "$repo" \
+    "README.md:${BT}99999 probes${BT}"
+# Place the source-of-truth backticked pins on a surface the snapshot
+# routine scans. The snapshot routine scans pykrete-tests/README.md +
+# editors/vscode/CHANGELOG.md only — not the root README. Use the
+# vscode CHANGELOG.
+printf "## 0.10.0\nHistorical: %s99 probes%s and %s88 fixtures%s.\n" "$BT" "$BT" "$BT" "$BT" > "$repo/editors/vscode/CHANGELOG.md"
+REPO_ROOT="$repo" bash "$GATE" --snapshot --skip-pykrete-tests > "$repo/stdout" 2> "$repo/stderr"
+LAST_RC=$?
+extra=ok
+grep -qF "wrote 2 snapshot pin(s)" "$repo/stdout" || extra=missing_snapshot_write_summary
+grep -qF "editors/vscode/CHANGELOG.md:${BT}99 probes${BT}" "$repo/scripts/trust-claim-sweep-checklist.snapshot.txt" || extra="${extra}+missing_pin1"
+grep -qF "editors/vscode/CHANGELOG.md:${BT}88 fixtures${BT}" "$repo/scripts/trust-claim-sweep-checklist.snapshot.txt" || extra="${extra}+missing_pin2"
+grep -qF "99999 probes" "$repo/scripts/trust-claim-sweep-checklist.snapshot.txt" && extra="${extra}+stale_pin_not_rewritten"
+grep -q "BACKTICK-PRESERVATION-FAIL" "$repo/stderr" && extra="${extra}+snapshot_ran_tripwire"
+grep -q "tripwire scanned" "$repo/stdout" && extra="${extra}+snapshot_ran_tripwire_in_stdout"
+assert "T4: --snapshot writes fresh snapshot + skips tripwire" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case T5: pin wrapped in DOUBLE backticks recognized as wrapped ---
+# The tripwire's grep -F search for `<single-backtick>pin<single-backtick>`
+# must NOT false-match on a `` ``pin`` `` (double-backtick) wrapping, AND
+# the surface containing a double-backtick wrap must still satisfy the
+# snapshot (the inner single-backtick pair is a substring of the double-
+# wrap, so it appears verbatim).
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+# Double-backtick wrap: `` `1.7.0` ``
+printf "Historical: %s%s1.7.0%s%s in markdown-escaped form.\n" "$BT$BT" "" "$BT$BT" "" > "$repo/README.md"
+# Wait: the brief uses `` ``1.7.0`` `` (double-backtick on each side).
+# Build that explicitly:
+printf "Double-wrap: %s%s1.7.0%s%s here.\n" "$BT$BT" "" "$BT$BT" "" >> "$repo/README.md"
+# Snapshot the inner single-backtick `1.7.0`. The outer double-wrap renders
+# the inner single-backticks as literal characters, so grep -F finds them.
+write_snapshot "$repo" \
+    "README.md:${BT}1.7.0${BT}"
+run_gate "$repo" 1.10.0 --skip-pykrete-tests
+extra=ok
+grep -q "BACKTICK-PRESERVATION-FAIL" "$repo/stderr" && extra=double_wrap_should_satisfy_tripwire
+assert "T5: double-backtick wrap satisfies tripwire (inner single-bt is substring)" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case T6: snapshot file missing → exit 0 (degraded mode, warn) ---
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README: 261 probes.\n' > "$repo/README.md"
+# No snapshot file at all.
+run_gate "$repo" 1.10.0 --skip-pykrete-tests
+extra=ok
+grep -qF "backtick-preservation snapshot not found" "$repo/stderr" || extra=missing_degraded_warn
+grep -q "BACKTICK-PRESERVATION-FAIL" "$repo/stderr" && extra="${extra}+should_not_fail_on_missing_snapshot"
+assert "T6: missing snapshot file → exit 0 with degraded-mode warning" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case T7: snapshot file empty → exit 0 (degraded mode, warn) ---
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README: 261 probes.\n' > "$repo/README.md"
+mkdir -p "$repo/scripts"
+: > "$repo/scripts/trust-claim-sweep-checklist.snapshot.txt"
+run_gate "$repo" 1.10.0 --skip-pykrete-tests
+extra=ok
+grep -qF "backtick-preservation snapshot at scripts/trust-claim-sweep-checklist.snapshot.txt is empty" "$repo/stderr" || extra=missing_empty_warn
+grep -q "BACKTICK-PRESERVATION-FAIL" "$repo/stderr" && extra="${extra}+should_not_fail_on_empty_snapshot"
+assert "T7: empty snapshot file → exit 0 with degraded-mode warning" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case T8: malformed snapshot line → tripwire fails fast ---
+# A snapshot line without a colon-separator is unparseable. The tripwire
+# treats this as a build-time bug in the snapshot file and exits 1
+# without false-positive on the unparseable entry.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README: 261 probes.\n' > "$repo/README.md"
+write_snapshot "$repo" \
+    "garbage-line-no-colon-separator"
+run_gate "$repo" 1.10.0 --skip-pykrete-tests
+extra=ok
+grep -qF "malformed snapshot line" "$repo/stderr" || extra=missing_malformed_error
+assert "T8: malformed snapshot line fails fast (exit 1)" 1 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case T9: snapshot points to missing surface → tripwire fails ---
+# If the snapshot references a file that no longer exists in the tree
+# (file deleted in a refactor), the tripwire must fail loud, not silently
+# pass. The skip-pykrete-tests carve-out (T9b) is the documented exception.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README: 261 probes.\n' > "$repo/README.md"
+write_snapshot "$repo" \
+    "deleted/path.md:${BT}1234 probes${BT}"
+run_gate "$repo" 1.10.0 --skip-pykrete-tests
+extra=ok
+grep -qF "BACKTICK-PRESERVATION-FAIL: deleted/path.md" "$repo/stderr" || extra=missing_deleted_surface_warn
+grep -qF "snapshotted surface not present in tree" "$repo/stderr" || extra="${extra}+missing_explanation"
+assert "T9: snapshot references missing surface → tripwire fails loud" 1 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case T9b: --skip-pykrete-tests honors the carve-out for sibling ---
+# Daily PR CI (no sibling checkout) must not trip on pykrete-tests
+# entries in the snapshot — passing --skip-pykrete-tests suppresses the
+# missing-surface error specifically for `../pykrete-tests/` prefixed
+# entries (and only for those).
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README: 261 probes.\n' > "$repo/README.md"
+write_snapshot "$repo" \
+    "../pykrete-tests/README.md:${BT}1234 probes${BT}"
+run_gate "$repo" 1.10.0 --skip-pykrete-tests
+extra=ok
+grep -q "BACKTICK-PRESERVATION-FAIL" "$repo/stderr" && extra=should_skip_pykrete_tests_entry
+assert "T9b: --skip-pykrete-tests honors carve-out for sibling-prefix entries" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
 
 # --- summary ---
 echo

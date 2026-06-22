@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # v1.11 PR-A1 — trust-claim sweep checklist.
+# v1.13 PR-A1 — backtick-preservation tripwire (--snapshot + tripwire).
 #
 # Sibling to scripts/changelog-grep.sh. Where changelog-grep verifies
 # CHANGELOG.md's numeric claims against the live extract (docs-vs-source),
@@ -8,14 +9,26 @@
 # release's numbers (docs-vs-history). Closes v1.10 retro rules 1 + 7 and
 # the 5-cycle PR-F-miscount pattern (v1.6 / v1.7 / v1.8 / v1.9 / v1.10).
 #
+# v1.13 PR-A1 layers a second check on top: a backtick-preservation
+# tripwire that reads scripts/trust-claim-sweep-checklist.snapshot.txt
+# and fails if any pin that was single-backticked at snapshot time
+# (e.g., `261 probes` in pykrete-tests/README.md) has been unwrapped on
+# the current revision. Closes the 2-cycle PR-G regression at v1.11 /
+# v1.12 where a docs-sync auditor closure PR stripped backticks on a
+# historical batch count and the cycle paid a re-write round.
+#
 # PR-F dev's flow:
 #   1. Update Cargo.toml + extension package.json to vN.M.0.
 #   2. Sweep README / docs-site / VS Code surfaces from vN.(M-1) numbers
 #      to live vN.M numbers.
 #   3. Run this gate. It re-reads Cargo.toml (vN.M), parses CHANGELOG.md
 #      for v(N.M-1)'s `text-numeric-historical` block, and greps the
-#      surface set for any prior-release number left behind.
-#   4. Exit 0 = sweep clean; open PR-F. Exit 1 = drift; fix and re-run.
+#      surface set for any prior-release number left behind. Then runs
+#      the backtick-preservation tripwire against the snapshot file.
+#   4. Exit 0 = sweep + tripwire clean; open PR-F. Exit 1 = drift; fix
+#      and re-run.
+#   5. Run `--snapshot` to refresh the snapshot when the cycle's new
+#      historical pins are committed (per v1.13-spec §2.1.1).
 
 set -u
 
@@ -25,6 +38,8 @@ CURRENT_VERSION=""
 SKIP_PYKRETE_TESTS=0
 CHANGELOG="${CHANGELOG:-CHANGELOG.md}"
 REPO_ROOT="${REPO_ROOT:-.}"
+SNAPSHOT_MODE=0
+SNAPSHOT_FILE="${SNAPSHOT_FILE:-scripts/trust-claim-sweep-checklist.snapshot.txt}"
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -48,6 +63,9 @@ while [ "$#" -gt 0 ]; do
         --skip-pykrete-tests)
             SKIP_PYKRETE_TESTS=1
             ;;
+        --snapshot)
+            SNAPSHOT_MODE=1
+            ;;
         -h|--help)
             cat <<'USAGE'
 Usage: trust-claim-sweep-checklist.sh [OPTIONS]
@@ -56,20 +74,33 @@ Verifies that docs surfaces (README, docs-site, VS Code extension, sibling
 pykrete-tests README) don't still carry the PRIOR release's pinned numbers
 from CHANGELOG.md. Run by PR-F dev after sweeping vN.(M-1) -> vN.M numbers.
 
+Also runs a backtick-preservation tripwire (v1.13 PR-A1): every
+non-`--snapshot` invocation re-reads the snapshot file and fails if any
+single-backticked historical pin (e.g., `` `261 probes` ``) recorded at
+snapshot time has been unwrapped on the current revision. Closes the
+2-cycle PR-G regression at v1.11 / v1.12.
+
 Options:
   --current-version=X.Y.Z   Override version detection (PR-F passes this).
                             Also accepts the space form: --current-version X.Y.Z.
   --skip-pykrete-tests      Skip the sibling pykrete-tests/README.md surface
                             (used by daily PR CI; release-gate CI doesn't skip).
+  --snapshot                Re-derive the backtick-preservation snapshot from
+                            the current surface set and write it to
+                            SNAPSHOT_FILE; skip both the prior-release-number
+                            sweep AND the tripwire check.
   -h, --help                Show this message.
 
 Environment overrides:
   REPO_ROOT                 Repo root to scan (default: .).
   CHANGELOG                 CHANGELOG path relative to REPO_ROOT (default: CHANGELOG.md).
+  SNAPSHOT_FILE             Snapshot path relative to REPO_ROOT (default:
+                            scripts/trust-claim-sweep-checklist.snapshot.txt).
 
 Exit codes:
-  0   sweep clean (or no prior pins to compare against).
-  1   one or more PRIOR-RELEASE-NUMBER-LEAKED lines emitted to stderr.
+  0   sweep clean (or no prior pins to compare against; or --snapshot succeeded).
+  1   one or more PRIOR-RELEASE-NUMBER-LEAKED or BACKTICK-PRESERVATION-FAIL
+      lines emitted to stderr.
   2   misuse (bad flag, malformed version, missing CHANGELOG, etc.).
 USAGE
             exit 0
@@ -81,6 +112,114 @@ USAGE
     esac
     shift
 done
+
+# --- shared surface assembly --------------------------------------------
+#
+# Used by both the prior-leak sweep AND by --snapshot / tripwire. Populates
+# SURFACES with repo-relative paths (so leak / tripwire messages cite the
+# user-readable path, not REPO_ROOT-rooted absolutes).
+SURFACES=()
+
+assemble_surfaces() {
+    add_surface() {
+        if [ -f "$REPO_ROOT/$1" ]; then
+            SURFACES+=("$1")
+        fi
+    }
+
+    add_surface "README.md"
+    add_surface "CHANGELOG.md"
+    add_surface "editors/vscode/CHANGELOG.md"
+    add_surface "editors/vscode/README.md"
+
+    if [ -d "$REPO_ROOT/docs-site/src/content" ]; then
+        while IFS= read -r f; do
+            rel="${f#$REPO_ROOT/}"
+            SURFACES+=("$rel")
+        done < <(find "$REPO_ROOT/docs-site/src/content" -type f \( -name '*.md' -o -name '*.mdx' \) | sort)
+    fi
+
+    # Sibling pykrete-tests checkout. The README isn't always present (release-
+    # gate CI checks it out; daily PR CI doesn't).
+    PYKRETE_TESTS_README="$REPO_ROOT/../pykrete-tests/README.md"
+    if [ "$SKIP_PYKRETE_TESTS" = "1" ]; then
+        :
+    elif [ -f "$PYKRETE_TESTS_README" ]; then
+        SURFACES+=("../pykrete-tests/README.md")
+    fi
+}
+
+# --- --snapshot early branch --------------------------------------------
+#
+# Snapshot mode is independent of CHANGELOG / version state — it just
+# enumerates the current single-backticked `<digits> <key>` pins across
+# the surface set and rewrites SNAPSHOT_FILE. Cycle-close PR-F runs this
+# after sweeping vN.(M-1) → vN.M numbers; the diff is reviewable.
+if [ "$SNAPSHOT_MODE" = "1" ]; then
+    # SNAPSHOT_SURFACES is a narrow subset of the full surface set: only
+    # the files where the 2-cycle PR-G regression actually happens (a
+    # backtick-strip in a historical migration-status / migration-batch
+    # row). Restricting the snapshot to these surfaces avoids snapshot-
+    # churn from CHANGELOG-current-section edits on every PR-F, which
+    # would defeat the tripwire's purpose. The CHANGELOG's historical
+    # sections are already protected by the existing header-section
+    # carve-out in the prior-leak sweep above; the tripwire is the
+    # second line of defense on the pykrete-tests README + vscode
+    # CHANGELOG, which carry no analogous masking.
+    SNAPSHOT_SURFACES=()
+    PYKRETE_TESTS_README="$REPO_ROOT/../pykrete-tests/README.md"
+    if [ "$SKIP_PYKRETE_TESTS" != "1" ] && [ -f "$PYKRETE_TESTS_README" ]; then
+        SNAPSHOT_SURFACES+=("../pykrete-tests/README.md")
+    fi
+    if [ -f "$REPO_ROOT/editors/vscode/CHANGELOG.md" ]; then
+        SNAPSHOT_SURFACES+=("editors/vscode/CHANGELOG.md")
+    fi
+
+    SNAPSHOT_PATH="$REPO_ROOT/$SNAPSHOT_FILE"
+    mkdir -p "$(dirname "$SNAPSHOT_PATH")"
+    : > "$SNAPSHOT_PATH"
+    for s in "${SNAPSHOT_SURFACES[@]:-}"; do
+        [ -z "$s" ] && continue
+        # `<digits> <key>` between matched single backticks. Same vocabulary
+        # as the CHANGELOG `text-numeric-historical` block keys so a
+        # snapshot of N is exactly the set of "historical batch counts a
+        # PR-G author might unwrap by accident" — the 2-cycle regression
+        # surface.
+        python3 - "$REPO_ROOT/$s" "$s" <<'PY' >> "$SNAPSHOT_PATH"
+import re
+import sys
+
+surface_path = sys.argv[1]
+surface_display = sys.argv[2]
+try:
+    with open(surface_path, "r", encoding="utf-8") as f:
+        text = f.read()
+except OSError:
+    sys.exit(0)
+
+bt = chr(96)
+# `<digits> <key>` with key in the same vocabulary as the
+# text-numeric-historical block keys. De-dup per surface so a pin
+# appearing N times in the file produces ONE snapshot line.
+pat = re.compile(
+    bt + r"(\d+ (?:probes|positive|negative|fixtures|tests|donors))" + bt
+)
+seen = set()
+for m in pat.finditer(text):
+    pin = m.group(1)
+    if pin in seen:
+        continue
+    seen.add(pin)
+    print(f"{surface_display}:{bt}{pin}{bt}")
+PY
+    done
+    # Stable order across runs: sort the snapshot so a re-run with no
+    # surface changes produces a byte-identical file (clean PR diffs).
+    sort -o "$SNAPSHOT_PATH" "$SNAPSHOT_PATH"
+    line_count=$(grep -c '^.' "$SNAPSHOT_PATH" || true)
+    echo "trust-claim-sweep: wrote $line_count snapshot pin(s) to $SNAPSHOT_FILE."
+    exit 0
+fi
 
 # Cargo.toml is the canonical source for "what release is shipping" —
 # it's what crates.io / cargo install sees. The marker file is a
@@ -197,42 +336,23 @@ if [ "$_TC_PINS_RC" -ne 0 ]; then
     exit 2
 fi
 PRIOR_NUMBERS=$(cat "$_TC_PINS_TMP")
+SKIP_PRIOR_SWEEP=0
 
 if [ -z "$PRIOR_NUMBERS" ]; then
     echo "trust-claim-sweep: no prior-release pins found for v$PRIOR_VERSION in $CHANGELOG; skipping (nothing to compare against)."
-    exit 0
+    # Tripwire still runs below — empty prior pins is independent of the
+    # backtick-preservation snapshot, which has its own state.
+    SKIP_PRIOR_SWEEP=1
 fi
 
 # --- assemble surface set ------------------------------------------------
-
-SURFACES=()
-
-add_surface() {
-    if [ -f "$REPO_ROOT/$1" ]; then
-        SURFACES+=("$1")
-    fi
-}
-
-add_surface "README.md"
-add_surface "CHANGELOG.md"
-add_surface "editors/vscode/CHANGELOG.md"
-add_surface "editors/vscode/README.md"
-
-if [ -d "$REPO_ROOT/docs-site/src/content" ]; then
-    while IFS= read -r f; do
-        rel="${f#$REPO_ROOT/}"
-        SURFACES+=("$rel")
-    done < <(find "$REPO_ROOT/docs-site/src/content" -type f \( -name '*.md' -o -name '*.mdx' \) | sort)
-fi
-
-# Sibling pykrete-tests checkout. The README isn't always present (release-
-# gate CI checks it out; daily PR CI doesn't).
+#
+# Surface helper is defined above (shared with --snapshot mode). The
+# absent-sibling warning is emitted here (non-snapshot path only) so the
+# snapshot run stays quiet on PR-F's clean rewrites.
+assemble_surfaces
 PYKRETE_TESTS_README="$REPO_ROOT/../pykrete-tests/README.md"
-if [ "$SKIP_PYKRETE_TESTS" = "1" ]; then
-    :
-elif [ -f "$PYKRETE_TESTS_README" ]; then
-    SURFACES+=("../pykrete-tests/README.md")
-else
+if [ "$SKIP_PYKRETE_TESTS" != "1" ] && [ ! -f "$PYKRETE_TESTS_README" ]; then
     echo "trust-claim-sweep: pykrete-tests sibling not present at $PYKRETE_TESTS_README; skipping that surface. Pass --skip-pykrete-tests to silence." >&2
 fi
 
@@ -254,6 +374,11 @@ fi
 fail=0
 total_scanned=0
 total_leaks=0
+
+if [ "$SKIP_PRIOR_SWEEP" = "1" ]; then
+    # Short-circuit the per-surface scan loop; tripwire still runs.
+    SURFACES=()
+fi
 
 while IFS= read -r line; do
     [ -z "$line" ] && continue
@@ -367,14 +492,80 @@ PY
         fail=1
     fi
 done <<EOF
-$(printf '%s\n' "${SURFACES[@]}")
+$(printf '%s\n' "${SURFACES[@]:-}")
 EOF
 
-prior_count=$(printf '%s\n' "$PRIOR_NUMBERS" | grep -c '^.' || true)
-echo "trust-claim-sweep: scanned $total_scanned surface(s) against $prior_count prior-release pin(s) for v$PRIOR_VERSION (current v$CURRENT_VERSION)."
+if [ "$SKIP_PRIOR_SWEEP" != "1" ]; then
+    prior_count=$(printf '%s\n' "$PRIOR_NUMBERS" | grep -c '^.' || true)
+    echo "trust-claim-sweep: scanned $total_scanned surface(s) against $prior_count prior-release pin(s) for v$PRIOR_VERSION (current v$CURRENT_VERSION)."
+fi
 
 if [ "$fail" -ne 0 ]; then
     echo "trust-claim-sweep: prior-release numbers leaked into trust-claim surfaces. Wrap intentionally-historical mentions in single-backticks, OR update the surface to the live v$CURRENT_VERSION numbers. Closes v1.6 / v1.7 / v1.8 / v1.9 / v1.10 PR-F-miscount pattern (v1.10 retro rules 1 + 7)." >&2
+fi
+
+# --- backtick-preservation tripwire (v1.13 PR-A1) -----------------------
+#
+# Reads SNAPSHOT_FILE; for each `surface:`<pin>`` line, checks the surface
+# still contains the EXACT backticked byte sequence. A snapshotted pin
+# whose backticks were stripped (the 2-cycle PR-G regression at v1.11 /
+# v1.12) fails the gate. Snapshot is additive: new backticked pins NOT
+# yet in the snapshot do NOT fire the tripwire (PR-F's --snapshot
+# refresh sweeps them in at cycle close).
+#
+# Degraded modes (exit 0, warn on stderr):
+# - SNAPSHOT_FILE missing → tripwire inactive (cold start / fresh repo).
+# - SNAPSHOT_FILE empty → tripwire inactive (nothing pinned yet).
+tripwire_fail=0
+SNAPSHOT_PATH="$REPO_ROOT/$SNAPSHOT_FILE"
+if [ ! -f "$SNAPSHOT_PATH" ]; then
+    echo "trust-claim-sweep: backtick-preservation snapshot not found at $SNAPSHOT_FILE; tripwire skipped. Run with --snapshot to seed it." >&2
+elif [ ! -s "$SNAPSHOT_PATH" ]; then
+    echo "trust-claim-sweep: backtick-preservation snapshot at $SNAPSHOT_FILE is empty; tripwire skipped." >&2
+else
+    tripwire_total=0
+    tripwire_missing=0
+    while IFS= read -r snap_line; do
+        [ -z "$snap_line" ] && continue
+        # Lines look like: pykrete-tests/README.md:`261 probes`
+        # Parse: SURFACE = up to first ':'; PIN = the rest (includes backticks).
+        snap_surface="${snap_line%%:*}"
+        snap_pin="${snap_line#*:}"
+        if [ -z "$snap_surface" ] || [ -z "$snap_pin" ] || [ "$snap_surface" = "$snap_line" ]; then
+            echo "trust-claim-sweep: malformed snapshot line: '$snap_line' (expected '<surface>:\`<pin>\`')" >&2
+            tripwire_fail=1
+            continue
+        fi
+        tripwire_total=$((tripwire_total + 1))
+        snap_path="$REPO_ROOT/$snap_surface"
+        if [ ! -f "$snap_path" ]; then
+            # Skip-pykrete-tests path or surface deleted in-tree. Honor
+            # the same skip semantics as the prior-leak sweep so daily
+            # PR CI (no sibling checkout) doesn't trip on the
+            # pykrete-tests entries.
+            if [ "$SKIP_PYKRETE_TESTS" = "1" ] && [ "${snap_surface#../pykrete-tests/}" != "$snap_surface" ]; then
+                continue
+            fi
+            echo "BACKTICK-PRESERVATION-FAIL: $snap_surface: snapshotted surface not present in tree." >&2
+            tripwire_missing=$((tripwire_missing + 1))
+            tripwire_fail=1
+            continue
+        fi
+        # Fixed-string grep: the snapshot stores the EXACT byte sequence
+        # we want to preserve (including the surrounding backticks).
+        if ! grep -qF -- "$snap_pin" "$snap_path"; then
+            echo "BACKTICK-PRESERVATION-FAIL: $snap_surface: '$snap_pin' was single-backticked at snapshot time but is not present on the current revision. Restore the backticks or refresh the snapshot with --snapshot." >&2
+            tripwire_missing=$((tripwire_missing + 1))
+            tripwire_fail=1
+        fi
+    done < "$SNAPSHOT_PATH"
+    echo "trust-claim-sweep: backtick-preservation tripwire scanned $tripwire_total snapshot pin(s); $tripwire_missing missing."
+    if [ "$tripwire_fail" -ne 0 ]; then
+        echo "trust-claim-sweep: backtick-preservation tripwire fired. Restore the backticks, OR refresh the snapshot with: bash scripts/trust-claim-sweep-checklist.sh --snapshot. Closes v1.11 / v1.12 PR-G regression class (v1.12 retro)." >&2
+    fi
+fi
+
+if [ "$fail" -ne 0 ] || [ "$tripwire_fail" -ne 0 ]; then
     exit 1
 fi
 
