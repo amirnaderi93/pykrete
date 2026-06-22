@@ -601,13 +601,19 @@ pub const PIVOT_TABLE_AGGFUNC_ALLOWLIST: &[&str] = &[
 ];
 
 #[doc(hidden)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PivotTableAggfuncForm {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PivotTableAggfuncForm<'a> {
     /// `aggfunc=` absent — pandas default (`"mean"`).
     Absent,
-    /// Single string literal from the allowlist.
-    AllowlistedString,
+    /// Single string literal from the allowlist; the borrowed `&str`
+    /// is the matched allowlist entry (e.g. `"sum"`). v1.13 PR-D2
+    /// consumes this to drive aggregate-semantics-informed schema
+    /// inference per spec §5.
+    AllowlistedString(&'a str),
     /// Literal list/tuple of allowlist strings (all members in-list).
+    /// Multi-aggregate result schema is a `MultiIndex`-on-columns
+    /// shape that pykrete's schema lattice doesn't model; v1.13 PR-D2
+    /// treats this as fall-through (Unknown result) per spec §5.1.4.
     AllowlistedStringList,
     /// Anything else: callable, dict, dynamic Name, out-of-allowlist
     /// string, mixed-literal list, etc. Falls through silently.
@@ -615,13 +621,14 @@ pub enum PivotTableAggfuncForm {
 }
 
 #[doc(hidden)]
-pub fn classify_pivot_table_aggfunc(call: &ExprCall) -> PivotTableAggfuncForm {
+pub fn classify_pivot_table_aggfunc(call: &ExprCall) -> PivotTableAggfuncForm<'_> {
     let Some(value) = pandas_kwarg_value(call, "aggfunc") else {
         return PivotTableAggfuncForm::Absent;
     };
     if let Some(lit) = value.as_string_literal_expr() {
-        if PIVOT_TABLE_AGGFUNC_ALLOWLIST.contains(&lit.value.to_str()) {
-            return PivotTableAggfuncForm::AllowlistedString;
+        let s = lit.value.to_str();
+        if let Some(matched) = PIVOT_TABLE_AGGFUNC_ALLOWLIST.iter().find(|a| **a == s) {
+            return PivotTableAggfuncForm::AllowlistedString(matched);
         }
         return PivotTableAggfuncForm::FellThrough;
     }
@@ -636,6 +643,75 @@ pub fn classify_pivot_table_aggfunc(call: &ExprCall) -> PivotTableAggfuncForm {
         return PivotTableAggfuncForm::FellThrough;
     }
     PivotTableAggfuncForm::FellThrough
+}
+
+/// v1.13 PR-D2 — the result-column dtype for a single allowlisted
+/// `pivot_table(aggfunc=...)` string, per spec §5.1.1. `None` means
+/// "preserve the receiver column's type" (sum/min/max/first/last);
+/// `Some(t)` is a concrete type that overrides whatever the receiver
+/// column held (count/nunique → Long, mean/std/var/median → Double).
+///
+/// The aggregate is assumed to be already-validated against
+/// [`PIVOT_TABLE_AGGFUNC_ALLOWLIST`] by [`classify_pivot_table_aggfunc`];
+/// callers shouldn't pass arbitrary strings. Returns `None` for anything
+/// outside the allowlist, which causes the caller to fall through (the
+/// aggregate is unrecognised, so the result type is unknown).
+fn pivot_table_aggfunc_result_override(aggfunc: &str) -> AggfuncResultDtype {
+    match aggfunc {
+        // Counting aggregates always produce integers regardless of
+        // input column type. Spec §5.1.1 pins these to int64 (Long).
+        "count" | "nunique" => AggfuncResultDtype::Override(ColumnType::Long),
+        // Statistical aggregates always produce floats; spec pins float64.
+        "mean" | "std" | "var" | "median" => AggfuncResultDtype::Override(ColumnType::Double),
+        // sum/min/max/first/last pass the receiver column type through.
+        "sum" | "min" | "max" | "first" | "last" => AggfuncResultDtype::Preserve,
+        _ => AggfuncResultDtype::Unrecognised,
+    }
+}
+
+enum AggfuncResultDtype {
+    Override(ColumnType),
+    Preserve,
+    Unrecognised,
+}
+
+/// v1.13 PR-D2 — synthesize a pandas `pivot_table` result `SchemaView`
+/// from the receiver, the literal `values=` column names, and the
+/// allowlisted `aggfunc` string. Per spec §5.1.2: the synthesized
+/// schema covers the `values` columns at the aggregate-driven type;
+/// the pandas index modeling carve-out (v1.4 §5) means `index=` /
+/// `columns=` shape is NOT modeled here. Returns `None` if any
+/// `values` column is absent from the receiver OR if the aggregate
+/// isn't recognised by the table — the caller falls through to the
+/// pre-v1.13 Unknown behavior.
+fn synthesize_pivot_result_from_aggfunc<'a>(
+    receiver: &SchemaView<'a>,
+    values_cols: &[&'a str],
+    aggfunc: &str,
+    schemas: &'a [Schema<'a>],
+) -> Option<SchemaView<'a>> {
+    if values_cols.is_empty() {
+        return None;
+    }
+    let override_ty = match pivot_table_aggfunc_result_override(aggfunc) {
+        AggfuncResultDtype::Override(t) => Some(Some(t)),
+        AggfuncResultDtype::Preserve => None,
+        AggfuncResultDtype::Unrecognised => return None,
+    };
+    let recv_fields = receiver.typed_fields(schemas);
+    let mut out: Vec<DerivedField<'a>> = Vec::with_capacity(values_cols.len());
+    for name in values_cols {
+        let recv = recv_fields.iter().find(|f| f.name == *name)?;
+        let ty = match &override_ty {
+            Some(t) => t.clone(),
+            None => recv.ty.clone(),
+        };
+        out.push(DerivedField {
+            name: recv.name,
+            ty,
+        });
+    }
+    Some(SchemaView::Derived(out))
 }
 
 /// v1.5 PR-A2 — resolve a `<X>.createDataFrame(...)` call's schema-source
@@ -1318,9 +1394,10 @@ fn analyze_method_call_inner<'a>(
     // on that arg only. Spark's `groupBy().pivot()` arm at `:976-1015`
     // is NOT reused — its predicate is `SchemaView::Grouped`
     // (`:984-987`), incompatible with pandas's DataFrame receiver.
-    // Output is Unknown (None) for v1.6; users re-anchor with
-    // `.cast(DataFrame[NewSchema])` for continued tracking (v1.7 will
-    // extend to synthesized output schema).
+    // Output was Unknown through v1.12; v1.13 PR-D2 synthesizes the
+    // `values=` columns at aggregate-driven dtype when aggfunc is
+    // recognized (per spec §5.1.1 table). Falls through to Unknown for
+    // non-literal/callable/multi-aggregate forms. See arm body below.
     //
     // v1.12 PR-D1 — `aggfunc=` literal-form recognition (spec §4).
     // Closes the v1.6 "aggfunc= is opaque" carve-out. The recognition
@@ -1329,21 +1406,63 @@ fn analyze_method_call_inner<'a>(
     // (aggfunc choice doesn't influence which columns survive given the
     // v1.4 pandas index-modeling carve-out). Recognition primes v1.13+
     // for richer aggfunc-driven schema inference.
+    //
+    // v1.13 PR-D2 — consume the classifier output. Synthesize the
+    // result schema's `values` columns at the aggregate-driven type per
+    // spec §5.1.1 (count/nunique → Long; mean/std/var/median → Double;
+    // sum/min/max/first/last → preserve receiver). Multi-aggregate
+    // (`AllowlistedStringList`) is deferred to v1.14+ per spec §5.1.4;
+    // it falls through to the pre-v1.13 Unknown behavior. FIRST
+    // observable aggregate-semantics-informed schema inference in
+    // pykrete; canonical convention for v1.14+ groupby.agg per spec §13.
     if receiver_is_pandas_inherited && method == "pivot_table" {
         let mut refs: Vec<(Option<&'a str>, &'a str, TextRange)> = Vec::new();
+        let mut values_cols: Vec<&'a str> = Vec::new();
+        let mut columns_kwarg_present = false;
         for kw_name in ["index", "columns", "values"] {
             let Some(value) = pandas_kwarg_value(call, kw_name) else {
                 continue;
             };
             if let Some(lit) = value.as_string_literal_expr() {
-                refs.push((None, lit.value.to_str(), lit.range()));
+                let name = lit.value.to_str();
+                refs.push((None, name, lit.range()));
+                if kw_name == "values" {
+                    values_cols.push(name);
+                }
+                if kw_name == "columns" {
+                    columns_kwarg_present = true;
+                }
             } else if let Some(list) = parse_string_list(value) {
+                if kw_name == "values" {
+                    values_cols.extend(list.iter().map(|(n, _)| *n));
+                }
+                if kw_name == "columns" && !list.is_empty() {
+                    columns_kwarg_present = true;
+                }
                 refs.extend(list.into_iter().map(|(n, r)| (None, n, r)));
             }
         }
         report_column_refs(&refs, &receiver, ctx, source, line_index, diagnostics);
-        let _ = classify_pivot_table_aggfunc(call);
-        return None;
+        // `values=['x','y']` AND `columns=` set → pandas returns a
+        // MultiIndex `(value_col, column_value)` on columns, which
+        // pykrete's schema lattice doesn't model. Fall through to
+        // Unknown — same cohort as `AllowlistedStringList` per spec
+        // §5.1.4. v1.14+ work.
+        if values_cols.len() > 1 && columns_kwarg_present {
+            return None;
+        }
+        let aggfunc_form = classify_pivot_table_aggfunc(call);
+        let aggfunc_for_inference: Option<&str> = match aggfunc_form {
+            // Pandas's documented default when `aggfunc=` is omitted.
+            PivotTableAggfuncForm::Absent => Some("mean"),
+            PivotTableAggfuncForm::AllowlistedString(s) => Some(s),
+            PivotTableAggfuncForm::AllowlistedStringList | PivotTableAggfuncForm::FellThrough => {
+                None
+            }
+        };
+        return aggfunc_for_inference.and_then(|af| {
+            synthesize_pivot_result_from_aggfunc(&receiver, &values_cols, af, ctx.schemas())
+        });
     }
     // v1.7 PR-D1 — `pdf.melt(id_vars=, value_vars=, var_name=, value_name=)`
     // literal-form schema synthesis (spec §4). Pandas's `melt` uses a
