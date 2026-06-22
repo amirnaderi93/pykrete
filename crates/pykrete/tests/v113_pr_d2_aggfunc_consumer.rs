@@ -479,3 +479,83 @@ def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
     );
     assert_does_not_have_code(&check(&src), "D0080");
 }
+
+// ---------------------------------------------------------------------------
+// V113D2_default_aggfunc_is_mean_synthesizes_double
+//
+// Positive pairing for the Absent → mean → Double default. Declaring
+// the values column as `double` matches the synthesized type exactly;
+// no D0080 fires. Pairs with
+// `V113D2_default_aggfunc_is_mean_declared_as_string_fires_D0080`
+// above.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn V113D2_default_aggfunc_is_mean_synthesizes_double() {
+    let src = format!(
+        "{IN_BASE}
+class Out(Schema):
+    year: double
+
+def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
+    return pdf.pivot_table(values='year', index='cat')
+"
+    );
+    assert_does_not_have_code(&check(&src), "D0080");
+}
+
+// ---------------------------------------------------------------------------
+// V113D2_index_arg_is_not_a_synthesized_column_fires_D0030
+//
+// Spec §5.1.2: `index=` arguments are NOT modeled as result columns.
+// pandas places `index=` values in the result DataFrame's INDEX, not
+// as columns. Subscripting `result["date"]` (where `date` was the
+// `index=`) must fire D0030 — synthesized schema covers `values=`
+// only. Sharp guard against silencing legitimate D0030 fires on
+// result-index access.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn V113D2_index_arg_is_not_a_synthesized_column_fires_D0030() {
+    let result = check(
+        r#"
+class In(Schema):
+    date: string
+    product: string
+    sales: double
+
+def f(pdf: PandasFrame[In]):
+    pivoted = pdf.pivot_table(values='sales', index='date', columns='product', aggfunc='sum')
+    return pivoted["date"]
+"#,
+    );
+    assert_has_code(&result, "D0030");
+    assert_message_contains(&result, "D0030", "date");
+}
+
+// ---------------------------------------------------------------------------
+// V113D2_multi_values_plus_columns_falls_through_to_unknown
+//
+// Spec §5.1.4 (extended): `values=['x','y']` AND `columns=` non-empty
+// produces a MultiIndex-on-columns shape pandas emits as
+// `(value_col, column_value)` tuples. pykrete's schema lattice doesn't
+// model that; fall through to Unknown. Declared dtype-crossing schema
+// MUST NOT fire D0080 — Unknown is permissive. Documents the carve-out
+// AND prevents silent wrong-schema synthesis (flat `[x, y]` would be
+// incorrect for the MultiIndex case).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn V113D2_multi_values_plus_columns_falls_through_to_unknown() {
+    let src = format!(
+        "{IN_BASE}
+class Out(Schema):
+    amount: string
+    year: string
+
+def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
+    return pdf.pivot_table(values=['amount', 'year'], index='cat', columns='cat', aggfunc='sum')
+"
+    );
+    assert_does_not_have_code(&check(&src), "D0080");
+}

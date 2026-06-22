@@ -1394,9 +1394,10 @@ fn analyze_method_call_inner<'a>(
     // on that arg only. Spark's `groupBy().pivot()` arm at `:976-1015`
     // is NOT reused — its predicate is `SchemaView::Grouped`
     // (`:984-987`), incompatible with pandas's DataFrame receiver.
-    // Output is Unknown (None) for v1.6; users re-anchor with
-    // `.cast(DataFrame[NewSchema])` for continued tracking (v1.7 will
-    // extend to synthesized output schema).
+    // Output was Unknown through v1.12; v1.13 PR-D2 synthesizes the
+    // `values=` columns at aggregate-driven dtype when aggfunc is
+    // recognized (per spec §5.1.1 table). Falls through to Unknown for
+    // non-literal/callable/multi-aggregate forms. See arm body below.
     //
     // v1.12 PR-D1 — `aggfunc=` literal-form recognition (spec §4).
     // Closes the v1.6 "aggfunc= is opaque" carve-out. The recognition
@@ -1417,6 +1418,7 @@ fn analyze_method_call_inner<'a>(
     if receiver_is_pandas_inherited && method == "pivot_table" {
         let mut refs: Vec<(Option<&'a str>, &'a str, TextRange)> = Vec::new();
         let mut values_cols: Vec<&'a str> = Vec::new();
+        let mut columns_kwarg_present = false;
         for kw_name in ["index", "columns", "values"] {
             let Some(value) = pandas_kwarg_value(call, kw_name) else {
                 continue;
@@ -1427,14 +1429,28 @@ fn analyze_method_call_inner<'a>(
                 if kw_name == "values" {
                     values_cols.push(name);
                 }
+                if kw_name == "columns" {
+                    columns_kwarg_present = true;
+                }
             } else if let Some(list) = parse_string_list(value) {
                 if kw_name == "values" {
                     values_cols.extend(list.iter().map(|(n, _)| *n));
+                }
+                if kw_name == "columns" && !list.is_empty() {
+                    columns_kwarg_present = true;
                 }
                 refs.extend(list.into_iter().map(|(n, r)| (None, n, r)));
             }
         }
         report_column_refs(&refs, &receiver, ctx, source, line_index, diagnostics);
+        // `values=['x','y']` AND `columns=` set → pandas returns a
+        // MultiIndex `(value_col, column_value)` on columns, which
+        // pykrete's schema lattice doesn't model. Fall through to
+        // Unknown — same cohort as `AllowlistedStringList` per spec
+        // §5.1.4. v1.14+ work.
+        if values_cols.len() > 1 && columns_kwarg_present {
+            return None;
+        }
         let aggfunc_form = classify_pivot_table_aggfunc(call);
         let aggfunc_for_inference: Option<&str> = match aggfunc_form {
             // Pandas's documented default when `aggfunc=` is omitted.
