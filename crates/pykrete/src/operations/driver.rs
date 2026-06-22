@@ -52,6 +52,7 @@ pub(crate) fn check_function_body<'a>(
 /// [`check_return_type`] so a `-> SparkFrame[X]` whose body produces
 /// a `PandasFrame[X]` value (e.g., via `.toPandas()`) fires D0080 with
 /// a dialect-mismatch clause.
+#[derive(Debug, Clone)]
 pub(crate) struct DeclaredReturn<'a> {
     pub view: SchemaView<'a>,
     pub dialect: Dialect,
@@ -901,6 +902,18 @@ fn actual_view_label(actual: Option<&SchemaView<'_>>) -> String {
     }
 }
 
+// I4: when the chain walker pins down a dialect but `analyze_expr`
+// can't resolve a SchemaView, the naive `render_dialect_label(d,
+// actual_view_label(None))` composes to "PandasFrame an unresolved
+// schema" — broken English. Render dialect as an adjective with no
+// schema label instead.
+fn render_actual_side(actual_dialect: Dialect, actual: Option<&SchemaView<'_>>) -> String {
+    match actual {
+        Some(view) => render_dialect_label(actual_dialect, &actual_view_label(Some(view))),
+        None => format!("an unresolved {} value", dialect_name(actual_dialect)),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn check_return_type<'a>(
     declared: &DeclaredReturn<'a>,
@@ -928,6 +941,11 @@ fn check_return_type<'a>(
     // returns a Pandas-typed `X`) has matching columns AND types, so
     // the existing checks below stay silent; the dialect clause is
     // the only fire.
+    //
+    // M2: D0091 carves out deprecated-alias receivers (the adjudication
+    // site is downstream of the alias rebinding); D0080 fires
+    // unconditionally because the return-type annotation IS the
+    // adjudication site — no downstream reader resolves it.
     if let Some(actual_dialect) = actual_dialect
         && actual_dialect != declared.dialect
     {
@@ -937,7 +955,7 @@ fn check_return_type<'a>(
             format!(
                 "Return type mismatch: declared as {} but the body produces {}.",
                 render_dialect_label(declared.dialect, &declared_label),
-                render_dialect_label(actual_dialect, &actual_view_label(actual)),
+                render_actual_side(actual_dialect, actual),
             ),
             range,
             source,
@@ -1149,6 +1167,24 @@ mod tests {
                  `inherited_chain_state`."
             );
         }
+    }
+
+    // v1.13 PR-D1 R2 I4 — when the chain walker pins down a dialect
+    // (`actual_dialect = Some(_)`) but `analyze_expr` returns no
+    // SchemaView (`actual = None`), the actual-side rendering must
+    // collapse to an adjective-form phrase, not splice "PandasFrame"
+    // in front of "an unresolved schema" (broken English). Unit-test
+    // the formatter directly across the matrix.
+    #[test]
+    fn v113_prd1_render_actual_side_unresolved_view() {
+        assert_eq!(
+            render_actual_side(Dialect::Spark, None),
+            "an unresolved SparkFrame value"
+        );
+        assert_eq!(
+            render_actual_side(Dialect::Pandas, None),
+            "an unresolved PandasFrame value"
+        );
     }
 
     #[test]
