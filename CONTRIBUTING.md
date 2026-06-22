@@ -307,20 +307,25 @@ Before opening PR-F, run `bash scripts/trust-claim-sweep-checklist.sh --current-
 
 ### Wait for dispatched release-gate run before merging PR-F
 
-GitHub Actions' GITHUB_TOKEN limitation means a `pull_request`-event-triggered release-gate job can't be a useful required status check (it would SKIP on every ordinary PR and block merges). v1.13 PR-A2 split the workflow by event:
+`release-gate.yml` listens on `push: branches: release/v*` and `workflow_dispatch` only — NOT on `pull_request`. Per GitHub branch-protection docs, *"a job that is skipped will report its status as 'Success'. It will not prevent a pull request from merging, even if it is a required check."* If the workflow listened on `pull_request`, the pull_request-triggered check would publish a `release-gate-check` check-run that branch-protection would treat as Success — silently bypassing the required-check on every ordinary PR. v1.13 PR-A2 closes that gap by dropping the `pull_request` trigger entirely.
 
-- `pull_request` event fires `release-gate-check-pr-noop` (exits success immediately; NOT in the required-checks list).
-- `workflow_dispatch` event fires `release-gate-check` (the full live-extract gate). v1.12 PR-A1's auto-label workflow dispatches this via `actions.createWorkflowDispatch` when the `release-ready` label lands.
+The mechanism:
 
-With branch protection configured (see below), `release-gate-check` is REQUIRED on `main`: a PR labeled `release-ready` cannot merge until the dispatched run completes green. Cold-cache runtime is ~35 min (down from ~70 min after v1.12 PR-A2's `cargo test` memoization).
+- **Ordinary PR (no `release-ready` label)** — no `release-gate-check` check-run ever publishes. Branch protection sits in **"Expected — Waiting for status to be reported"** state. The merge button is blocked because the required check has neither passed nor failed.
+- **`release-ready`-labeled PR** — the auto-label workflow (`.github/workflows/auto-label-release-pr.yml`) calls `actions.createWorkflowDispatch` on `release-gate.yml` with the PR's head ref. The dispatched run publishes a `release-gate-check` check-run via the `workflow_dispatch` event. When it reports SUCCESS, branch protection unblocks.
+- **Push to `release/v*` branch** — the `push` trigger fires the same `release-gate-check`. Used as a structural pre-tag guard.
 
-If you need to find the dispatched run manually (e.g., to inspect failing step output before the required-check status updates on the PR):
+Cold-cache runtime is ~35 min (down from ~70 min after v1.12 PR-A2's `cargo test` memoization).
+
+If you need to find the dispatched run manually (e.g., to inspect failing step output before the required-check status updates on the PR), replace `<your-branch>` with the PR's head branch name:
 
 ```sh
 gh run list --repo amirnaderi93/pykrete --workflow=release-gate.yml --limit 5 \
     --json databaseId,status,event,headBranch \
-    | jq '.[] | select(.event=="workflow_dispatch" and .headBranch=="chore/v1.X-pr-f-trust-claim")'
+    | jq '.[] | select(.event=="workflow_dispatch" and .headBranch=="<your-branch>")'
 ```
+
+For example, PR-F branches are conventionally named `chore/vX.Y-pr-f-trust-claim`; substitute that as needed.
 
 #### Branch-protection configuration (manual one-time step)
 
@@ -340,6 +345,6 @@ EOF
 
 Notes:
 - `"strict": false` is intentional. `strict: true` requires the PR branch to be up-to-date with `main` before merging, which forces a rebase + re-run of the dispatched gate every time `main` advances. For a release gate that takes ~35 min cold, that's prohibitive. The dispatched-run-passed contract is what we care about, not the up-to-date contract.
-- `contexts` is a flat list; only `release-gate-check` is required. The `release-gate-check-pr-noop` job is NOT in the list, so its existence (it exits success on every PR) is irrelevant to merge gating.
+- `contexts` is a flat list; only `release-gate-check` is required. On ordinary PRs the check-run never publishes, so branch protection sits in "Expected — Waiting" state until the `release-ready` label triggers a dispatched run (or until an operator dispatches manually via `gh workflow run release-gate.yml --ref <head-ref>`).
 - Branch protection cannot be expressed alongside other settings (admins, restrictions, etc.) without re-specifying them; if the repo already has a richer branch-protection JSON, fetch it first with `gh api repos/amirnaderi93/pykrete/branches/main/protection`, merge the `required_status_checks` field, and PATCH the full payload back.
 - Direct push to `main` without a PR is not affected by required status checks; that path is gated by separate push-protection settings.
