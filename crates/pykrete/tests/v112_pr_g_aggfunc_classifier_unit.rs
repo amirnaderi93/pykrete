@@ -40,8 +40,8 @@ fn V112G_classifier_allowlisted_string_for_each_documented_aggfunc() {
         let call = parse_call(&src);
         assert_eq!(
             classify_pivot_table_aggfunc(&call),
-            PivotTableAggfuncForm::AllowlistedString,
-            "expected AllowlistedString for aggfunc={name:?}",
+            PivotTableAggfuncForm::AllowlistedString(name),
+            "expected AllowlistedString({name:?}) for aggfunc={name:?}",
         );
     }
 }
