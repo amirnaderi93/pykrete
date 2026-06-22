@@ -625,6 +625,23 @@ pub fn classify_pivot_table_aggfunc(call: &ExprCall) -> PivotTableAggfuncForm<'_
     let Some(value) = pandas_kwarg_value(call, "aggfunc") else {
         return PivotTableAggfuncForm::Absent;
     };
+    classify_aggfunc_value(value)
+}
+
+/// v1.14 PR-D2 — positional-arg variant for `.agg("sum")` (the pandas
+/// `groupby.agg` shape). Returns `Absent` when there's no first
+/// positional arg (an `.agg()` call with no value to classify).
+/// Falls back to the same value-based classifier so the allowlist /
+/// list-of-string / fall-through semantics stay identical to the kwarg
+/// form used by `pivot_table(aggfunc=...)`. Spec §1.iii.1.iii.
+fn classify_pivot_table_aggfunc_positional(call: &ExprCall) -> PivotTableAggfuncForm<'_> {
+    let Some(value) = call.arguments.args.first() else {
+        return PivotTableAggfuncForm::Absent;
+    };
+    classify_aggfunc_value(value)
+}
+
+fn classify_aggfunc_value(value: &Expr) -> PivotTableAggfuncForm<'_> {
     if let Some(lit) = value.as_string_literal_expr() {
         let s = lit.value.to_str();
         if let Some(matched) = PIVOT_TABLE_AGGFUNC_ALLOWLIST.iter().find(|a| **a == s) {
@@ -710,6 +727,55 @@ fn synthesize_pivot_result_from_aggfunc<'a>(
             name: recv.name,
             ty,
         });
+    }
+    Some(SchemaView::Derived(out))
+}
+
+/// v1.14 PR-D2 — synthesize a pandas `pdf.groupby(keys).agg("<aggfunc>")`
+/// result `SchemaView` from the keys, the underlying receiver schema,
+/// and the allowlisted single-string aggfunc. Output is
+/// `keys ++ (underlying.field_names() \ keys)` with each non-key
+/// column's dtype overridden per the v1.13 §5.1.1 aggregate-to-dtype
+/// table (count/nunique → Long; mean/std/var/median → Double;
+/// sum/min/max/first/last → preserve receiver type). Spec §1.iii.1.iii.
+///
+/// Returns `None` only when the aggregate is unrecognised — the caller
+/// falls through to Unknown.
+fn synthesize_groupby_agg_from_aggfunc<'a>(
+    keys: &[&'a str],
+    underlying: &SchemaView<'a>,
+    aggfunc: &str,
+    schemas: &'a [Schema<'a>],
+) -> Option<SchemaView<'a>> {
+    let override_ty = match pivot_table_aggfunc_result_override(aggfunc) {
+        AggfuncResultDtype::Override(t) => Some(Some(t)),
+        AggfuncResultDtype::Preserve => None,
+        AggfuncResultDtype::Unrecognised => return None,
+    };
+    let recv_fields = underlying.typed_fields(schemas);
+    let mut out: Vec<DerivedField<'a>> = Vec::with_capacity(recv_fields.len());
+    for &key in keys {
+        if let Some(f) = recv_fields.iter().find(|f| f.name == key) {
+            out.push(DerivedField {
+                name: f.name,
+                ty: f.ty.clone(),
+            });
+        } else {
+            out.push(DerivedField {
+                name: key,
+                ty: None,
+            });
+        }
+    }
+    for f in &recv_fields {
+        if keys.contains(&f.name) {
+            continue;
+        }
+        let ty = match &override_ty {
+            Some(t) => t.clone(),
+            None => f.ty.clone(),
+        };
+        out.push(DerivedField { name: f.name, ty });
     }
     Some(SchemaView::Derived(out))
 }
@@ -1095,6 +1161,7 @@ fn analyze_method_call_inner<'a>(
             keys,
             underlying,
             after_pivot,
+            ..
         } = &receiver
     {
         // After `.pivot(...)` the output columns are runtime data (a
@@ -1255,7 +1322,10 @@ fn analyze_method_call_inner<'a>(
         // are runtime data). The user re-anchors the chain with
         // `.cast(DataFrame[…])` when ready.
         if let SchemaView::Grouped {
-            keys, underlying, ..
+            keys,
+            underlying,
+            dialect,
+            ..
         } = &receiver
         {
             if let Some(lit) = call
@@ -1293,6 +1363,7 @@ fn analyze_method_call_inner<'a>(
                 keys: keys.clone(),
                 underlying: underlying.clone(),
                 after_pivot: true,
+                dialect: *dialect,
             });
         }
         return None;
@@ -1660,7 +1731,14 @@ fn analyze_method_call_inner<'a>(
         if method == "withColumn" {
             check_with_column_enum_sink(call, &receiver, ctx, source, line_index, diagnostics);
         }
-        return apply_column_method(method, &receiver, call, ctx, ctx.type_ctx());
+        return apply_column_method(
+            method,
+            &receiver,
+            call,
+            ctx,
+            ctx.type_ctx(),
+            receiver_dialect,
+        );
     }
     if let Some(kind) = two_df_method(method) {
         // `merge` is the pandas spelling of join (spec §5). Skip the
@@ -2780,14 +2858,49 @@ fn handle_agg<'a>(
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<SchemaView<'a>> {
-    let (keys, underlying, after_pivot): (Vec<&'a str>, SchemaView<'a>, bool) = match receiver {
+    let (keys, underlying, after_pivot, dialect): (
+        Vec<&'a str>,
+        SchemaView<'a>,
+        bool,
+        Option<Dialect>,
+    ) = match receiver {
         SchemaView::Grouped {
             keys,
             underlying,
             after_pivot,
-        } => (keys.clone(), (**underlying).clone(), *after_pivot),
-        other => (Vec::new(), other.clone(), false),
+            dialect,
+        } => (
+            keys.clone(),
+            (**underlying).clone(),
+            *after_pivot,
+            Some(*dialect),
+        ),
+        other => (Vec::new(), other.clone(), false, None),
     };
+
+    // v1.14 PR-D2 — pandas-side single-string-aggfunc arm. Fires before
+    // the existing Spark column-expression arm so `pdf.groupby("k").agg("sum")`
+    // synthesizes a Derived schema from the v1.13 aggregate-to-dtype
+    // convention (count/nunique → Long; mean/std/var/median → Double;
+    // sum/min/max/first/last → preserve receiver). Out-of-scope shapes
+    // (dict-aggfunc, callable, list-of-aggfunc, mixed/non-literal) fall
+    // through to the Spark arm below which collects no columns from
+    // those argument shapes, yielding the pre-v1.14 Unknown (keys-only)
+    // behavior. Spec §1.iii.1.iii.
+    if dialect == Some(Dialect::Pandas) && !after_pivot {
+        let aggfunc_form = classify_pivot_table_aggfunc_positional(call);
+        if let PivotTableAggfuncForm::AllowlistedString(af) = aggfunc_form {
+            return synthesize_groupby_agg_from_aggfunc(&keys, &underlying, af, ctx.schemas());
+        }
+        // List-of-aggfunc, callable, dict, out-of-allowlist string,
+        // non-literal — explicit fall-through to Unknown per spec §1.iii.3
+        // (MultiIndex / unrecognized forms). Returning None here (NOT
+        // falling into the Spark arm) prevents the Spark arm from
+        // collecting an empty / wrong-shape Derived for pandas inputs.
+        if !matches!(aggfunc_form, PivotTableAggfuncForm::Absent) {
+            return None;
+        }
+    }
 
     let mut refs: Vec<(Option<&'a str>, &'a str, TextRange)> = Vec::new();
     // Group keys keep their type from the underlying schema; aggregate
@@ -2898,6 +3011,7 @@ fn grouped_aggregate_schema<'a>(
         keys,
         underlying,
         after_pivot,
+        ..
     } = receiver
     else {
         return Some(receiver.clone());

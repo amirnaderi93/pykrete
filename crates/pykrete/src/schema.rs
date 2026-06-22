@@ -11,6 +11,7 @@ use std::sync::OnceLock;
 use ruff_python_ast::{Expr, Number};
 use ruff_text_size::{Ranged, TextRange};
 
+use crate::dataframe::Dialect;
 use crate::types::{
     COLUMN_TYPE_NAMES, ColumnType, EnumParseError, StructField, validate_decimal_args,
 };
@@ -595,6 +596,14 @@ pub enum SchemaView<'a> {
         /// schema degrades to Unknown — pivot's output columns depend
         /// on runtime pivot-value data that pykrete can't see.
         after_pivot: bool,
+        /// v1.14 PR-D2 — the receiver dialect at `.groupBy` / `.groupby`
+        /// construction time. Threads through so a follow-up `.agg(...)`
+        /// can dialect-discriminate dispatch: pandas's
+        /// `.agg("sum")` (single-string-aggfunc) consumes the v1.13
+        /// aggregate-to-dtype convention; Spark's `.agg(F.sum(col))`
+        /// continues to flow through the existing column-expression arm.
+        /// Spec §1.iii.1.i.
+        dialect: Dialect,
     },
 }
 
@@ -1416,6 +1425,7 @@ class Leaf(Mid):
             keys: vec!["k"],
             underlying: Box::new(underlying),
             after_pivot: false,
+            dialect: Dialect::Spark,
         };
         assert!(!grouped.has_field("k"));
         assert!(!grouped.has_field("a"));
@@ -1429,6 +1439,7 @@ class Leaf(Mid):
             keys: vec!["k1", "k2"],
             underlying: Box::new(underlying),
             after_pivot: false,
+            dialect: Dialect::Spark,
         };
         assert_eq!(grouped.field_names(), vec!["k1", "k2"]);
     }
@@ -1440,6 +1451,7 @@ class Leaf(Mid):
             keys: vec!["k"],
             underlying: Box::new(underlying),
             after_pivot: false,
+            dialect: Dialect::Spark,
         };
         assert_eq!(grouped.display_name(), "grouped data with keys [k]");
     }
