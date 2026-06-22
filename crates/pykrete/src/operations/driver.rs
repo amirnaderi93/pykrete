@@ -210,6 +210,23 @@ fn inherited_chain_state<'a>(
                 {
                     return (Some(crate::dataframe::Dialect::Spark), false);
                 }
+                // v1.14 PR-D1 — Arm 3 (spec §1.ii.1, dialect-only extension).
+                // `<X>.createDataFrame(rows, schema=<bare Schema name>)`
+                // (Python-literal-rows form): the `schema=` kwarg's value is
+                // a bare Name that pykrete cannot resolve to a frame binding,
+                // so the v1.5 PR-A2 gate stays silent. Structurally this is
+                // still a Spark constructor — the schema kwarg disambiguates.
+                // Dialect-only on purpose: the view-side resolver stays
+                // unchanged, so this PR doesn't widen `analyze_expr` over a
+                // bare Schema class arg (kept out of scope per the brief).
+                if attr.attr.id.as_str() == "createDataFrame"
+                    && c.arguments.keywords.iter().any(|k| {
+                        k.arg.as_ref().is_some_and(|n| n.id.as_str() == "schema")
+                            && k.value.as_name_expr().is_some()
+                    })
+                {
+                    return (Some(crate::dataframe::Dialect::Spark), false);
+                }
                 // v1.5 PR-A1 — `.toPandas()` flips the inherited dialect
                 // Spark → Pandas. Like createDataFrame, the handoff erases
                 // the originating deprecated-alias bit.
@@ -218,6 +235,42 @@ fn inherited_chain_state<'a>(
                         == Some(crate::dataframe::Dialect::Spark)
                 {
                     return (Some(crate::dataframe::Dialect::Pandas), false);
+                }
+                // v1.14 PR-D1 — Arm 1 (spec §1.ii.1).
+                // `pd.DataFrame(...)` bottoms out at a literal `Name("pd")`
+                // that pykrete has no frame binding for, so the v1.13
+                // baseline fell through to `(None, false)`. Structural
+                // recognizer: the call shape is `Call(func=Attribute(
+                // value=Name("pd"), attr="DataFrame"))`. Heuristic name
+                // match per spec §1.ii.2 — `pd` is NOT resolved through the
+                // symbol table, mirroring the v1.6 structural-match rules
+                // for `pivot_table` / `stack` / `unstack`. Aliased imports
+                // (`import pandas as p; p.DataFrame(...)`) fall through.
+                if attr.attr.id.as_str() == "DataFrame"
+                    && attr
+                        .value
+                        .as_name_expr()
+                        .is_some_and(|n| n.id.as_str() == "pd")
+                {
+                    return (Some(crate::dataframe::Dialect::Pandas), false);
+                }
+                // v1.14 PR-D1 — Arm 2 (spec §1.ii.1).
+                // `spark.read.<format>(...)` — two-level structural match:
+                // `Call(func=Attribute(value=Attribute(value=Name("spark"),
+                // attr="read"), attr=<any_format>))`. Any format identifier
+                // matches (`.parquet` / `.json` / `.csv` / `.orc` / ...);
+                // pykrete does not enumerate. Heuristic name match per spec
+                // §1.ii.2 — `spark` is NOT resolved through the symbol
+                // table. Aliased session imports fall through to the
+                // baseline silent behavior.
+                if let Some(inner) = attr.value.as_attribute_expr()
+                    && inner.attr.id.as_str() == "read"
+                    && inner
+                        .value
+                        .as_name_expr()
+                        .is_some_and(|n| n.id.as_str() == "spark")
+                {
+                    return (Some(crate::dataframe::Dialect::Spark), false);
                 }
                 cursor = &attr.value;
             }
