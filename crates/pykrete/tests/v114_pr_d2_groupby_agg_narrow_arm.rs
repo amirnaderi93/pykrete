@@ -297,6 +297,90 @@ def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
     assert_has_code(&check(&src), "D0080");
 }
 
+// ---------------------------------------------------------------------------
+// Positive synthesis proof — one D0080-fire per dtype-override family that
+// previously only had a single representative in the negative cohort. Pairs
+// with the `_synthesizes_long` / `_synthesizes_double` / `_preserves_*`
+// positive tests above to lock in that each aggfunc's synthesis arm is
+// actually wired (a no-op `None` synthesizer would silently pass the
+// positive tests).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn V114D2_nunique_declared_as_string_fires_D0080() {
+    // nunique → Long override (sibling to count). Declaring amount as
+    // string crosses the boundary; D0080 must fire to prove synthesis.
+    let src = format!(
+        "{IN_BASE}
+class Out(Schema):
+    k: string
+    amount: string
+    count_col: long
+
+def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
+    return pdf.groupby('k').agg('nunique')
+"
+    );
+    assert_has_code(&check(&src), "D0080");
+}
+
+#[test]
+fn V114D2_std_declared_as_string_fires_D0080() {
+    // std → Double override (sibling to mean).
+    let src = format!(
+        "{IN_BASE}
+class Out(Schema):
+    k: string
+    amount: string
+    count_col: double
+
+def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
+    return pdf.groupby('k').agg('std')
+"
+    );
+    assert_has_code(&check(&src), "D0080");
+}
+
+#[test]
+fn V114D2_min_declared_as_string_fires_D0080() {
+    // min → Preserve (sibling to sum). amount: double preserved as double;
+    // declaring it as string crosses the numeric/non-numeric boundary.
+    let src = format!(
+        "{IN_BASE}
+class Out(Schema):
+    k: string
+    amount: string
+    count_col: int
+
+def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
+    return pdf.groupby('k').agg('min')
+"
+    );
+    assert_has_code(&check(&src), "D0080");
+}
+
+#[test]
+fn V114D2_multi_key_count_declared_as_string_fires_D0080() {
+    // Multi-key synthesis path proof: keys k1, k2 are emitted first, then
+    // amount is overridden to Long by count. Declaring amount: string
+    // crosses the boundary — D0080 fires on the multi-key path.
+    let src = "\
+class In(Schema):
+    k1: string
+    k2: int
+    amount: double
+
+class Out(Schema):
+    k1: string
+    k2: int
+    amount: string
+
+def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
+    return pdf.groupby(['k1', 'k2']).agg('count')
+";
+    assert_has_code(&check(src), "D0080");
+}
+
 // ===========================================================================
 // Negative fall-through tests — Unknown result, NOT silently-wrong schema.
 // Per spec §1.iii.3, dict-aggfunc, callable-aggfunc, list-of-aggfunc,
@@ -376,6 +460,53 @@ def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
 "
     );
     assert_does_not_have_code(&check(&src), "D0080");
+}
+
+// ---------------------------------------------------------------------------
+// Spec §1.iii.6 asymmetric dialect-crossover defense — pandas dialect with
+// a Spark-shape arg (column-expression) and Spark dialect with a pandas-
+// shape arg (literal string) must BOTH fall through to Unknown rather than
+// silently producing a synthesized schema. v1.5 retro rule 4 / v1.6 rule 8.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn V114D2_pandas_dialect_with_spark_shape_arg_falls_through() {
+    // Pandas-grouped receiver but the arg is a Spark-style column
+    // expression, not an allowlist literal string. Must fall through to
+    // Unknown — D0080 must NOT fire on the declared Out schema.
+    let src = format!(
+        "{IN_BASE}
+class Out(Schema):
+    k: string
+    amount: string
+
+def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
+    return pdf.groupby('k').agg(F.sum(col('amount')))
+"
+    );
+    assert_does_not_have_code(&check(&src), "D0080");
+}
+
+#[test]
+fn V114D2_spark_dialect_with_pandas_shape_arg_falls_through() {
+    // Spark-grouped receiver with a pandas-style string-literal aggfunc.
+    // The new pandas arm is gated on `dialect == Pandas`; the Spark
+    // dialect path does NOT consume string-literal args, so this must
+    // fall through (no D0080 on the declared Out schema) and not invoke
+    // the new synthesis.
+    let src = "\
+class Orders(Schema):
+    place_code: int
+    price: int
+
+class Out(Schema):
+    place_code: int
+    price: string
+
+def f(raw: SparkFrame[Orders]) -> SparkFrame[Out]:
+    return raw.groupBy('place_code').agg('sum')
+";
+    assert_does_not_have_code(&check(src), "D0080");
 }
 
 // ===========================================================================
