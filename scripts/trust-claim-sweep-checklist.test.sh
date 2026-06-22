@@ -608,6 +608,118 @@ grep -qF "PRIOR-RELEASE-NUMBER-LEAKED: editors/vscode/CHANGELOG.md" "$repo/stder
 assert "V1.5: level-3 (### 0.X.Y) headers do NOT divide sections (format constraint)" 1 "$LAST_RC" "$extra"
 rm -rf "$repo"
 
+# === v1.14 PR-A1 — backticked-claim-stale scanner tests ===
+#
+# Closes the v1.13 docs-sync audit 8-blocker pattern (per
+# project-v23-retrospective rule 9). A backticked `<num> <key>` in a
+# tracked surface must EITHER match a current text-numeric pin OR live
+# inside a text-numeric-historical fenced block.
+
+# Use a CHANGELOG with a CURRENT text-numeric block + historical blocks
+# so the new scanner has both a "truth source" (current pins) and an
+# explicit "intentionally historical" carve-out to validate against.
+CHANGELOG_V114='# Changelog
+
+## [1.13.0]
+Current pins.
+
+```text-numeric
+289 probes
+148 fixtures
+17 donors
+```
+
+## [1.12.0]
+Historical pins.
+
+```text-numeric-historical
+279 probes
+138 fixtures
+17 donors
+```
+'
+
+# --- Case PR-A1.V1.4.1: stale backticked number in README fails ---
+# `279 probes` is the v1.12 (historical) pin. The number IS in a
+# text-numeric-historical block somewhere in CHANGELOG, but the
+# OCCURRENCE in README.md is OUTSIDE any historical block, so it
+# fails the stale-claim gate (the carve-out is occurrence-scoped, not
+# value-scoped). Per the brief, stale backticked numbers in README
+# fail with the BACKTICKED-CLAIM-STALE diagnostic.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_V114" > "$repo/CHANGELOG.md"
+printf "README: legacy %s500 probes%s claim that is neither current nor in a historical block.\n" "$BT" "$BT" > "$repo/README.md"
+run_gate "$repo" 1.13.0 --skip-pykrete-tests
+extra=ok
+grep -qF "BACKTICKED-CLAIM-STALE: README.md" "$repo/stderr" || extra=missing_stale_line
+grep -qF "${BT}500 probes${BT}" "$repo/stderr" || extra="${extra}+missing_pin_in_message"
+grep -qF "(non-current, non-historical)" "$repo/stderr" || extra="${extra}+missing_explanation"
+assert "PR-A1.V1.4.1: stale backticked number in README fails BACKTICKED-CLAIM-STALE" 1 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case PR-A1.V1.4.2: backticked number matching current pin passes ---
+# `289 probes` IS the current pin. A backticked occurrence outside any
+# historical block is valid (escape hatch (a) in the brief).
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_V114" > "$repo/CHANGELOG.md"
+printf "README: today's run reports %s289 probes%s across the fixtures.\n" "$BT" "$BT" > "$repo/README.md"
+run_gate "$repo" 1.13.0 --skip-pykrete-tests
+extra=ok
+grep -q "BACKTICKED-CLAIM-STALE" "$repo/stderr" && extra=current_pin_should_be_clean
+assert "PR-A1.V1.4.2: backticked number matching current pin passes" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case PR-A1.V1.4.3: backticked number in text-numeric-historical block passes ---
+# A backticked `279 probes` written INSIDE a text-numeric-historical
+# fenced block on a surface is intentionally-historical and must NOT
+# fire the stale-claim gate (escape hatch (b) in the brief). The
+# text-numeric-historical mask carve-out applies to non-CHANGELOG
+# surfaces too.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_V114" > "$repo/CHANGELOG.md"
+{
+    printf 'Some prose mentioning the current %s289 probes%s.\n\n' "$BT" "$BT"
+    printf '```text-numeric-historical\n'
+    printf "Bumped from %s279 probes%s to %s289 probes%s.\n" "$BT" "$BT" "$BT" "$BT"
+    printf '```\n'
+} > "$repo/README.md"
+run_gate "$repo" 1.13.0 --skip-pykrete-tests
+extra=ok
+grep -q "BACKTICKED-CLAIM-STALE" "$repo/stderr" && extra=historical_block_should_be_masked
+assert "PR-A1.V1.4.3: backticked number inside text-numeric-historical block passes" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case PR-A1.V1.4.4: non-numeric backticks (function names) ignored ---
+# Backticked spans that aren't `<digits> <allowed-key>` shaped are
+# orthogonal to this gate. Function names, file paths, CLI flags, etc.
+# must never trip the scanner regardless of content.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_V114" > "$repo/CHANGELOG.md"
+{
+    printf "README mentions %sscan_backticked_stale_numbers()%s and %s--current-version%s.\n" "$BT" "$BT" "$BT" "$BT"
+    printf "Also %sscripts/trust-claim-sweep-checklist.sh%s.\n" "$BT" "$BT"
+} > "$repo/README.md"
+run_gate "$repo" 1.13.0 --skip-pykrete-tests
+extra=ok
+grep -q "BACKTICKED-CLAIM-STALE" "$repo/stderr" && extra=non_numeric_should_not_trip
+assert "PR-A1.V1.4.4: non-numeric backticked spans (fn names, flags, paths) ignored" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case PR-A1.V1.4.5: backticked number with non-tracked key ignored ---
+# A backticked `<num> <other-word>` where the key is NOT in the
+# text-numeric vocabulary (probes / positive / negative / fixtures /
+# tests / donors) is out of scope for this gate. Example: a sentence
+# citing `12 columns` or `42 rules` — those numbers aren't pinned in
+# the text-numeric block and shouldn't false-positive.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_V114" > "$repo/CHANGELOG.md"
+printf "README cites %s12 columns%s and %s42 rules%s for context.\n" "$BT" "$BT" "$BT" "$BT" > "$repo/README.md"
+run_gate "$repo" 1.13.0 --skip-pykrete-tests
+extra=ok
+grep -q "BACKTICKED-CLAIM-STALE" "$repo/stderr" && extra=non_tracked_key_should_not_trip
+assert "PR-A1.V1.4.5: backticked number with non-tracked key (columns, rules) ignored" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
 # --- summary ---
 echo
 echo "=========================================="
