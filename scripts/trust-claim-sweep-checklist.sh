@@ -438,14 +438,18 @@ text = hist_fence.sub(blank_keep_lines, text)
 # section; everything from the SECOND level-2 header onwards is
 # historical and masked out. This uniformly handles the root
 # CHANGELOG.md (Unreleased + most-recent) and editors/vscode/CHANGELOG.md
-# (no Unreleased; just versioned sections).
+# (no Unreleased; just versioned sections — v1.13 PR-V1 audited + locked
+# this behavior in via dedicated vscode-CHANGELOG self-test cases, closing
+# the 3-cycle manual-backtick workaround at PR-G v1.10 / v1.11 / v1.12).
 #
 # NOTE: docs-site tables with version-row layouts (e.g. a "Releases" page
 # listing `1.9.0 | 255 probes` rows) must use backtick-wrap or a
 # `text-numeric-historical` fenced block to flag the row content as
 # intentionally-historical. The header-second-onward mask only fires on
 # files named `CHANGELOG.md`; docs-site `*.md` / `*.mdx` get no implicit
-# historical carve-out.
+# historical carve-out. Level-3 (`### 0.X.Y`) section markers are NOT
+# recognized — vscode CHANGELOG sections must use `## ` per format
+# convention (locked in by the level-3 negative-space self-test).
 if surface_display.endswith("CHANGELOG.md"):
     header_pat = re.compile(r"^## [^\n]*$", re.MULTILINE)
     headers = list(header_pat.finditer(text))
