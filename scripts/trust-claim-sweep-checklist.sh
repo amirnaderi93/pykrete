@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # v1.11 PR-A1 — trust-claim sweep checklist.
 # v1.13 PR-A1 — backtick-preservation tripwire (--snapshot + tripwire).
+# v1.14 PR-A1 — backticked-claim-stale scanner (default-mode 3rd check).
 #
 # Sibling to scripts/changelog-grep.sh. Where changelog-grep verifies
 # CHANGELOG.md's numeric claims against the live extract (docs-vs-source),
@@ -80,6 +81,12 @@ single-backticked historical pin (e.g., `` `261 probes` ``) recorded at
 snapshot time has been unwrapped on the current revision. Closes the
 2-cycle PR-G regression at v1.11 / v1.12.
 
+Also runs the backticked-claim-stale scanner (v1.14 PR-A1): every
+non-`--snapshot` invocation greps tracked surfaces for backticked
+`<num> <key>` patterns and fails if the pin matches NEITHER a current
+text-numeric pin NOR a text-numeric-historical fenced block. Closes
+the v1.13 docs-sync audit 8-blocker pattern.
+
 Options:
   --current-version=X.Y.Z   Override version detection (PR-F passes this).
                             Also accepts the space form: --current-version X.Y.Z.
@@ -99,8 +106,8 @@ Environment overrides:
 
 Exit codes:
   0   sweep clean (or no prior pins to compare against; or --snapshot succeeded).
-  1   one or more PRIOR-RELEASE-NUMBER-LEAKED or BACKTICK-PRESERVATION-FAIL
-      lines emitted to stderr.
+  1   one or more PRIOR-RELEASE-NUMBER-LEAKED, BACKTICK-PRESERVATION-FAIL,
+      or BACKTICKED-CLAIM-STALE lines emitted to stderr.
   2   misuse (bad flag, malformed version, missing CHANGELOG, etc.).
 USAGE
             exit 0
@@ -127,10 +134,12 @@ assemble_surfaces() {
         fi
     }
 
+    # Surface inventory shared with stale-scanner (PR-A1 v1.14) — keep in sync.
     add_surface "README.md"
     add_surface "CHANGELOG.md"
     add_surface "editors/vscode/CHANGELOG.md"
     add_surface "editors/vscode/README.md"
+    add_surface "docs/roadmap.md"
 
     if [ -d "$REPO_ROOT/docs-site/src/content" ]; then
         while IFS= read -r f; do
@@ -569,7 +578,223 @@ else
     fi
 fi
 
-if [ "$fail" -ne 0 ] || [ "$tripwire_fail" -ne 0 ]; then
+# --- backticked-claim-stale scanner (v1.14 PR-A1) ----------------------
+#
+# Closes the v1.13 docs-sync audit 8-blocker pattern (per project-v23
+# retrospective rule 9): the existing prior-leak sweep's backtick
+# carve-out (carve-out 2 in the per-surface scan above) lets stale-but-
+# still-backticked numbers escape. A surface that backticks a prior
+# release's `271 probes` to "preserve" it across the sweep STILL leaks
+# trust if that number isn't current and isn't recorded as historical
+# in a CHANGELOG block — backticks are a typography signal, not a
+# legitimacy claim. The probe-density audit independently flagged the
+# same blind-spot.
+#
+# Validity rules per the v1.14 PR-A1 brief:
+#   A backticked `<num> <key>` in any tracked surface is valid IFF
+#   either (a) `<num> <key>` matches a current `text-numeric` pin in
+#   CHANGELOG, OR (b) the backticked occurrence appears inside a
+#   `text-numeric-historical` fenced block. CHANGELOG.md sections from
+#   the 2nd `## ` header onward are also masked (per the same convention
+#   as the prior-leak sweep) — historical CHANGELOG sections are
+#   immutable by design and cite their own pinned numbers verbatim.
+stale_fail=0
+STALE_TOTAL=0
+STALE_HITS=0
+if [ -f "$REPO_ROOT/$CHANGELOG" ]; then
+    SURFACES_FOR_STALE=()
+    assemble_stale_surfaces() {
+        add_stale_surface() {
+            if [ -f "$REPO_ROOT/$1" ]; then
+                SURFACES_FOR_STALE+=("$1")
+            fi
+        }
+        add_stale_surface "README.md"
+        add_stale_surface "CHANGELOG.md"
+        add_stale_surface "editors/vscode/CHANGELOG.md"
+        add_stale_surface "editors/vscode/README.md"
+        add_stale_surface "docs/roadmap.md"
+        if [ -d "$REPO_ROOT/docs-site/src/content" ]; then
+            while IFS= read -r f; do
+                rel="${f#$REPO_ROOT/}"
+                SURFACES_FOR_STALE+=("$rel")
+            done < <(find "$REPO_ROOT/docs-site/src/content" -type f \( -name '*.md' -o -name '*.mdx' \) | sort)
+        fi
+        PYKRETE_TESTS_README="$REPO_ROOT/../pykrete-tests/README.md"
+        if [ "$SKIP_PYKRETE_TESTS" != "1" ] && [ -f "$PYKRETE_TESTS_README" ]; then
+            SURFACES_FOR_STALE+=("../pykrete-tests/README.md")
+        fi
+    }
+    assemble_stale_surfaces
+
+    # Pre-extract current + historical pin sets ONCE; reuse for every
+    # surface scan. A parser crash here is fail-loud (tmpfile + exit-code
+    # capture, matching the prior-leak scanner's convention).
+    _TC_STALE_TMP=$(mktemp 2>/dev/null || mktemp -t trust-claim-sweep-stale)
+    trap 'rm -f "$_TC_PINS_TMP" "$_TC_STALE_TMP"' EXIT
+    python3 - "$REPO_ROOT/$CHANGELOG" "$CURRENT_VERSION" > "$_TC_STALE_TMP" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+current = sys.argv[2]
+with open(path, "r", encoding="utf-8") as f:
+    text = f.read()
+
+current_section = re.compile(
+    r"^## \[" + re.escape(current) + r"\][^\n]*\n([\s\S]*?)(?=^## \[|\Z)",
+    re.MULTILINE,
+)
+allowed = ("probes", "positive", "negative", "fixtures", "tests", "donors")
+
+current_pins = set()
+m = current_section.search(text)
+if m:
+    block_pat = re.compile(r"^```text-numeric\n([\s\S]*?)^```", re.MULTILINE)
+    for bm in block_pat.finditer(m.group(1)):
+        for line in bm.group(1).splitlines():
+            parts = line.strip().split(None, 1)
+            if len(parts) < 2:
+                continue
+            num, key = parts[0], parts[1].split()[0]
+            if num.isdigit() and key in allowed:
+                current_pins.add(f"{num} {key}")
+
+historical_pins = set()
+hist_block_pat = re.compile(
+    r"^```text-numeric-historical\n([\s\S]*?)^```", re.MULTILINE
+)
+for bm in hist_block_pat.finditer(text):
+    for line in bm.group(1).splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) < 2:
+            continue
+        num, key = parts[0], parts[1].split()[0]
+        if num.isdigit() and key in allowed:
+            historical_pins.add(f"{num} {key}")
+
+print("CURRENT")
+for p in sorted(current_pins):
+    print(p)
+print("HISTORICAL")
+for p in sorted(historical_pins):
+    print(p)
+PY
+    _TC_STALE_RC=$?
+    if [ "$_TC_STALE_RC" -ne 0 ]; then
+        echo "trust-claim-sweep: CHANGELOG parser failed (exit $_TC_STALE_RC) for stale-scanner pin extraction" >&2
+        exit 2
+    fi
+    STALE_PIN_SETS=$(cat "$_TC_STALE_TMP")
+    # Degraded mode: if the current CHANGELOG section has no text-numeric
+    # block, there's no "current pin truth source" for the stale scanner
+    # to validate against, so any backticked `<num> <key>` would over-fire
+    # unless it happens to live inside a historical block. Skip with a
+    # stderr note (cold-start / pre-v1.9 / test-fixture mode); the existing
+    # prior-leak sweep + tripwire still run.
+    if ! printf '%s\n' "$STALE_PIN_SETS" | awk '/^CURRENT$/{flag=1; next} /^HISTORICAL$/{exit} flag && NF' | grep -q '^.'; then
+        echo "trust-claim-sweep: no current text-numeric pins for v$CURRENT_VERSION in $CHANGELOG; backticked-claim-stale scanner skipped." >&2
+        SURFACES_FOR_STALE=()
+    fi
+
+    while IFS= read -r surface; do
+        [ -z "$surface" ] && continue
+        STALE_PIN_SETS_ENV="$STALE_PIN_SETS" \
+        SURFACE_PATH="$REPO_ROOT/$surface" \
+        SURFACE_DISPLAY="$surface" \
+        python3 - <<'PY'
+import os
+import re
+import sys
+
+surface_path = os.environ["SURFACE_PATH"]
+surface_display = os.environ["SURFACE_DISPLAY"]
+
+current_pins = set()
+historical_pins = set()
+bucket = None
+for ln in os.environ["STALE_PIN_SETS_ENV"].splitlines():
+    ln = ln.strip()
+    if ln == "CURRENT":
+        bucket = current_pins
+        continue
+    if ln == "HISTORICAL":
+        bucket = historical_pins
+        continue
+    if not ln or bucket is None:
+        continue
+    bucket.add(ln)
+
+try:
+    with open(surface_path, "r", encoding="utf-8") as f:
+        text = f.read()
+except OSError as exc:
+    print(f"trust-claim-sweep: could not read {surface_display}: {exc}", file=sys.stderr)
+    sys.exit(2)
+
+def blank_keep_lines(match):
+    return "\n" * match.group(0).count("\n")
+
+hist_fence = re.compile(
+    r"^```text-numeric-historical\n[\s\S]*?^```",
+    re.MULTILINE,
+)
+text = hist_fence.sub(blank_keep_lines, text)
+
+if surface_display.endswith("CHANGELOG.md"):
+    header_pat = re.compile(r"^## [^\n]*$", re.MULTILINE)
+    headers = list(header_pat.finditer(text))
+    if len(headers) >= 2:
+        start = headers[1].start()
+        masked_chars = list(text)
+        for j in range(start, len(text)):
+            if masked_chars[j] != "\n":
+                masked_chars[j] = "_"
+        text = "".join(masked_chars)
+
+_BT = chr(96)
+allowed = "probes|positive|negative|fixtures|tests|donors"
+pat = re.compile(
+    _BT + r"(\d+)\s+(" + allowed + r")" + _BT
+)
+
+hits = 0
+for m in pat.finditer(text):
+    num, key = m.group(1), m.group(2)
+    pin = f"{num} {key}"
+    if pin in current_pins:
+        continue
+    if pin in historical_pins:
+        continue
+    line_no = text.count("\n", 0, m.start()) + 1
+    print(
+        f"BACKTICKED-CLAIM-STALE: {surface_display}:{line_no}: "
+        f"{_BT}{pin}{_BT} (non-current, non-historical)",
+        file=sys.stderr,
+    )
+    hits += 1
+
+sys.exit(1 if hits > 0 else 0)
+PY
+        rc=$?
+        STALE_TOTAL=$((STALE_TOTAL + 1))
+        if [ "$rc" -eq 1 ]; then
+            stale_fail=1
+            STALE_HITS=$((STALE_HITS + 1))
+        elif [ "$rc" -ne 0 ]; then
+            echo "trust-claim-sweep: stale-scanner aborted on $surface (exit $rc)" >&2
+            stale_fail=1
+        fi
+    done <<EOF
+$(printf '%s\n' "${SURFACES_FOR_STALE[@]:-}")
+EOF
+    echo "trust-claim-sweep: backticked-claim-stale scanned $STALE_TOTAL surface(s); $STALE_HITS surface(s) had stale backticked claims."
+    if [ "$stale_fail" -ne 0 ]; then
+        echo "trust-claim-sweep: backticked-claim-stale gate fired. A backticked '<num> <key>' must EITHER match a current text-numeric pin OR live inside a text-numeric-historical fenced block. Closes v1.13 docs-sync audit 8-blocker pattern (project-v23-retrospective rule 9)." >&2
+    fi
+fi
+
+if [ "$fail" -ne 0 ] || [ "$tripwire_fail" -ne 0 ] || [ "$stale_fail" -ne 0 ]; then
     exit 1
 fi
 
