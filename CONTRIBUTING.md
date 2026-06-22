@@ -305,6 +305,8 @@ The mechanism is a `.github/centralized-bump-cycle.marker` file committed at the
 
 Before opening PR-F, run `bash scripts/trust-claim-sweep-checklist.sh --current-version X.Y.Z` to catch prior-release number leaks across trust-claim surfaces (README, docs-site, editors/vscode/README.md, pykrete-tests/README.md). This is the structural closure for the 5-cycle PR-F-miscount pattern (v1.6/v1.7/v1.8/v1.9/v1.10). The gate also runs automatically in the `release-gate.yml` workflow when the PR is labeled `release-ready`.
 
+**Snapshot refresh (v1.13 PR-A1 backtick-preservation tripwire).** After the cycle's new historical pins land in `pykrete-tests/README.md` or `editors/vscode/CHANGELOG.md`, refresh the snapshot with `bash scripts/trust-claim-sweep-checklist.sh --snapshot` and commit the diff. The default-mode invocation re-reads `scripts/trust-claim-sweep-checklist.snapshot.txt` and fires `BACKTICK-PRESERVATION-FAIL` if any previously-single-backticked pin has been stripped (the 2-cycle backtick-strip regression at PR-G v1.11 + v1.12).
+
 ### Wait for dispatched release-gate run before merging PR-F
 
 `release-gate.yml` listens on `push: branches: release/v*` and `workflow_dispatch` only — NOT on `pull_request`. Per GitHub branch-protection docs, *"a job that is skipped will report its status as 'Success'. It will not prevent a pull request from merging, even if it is a required check."* If the workflow listened on `pull_request`, the pull_request-triggered check would publish a `release-gate-check` check-run that branch-protection would treat as Success — silently bypassing the required-check on every ordinary PR. v1.13 PR-A2 closes that gap by dropping the `pull_request` trigger entirely.

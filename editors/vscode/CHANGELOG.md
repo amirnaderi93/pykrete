@@ -1,6 +1,45 @@
 # Changelog
 
 
+## 0.11.0
+
+Tracks the v1.13.0 pykrete release — **closing D0080's dialect-on-
+return gap** (the longest-standing 7-cycle correctness hole,
+v1.6 → v1.12 silent), turning v1.12's `pivot_table(aggfunc=)`
+classifier into observable schema inference, and converting the
+dispatched release-gate into a required status check. The
+bundled `pykrete` and `pykrete-lsp` binaries gain a NEW D0080
+checker arm: `check_return_type` now compares the `Dialect` tag,
+so a function annotated `-> SparkFrame[X]` whose body returns a
+`.toPandas()` chain fires D0080 with a dedicated dialect-mismatch
+message ("declared as SparkFrame schema 'X' but the body produces
+PandasFrame schema 'X'"). Honest-silence policy holds for
+constructor cases (`pd.DataFrame(...)`,
+`spark.read.parquet(...)`); v1.14 extends `inherited_chain_state`
+with constructor arms. Pandas `pivot_table(aggfunc=)` schema
+inference lands: v1.12 PR-D1's dead-code primer is now consumed,
+synthesizing a `Derived` schema with `values=` columns at the
+aggregate-driven dtype (`count` / `nunique` → int64; `mean` /
+`std` / `var` / `median` → float64; `sum` / `min` / `max` /
+`first` / `last` → preserve receiver column type; default → mean
+→ float64). Multi-values + `columns=` correctly falls through to
+Unknown. FIRST observable aggregate-semantics-informed schema
+inference in pykrete; sets the convention for v1.14+
+groupby.agg. On the CI side, `release-gate.yml` no longer
+triggers on `pull_request` events (only `push: release/v*` +
+`workflow_dispatch`); branch-protection now requires
+`release-gate-check`, which sits in "Expected — Waiting" state
+on PRs until a dispatched run reports SUCCESS. The
+backtick-preservation tripwire ships in
+`trust-claim-sweep-checklist.sh`, closing the 2-cycle
+backtick-strip regression at PR-G v1.11 + v1.12. Cross-codebase
+coverage: 279 → 289 probes across 148 fixtures from 17 donors.
+No new D-codes, no new annotation forms; SemVer-minor under the
+`tighteningDiagnostics` policy and the established
+alias-report-style JSON-additive policy. Cycle-close minor bump
+aligns the extension with the v1.13.0 tag per the version-guard
+policy.
+
 ## 0.10.0
 
 Tracks the v1.12.0 pykrete release — **closing the v1.11
