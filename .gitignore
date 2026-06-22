@@ -24,6 +24,11 @@ editors/vscode/server/
 # Claude Code scheduling lockfiles (per-session, not source-controlled)
 .claude/scheduled_tasks.lock
 
+# Local Claude Code auto-memory (per-project, never committed).
+# Physically lives in project tree for portability; ~/.claude/projects/.../memory
+# symlinks here. Run .claude/setup-memory-symlink.sh on a fresh machine.
+.claude/memory/
+
 # Per-user VS Code workspace settings (interpreter paths, etc.)
 .vscode/
 examples/pykrete.py
