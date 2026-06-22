@@ -4,6 +4,7 @@ use super::col_refs::{col_reference, collect_col_refs};
 use super::column_exprs::{
     infer_expr_type, report_branch_form_enum_conflicts, report_get_field_typo, select_arg_type,
 };
+use super::column_methods::parse_string_list;
 use super::context::{BodyContext, TypeCtx};
 use super::enum_checks::{emit_d0084, enum_vocab, peel_string_literal, vocab_contains};
 use super::shapes::ArgRole;
@@ -13,6 +14,7 @@ use ruff_python_ast::{CmpOp, Expr, ExprCall, Operator};
 use ruff_source_file::LineIndex;
 use ruff_text_size::{Ranged, TextRange};
 
+use crate::dataframe::Dialect;
 use crate::diagnostics::{CheckMode, Diagnostic, Severity};
 use crate::schema::{DerivedField, Schema, SchemaView, suggest_field_name};
 use crate::types::{COLUMN_TYPE_NAMES, ColumnType};
@@ -438,6 +440,7 @@ pub(super) fn apply_column_method<'a>(
     call: &'a ExprCall,
     ctx: &BodyContext<'a>,
     tcx: TypeCtx<'a>,
+    receiver_dialect: Option<Dialect>,
 ) -> Option<SchemaView<'a>> {
     match method {
         "select" => {
@@ -550,12 +553,25 @@ pub(super) fn apply_column_method<'a>(
             for arg in &call.arguments.args {
                 if let Some(name) = column_name_arg(arg, Some(ctx)) {
                     keys.push(name);
+                    continue;
+                }
+                // v1.14 PR-D2 — pandas `.groupby(["k1", "k2"])` list form
+                // (spec §1.iii.2). Spark's spelling spreads positionals
+                // (`.groupBy("k1", "k2")`), but pandas takes a single list
+                // arg. parse_string_list also accepts tuples.
+                if let Some(list) = parse_string_list(arg) {
+                    keys.extend(list.into_iter().map(|(n, _)| n));
                 }
             }
+            // v1.14 PR-D2 — tag the Grouped variant with the receiver's
+            // dialect so `handle_agg` can dialect-discriminate dispatch.
+            // Missing inherited-dialect signal (opaque receiver) defaults to
+            // Spark for backward-compat with the v1.0 `.groupBy` arm.
             Some(SchemaView::Grouped {
                 keys,
                 underlying: Box::new(recv.clone()),
                 after_pivot: false,
+                dialect: receiver_dialect.unwrap_or(Dialect::Spark),
             })
         }
         _ => None,
