@@ -59,7 +59,7 @@ pub mod two_df;
 // Internal types — kept crate-visible for cross-module use by `completion.rs`,
 // `hover.rs`, `symbols.rs`, and the `lib.rs` driver. Not part of the public API.
 pub(crate) use context::{BodyContext, CallResultTrace, ColumnRefTrace, LocalBindingTrace};
-pub(crate) use driver::check_function_body;
+pub(crate) use driver::{DeclaredReturn, check_function_body};
 
 // Exposed to the integration-test crate that pins the synthetic-name pool's
 // growth invariant — see `tests/groupby_aggregates.rs` and

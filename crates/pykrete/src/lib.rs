@@ -75,7 +75,8 @@ pub use crate::diagnostics::CheckMode;
 use crate::diagnostics::{Diagnostic, Severity};
 use crate::imports::{ModulePath, find_pyproject_root, longest_common_ancestor, parse_imports};
 use crate::operations::{
-    BodyContext, CallResultTrace, ColumnRefTrace, LocalBindingTrace, check_function_body,
+    BodyContext, CallResultTrace, ColumnRefTrace, DeclaredReturn, LocalBindingTrace,
+    check_function_body,
 };
 use crate::registry::Registry;
 use crate::schema::{
@@ -854,10 +855,10 @@ fn analyze_module<'a>(
 fn declared_return_schema<'a>(
     slots: &[TypedSlot<'a>],
     schemas: &'a [Schema<'a>],
-) -> Option<SchemaView<'a>> {
+) -> Option<DeclaredReturn<'a>> {
     for slot in slots {
         if matches!(slot.label, SlotLabel::Return) {
-            return match slot.kind {
+            let view = match slot.kind {
                 DataFrameAnnotation::Typed(name) => schemas
                     .iter()
                     .find(|s| s.name() == name)
@@ -865,6 +866,10 @@ fn declared_return_schema<'a>(
                 DataFrameAnnotation::Derived(expr) => resolve_derived_schema(expr, schemas),
                 _ => None,
             };
+            return view.map(|view| DeclaredReturn {
+                view,
+                dialect: slot.dialect,
+            });
         }
     }
     None
