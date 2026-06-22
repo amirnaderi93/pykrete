@@ -25,6 +25,7 @@ pub mod alias_adjudicate;
 pub mod alias_report;
 #[doc(hidden)]
 pub mod build_helpers;
+pub mod compare_to;
 pub mod completion;
 pub mod config;
 pub mod dataframe;
@@ -48,6 +49,10 @@ pub use alias_adjudicate::{
 pub use alias_report::{
     AckFilter, AdjudicatedDialect, AliasSite, MigrationStatus, collect_alias_sites,
     render_alias_report_json, render_deprecation_report_json,
+};
+pub use compare_to::{
+    Snapshot, SnapshotProvenance, SnapshotSite, added_count, parse_snapshot, render_diff,
+    snapshot_from_current_envelope,
 };
 pub use completion::{CompletionItem, CompletionItemKind, completions};
 pub use config::Config;
