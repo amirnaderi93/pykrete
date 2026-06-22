@@ -967,6 +967,38 @@ fn render_actual_side(actual_dialect: Dialect, actual: Option<&SchemaView<'_>>) 
     }
 }
 
+// v1.14 PR-V1 — single emission point for D0080 on the return-type
+// path. Callers in `check_return_type` collect clause strings (each one
+// a self-contained mismatch fact about the return) and hand them off
+// here; this function decides whether to emit zero, one, or one
+// combined diagnostic. Single-clause callers get the pre-PR-V1 message
+// shape verbatim; two-or-more clauses are joined with "; additionally,"
+// so the user sees one diagnostic listing every fact instead of N
+// stacked diagnostics at the same range.
+fn emit_d0080(
+    clauses: &[String],
+    range: TextRange,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if clauses.is_empty() {
+        return;
+    }
+    let message = format!(
+        "Return type mismatch: {}.",
+        clauses.join("; additionally, ")
+    );
+    diagnostics.push(Diagnostic::at_range(
+        Severity::Error,
+        "D0080",
+        message,
+        range,
+        source,
+        line_index,
+    ));
+}
+
 #[allow(clippy::too_many_arguments)]
 fn check_return_type<'a>(
     declared: &DeclaredReturn<'a>,
@@ -999,24 +1031,28 @@ fn check_return_type<'a>(
     // site is downstream of the alias rebinding); D0080 fires
     // unconditionally because the return-type annotation IS the
     // adjudication site — no downstream reader resolves it.
+    //
+    // v1.14 PR-V1 — when the dialect clause AND one-or-more column-
+    // type clauses both fire on the same return range, collapse them
+    // into a single D0080 diagnostic so the user sees one message
+    // listing every clause instead of N stacked diagnostics. We
+    // collect clause text first, then emit a single Diagnostic at the
+    // end of this function. D0083 (nullability) and D0050 (column-set
+    // mismatch) carry different codes and stay independent.
+    let mut d0080_clauses: Vec<String> = Vec::new();
+
     if let Some(actual_dialect) = actual_dialect
         && actual_dialect != declared.dialect
     {
-        diagnostics.push(Diagnostic::at_range(
-            Severity::Error,
-            "D0080",
-            format!(
-                "Return type mismatch: declared as {} but the body produces {}.",
-                render_dialect_label(declared.dialect, &declared_label),
-                render_actual_side(actual_dialect, actual),
-            ),
-            range,
-            source,
-            line_index,
+        d0080_clauses.push(format!(
+            "declared as {} but the body produces {}",
+            render_dialect_label(declared.dialect, &declared_label),
+            render_actual_side(actual_dialect, actual),
         ));
     }
 
     let Some(actual) = actual else {
+        emit_d0080(&d0080_clauses, range, source, line_index, diagnostics);
         return;
     };
 
@@ -1038,16 +1074,9 @@ fn check_return_type<'a>(
             actual.field_type(name, schemas),
         ) {
             if !types_compatible(&declared_ty, &actual_ty) {
-                diagnostics.push(Diagnostic::at_range(
-                    Severity::Error,
-                    "D0080",
-                    format!(
-                        "Return type mismatch: column '{name}' is declared {declared_ty} \
-                         in {declared_label}, but the body produces {actual_ty}.",
-                    ),
-                    range,
-                    source,
-                    line_index,
+                d0080_clauses.push(format!(
+                    "column '{name}' is declared {declared_ty} in {declared_label}, \
+                     but the body produces {actual_ty}",
                 ));
             }
             // Strict: a nullable value flowing into a column the return
@@ -1072,6 +1101,8 @@ fn check_return_type<'a>(
             }
         }
     }
+
+    emit_d0080(&d0080_clauses, range, source, line_index, diagnostics);
 
     if declared_names == actual_names {
         return;
