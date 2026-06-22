@@ -6,6 +6,62 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-06-22
+
+**Trust claim**: v1.13 closes D0080's dialect-on-return gap, turns v1.12's pivot_table aggfunc classifier into observable schema inference (convention for v1.14+ groupby.agg), and converts the dispatched release-gate into a required status check.
+
+### Audit-tooling
+
+- **Backtick-preservation tripwire** (`scripts/trust-claim-sweep-checklist.sh --snapshot`) — closes 2-cycle backtick-strip regression at PR-G v1.11 + v1.12. New snapshot file `scripts/trust-claim-sweep-checklist.snapshot.txt` enumerates single-backticked historical pins; tripwire fires `BACKTICK-PRESERVATION-FAIL` if any pin is removed. — PR-A1 #188.
+- **Dispatched-run required-status-check** — `release-gate.yml` no longer triggers on `pull_request` events; only `push: release/v*` + `workflow_dispatch`. Branch-protection requires `release-gate-check`; sits in "Expected — Waiting" state on PRs until dispatched run reports SUCCESS. Closes v1.12 retro #2 polling-step. Dispatched-event verification CAPTURED on PR-A2 #186 itself. — PR-A2 #186.
+
+### New features
+
+- **Pandas `pivot_table(aggfunc=)` schema inference** — v1.12 PR-D1's dead-code primer now consumed. Schema inference table: `count`/`nunique` → int64; `mean`/`std`/`var`/`median` → float64; `sum`/`min`/`max`/`first`/`last` → preserve receiver column type; default (no aggfunc) → mean → float64. Multi-values + `columns=` correctly falls through to Unknown (caught silent-wrong-schema bug at R2). FIRST observable aggregate-semantics-informed schema inference in pykrete; sets convention for v1.14+ groupby.agg. — PR-D2 #189.
+- **D0080 dialect-on-return checker arm** — `check_return_type` now compares `Dialect` tag. `-> SparkFrame[X]` returning `.toPandas()` chain now fires D0080 with dedicated dialect-mismatch message ("declared as SparkFrame schema 'X' but the body produces PandasFrame schema 'X'"). Closes longest-standing 7-cycle correctness gap (v1.6 → v1.12 silent). Honest-silence policy for constructor cases (`pd.DataFrame(...)`, `spark.read.parquet(...)`); v1.14 candidate to extend `inherited_chain_state` with constructor arms. — PR-D1 #190.
+
+### Process / tooling
+
+- **vscode CHANGELOG per-section masking test lock-in** — `5` negative-space tests for the existing `surface_display.endswith("CHANGELOG.md")` per-section mask. Closes the 3-cycle defensive-backtick-wrap workaround at PR-G v1.10/v1.11/v1.12 (those wraps were on `pykrete-tests/README.md`, not vscode CHANGELOG — V1 test lock-in prevents future refactor from silently breaking the mask). — PR-V1 #187.
+
+### Changed
+
+- **D0080 dialect-on-return is now observable.** Functions annotated `-> SparkFrame[X]` whose body returns a `.toPandas()` chain (or similar) previously fired ZERO diagnostics; v1.13 fires D0080 with dialect-mismatch message. Adopters with code that incorrectly cross-converts dialects at function boundaries will see new D0080 fires. **Path forward**: align annotation with body, OR rewrite body to match annotation. v1.10's bare-attribute D0091 carve-out for deprecated `DataFrame[X]` annotation does NOT apply — return-type annotation IS the adjudication site.
+
+- **Pandas `pivot_table(aggfunc=)` result schema is no longer Unknown** when aggfunc is recognized. Previously, downstream column-refs on result were silently permissive (Unknown swallowed everything). v1.13 synthesizes `Derived` schema with `values=` columns at aggregate-driven dtype — downstream column-refs that don't match the synthesized schema now fire D0030. Adopters with code that accidentally accessed non-`values` columns post-`pivot_table` will see new D0030 fires. **Path forward**: `.reset_index()` first to access `index=` / `columns=` arg values as columns.
+
+### Test coverage
+
+- pykrete: `1828 tests` total
+- pykrete-tests: `289 probes` (`187 positive` + `102 negative`); `148 fixtures`; `17 donors`
+
+```text-numeric
+289 probes
+187 positive
+102 negative
+148 fixtures
+1828 tests
+17 donors
+```
+
+### Internal
+
+- `crates/pykrete/src/operations/driver.rs:910` — `render_actual_side(actual_dialect, actual)` helper handles all four dialect/view combinations.
+- `crates/pykrete/src/operations/expr.rs:687` — `synthesize_pivot_result_from_aggfunc` consumer.
+- `scripts/trust-claim-sweep-checklist.sh` `--snapshot` mode + backtick-tripwire.
+- `.github/workflows/release-gate.yml` event-split for dispatched-only firing.
+
+### Audit-debt deferred to v1.14
+
+- `--compare-to <snapshot>` for `--deprecation-report` (5th consecutive defer; v1.14 spec-time user-decision per v1.13 PR-S1 §12).
+- `pd.DataFrame(...)` + `spark.read.<format>(...)` + `spark.createDataFrame(rows, schema=)` constructor arms in `inherited_chain_state` (PR-D1 v1.13 carve-out).
+- Pandas `groupby.agg` (now unblocked by PR-D2 schema-rewriting convention; needs `Grouped<pandas>` receiver type).
+- Multi-aggregate aggfunc list (e.g., `aggfunc=['sum', 'mean']`) MultiIndex inference.
+- `pd.DataFrame.attribute_access` form for D0030 tracking (vs only `["subscript"]` form today).
+- `Box::leak` → `OnceLock` cleanup.
+- LSP polish bundle (formally v2.0.1 per v1.10 spec §10.10).
+- Polars.
+
 ## [1.12.0] - 2026-06-18
 
 **Trust claim**: v1.12 closes the v1.11.0 calendared GITHUB_TOKEN promise (release-gate now fires non-skipped on labeled PR events via workflow_dispatch API) AND adds D0080 cross-codebase trust coverage (the longest-standing gap since v1.6).
@@ -32,7 +88,7 @@ All notable changes to pykrete are documented here. The format follows
 - pykrete: `1789 tests` total
 - pykrete-tests: `279 probes` (`187 positive` + `92 negative`); `138 fixtures`; `17 donors`
 
-```text-numeric
+```text-numeric-historical
 279 probes
 187 positive
 92 negative
