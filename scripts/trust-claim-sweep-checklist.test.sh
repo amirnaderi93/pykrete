@@ -486,6 +486,126 @@ run_gate "$repo" 1.10.0 --skip-pykrete-tests
 extra=ok
 grep -q "BACKTICK-PRESERVATION-FAIL" "$repo/stderr" && extra=should_skip_pykrete_tests_entry
 assert "T9b: --skip-pykrete-tests honors carve-out for sibling-prefix entries" 0 "$LAST_RC" "$extra"
+# --- v1.13 PR-V1: vscode CHANGELOG per-section masking ---
+# Locks in the existing `surface_display.endswith("CHANGELOG.md")` branch's
+# behavior for editors/vscode/CHANGELOG.md (first `## ` = current; second
+# onward = masked). Closes the 3-cycle manual-backtick workaround at
+# PR-G v1.10 / v1.11 / v1.12.
+
+# Use a CHANGELOG with current=1.13.0 + prior=1.12.0 pins so the test fires
+# against the post-bump scenario the brief describes.
+CHANGELOG_V113='# Changelog
+
+## [1.13.0]
+Pins for v1.13.
+
+```text-numeric-historical
+279 probes
+138 fixtures
+17 donors
+```
+
+## [1.12.0]
+Pins for v1.12.
+
+```text-numeric-historical
+271 probes
+130 fixtures
+17 donors
+```
+'
+
+# --- Case V1.1: vscode CHANGELOG with current + historical sections is CLEAN
+# Current section (## 0.11.0) carries the current pin (279); historical
+# section (## 0.10.0) carries the prior pin (271). The header-second-
+# onward mask hides 271; 279 matches current so it's not flagged either.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_V113" > "$repo/CHANGELOG.md"
+{
+    printf '# Changelog\n\n'
+    printf '## 0.11.0\n'
+    printf 'Tracks v1.13.0: 279 probes across 138 fixtures.\n\n'
+    printf '## 0.10.0\n'
+    printf 'Tracks v1.12.0: 271 probes across 130 fixtures.\n'
+} > "$repo/editors/vscode/CHANGELOG.md"
+printf 'README: 279 probes.\n' > "$repo/README.md"
+run_gate "$repo" 1.13.0 --skip-pykrete-tests
+extra=ok
+grep -q "PRIOR-RELEASE-NUMBER-LEAKED" "$repo/stderr" && extra=vscode_historical_should_be_masked
+assert "V1.1: vscode CHANGELOG historical section is masked (271 not flagged)" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case V1.2: vscode CHANGELOG with only one `## ` heading → no mask ---
+# A single-section vscode CHANGELOG has no historical content to mask. The
+# whole body stays scannable; any prior-pin number leaks normally.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_V113" > "$repo/CHANGELOG.md"
+{
+    printf '# Changelog\n\n'
+    printf '## 0.11.0\n'
+    printf 'Stale narrative: 271 probes here MUST leak (no historical to mask under).\n'
+} > "$repo/editors/vscode/CHANGELOG.md"
+printf 'README: 279 probes.\n' > "$repo/README.md"
+run_gate "$repo" 1.13.0 --skip-pykrete-tests
+extra=ok
+grep -qF "PRIOR-RELEASE-NUMBER-LEAKED: editors/vscode/CHANGELOG.md" "$repo/stderr" || extra=single_section_should_have_fired
+assert "V1.2: single-## vscode CHANGELOG leaks (no historical to mask)" 1 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case V1.3: empty vscode CHANGELOG → degraded clean ---
+# Empty file: no headers, no body, no leaks. Exit 0.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_V113" > "$repo/CHANGELOG.md"
+: > "$repo/editors/vscode/CHANGELOG.md"
+printf 'README: 279 probes.\n' > "$repo/README.md"
+run_gate "$repo" 1.13.0 --skip-pykrete-tests
+extra=ok
+grep -q "PRIOR-RELEASE-NUMBER-LEAKED" "$repo/stderr" && extra=empty_file_should_be_clean
+assert "V1.3: empty vscode CHANGELOG is degraded clean" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case V1.4: leak in CURRENT (first `## `) section MUST fire ---
+# Regression guard: a stale prior pin inside the first `## ` block of the
+# vscode CHANGELOG is NOT masked by the per-section scope.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_V113" > "$repo/CHANGELOG.md"
+{
+    printf '# Changelog\n\n'
+    printf '## 0.11.0\n'
+    printf 'Tracks v1.13.0 release: stale 271 probes inside CURRENT — MUST FIRE.\n\n'
+    printf '## 0.10.0\n'
+    printf 'Historical block (masked).\n'
+} > "$repo/editors/vscode/CHANGELOG.md"
+printf 'README: 279 probes.\n' > "$repo/README.md"
+run_gate "$repo" 1.13.0 --skip-pykrete-tests
+extra=ok
+grep -qF "PRIOR-RELEASE-NUMBER-LEAKED: editors/vscode/CHANGELOG.md" "$repo/stderr" || extra=current_section_leak_should_fire
+grep -qF "'271 probes' is v1.12.0's number" "$repo/stderr" || extra="${extra}+missing_version_context"
+assert "V1.4: leak in CURRENT vscode section fires PRIOR-RELEASE-NUMBER-LEAKED" 1 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case V1.5: level-3 (`### 0.X.Y`) headers do NOT divide sections ---
+# Documents the format constraint from the script comment: only `## `
+# (level-2) headers are recognized as section dividers. A vscode CHANGELOG
+# that uses `### 0.X.Y` instead would have the whole body treated as a
+# single section (no mask), so a prior-pin number in a "historical"-feeling
+# block would still leak. PR-V1 chose to lock in the level-2-only contract
+# rather than recognize multiple header levels; the negative-space test
+# guards against accidental level-3 misuse going undetected.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_V113" > "$repo/CHANGELOG.md"
+{
+    printf '# Changelog\n\n'
+    printf '### 0.11.0\n'
+    printf 'Pseudo-current using level 3.\n\n'
+    printf '### 0.10.0\n'
+    printf 'Pseudo-historical using level 3: 271 probes leaks because no `## ` divides.\n'
+} > "$repo/editors/vscode/CHANGELOG.md"
+printf 'README: 279 probes.\n' > "$repo/README.md"
+run_gate "$repo" 1.13.0 --skip-pykrete-tests
+extra=ok
+grep -qF "PRIOR-RELEASE-NUMBER-LEAKED: editors/vscode/CHANGELOG.md" "$repo/stderr" || extra=level3_should_not_mask
+assert "V1.5: level-3 (### 0.X.Y) headers do NOT divide sections (format constraint)" 1 "$LAST_RC" "$extra"
 rm -rf "$repo"
 
 # --- summary ---
