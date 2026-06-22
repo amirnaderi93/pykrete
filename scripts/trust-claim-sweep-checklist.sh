@@ -134,10 +134,12 @@ assemble_surfaces() {
         fi
     }
 
+    # Surface inventory shared with stale-scanner (PR-A1 v1.14) — keep in sync.
     add_surface "README.md"
     add_surface "CHANGELOG.md"
     add_surface "editors/vscode/CHANGELOG.md"
     add_surface "editors/vscode/README.md"
+    add_surface "docs/roadmap.md"
 
     if [ -d "$REPO_ROOT/docs-site/src/content" ]; then
         while IFS= read -r f; do
