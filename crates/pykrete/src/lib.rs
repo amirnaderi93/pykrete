@@ -34,6 +34,7 @@ pub mod dialect_signals;
 pub mod hover;
 pub mod imports;
 pub mod operations;
+pub mod provenance;
 pub mod registry;
 pub mod schema;
 pub mod sql;
@@ -61,6 +62,10 @@ pub use dialect_signals::{
     PANDAS_ONLY_SIGNALS, SPARK_DISCRIMINATOR_PROPERTIES, SPARK_DISCRIMINATORS,
 };
 pub use hover::{HoverInfo, hover};
+pub use provenance::{
+    capture_current as capture_current_provenance, capture_git_sha, current_timestamp_iso8601,
+    format_unix_secs_as_iso8601,
+};
 pub use symbols::{
     DocumentSymbol, Span, SymbolKind, definition, document_symbols, prepare_rename, references,
     rename,

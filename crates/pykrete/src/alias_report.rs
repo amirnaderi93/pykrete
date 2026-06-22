@@ -474,9 +474,16 @@ pub fn render_alias_report_json(sites: &[AliasSite]) -> String {
 /// Per spec §4.5 carve-out: NO `target_version` field. NO calendar
 /// quarter. NO date marker. The envelope is a planning instrument;
 /// the ship-date is product fork, not committee fork.
+///
+/// v1.14 PR-D3 addition: emits top-level `pykreteSourceCommit` and
+/// `generatedAt` keys (`null` when `provenance` carries `None` for the
+/// respective field). These round-trip through `--compare-to` as
+/// `snapshot_a` provenance, closing the spec promise that v1.14+
+/// snapshots preserve their source-of-truth context across diffs.
 pub fn render_deprecation_report_json(
     sites: &[AliasSite],
     ack_filter: Option<AckFilter>,
+    provenance: &crate::compare_to::SnapshotProvenance,
 ) -> String {
     // Counters are post-filter: .map() runs after .filter(), so spark/pandas/ambiguous
     // reflect the --ack-filtered envelope, not the raw site set. Intentional.
@@ -532,8 +539,22 @@ pub fn render_deprecation_report_json(
         })
         .collect();
     let total = site_values.len();
+    let sha_value = provenance
+        .sha
+        .as_deref()
+        .map_or(serde_json::Value::Null, |s| {
+            serde_json::Value::String(s.to_owned())
+        });
+    let ts_value = provenance
+        .timestamp
+        .as_deref()
+        .map_or(serde_json::Value::Null, |s| {
+            serde_json::Value::String(s.to_owned())
+        });
     let payload = serde_json::json!({
         "deprecationReportVersion": "2",
+        "pykreteSourceCommit": sha_value,
+        "generatedAt": ts_value,
         "sites": site_values,
         "summary": {
             "totalSites": total,
@@ -701,7 +722,11 @@ def f(df: DataFrame) -> DataFrame:
     fn deprecation_report_v2_envelope_has_version_2() {
         let src = "def f(df: DataFrame[Sale]) -> int: ...\n";
         let sites = collect(src);
-        let json = render_deprecation_report_json(&sites, None);
+        let json = render_deprecation_report_json(
+            &sites,
+            None,
+            &crate::compare_to::SnapshotProvenance::default(),
+        );
         let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
         assert_eq!(v["deprecationReportVersion"], "2");
     }
@@ -710,9 +735,56 @@ def f(df: DataFrame) -> DataFrame:
     fn deprecation_report_v2_per_site_has_migration_status() {
         let src = "def f(df: DataFrame[Sale]) -> int: ...\n";
         let sites = collect(src);
-        let json = render_deprecation_report_json(&sites, None);
+        let json = render_deprecation_report_json(
+            &sites,
+            None,
+            &crate::compare_to::SnapshotProvenance::default(),
+        );
         let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
         assert_eq!(v["sites"][0]["migrationStatus"], "pending");
+    }
+
+    #[test]
+    fn deprecation_report_v2_emits_provenance_keys_when_present() {
+        // v1.14 PR-D3 BLOCKER #1 fix: envelope ALWAYS emits both
+        // top-level provenance keys; when the caller threads non-None
+        // values, those values surface verbatim.
+        let src = "def f(df: DataFrame[Sale]) -> int: ...\n";
+        let sites = collect(src);
+        let prov = crate::compare_to::SnapshotProvenance {
+            sha: Some("deadbeef".to_owned()),
+            timestamp: Some("2026-06-23T12:00:00Z".to_owned()),
+        };
+        let json = render_deprecation_report_json(&sites, None, &prov);
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert_eq!(v["pykreteSourceCommit"], "deadbeef");
+        assert_eq!(v["generatedAt"], "2026-06-23T12:00:00Z");
+    }
+
+    #[test]
+    fn deprecation_report_v2_emits_null_provenance_when_absent() {
+        // Default provenance (both fields None) → top-level keys are
+        // STILL present but explicitly null. Consumers can rely on the
+        // keys existing regardless of capture success.
+        let src = "def f(df: DataFrame[Sale]) -> int: ...\n";
+        let sites = collect(src);
+        let json = render_deprecation_report_json(
+            &sites,
+            None,
+            &crate::compare_to::SnapshotProvenance::default(),
+        );
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        let obj = v.as_object().expect("envelope is an object");
+        assert!(
+            obj.contains_key("pykreteSourceCommit"),
+            "top-level key MUST be present even when null"
+        );
+        assert!(
+            obj.contains_key("generatedAt"),
+            "top-level key MUST be present even when null"
+        );
+        assert!(v["pykreteSourceCommit"].is_null());
+        assert!(v["generatedAt"].is_null());
     }
 
     // v1.10 PR-A1 — multi-line ack-marker walker (arch-I1 closure).
@@ -1033,7 +1105,11 @@ def b(df: DataFrame[Sale]) -> int: ...
 ";
         let sites = collect(src);
         assert_eq!(sites.len(), 2);
-        let json = render_deprecation_report_json(&sites, Some(AckFilter::Pending));
+        let json = render_deprecation_report_json(
+            &sites,
+            Some(AckFilter::Pending),
+            &crate::compare_to::SnapshotProvenance::default(),
+        );
         let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
         assert_eq!(v["sites"].as_array().unwrap().len(), 1);
         assert_eq!(v["summary"]["totalSites"], 1);

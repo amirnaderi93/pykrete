@@ -164,15 +164,17 @@ fn full_prior_empty_current_all_removed_exit_zero() {
 }
 
 #[test]
-fn status_flip_pending_to_acknowledged_remove_plus_add() {
-    let dir = tmpdir("status-flip");
+fn ack_marker_insertion_surfaces_as_add_plus_remove_via_line_shift() {
+    // Rename of round-2 `status_flip_pending_to_acknowledged_remove_plus_add`:
+    // adding the ack marker shifts the def's line by 1, so the new site
+    // has a DIFFERENT (file, line) key than the prior — the diff walker
+    // hits the disjoint-keys path (line shift), not the same-key
+    // payload-mismatch path. See `payload_drift_at_same_site_id_…` below
+    // for the genuine same-key/different-payload pin.
+    let dir = tmpdir("ack-marker-line-shift");
     let pyk = write_pyk(&dir, "x.pyk", ONE_SITE_PENDING);
     let snap = snapshot(&dir, "prior.json", &pyk);
 
-    // Add the ack marker → same (file, line) but payload differs.
-    // Note: adding the marker shifts the def's line by 1, so the new
-    // site has a NEW (file, line) key — appears as added; the prior
-    // site's line is no longer present → appears as removed.
     let pyk_acked = write_pyk(&dir, "x.pyk", ONE_SITE_ACK);
     let (exit, stdout, _) = run(&[
         "check",
@@ -334,6 +336,79 @@ fn snapshot_b_timestamp_is_iso8601_z() {
     assert!(ts.chars().nth(4) == Some('-'));
     assert!(ts.chars().nth(7) == Some('-'));
     assert!(ts.chars().nth(10) == Some('T'));
+}
+
+// -------------------------------------------------------------------
+// Provenance round-trip — v1.14 PR-D3 round-2 BLOCKER #1 fix
+// -------------------------------------------------------------------
+
+#[test]
+fn snapshot_envelope_emits_provenance_top_level_keys() {
+    // v1.14+ snapshots ALWAYS emit `pykreteSourceCommit` + `generatedAt`
+    // at the top level. The git SHA may be null (snapshot taken outside
+    // a git repo, etc.); the timestamp is best-effort but populated
+    // under normal conditions.
+    let dir = tmpdir("snapshot-provenance");
+    let pyk = write_pyk(&dir, "x.pyk", ONE_SITE_PENDING);
+    let snap = snapshot(&dir, "prior.json", &pyk);
+    let v: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&snap).unwrap()).expect("valid JSON");
+    let obj = v.as_object().expect("envelope is an object");
+    assert!(
+        obj.contains_key("pykreteSourceCommit"),
+        "snapshot envelope MUST emit pykreteSourceCommit top-level key"
+    );
+    assert!(
+        obj.contains_key("generatedAt"),
+        "snapshot envelope MUST emit generatedAt top-level key"
+    );
+    // Timestamp is captured from system clock; should always populate
+    // to ISO-8601 UTC second-precision when the system clock works.
+    let ts = v["generatedAt"]
+        .as_str()
+        .expect("generatedAt should be ISO-8601 string");
+    assert_eq!(ts.len(), 20, "ts shape: {ts}");
+    assert!(ts.ends_with('Z'), "ts should end in Z: {ts}");
+}
+
+#[test]
+fn compare_to_round_trips_snapshot_a_provenance_from_v114_snapshot() {
+    // A snapshot taken by v1.14+ carries provenance; feeding it to
+    // `--compare-to` MUST surface `snapshot_a.timestamp` (and
+    // `snapshot_a.sha` if a git SHA was captured) — not null.
+    let dir = tmpdir("provenance-roundtrip");
+    let pyk = write_pyk(&dir, "x.pyk", ONE_SITE_PENDING);
+    let snap = snapshot(&dir, "prior.json", &pyk);
+
+    // Sanity-check that the snapshot itself has the keys populated
+    // (timestamp always; sha when run inside a git repo, which the
+    // pykrete worktree always is during `cargo test`).
+    let prior_v: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&snap).unwrap()).unwrap();
+    let prior_ts = prior_v["generatedAt"]
+        .as_str()
+        .expect("v1.14 snapshot generatedAt populated");
+
+    let (exit, stdout, stderr) = run(&[
+        "check",
+        "--deprecation-report",
+        &format!("--compare-to={}", snap.display()),
+        pyk.to_str().unwrap(),
+    ]);
+    assert_eq!(exit, 0, "stderr: {stderr}");
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    assert_eq!(
+        v["snapshot_a"]["timestamp"].as_str(),
+        Some(prior_ts),
+        "snapshot_a.timestamp must round-trip from v1.14 snapshot's generatedAt"
+    );
+    // sha may be Some(real SHA) or None — what matters is the
+    // round-trip: if the snapshot carried a sha, the diff doc carries
+    // the same one verbatim.
+    assert_eq!(
+        v["snapshot_a"]["sha"], prior_v["pykreteSourceCommit"],
+        "snapshot_a.sha must round-trip from v1.14 snapshot's pykreteSourceCommit"
+    );
 }
 
 // -------------------------------------------------------------------

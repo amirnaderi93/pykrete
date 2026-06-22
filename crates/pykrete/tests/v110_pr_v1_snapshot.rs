@@ -155,12 +155,23 @@ fn snapshot_envelope_has_no_compare_to_fields() {
     let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&snap).unwrap()).unwrap();
     let obj = v.as_object().expect("envelope is an object");
     let keys: BTreeSet<&str> = obj.keys().map(|s| s.as_str()).collect();
-    let expected: BTreeSet<&str> = ["deprecationReportVersion", "sites", "summary"]
-        .into_iter()
-        .collect();
+    // v1.14 PR-D3 added `pykreteSourceCommit` + `generatedAt` (provenance
+    // round-trip into `--compare-to`). The v1.10 §5.5 carve-out forbade
+    // CONSUMER-STATE pre-allocation (`previous_snapshot_diff`,
+    // `resolvedSites`); provenance keys are source-of-truth metadata and
+    // explicitly allowed.
+    let expected: BTreeSet<&str> = [
+        "deprecationReportVersion",
+        "pykreteSourceCommit",
+        "generatedAt",
+        "sites",
+        "summary",
+    ]
+    .into_iter()
+    .collect();
     assert_eq!(
         keys, expected,
-        "envelope must only contain v1.9 keys (spec §5.5 carve-out); got {obj:?}"
+        "envelope keys must match v1.14 schema (v1.9 base + v1.14 provenance pair); got {obj:?}"
     );
 }
 
