@@ -278,6 +278,12 @@ CHANGELOG citations may use bare basenames (e.g., `alias_report.rs:446`); the ci
 
 v1.12 extends `# pykrete: ack-deprecation` recognition to the entire contiguous comment block above the anchor. v1.10's `marker → non-matching comment → def` pending semantic is now acknowledged. Spec §6.1.4.
 
+### `editors/vscode/CHANGELOG.md` numeric-claim convention
+
+The vscode CHANGELOG (`editors/vscode/CHANGELOG.md`) does NOT carry the `text-numeric` fenced-block discipline that the root CHANGELOG enforces. Per-cycle numeric claims (cross-codebase probe counts, fixture counts) live in flowing prose as `<old> → <new> probes across <fixtures> fixtures from <donors> donors`. By convention these are bare (no backticks) — matching the historical style of every prior release entry in the file. The trust-claim sweep checklist's backtick-preservation tripwire (v1.13 PR-A1) snapshots only the surfaces that DO use single backticks (`pykrete-tests/README.md`, root CHANGELOG historical pins); the vscode CHANGELOG is intentionally exempt from the tripwire.
+
+Rationale: the vscode CHANGELOG is downstream-facing (Marketplace + Open VSX render it), and the per-release entries are append-only at cycle close (PR-F). Adding fenced-block discipline would require either authoring the gate to understand a second CHANGELOG location or de-fencing on render. Neither earns its keep against the 2-cycle delta of prior-release leak risk; PR-F's trust-claim sweep checklist still catches stale numbers in the vscode CHANGELOG via the docs-vs-history surface scan (see `add_surface "editors/vscode/CHANGELOG.md"` in `scripts/trust-claim-sweep-checklist.sh:132`).
+
 ### Release-gate `cargo test` memoization (v1.12+)
 
 The release-gate workflow memoizes `cargo test --release --workspace` output via the `PYKRETE_TESTS_COUNT_FILE` env var. Local dev path (env var unset) preserves the cargo invocation; CI path (env var set) reads from the file written by an earlier cargo-test step. Eliminates v1.11 PR-F's 34-min double-build stall.
