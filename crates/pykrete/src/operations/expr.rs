@@ -1664,6 +1664,65 @@ fn analyze_method_call_inner<'a>(
         }
         return None;
     }
+    // v1.15 PR-D2 — `pdf.reset_index(drop=True)` schema pass-through arm
+    // (spec §5 + §1.iii). Closes the v1.14 PR-D2 carve-out: a chain like
+    // `pdf.groupby('k').agg('sum').reset_index(drop=True)` (the canonical
+    // pandas idiom) previously lost the synthesized Derived envelope at
+    // `.reset_index(...)` and degraded to Unknown, breaking downstream
+    // column resolution two methods deep. The arm fires only on the
+    // `drop=True` shape — pandas semantics: drop the index without
+    // promoting it to a column, so the output columns equal the
+    // receiver's. `drop=False` (the default) promotes the index as a
+    // NEW column, which would require tracking which column went to the
+    // index at `set_index` / `groupby` time; deferred to v1.16 per
+    // spec §1.iii.3 (no synthesis stat tracked today).
+    //
+    // Dialect gate mirrors v1.14 PR-D2 `.agg("...")`. Receiver shape:
+    // Declared / Derived → Derived(typed_fields(receiver)); Grouped →
+    // Derived(typed_fields(underlying)) — "all fields" per brief, since
+    // `Grouped::typed_fields` returns only the keys but the intent of
+    // unsetting Grouped post-groupby is to expose the full pre-group
+    // surface. Non-`drop=True` shapes (missing kwarg, `drop=False`,
+    // non-bool-literal) explicit fall-through to None per the
+    // synthesis-arm positive-coverage standing rule (v1.14 retro §8).
+    if receiver_is_pandas_inherited && method == "reset_index" {
+        let drop_is_true = pandas_kwarg_value(call, "drop")
+            .and_then(|e| e.as_boolean_literal_expr())
+            .is_some_and(|b| b.value);
+        if !drop_is_true {
+            return None;
+        }
+        let fields = match &receiver {
+            SchemaView::Grouped { underlying, .. } => underlying.typed_fields(ctx.schemas()),
+            _ => receiver.typed_fields(ctx.schemas()),
+        };
+        return Some(SchemaView::Derived(fields));
+    }
+    // v1.15 PR-D2 — `pdf.set_index([<literal-keys>])` / `pdf.set_index("k")`
+    // literal-keys arm (spec §5 + §1.iii). Output columns = receiver
+    // columns MINUS the literal key names (pandas moves them to the
+    // index; they're no longer accessible via `df["key"]`). Validates
+    // each literal key exists on the receiver (D0030 on typo) before
+    // subtracting. Non-literal arg shapes (bare Name, expression, dict)
+    // explicit fall-through to None per spec §1.iii.3 (no expr-eval).
+    if receiver_is_pandas_inherited && method == "set_index" {
+        let first = call.arguments.args.first()?;
+        let keys: Vec<(&'a str, TextRange)> = if let Some(lit) = first.as_string_literal_expr() {
+            vec![(lit.value.to_str(), lit.range())]
+        } else {
+            parse_string_list(first)?
+        };
+        let refs: Vec<(Option<&'a str>, &'a str, TextRange)> =
+            keys.iter().map(|&(n, r)| (None, n, r)).collect();
+        report_column_refs(&refs, &receiver, ctx, source, line_index, diagnostics);
+        let key_names: HashSet<&str> = keys.iter().map(|(n, _)| *n).collect();
+        let recv_fields = receiver.typed_fields(ctx.schemas());
+        let out: Vec<DerivedField<'a>> = recv_fields
+            .into_iter()
+            .filter(|f| !key_names.contains(f.name))
+            .collect();
+        return Some(SchemaView::Derived(out));
+    }
     if matches!(method, "melt" | "unpivot") {
         return Some(apply_melt(
             call,
