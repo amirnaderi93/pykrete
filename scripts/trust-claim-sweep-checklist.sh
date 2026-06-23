@@ -2,6 +2,9 @@
 # v1.11 PR-A1 — trust-claim sweep checklist.
 # v1.13 PR-A1 — backtick-preservation tripwire (--snapshot + tripwire).
 # v1.14 PR-A1 — backticked-claim-stale scanner (default-mode 3rd check).
+# v1.15 PR-A1 — unbackticked-marketing-table scanner (default-mode 4th check)
+#               + DRY-up of the v1.14 dual assemble_*_surfaces pair into a
+#               single collect_surfaces helper.
 #
 # Sibling to scripts/changelog-grep.sh. Where changelog-grep verifies
 # CHANGELOG.md's numeric claims against the live extract (docs-vs-source),
@@ -87,6 +90,14 @@ non-`--snapshot` invocation greps tracked surfaces for backticked
 text-numeric pin NOR a text-numeric-historical fenced block. Closes
 the v1.13 docs-sync audit 8-blocker pattern.
 
+Also runs the unbackticked-marketing-table scanner (v1.15 PR-A1):
+every non-`--snapshot` invocation scans tracked surfaces for BARE
+`<num> <key>` patterns inside markdown-table rows (lines starting with
+`|` and containing more than one `|`). Same validity rule as the
+backticked-claim-stale scanner; closes the v1.14 architecture-auditor
+finding that bare numbers in trajectory-table cells escaped both prior
+scanners.
+
 Options:
   --current-version=X.Y.Z   Override version detection (PR-F passes this).
                             Also accepts the space form: --current-version X.Y.Z.
@@ -107,7 +118,8 @@ Environment overrides:
 Exit codes:
   0   sweep clean (or no prior pins to compare against; or --snapshot succeeded).
   1   one or more PRIOR-RELEASE-NUMBER-LEAKED, BACKTICK-PRESERVATION-FAIL,
-      or BACKTICKED-CLAIM-STALE lines emitted to stderr.
+      BACKTICKED-CLAIM-STALE, or MARKETING-TABLE-CLAIM-STALE lines emitted to
+      stderr.
   2   misuse (bad flag, malformed version, missing CHANGELOG, etc.).
 USAGE
             exit 0
@@ -122,41 +134,43 @@ done
 
 # --- shared surface assembly --------------------------------------------
 #
-# Used by both the prior-leak sweep AND by --snapshot / tripwire. Populates
-# SURFACES with repo-relative paths (so leak / tripwire messages cite the
-# user-readable path, not REPO_ROOT-rooted absolutes).
-SURFACES=()
+# Single source of truth for the trust-claim surface inventory. Used by the
+# prior-leak sweep, the --snapshot / tripwire path, the stale-claim scanner
+# (v1.14 PR-A1), and the unbackticked marketing-table scanner (v1.15 PR-A1).
+# v1.15 PR-A1 consolidated the v1.14 `assemble_surfaces` / `assemble_stale_
+# surfaces` pair into this single helper (v1.14 PR-A1 R2 follow-up). Each
+# caller passes the name of the array variable to populate.
+collect_surfaces() {
+    local _out_var="$1"
 
-assemble_surfaces() {
-    add_surface() {
+    _add() {
         if [ -f "$REPO_ROOT/$1" ]; then
-            SURFACES+=("$1")
+            eval "${_out_var}+=(\"\$1\")"
         fi
     }
 
-    # Surface inventory shared with stale-scanner (PR-A1 v1.14) — keep in sync.
-    add_surface "README.md"
-    add_surface "CHANGELOG.md"
-    add_surface "editors/vscode/CHANGELOG.md"
-    add_surface "editors/vscode/README.md"
-    add_surface "docs/roadmap.md"
+    _add "README.md"
+    _add "CHANGELOG.md"
+    _add "editors/vscode/CHANGELOG.md"
+    _add "editors/vscode/README.md"
+    _add "docs/roadmap.md"
 
     if [ -d "$REPO_ROOT/docs-site/src/content" ]; then
         while IFS= read -r f; do
-            rel="${f#$REPO_ROOT/}"
-            SURFACES+=("$rel")
+            local rel="${f#$REPO_ROOT/}"
+            eval "${_out_var}+=(\"\$rel\")"
         done < <(find "$REPO_ROOT/docs-site/src/content" -type f \( -name '*.md' -o -name '*.mdx' \) | sort)
     fi
 
     # Sibling pykrete-tests checkout. The README isn't always present (release-
     # gate CI checks it out; daily PR CI doesn't).
-    PYKRETE_TESTS_README="$REPO_ROOT/../pykrete-tests/README.md"
-    if [ "$SKIP_PYKRETE_TESTS" = "1" ]; then
-        :
-    elif [ -f "$PYKRETE_TESTS_README" ]; then
-        SURFACES+=("../pykrete-tests/README.md")
+    local _pyk_tests_readme="$REPO_ROOT/../pykrete-tests/README.md"
+    if [ "$SKIP_PYKRETE_TESTS" != "1" ] && [ -f "$_pyk_tests_readme" ]; then
+        eval "${_out_var}+=(\"../pykrete-tests/README.md\")"
     fi
 }
+
+SURFACES=()
 
 # --- --snapshot early branch --------------------------------------------
 #
@@ -359,7 +373,7 @@ fi
 # Surface helper is defined above (shared with --snapshot mode). The
 # absent-sibling warning is emitted here (non-snapshot path only) so the
 # snapshot run stays quiet on PR-F's clean rewrites.
-assemble_surfaces
+collect_surfaces SURFACES
 PYKRETE_TESTS_README="$REPO_ROOT/../pykrete-tests/README.md"
 if [ "$SKIP_PYKRETE_TESTS" != "1" ] && [ ! -f "$PYKRETE_TESTS_README" ]; then
     echo "trust-claim-sweep: pykrete-tests sibling not present at $PYKRETE_TESTS_README; skipping that surface. Pass --skip-pykrete-tests to silence." >&2
@@ -603,29 +617,7 @@ STALE_TOTAL=0
 STALE_HITS=0
 if [ -f "$REPO_ROOT/$CHANGELOG" ]; then
     SURFACES_FOR_STALE=()
-    assemble_stale_surfaces() {
-        add_stale_surface() {
-            if [ -f "$REPO_ROOT/$1" ]; then
-                SURFACES_FOR_STALE+=("$1")
-            fi
-        }
-        add_stale_surface "README.md"
-        add_stale_surface "CHANGELOG.md"
-        add_stale_surface "editors/vscode/CHANGELOG.md"
-        add_stale_surface "editors/vscode/README.md"
-        add_stale_surface "docs/roadmap.md"
-        if [ -d "$REPO_ROOT/docs-site/src/content" ]; then
-            while IFS= read -r f; do
-                rel="${f#$REPO_ROOT/}"
-                SURFACES_FOR_STALE+=("$rel")
-            done < <(find "$REPO_ROOT/docs-site/src/content" -type f \( -name '*.md' -o -name '*.mdx' \) | sort)
-        fi
-        PYKRETE_TESTS_README="$REPO_ROOT/../pykrete-tests/README.md"
-        if [ "$SKIP_PYKRETE_TESTS" != "1" ] && [ -f "$PYKRETE_TESTS_README" ]; then
-            SURFACES_FOR_STALE+=("../pykrete-tests/README.md")
-        fi
-    }
-    assemble_stale_surfaces
+    collect_surfaces SURFACES_FOR_STALE
 
     # Pre-extract current + historical pin sets ONCE; reuse for every
     # surface scan. A parser crash here is fail-loud (tmpfile + exit-code
@@ -794,7 +786,176 @@ EOF
     fi
 fi
 
-if [ "$fail" -ne 0 ] || [ "$tripwire_fail" -ne 0 ] || [ "$stale_fail" -ne 0 ]; then
+# --- unbackticked-marketing-table scanner (v1.15 PR-A1) ----------------
+#
+# Closes the v1.14 architecture-auditor finding (project-v24-retrospective)
+# that backticked-claim-stale only sees `<num> <key>` pairs wrapped in
+# single-backticks. Marketing-table surfaces (e.g. trajectory tables in
+# docs-site/about/pandas-roadmap.md) carry UNBACKTICKED `<num> <key>` in
+# table cells per the rendered-typography convention — and those bare
+# numbers escaped both the prior-leak sweep (only fires on the PRIOR
+# release's specific number) and the backticked-claim-stale scanner
+# (requires backticks). A surface that writes `223 probes` bare in a
+# table row still claims trust; the validity rule should apply identically.
+#
+# Validity rule (same as backticked-claim-stale):
+#   A bare `<num> <key>` IN A MARKDOWN-TABLE ROW is valid IFF either
+#   (a) `<num> <key>` matches a current text-numeric pin in CHANGELOG,
+#   OR (b) the bare occurrence appears inside a text-numeric-historical
+#   fenced block on the surface. CHANGELOG.md sections from the 2nd `## `
+#   header onward are masked (per the existing convention).
+#
+# Scope is INTENTIONALLY narrowed to table-row contexts. Bare numbers in
+# prose paragraphs are already governed by the prior-leak sweep (catches
+# the specific prior-release number) plus the CHANGELOG grep gate v3
+# (catches prose-paragraph numerics in CHANGELOG.md). Generalizing to all
+# bare numbers in all surfaces would be a much larger change with high
+# false-positive risk on incidental numeric prose ("the 10 donors", etc.);
+# the table-row context is the narrow surface the v1.14 audit flagged.
+#
+# Heuristic for "markdown-table row": a line that BOTH starts with `|`
+# AND contains more than one `|` total. Separator rows (`|---|`) are
+# included by the heuristic but contain no `<num> <key>` patterns and
+# are naturally skipped by the inner regex.
+table_fail=0
+TABLE_TOTAL=0
+TABLE_HITS=0
+if [ -f "$REPO_ROOT/$CHANGELOG" ] && [ -n "${STALE_PIN_SETS:-}" ]; then
+    SURFACES_FOR_TABLE=()
+    collect_surfaces SURFACES_FOR_TABLE
+
+    # Degraded mode: if the current CHANGELOG section had no text-numeric
+    # block (stale-scanner short-circuited above), we have no truth source
+    # for the table scanner either; skip with a stderr note.
+    if ! printf '%s\n' "$STALE_PIN_SETS" | awk '/^CURRENT$/{flag=1; next} /^HISTORICAL$/{exit} flag && NF' | grep -q '^.'; then
+        echo "trust-claim-sweep: no current text-numeric pins for v$CURRENT_VERSION in $CHANGELOG; unbackticked-marketing-table scanner skipped." >&2
+        SURFACES_FOR_TABLE=()
+    fi
+
+    while IFS= read -r surface; do
+        [ -z "$surface" ] && continue
+        STALE_PIN_SETS_ENV="$STALE_PIN_SETS" \
+        SURFACE_PATH="$REPO_ROOT/$surface" \
+        SURFACE_DISPLAY="$surface" \
+        python3 - <<'PY'
+import os
+import re
+import sys
+
+surface_path = os.environ["SURFACE_PATH"]
+surface_display = os.environ["SURFACE_DISPLAY"]
+
+current_pins = set()
+historical_pins = set()
+bucket = None
+for ln in os.environ["STALE_PIN_SETS_ENV"].splitlines():
+    ln = ln.strip()
+    if ln == "CURRENT":
+        bucket = current_pins
+        continue
+    if ln == "HISTORICAL":
+        bucket = historical_pins
+        continue
+    if not ln or bucket is None:
+        continue
+    bucket.add(ln)
+
+try:
+    with open(surface_path, "r", encoding="utf-8") as f:
+        text = f.read()
+except OSError as exc:
+    print(f"trust-claim-sweep: could not read {surface_display}: {exc}", file=sys.stderr)
+    sys.exit(2)
+
+def blank_keep_lines(match):
+    return "\n" * match.group(0).count("\n")
+
+# Carve-out: text-numeric-historical fenced blocks. A surface that
+# explicitly opts into a historical block on a table-formatted release
+# matrix (rare but possible) gets the same immunity as the backticked
+# scanner above.
+hist_fence = re.compile(
+    r"^```text-numeric-historical\n[\s\S]*?^```",
+    re.MULTILINE,
+)
+text = hist_fence.sub(blank_keep_lines, text)
+
+# Carve-out: CHANGELOG.md sections from the 2nd `## ` header onward —
+# historical CHANGELOG sections are immutable by design (same convention
+# as the prior-leak sweep + stale-claim scanner).
+if surface_display.endswith("CHANGELOG.md"):
+    header_pat = re.compile(r"^## [^\n]*$", re.MULTILINE)
+    headers = list(header_pat.finditer(text))
+    if len(headers) >= 2:
+        start = headers[1].start()
+        masked_chars = list(text)
+        for j in range(start, len(text)):
+            if masked_chars[j] != "\n":
+                masked_chars[j] = "_"
+        text = "".join(masked_chars)
+
+# Number-key regex shared with the backticked-claim-stale scanner.
+allowed = "probes|positive|negative|fixtures|tests|donors"
+# Anchor: NOT preceded by a backtick (so the backticked-claim-stale
+# scanner above owns those occurrences and this one only sees BARE
+# numbers). Also NOT preceded by alnum/underscore so D-codes / identifier-
+# prefixed digits don't false-match (same convention as the prior-leak
+# sweep's `(?<![A-Za-z0-9_])` anchor). Followed by `\b` so `1234 probesx`
+# does not match.
+_BT = chr(96)
+pat = re.compile(
+    r"(?<![A-Za-z0-9_" + _BT + r"])(\d+)\s+(" + allowed + r")\b(?!" + _BT + r")"
+)
+
+hits = 0
+# Iterate line-by-line so we can apply the table-row heuristic per line.
+# A markdown-table row is a line that BOTH starts with `|` (after any
+# leading whitespace) AND contains more than one `|` total. The cell
+# content between the `|` characters is then scanned for bare `<num>
+# <key>` pairs.
+lines = text.splitlines(keepends=True)
+char_offset = 0
+for line in lines:
+    stripped = line.lstrip()
+    if stripped.startswith("|") and line.count("|") > 1:
+        for m in pat.finditer(line):
+            num, key = m.group(1), m.group(2)
+            pin = f"{num} {key}"
+            if pin in current_pins:
+                continue
+            if pin in historical_pins:
+                continue
+            # `line_no` reported is the line of the table-row match (1-based).
+            line_no = text.count("\n", 0, char_offset + m.start()) + 1
+            print(
+                f"MARKETING-TABLE-CLAIM-STALE: {surface_display}:{line_no}: "
+                f"'{pin}' bare in table row (non-current, non-historical)",
+                file=sys.stderr,
+            )
+            hits += 1
+    char_offset += len(line)
+
+sys.exit(1 if hits > 0 else 0)
+PY
+        rc=$?
+        TABLE_TOTAL=$((TABLE_TOTAL + 1))
+        if [ "$rc" -eq 1 ]; then
+            table_fail=1
+            TABLE_HITS=$((TABLE_HITS + 1))
+        elif [ "$rc" -ne 0 ]; then
+            echo "trust-claim-sweep: marketing-table-scanner aborted on $surface (exit $rc)" >&2
+            table_fail=1
+        fi
+    done <<EOF
+$(printf '%s\n' "${SURFACES_FOR_TABLE[@]:-}")
+EOF
+    echo "trust-claim-sweep: unbackticked-marketing-table scanned $TABLE_TOTAL surface(s); $TABLE_HITS surface(s) had stale table-row claims."
+    if [ "$table_fail" -ne 0 ]; then
+        echo "trust-claim-sweep: unbackticked-marketing-table gate fired. A bare '<num> <key>' in a markdown-table row must EITHER match a current text-numeric pin OR live inside a text-numeric-historical fenced block. Wrap in backticks (then it'll be governed by the stale-claim scanner) OR add a text-numeric-historical block for the cycle. Closes v1.14 architecture-auditor finding (project-v24-retrospective)." >&2
+    fi
+fi
+
+if [ "$fail" -ne 0 ] || [ "$tripwire_fail" -ne 0 ] || [ "$stale_fail" -ne 0 ] || [ "$table_fail" -ne 0 ]; then
     exit 1
 fi
 

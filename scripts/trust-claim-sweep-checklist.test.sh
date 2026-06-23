@@ -639,6 +639,15 @@ Historical pins.
 138 fixtures
 17 donors
 ```
+
+## [1.10.0]
+Older historical pins (two minors back; not the immediate-prior).
+
+```text-numeric-historical
+261 probes
+120 fixtures
+17 donors
+```
 '
 
 # --- Case BCS1: stale backticked number in README fails ---
@@ -769,6 +778,154 @@ run_gate "$repo" 1.13.0 --skip-pykrete-tests
 extra=ok
 grep -q "BACKTICKED-CLAIM-STALE" "$repo/stderr" && extra=historical_changelog_should_be_masked
 assert "BCS7: stale backticked pin in CHANGELOG.md historical section masked" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# === v1.15 PR-A1 — unbackticked-marketing-table scanner tests (MT1—MT7) ==
+#
+# Closes the v1.14 architecture-auditor finding (project-v24-retrospective).
+# A bare `<num> <key>` inside a markdown-table row must EITHER match a
+# current text-numeric pin OR live inside a text-numeric-historical
+# fenced block — otherwise it's a stale-marketing-table claim. Bare numbers
+# in prose paragraphs stay governed by the prior-leak sweep (existing
+# behavior preserved).
+#
+# Reuses the CHANGELOG_V114 fixture with current=1.13.0 (289 probes pin) +
+# historical=1.12.0 (279 probes pin).
+
+# --- Case MT1: bare table-row pin matching historical block passes ---
+# `261 probes` is in the v1.10.0 text-numeric-historical block (two minors
+# back; not the immediate-prior v1.12.0 the prior-leak sweep checks). A
+# bare occurrence in a markdown-table row is a trajectory-table cell;
+# the validity rule's (b) clause grants immunity.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_V114" > "$repo/CHANGELOG.md"
+{
+    printf '# Trajectory\n\n'
+    printf '| Version | Pandas claim | Verifiable? |\n'
+    printf '|---|---|---|\n'
+    printf '| v1.10.0 | "stuff" | yes — 261 probes total across 17 donors |\n'
+    printf '| v1.13.0 | "more stuff" | yes — 289 probes total across 17 donors |\n'
+} > "$repo/README.md"
+run_gate "$repo" 1.13.0 --skip-pykrete-tests
+extra=ok
+grep -q "MARKETING-TABLE-CLAIM-STALE" "$repo/stderr" && extra=historical_table_row_should_pass
+assert "MT1: bare table-row pin matching historical block passes" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case MT2: bare table-row pin NOT in any block fires ---
+# `500 probes` is neither current nor historical. The scanner fires
+# MARKETING-TABLE-CLAIM-STALE with the bare-pin and the line number.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_V114" > "$repo/CHANGELOG.md"
+{
+    printf '# Trajectory\n\n'
+    printf '| Version | Verifiable? |\n'
+    printf '|---|---|\n'
+    printf '| v1.13.0 | yes — 289 probes |\n'
+    printf '| v1.99.0 | yes — 500 probes (stale) |\n'
+} > "$repo/README.md"
+run_gate "$repo" 1.13.0 --skip-pykrete-tests
+extra=ok
+grep -qF "MARKETING-TABLE-CLAIM-STALE: README.md" "$repo/stderr" || extra=missing_stale_line
+grep -qF "'500 probes' bare in table row" "$repo/stderr" || extra="${extra}+missing_pin_in_message"
+grep -qF "(non-current, non-historical)" "$repo/stderr" || extra="${extra}+missing_explanation"
+assert "MT2: bare table-row pin not in any block fires MARKETING-TABLE-CLAIM-STALE" 1 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case MT3: bare pin in prose paragraph (not a table) does NOT fire ---
+# Existing behavior preserved: bare numbers in prose are governed by the
+# prior-leak sweep (catches the specific prior-release number) plus the
+# CHANGELOG grep gate v3 (catches prose-paragraph numerics in CHANGELOG).
+# This scanner is INTENTIONALLY narrowed to table-row contexts only.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_V114" > "$repo/CHANGELOG.md"
+printf 'README prose with bare 500 probes mention (would be a leak if scanned).\n' > "$repo/README.md"
+run_gate "$repo" 1.13.0 --skip-pykrete-tests
+extra=ok
+grep -q "MARKETING-TABLE-CLAIM-STALE" "$repo/stderr" && extra=prose_should_not_be_scanned
+assert "MT3: bare pin in prose paragraph does NOT fire (table-only scope)" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case MT4: backticked table-row pin handled by backticked-claim-stale ---
+# A backticked `<num> <key>` is owned by the BACKTICKED-CLAIM-STALE scanner
+# (existing behavior). The unbackticked scanner's preceding-backtick anchor
+# excludes the backticked form so this scanner sees nothing — confirms the
+# two scanners don't double-fire on the same pin.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_V114" > "$repo/CHANGELOG.md"
+{
+    printf '# Trajectory\n\n'
+    printf '| Version | Verifiable? |\n'
+    printf '|---|---|\n'
+    printf "| v1.99.0 | yes — %s500 probes%s |\n" "$BT" "$BT"
+} > "$repo/README.md"
+run_gate "$repo" 1.13.0 --skip-pykrete-tests
+extra=ok
+grep -q "MARKETING-TABLE-CLAIM-STALE" "$repo/stderr" && extra=backticked_should_not_double_fire
+# Confirm backticked-claim-stale DID fire (it's the right scanner for this pin).
+grep -qF "BACKTICKED-CLAIM-STALE: README.md" "$repo/stderr" || extra="${extra}+backticked_stale_should_have_fired"
+assert "MT4: backticked table-row pin owned by backticked-claim-stale (no double-fire)" 1 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case MT5: bare table-row pin matching current passes (escape hatch a) ---
+# `289 probes` IS the current pin. Identical to MT1 but exercising the (a)
+# clause of the validity rule rather than (b).
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_V114" > "$repo/CHANGELOG.md"
+{
+    printf '# Trajectory\n\n'
+    printf '| Version | Verifiable? |\n'
+    printf '|---|---|\n'
+    printf '| v1.13.0 (current) | yes — 289 probes across 148 fixtures |\n'
+} > "$repo/README.md"
+run_gate "$repo" 1.13.0 --skip-pykrete-tests
+extra=ok
+grep -q "MARKETING-TABLE-CLAIM-STALE" "$repo/stderr" && extra=current_table_row_should_pass
+assert "MT5: bare table-row pin matching current pin passes" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case MT6: separator row (`|---|`) is harmless ---
+# Pipe-table separator rows match the table-row heuristic but contain
+# no `<num> <key>` patterns. Confirm they don't false-match.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_V114" > "$repo/CHANGELOG.md"
+{
+    printf '# Pretty empty table\n\n'
+    printf '| col1 | col2 |\n'
+    printf '|---|---|\n'
+    printf '| a | b |\n'
+} > "$repo/README.md"
+run_gate "$repo" 1.13.0 --skip-pykrete-tests
+extra=ok
+grep -q "MARKETING-TABLE-CLAIM-STALE" "$repo/stderr" && extra=separator_should_not_match
+assert "MT6: separator row (|---|) is harmless" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case MT7: bare table-row pin in CHANGELOG.md historical section masked ---
+# The per-CHANGELOG mask from the 2nd `## ` onward shared with the prior-
+# leak + stale-claim scanners also applies to the marketing-table scanner.
+# A bare-in-table-row stale pin inside a historical CHANGELOG section is
+# masked.
+repo=$(new_repo)
+{
+    printf '# Changelog\n\n'
+    printf '## [1.13.0]\n'
+    printf 'Current.\n\n'
+    printf '```text-numeric\n'
+    printf '289 probes\n148 fixtures\n17 donors\n'
+    printf '```\n\n'
+    printf '## [1.12.0]\n'
+    printf 'Historical narrative with a stale TABLE-ROW pin (masked):\n\n'
+    printf '| Version | Verifiable? |\n'
+    printf '|---|---|\n'
+    printf '| v1.99.0 | yes — 500 probes (masked) |\n'
+    printf '\n```text-numeric-historical\n279 probes\n138 fixtures\n17 donors\n```\n'
+} > "$repo/CHANGELOG.md"
+printf 'README.\n' > "$repo/README.md"
+run_gate "$repo" 1.13.0 --skip-pykrete-tests
+extra=ok
+grep -q "MARKETING-TABLE-CLAIM-STALE" "$repo/stderr" && extra=historical_changelog_table_row_should_be_masked
+assert "MT7: bare table-row pin in CHANGELOG.md historical section masked" 0 "$LAST_RC" "$extra"
 rm -rf "$repo"
 
 # --- summary ---
