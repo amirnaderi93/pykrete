@@ -113,7 +113,17 @@ pykrete checks column **types**, not just existence. How much it checks depends 
 
 **`returnTypeMismatch` — D0080.** On by default; emitted at `error` severity. The returned columns match the declared return schema by name, but a column's *type* doesn't — and both types are confidently known and genuinely incompatible. Numeric widening (`int` → `long` → `double`) is accepted; unknown types are left alone. The check is conservative on the column-type arm: it stays silent when either side's type is Unknown.
 
-**New in v1.13: dialect mismatch.** When a function is annotated `-> SparkFrame[X]` but the body returns a `.toPandas()` chain (or any other expression that resolves to a `PandasFrame[…]`), D0080 fires with the message: `Return type mismatch: declared as SparkFrame schema 'X' but the body produces PandasFrame schema 'X'.` Honest-silence carve-out: constructor cases (`pd.DataFrame(...)`, `spark.read.parquet(...)`) where the body dialect is unknown don't fire (no fabrication). v1.10's bare-attribute D0091 carve-out for the deprecated `DataFrame[X]` annotation does NOT apply here — the return-type annotation IS the adjudication site. **Adopters with code that incorrectly cross-converts dialects at function boundaries will see new D0080 fires.** Fix: align the annotation with the body, OR rewrite the body to match the annotation.
+**New in v1.13: dialect mismatch.** When a function is annotated `-> SparkFrame[X]` but the body returns a `.toPandas()` chain (or any other expression that resolves to a `PandasFrame[…]`), D0080 fires with the message: `Return type mismatch: declared as SparkFrame schema 'X' but the body produces PandasFrame schema 'X'.` v1.10's bare-attribute D0091 carve-out for the deprecated `DataFrame[X]` annotation does NOT apply here — the return-type annotation IS the adjudication site.
+
+**v1.14 closes the constructor carve-out.** A function annotated `-> SparkFrame[X]` returning `pd.DataFrame({...})`, or `-> PandasFrame[X]` returning `spark.read.parquet(path)`, now fires D0080. The `spark.createDataFrame(rows, schema=<Schema>)` form also fires when the dialect disagrees with the annotation. **Adopters with code that incorrectly cross-converts at function boundaries via constructor calls will see new D0080 fires.** Fix: align the annotation with the body, OR rewrite the body to match the annotation.
+
+**Multi-clause format (post-PR-V1).** When both the dialect and a column type are wrong on the same return, D0080 emits a single multi-clause message rather than two stacked fires:
+
+```
+Return type mismatch: declared as SparkFrame schema 'X' but the body produces PandasFrame schema 'X'; additionally, column 'amount' typed as long but body produces double.
+```
+
+Adopters whose CI greps for "two D0080 fires at the same range" will need to adjust to ONE fire with both clauses.
 
 **Strict mode adds three.** Under `typeCheckingMode: strict`:
 
@@ -254,6 +264,8 @@ def revenue(sales: DataFrame[Sale]) -> DataFrame[Sale]:
 ```
 
 The envelope deliberately ships **without** `targetVersion` / `removalVersion` / `shipDate` fields: pykrete tracks per-site migration progress; the user picks the v2.0 ship date.
+
+**v1.14 — envelope schema v2 provenance pair + `--compare-to` snapshot diff.** The v2 envelope extends with two top-level fields: `pykreteSourceCommit` (the in-tree commit hash recorded at report time) and `generatedAt` (ISO-8601 timestamp). Both round-trip through `--snapshot` and are propagated to `--compare-to` so CI snapshot artifacts carry author-pinpointing metadata. A new `--compare-to=<prior.json>` flag emits a SIMPLE three-bucket diff envelope (`added` / `removed` / `unchanged`) and exits non-zero when `added` is non-empty — drop `pykrete check --deprecation-report --compare-to=previous.json src/` into CI to fail on any newly-introduced deprecation site without re-implementing `jq` over the raw envelope. `--compare-to` is mutually exclusive with `--ack`, `--snapshot`, and `--fail-on-nonempty` (those gate live state; `--compare-to` reports a delta — the two modes don't compose). See [cookbook step 7](/cookbook/#6-migrate-dataframex-to-the-v20-dialect-tagged-names) for the full workflow.
 
 ```bash
 pykrete check --deprecation-report src/ > deprecation.json

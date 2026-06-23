@@ -124,7 +124,7 @@ The result schema is the grouping keys plus each aggregation, named by `.alias(.
 
 | Method | Status | Notes |
 | --- | --- | --- |
-| `groupBy` | modeled | Returns a grouped view; `agg` builds the output from keys + alias names. |
+| `groupBy` | modeled | Returns a grouped view; `agg` builds the output from keys + alias names. v1.14 adds the pandas `groupby.agg` sibling — see [`pdf.groupby(...).agg(...)`](#pdfgroupbyagg-derived-synthesis-v114). |
 | `cube` | modeled | Same shape as `groupBy`. |
 | `rollup` | modeled | Same shape as `groupBy`. |
 | `agg` | modeled | Output = grouping keys + each aggregation's alias or referenced column. |
@@ -453,19 +453,31 @@ def first_n(orders: PandasFrame[Order], other: PandasFrame[OtherSchema]) -> pd.D
 
 `pdf.pivot_table(index="cat", columns="year", values="amount", aggfunc="sum")` resolves the string-literal arguments to `index` / `columns` / `values` against `PandasFrame[X]`'s schema, firing D0030 on a typo with a *did you mean*. List-of-literals shapes (`index=["a", "b"]`) are also checked. Variable arguments (`index=col_var`) and the no-arg form fall through to Unknown. **v1.12 — `aggfunc=` recognition.** The `aggfunc=` kwarg is checked against an 11-string allowlist (`sum` / `mean` / `count` / `min` / `max` / `median` / `std` / `var` / `first` / `last` / `nunique`). Callable `aggfunc` (`aggfunc=np.mean`), dict forms, mixed-literal lists, and out-of-allowlist strings fall through silently.
 
-**v1.13: aggfunc-driven schema inference.** When `aggfunc=` is a recognized string and `values=` carries one or more literal columns, the result schema synthesizes a `Derived` envelope with the named columns at the aggregate-driven dtype. Inference table: `count` / `nunique` → int64; `mean` / `std` / `var` / `median` → float64; `sum` / `min` / `max` / `first` / `last` → preserve the receiver column's type; default (no aggfunc) → mean → float64. Multi-values + `columns=` (MultiIndex result) falls through to Unknown. Callable `aggfunc`, dict forms, mixed-literal lists, and out-of-allowlist strings still fall through silently. **Adopters with code that accidentally accessed non-`values=` columns post-`pivot_table` will see new D0030 fires**; use `.reset_index()` first to access `index=` / `columns=` arg values as columns.
+**v1.13: aggfunc-driven schema inference.** When `aggfunc=` is a recognized string and `values=` carries one or more literal columns, the result schema synthesizes a `Derived` envelope with the named columns at the aggregate-driven dtype. Inference table: `count` / `nunique` → int64; `mean` / `std` / `var` / `median` → float64; `sum` / `min` / `max` / `first` / `last` → preserve the receiver column's type; default (no aggfunc) → mean → float64. Multi-values + `columns=` (MultiIndex result) falls through to Unknown. Callable `aggfunc`, dict forms, mixed-literal lists, and out-of-allowlist strings still fall through silently. **Adopters with code that accidentally accessed non-`values=` columns post-`pivot_table` will see new D0030 fires**; use `.reset_index()` first to access `index=` / `columns=` arg values as columns. v1.14 reuses the same inference table for [`groupby.agg`](#pdfgroupbyagg-derived-synthesis-v114) — the synthesis helper is shared.
 
 ### `.melt(id_vars=, value_vars=, var_name=, value_name=)` literal-form (v1.7)
 
-`pdf.melt(id_vars=["a", "b"], value_vars=["c", "d"], var_name="variable", value_name="value")` resolves the string-literal arguments to `id_vars` / `value_vars` against `PandasFrame[X]`'s schema, firing D0030 on a typo with a *did you mean*. List-of-literals shapes (`id_vars=["a", "b"]`) and single-literal `id_vars="a"` are also checked. Variable arguments (`id_vars=cols_var`) and the no-arg form fall through to Unknown. The pandas dispatch is gated on `receiver_is_pandas_inherited`, so the existing Spark `melt`/`unpivot` arm's behavior on `SparkFrame[X]` receivers is unchanged. Full `melt` output schema-tracking (the long-format schema with `var_name` / `value_name` as columns) is carried forward to v1.14 paired with `groupby.agg`.
+`pdf.melt(id_vars=["a", "b"], value_vars=["c", "d"], var_name="variable", value_name="value")` resolves the string-literal arguments to `id_vars` / `value_vars` against `PandasFrame[X]`'s schema, firing D0030 on a typo with a *did you mean*. List-of-literals shapes (`id_vars=["a", "b"]`) and single-literal `id_vars="a"` are also checked. Variable arguments (`id_vars=cols_var`) and the no-arg form fall through to Unknown. The pandas dispatch is gated on `receiver_is_pandas_inherited`, so the existing Spark `melt`/`unpivot` arm's behavior on `SparkFrame[X]` receivers is unchanged. Full `melt` output schema-tracking (the long-format schema with `var_name` / `value_name` as columns) is carried forward to v1.15+ paired with broader pandas reshape output.
 
 ### `.stack(level=, dropna=)` literal-form (v1.10)
 
-`pdf.stack(level="month")` (or `level=["month", "year"]`) resolves the string-literal `level` argument against `PandasFrame[X]`'s schema, firing D0030 on a typo with a *did you mean*. Single-literal `level="m"` and list / tuple-of-literals shapes are checked; int / int-list / `None` / non-literal forms fall through to Unknown. Receiver-dialect-gated: only fires on `PandasFrame[X]` receivers — Spark's `stack` is a column-free-function (`pyspark.sql.functions.stack`), not a `DataFrame` method, so the same-spelled name on `SparkFrame[X]` receivers stays out of the dispatch. Full `stack` output schema-tracking (the index-pivoted long-format schema) is carried forward to v1.14 paired with `groupby.agg`.
+`pdf.stack(level="month")` (or `level=["month", "year"]`) resolves the string-literal `level` argument against `PandasFrame[X]`'s schema, firing D0030 on a typo with a *did you mean*. Single-literal `level="m"` and list / tuple-of-literals shapes are checked; int / int-list / `None` / non-literal forms fall through to Unknown. Receiver-dialect-gated: only fires on `PandasFrame[X]` receivers — Spark's `stack` is a column-free-function (`pyspark.sql.functions.stack`), not a `DataFrame` method, so the same-spelled name on `SparkFrame[X]` receivers stays out of the dispatch. Full `stack` output schema-tracking (the index-pivoted long-format schema) is carried forward to v1.15+ paired with broader pandas reshape output.
 
 ### `.unstack(level=, fill_value=)` literal-form (v1.11)
 
-`pdf.unstack(level="month")` (or `level=["month", "year"]`) resolves the string-literal `level` argument against `PandasFrame[X]`'s schema, firing D0030 on a typo with a *did you mean*. Mirror of v1.10 `.stack`: single-literal `level="m"` and list / tuple-of-literals shapes are checked; int / int-list / `None` / non-literal forms fall through to Unknown. Receiver-dialect-gated to `PandasFrame[X]` receivers only — pandas exposes `unstack` as a `DataFrame` method; Spark exposes no same-spelled method. Full `unstack` output schema-tracking (the index-pivoted wide-format schema) is carried forward to v1.14 paired with `groupby.agg`.
+`pdf.unstack(level="month")` (or `level=["month", "year"]`) resolves the string-literal `level` argument against `PandasFrame[X]`'s schema, firing D0030 on a typo with a *did you mean*. Mirror of v1.10 `.stack`: single-literal `level="m"` and list / tuple-of-literals shapes are checked; int / int-list / `None` / non-literal forms fall through to Unknown. Receiver-dialect-gated to `PandasFrame[X]` receivers only — pandas exposes `unstack` as a `DataFrame` method; Spark exposes no same-spelled method. Full `unstack` output schema-tracking (the index-pivoted wide-format schema) is carried forward to v1.15+ paired with broader pandas reshape output.
+
+### `pdf.groupby(...).agg(...)` `Derived` synthesis (v1.14)
+
+`pdf.groupby("region").agg({"amount": "sum", "quantity": "mean"})` synthesizes a `Derived` envelope mirroring the v1.13 `pivot_table(aggfunc=)` arm: the result schema carries the named value columns at the aggregate-driven dtype. Inference table: `count` / `nunique` → int64; `mean` / `std` / `var` / `median` → float64; `sum` / `min` / `max` / `first` / `last` → preserve the receiver column's type.
+
+```python
+def by_region(sales: PandasFrame[Sale]) -> pd.DataFrame:
+    out = sales.groupby("region").agg({"amount": "sum", "quantity": "mean"})
+    return out[["amount", "quantity"]]   # both column refs checked against Derived envelope
+```
+
+The grouping key resolves against `PandasFrame[X]`'s schema, firing D0030 on a typo with a *did you mean*. Callable `aggfunc` (`np.mean`), out-of-allowlist strings, list-of-aggfunc-per-column shapes, and named-aggregation kwarg form (`pd.NamedAgg`) fall through to Unknown. Receiver-dialect-gated to `PandasFrame[X]` — Spark's `groupBy.agg` keeps its v1.0 modeled behavior. **Adopters that accidentally accessed non-aggregated columns post-`groupby.agg` will see new D0030 fires** — use `.reset_index()` first to access the grouping key as a column.
 
 ### Six dispatched operations
 
@@ -498,7 +510,7 @@ def annotate(sales: PandasFrame[Sale]) -> pd.DataFrame:
 
 v1.3 shipped **column-reference recognition** for pandas — the six dispatched operations above plus the D0090 deprecation. Positive **type-tracking** verification for pandas (the `PROBE-TYPE-IS` parity that PySpark got in v1.2) shipped in v1.4; the [pykrete-tests#14](https://github.com/amirnaderi93/pykrete-tests/issues/14) tracker closed with that release.
 
-For the PySpark-only operations on this page (joins / aggregations / windows / IO), `PandasFrame[X]` chains fall back to **opaque** — pykrete doesn't model pandas's `groupby` / `agg` / `read_parquet` / window surface yet. Re-anchor with `.cast(PandasFrame[X])` when needed.
+For the PySpark-only operations on this page (joins / windows / IO), `PandasFrame[X]` chains fall back to **opaque** — pykrete doesn't model pandas's `read_parquet` / window surface yet. Re-anchor with `.cast(PandasFrame[X])` when needed. **v1.14 closes the `groupby.agg` half** of the prior gap — see [`pdf.groupby(...).agg(...)`](#pdfgroupbyagg-derived-synthesis-v114) below.
 
 ## What's not modeled — by design
 
