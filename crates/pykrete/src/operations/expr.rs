@@ -662,34 +662,23 @@ fn classify_aggfunc_value(value: &Expr) -> PivotTableAggfuncForm<'_> {
     PivotTableAggfuncForm::FellThrough
 }
 
-/// v1.13 PR-D2 — the result-column dtype for a single allowlisted
-/// `pivot_table(aggfunc=...)` string, per spec §5.1.1. `None` means
-/// "preserve the receiver column's type" (sum/min/max/first/last);
-/// `Some(t)` is a concrete type that overrides whatever the receiver
-/// column held (count/nunique → Long, mean/std/var/median → Double).
+/// v1.15 PR-D1 — resolve the dtype override for a single allowlisted
+/// aggregate-function string, per spec §5.1.1. Shared primitive for
+/// both `synthesize_pivot_result_from_aggfunc` (v1.13 PR-D2) and
+/// `synthesize_groupby_agg_from_aggfunc` (v1.14 PR-D2).
 ///
-/// The aggregate is assumed to be already-validated against
-/// [`PIVOT_TABLE_AGGFUNC_ALLOWLIST`] by [`classify_pivot_table_aggfunc`];
-/// callers shouldn't pass arbitrary strings. Returns `None` for anything
-/// outside the allowlist, which causes the caller to fall through (the
-/// aggregate is unrecognised, so the result type is unknown).
-fn pivot_table_aggfunc_result_override(aggfunc: &str) -> AggfuncResultDtype {
+/// Returns:
+/// - `Some(Some(ty))` — override the receiver column's dtype to `ty`
+///   (count/nunique → Long; mean/std/var/median → Double).
+/// - `Some(None)` — preserve receiver column type (sum/min/max/first/last).
+/// - `None` — unrecognised aggfunc; caller falls through to Unknown.
+pub fn resolve_override_ty(aggfunc: &str) -> Option<Option<ColumnType>> {
     match aggfunc {
-        // Counting aggregates always produce integers regardless of
-        // input column type. Spec §5.1.1 pins these to int64 (Long).
-        "count" | "nunique" => AggfuncResultDtype::Override(ColumnType::Long),
-        // Statistical aggregates always produce floats; spec pins float64.
-        "mean" | "std" | "var" | "median" => AggfuncResultDtype::Override(ColumnType::Double),
-        // sum/min/max/first/last pass the receiver column type through.
-        "sum" | "min" | "max" | "first" | "last" => AggfuncResultDtype::Preserve,
-        _ => AggfuncResultDtype::Unrecognised,
+        "count" | "nunique" => Some(Some(ColumnType::Long)),
+        "mean" | "std" | "var" | "median" => Some(Some(ColumnType::Double)),
+        "sum" | "min" | "max" | "first" | "last" => Some(None),
+        _ => None,
     }
-}
-
-enum AggfuncResultDtype {
-    Override(ColumnType),
-    Preserve,
-    Unrecognised,
 }
 
 /// v1.13 PR-D2 — synthesize a pandas `pivot_table` result `SchemaView`
@@ -710,17 +699,13 @@ fn synthesize_pivot_result_from_aggfunc<'a>(
     if values_cols.is_empty() {
         return None;
     }
-    let override_ty = match pivot_table_aggfunc_result_override(aggfunc) {
-        AggfuncResultDtype::Override(t) => Some(Some(t)),
-        AggfuncResultDtype::Preserve => None,
-        AggfuncResultDtype::Unrecognised => return None,
-    };
+    let override_ty = resolve_override_ty(aggfunc)?;
     let recv_fields = receiver.typed_fields(schemas);
     let mut out: Vec<DerivedField<'a>> = Vec::with_capacity(values_cols.len());
     for name in values_cols {
         let recv = recv_fields.iter().find(|f| f.name == *name)?;
         let ty = match &override_ty {
-            Some(t) => t.clone(),
+            Some(t) => Some(t.clone()),
             None => recv.ty.clone(),
         };
         out.push(DerivedField {
@@ -747,11 +732,7 @@ fn synthesize_groupby_agg_from_aggfunc<'a>(
     aggfunc: &str,
     schemas: &'a [Schema<'a>],
 ) -> Option<SchemaView<'a>> {
-    let override_ty = match pivot_table_aggfunc_result_override(aggfunc) {
-        AggfuncResultDtype::Override(t) => Some(Some(t)),
-        AggfuncResultDtype::Preserve => None,
-        AggfuncResultDtype::Unrecognised => return None,
-    };
+    let override_ty = resolve_override_ty(aggfunc)?;
     let recv_fields = underlying.typed_fields(schemas);
     let mut out: Vec<DerivedField<'a>> = Vec::with_capacity(recv_fields.len());
     for &key in keys {
@@ -772,7 +753,7 @@ fn synthesize_groupby_agg_from_aggfunc<'a>(
             continue;
         }
         let ty = match &override_ty {
-            Some(t) => t.clone(),
+            Some(t) => Some(t.clone()),
             None => f.ty.clone(),
         };
         out.push(DerivedField { name: f.name, ty });
