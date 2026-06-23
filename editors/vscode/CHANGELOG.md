@@ -1,6 +1,68 @@
 # Changelog
 
 
+## 0.12.0
+
+Tracks the v1.14.0 pykrete release — **turning v1.13's `pivot_table`
+aggfunc-driven Derived synthesis into the canonical convention via
+`groupby.agg`**, closing **D0080 dialect-on-return at constructor
+sites** (the v1.13 PR-D1 honest-silence carve-out: `pd.DataFrame(...)`
+and `spark.read.<format>(...)` return shapes), and landing the
+**5-cycle calendared `--compare-to <snapshot>` user-decision**. The
+bundled `pykrete` and `pykrete-lsp` binaries gain a NEW pandas
+inference arm for `pdf.groupby("k").agg("sum")`: the result is no
+longer Unknown — it synthesizes a `Derived` envelope with
+`keys ++ (non-keys at aggregate-driven dtype)` per the v1.13
+pivot_table table (`count` / `nunique` → int64; `mean` / `std` /
+`var` / `median` → float64; `sum` / `min` / `max` / `first` / `last`
+→ preserve receiver column type), so downstream column-refs on the
+result that don't match now fire D0030. The narrow-arm covers the
+literal-string-aggfunc form; dict / callable / list-of-aggfunc /
+multi-aggregate MultiIndex forms are deferred to v1.15 per the
+one-arm-per-cycle cadence. The v1.13 D0080 honest-silence carve-out
+closes structurally: `inherited_chain_state` gains three constructor-
+arm recognizers (`pd.DataFrame(...)` single-level structural,
+`spark.read.<format>(...)` two-level structural across any format
+identifier, and `spark.createDataFrame(rows, schema=<bare Schema>)`
+dialect-only sibling check). Coverage of the adopter shape moves
+from ~80% to ~95% — a function annotated `-> SparkFrame[X]` whose
+body returns `pd.DataFrame({...})`, or one annotated
+`-> PandasFrame[X]` whose body returns `spark.read.parquet(path)`,
+now fires D0080. Combined dialect-and-type mismatches at the same
+function-return site now emit ONE D0080 with `"; additionally, "`
+joining the two clauses instead of two separate diagnostics at the
+same range — sets the multi-clause joiner convention for future
+D-code consumers. The bundled `pykrete` CLI gains
+`pykrete check --deprecation-report --compare-to <snapshot.json>`:
+SIMPLE three-bucket diff (`added` / `removed` / `unchanged`) with
+the FULL site payload in each bucket, exit-nonzero on
+`added.length > 0` for regression-gate CI. Binary `MigrationStatus`
+transitions (`pending` → `acknowledged`) surface naturally as a
+remove-from-old plus add-to-new pair, so no separate `status_changed`
+bucket is needed. The deprecation-report envelope schema bumps to
+v2 in lockstep: two new top-level keys (`pykreteSourceCommit` +
+`generatedAt`, CLI-captured at snapshot time) ship with every new
+report so `--compare-to` round-trips full provenance; pre-v1.14
+snapshots remain readable (both keys treated as nullable). On the
+audit-tooling side, `trust-claim-sweep-checklist.sh` gains the
+`scan_backticked_stale_numbers()` scanner — catches backticked-but-
+stale numeric claims that escaped the v1.13 backtick carve-out (the
+root cause behind v1.13's docs-sync 8-blocker audit), with v1.4 →
+v1.8 historical pins cleaned in `docs-site/src/content/docs/about/
+pandas-roadmap.md` in the same PR. The
+`.github/workflows/auto-label-release-pr.yml` workflow adds the
+`labeled` trigger to `pull_request.types` — investigation revealed
+v1.13 retro rule 11's framing was wrong: synchronize-redispatch
+worked since v1.12 PR-A1; the actual gap was `labeled` missing from
+triggers, so the operator's manual remove+re-add was a no-op reflex
+(memory reframed). Cross-codebase coverage: 289 → 299 probes across
+148 → 158 fixtures from 17 donors. No new D-codes; SemVer-minor
+under the `tighteningDiagnostics` policy and the established alias-
+report-style JSON-additive policy. Cycle-close minor bump aligns
+the extension with the v1.14.0 tag per the version-guard contract.
+See the [main CHANGELOG](../../CHANGELOG.md#1140---2026-06-23) for
+details.
+
 ## 0.11.0
 
 Tracks the v1.13.0 pykrete release — **closing D0080's dialect-on-
