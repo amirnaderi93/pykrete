@@ -1665,7 +1665,7 @@ fn analyze_method_call_inner<'a>(
         return None;
     }
     // v1.15 PR-D2 — `pdf.reset_index(drop=True)` schema pass-through arm
-    // (spec §5 + §1.iii). Closes the v1.14 PR-D2 carve-out: a chain like
+    // (spec §1.iii). Closes the v1.14 PR-D2 carve-out: a chain like
     // `pdf.groupby('k').agg('sum').reset_index(drop=True)` (the canonical
     // pandas idiom) previously lost the synthesized Derived envelope at
     // `.reset_index(...)` and degraded to Unknown, breaking downstream
@@ -1678,13 +1678,16 @@ fn analyze_method_call_inner<'a>(
     // spec §1.iii.3 (no synthesis stat tracked today).
     //
     // Dialect gate mirrors v1.14 PR-D2 `.agg("...")`. Receiver shape:
-    // Declared / Derived → Derived(typed_fields(receiver)); Grouped →
-    // Derived(typed_fields(underlying)) — "all fields" per brief, since
-    // `Grouped::typed_fields` returns only the keys but the intent of
-    // unsetting Grouped post-groupby is to expose the full pre-group
-    // surface. Non-`drop=True` shapes (missing kwarg, `drop=False`,
-    // non-bool-literal) explicit fall-through to None per the
-    // synthesis-arm positive-coverage standing rule (v1.14 retro §8).
+    // Declared / Derived → Derived(typed_fields(receiver)). Grouped has
+    // no dedicated branch — `handle_agg` returns Derived (not Grouped),
+    // so the canonical `groupby(...).agg(...).reset_index(drop=True)`
+    // chain hits the Derived path; the rare `groupby(...).reset_index(...)`
+    // shape without an intervening agg falls through `typed_fields` on
+    // Grouped, which returns the keys only (honestly documenting the
+    // unmodeled case rather than synthesizing fields we can't justify).
+    // Non-`drop=True` shapes (missing kwarg, `drop=False`, non-bool-literal)
+    // explicit fall-through to None per the synthesis-arm positive-coverage
+    // standing rule (v1.14 retro §8).
     if receiver_is_pandas_inherited && method == "reset_index" {
         let drop_is_true = pandas_kwarg_value(call, "drop")
             .and_then(|e| e.as_boolean_literal_expr())
@@ -1692,20 +1695,37 @@ fn analyze_method_call_inner<'a>(
         if !drop_is_true {
             return None;
         }
-        let fields = match &receiver {
-            SchemaView::Grouped { underlying, .. } => underlying.typed_fields(ctx.schemas()),
-            _ => receiver.typed_fields(ctx.schemas()),
-        };
-        return Some(SchemaView::Derived(fields));
+        return Some(SchemaView::Derived(receiver.typed_fields(ctx.schemas())));
     }
     // v1.15 PR-D2 — `pdf.set_index([<literal-keys>])` / `pdf.set_index("k")`
-    // literal-keys arm (spec §5 + §1.iii). Output columns = receiver
-    // columns MINUS the literal key names (pandas moves them to the
-    // index; they're no longer accessible via `df["key"]`). Validates
-    // each literal key exists on the receiver (D0030 on typo) before
+    // literal-keys arm (spec §1.iii). Output columns = receiver columns
+    // MINUS the literal key names (pandas moves them to the index;
+    // they're no longer accessible via `df["key"]`). Validates each
+    // literal key exists on the receiver (D0030 on typo) before
     // subtracting. Non-literal arg shapes (bare Name, expression, dict)
     // explicit fall-through to None per spec §1.iii.3 (no expr-eval).
+    //
+    // pandas signature: `set_index(keys, *, drop=True, append=False, ...)`.
+    // `drop=False` KEEPS the key column on the frame (still accessible
+    // via `df["k"]`); `append=True` adds keys to a MultiIndex while
+    // leaving the existing schema otherwise intact. Both shapes break
+    // the unconditional "subtract keys" assumption. We synthesize only
+    // when each kwarg is either absent (so the safe pandas default
+    // applies) or a literal matching the safe default; any non-literal
+    // shape is unresolvable at static-check time and falls through to
+    // Unknown. Grouped receiver also falls through — pandas itself
+    // errors on `groupby(...).set_index(...)`.
     if receiver_is_pandas_inherited && method == "set_index" {
+        if matches!(receiver, SchemaView::Grouped { .. }) {
+            return None;
+        }
+        let drop_safe = pandas_kwarg_value(call, "drop")
+            .is_none_or(|e| e.as_boolean_literal_expr().is_some_and(|b| b.value));
+        let append_safe = pandas_kwarg_value(call, "append")
+            .is_none_or(|e| e.as_boolean_literal_expr().is_some_and(|b| !b.value));
+        if !drop_safe || !append_safe {
+            return None;
+        }
         let first = call.arguments.args.first()?;
         let keys: Vec<(&'a str, TextRange)> = if let Some(lit) = first.as_string_literal_expr() {
             vec![(lit.value.to_str(), lit.range())]

@@ -22,6 +22,11 @@
 //!   the receiver (D0030 on typo).
 //! - `set_index(<bare-name>)` / `set_index(<expr>)` (non-literal) →
 //!   explicit fall-through to Unknown.
+//! - `set_index(..., drop=False)` keeps the key column on the frame;
+//!   `set_index(..., append=True)` adds keys to a MultiIndex without
+//!   shedding the existing schema. Both fall through to Unknown.
+//! - `set_index` on a Grouped receiver falls through to Unknown
+//!   (pandas itself errors on the call shape).
 //! - Spark receivers don't have `reset_index` / `set_index` — D0091
 //!   fires via the existing cross-dialect machinery; the synthesis arms
 //!   never run.
@@ -353,6 +358,82 @@ def f(pdf: PandasFrame[In]):
 }
 
 // ===========================================================================
+// set_index — drop=False / append=True kwargs deviate from the default
+// "subtract keys" shape. pandas `set_index(keys, *, drop=True,
+// append=False, ...)`: drop=False KEEPS the key column on the frame;
+// append=True adds to a MultiIndex while leaving the existing schema
+// otherwise intact. Both fall through to Unknown so we don't synthesize
+// an envelope the user can't actually use.
+// ===========================================================================
+
+#[test]
+fn V115D2_set_index_drop_false_falls_through_to_unknown() {
+    // drop=False keeps `k` accessible via `result['k']` in real pandas.
+    // If we incorrectly stripped `k`, D0030 would fire here (false
+    // positive). Falling through to Unknown is the correct v1.x answer.
+    let src = "\
+class In(Schema):
+    k: string
+    amount: double
+
+def f(pdf: PandasFrame[In]):
+    result = pdf.set_index('k', drop=False)
+    return result['k']
+";
+    assert_does_not_have_code(&check(src), "D0030");
+}
+
+#[test]
+fn V115D2_set_index_append_true_falls_through_to_unknown() {
+    // append=True adds `k` to the MultiIndex but doesn't shed columns
+    // from the existing axis. The unconditional "subtract keys"
+    // synthesis would be wrong; fall through to Unknown.
+    let src = "\
+class In(Schema):
+    k: string
+    amount: double
+
+def f(pdf: PandasFrame[In]):
+    result = pdf.set_index('k', append=True)
+    return result['k']
+";
+    assert_does_not_have_code(&check(src), "D0030");
+}
+
+#[test]
+fn V115D2_set_index_non_literal_drop_kwarg_falls_through_to_unknown() {
+    // Non-bool-literal (a Name binding) is unresolvable at static-check
+    // time → fall-through to Unknown rather than guess.
+    let src = "\
+class In(Schema):
+    k: string
+    amount: double
+
+def f(pdf: PandasFrame[In], some_bool_var: bool):
+    result = pdf.set_index('k', drop=some_bool_var)
+    return result['typo']
+";
+    assert_does_not_have_code(&check(src), "D0030");
+}
+
+#[test]
+fn V115D2_set_index_on_grouped_receiver_falls_through_to_unknown() {
+    // pandas itself errors on `groupby(...).set_index(...)`, but the
+    // arm explicitly handles it to avoid synthesizing Derived(empty)
+    // from a Grouped receiver's typed_fields (which returns only keys).
+    let src = "\
+class In(Schema):
+    k: string
+    amount: double
+
+def f(pdf: PandasFrame[In]):
+    result = pdf.groupby('k').set_index('k')
+    return result['typo']
+";
+    assert_does_not_have_code(&check(src), "D0030");
+}
+
+// ===========================================================================
 // Cross-dialect: Spark receivers must NOT trigger synthesis. The existing
 // D0091 cross-dialect machinery handles surface-mismatch warnings; the
 // synthesis arms here are gated on `receiver_is_pandas_inherited` so a
@@ -414,6 +495,9 @@ def f(pdf: PandasFrame[In]):
 ";
     // `k` removed at set_index and NOT restored by reset_index(drop=True).
     assert_has_code(&check(src), "D0030");
+    // The chain composition (set_index → reset_index) is load-bearing —
+    // assert no spurious D0080 fires alongside the expected D0030.
+    assert_does_not_have_code(&check(src), "D0080");
 }
 
 #[test]
