@@ -6,6 +6,76 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.14.0] - 2026-06-23
+
+**Trust claim**: v1.14 turns v1.13's pivot_table aggfunc-driven Derived synthesis into the canonical convention via `groupby.agg`, closes D0080 dialect-on-return at constructor sites (`pd.DataFrame(...)` and `spark.read.<format>(...)`), and lands the 5-cycle calendared `--compare-to <snapshot>` user-decision.
+
+### Audit-tooling
+
+- **Backtick-stale gate extension** — `scripts/trust-claim-sweep-checklist.sh` gains `scan_backticked_stale_numbers()` scanner. Catches backticked-but-stale numeric claims that escaped the v1.13 backtick carve-out (v1.13 docs-sync audit 8-blocker root cause). Self-exercise on v1.14 baseline ran green; v1.4–v1.8 historical pins cleaned in `docs-site/src/content/docs/about/pandas-roadmap.md`. — PR-A1 #196.
+- **Auto-label workflow synchronize+labeled trigger fix** — `.github/workflows/auto-label-release-pr.yml` adds `labeled` to `pull_request.types`. Investigation revealed v1.13 retro rule 11's framing was WRONG: synchronize-redispatch worked since v1.12 PR-A1 (`1af9874a`); the actual gap was `labeled` missing from triggers, so operator's manual remove+re-add was a no-op reflex. Reframed v1.13 retro rule 11 in memory. — PR-A2 #194.
+
+### New features
+
+- **`--compare-to <snapshot>` SIMPLE shape** — 5-cycle calendared user-decision LANDS. JSON output: `{snapshot_a, snapshot_b, diff: {added, removed, unchanged}}`. FULL site payload in all 3 buckets. Binary `MigrationStatus` transitions surface naturally as remove-from-old + add-to-new (no `status_changed` bucket). Exit nonzero on `added.length > 0` regression signal. ALSO bumps deprecation-report envelope schema to emit `pykreteSourceCommit` + `generatedAt` top-level keys so consumers reading saved snapshots get provenance for diff round-trip. — PR-D3 #198.
+- **`groupby.agg` narrow-arm aggregate-semantics inference** — `pdf.groupby("k").agg("sum")` result schema synthesizes Derived envelope with `keys ++ (non-keys with dtype-override)`. Inference table: `count`/`nunique` → int64; `mean`/`std`/`var`/`median` → float64; `sum`/`min`/`max`/`first`/`last` → preserve receiver column type. REALIZES v1.13 PR-S1 §13 forward-binding promise. FIRST observable aggregate-semantics-informed inference for groupby (parallel to v1.13 pivot_table). — PR-D2 #199.
+- **D0080 dialect-on-return constructor arms** — `inherited_chain_state` walker gains `pd.DataFrame(...)` (single-level structural) + `spark.read.<format>(...)` (two-level structural, any format identifier) + `spark.createDataFrame(rows, schema=<bare Schema>)` dialect-only sibling check. Closes v1.13 PR-D1 honest-silence carve-out. Coverage ~80% → ~95% adopter shape. — PR-D1 #195.
+
+### Process / tooling
+
+- **D0080 dual-clause collapse** — combined dialect+type mismatch now emits ONE D0080 diagnostic with both clauses joined by `"; additionally, "` instead of TWO separate diagnostics at same range. Sets multi-clause joiner convention for future D-code consumers (D0091, D0050 if they ever need it). — PR-V1 #197.
+
+### Changed
+
+- **`pdf.groupby("k").agg("sum")` result schema is no longer Unknown** when aggfunc is a recognized string. Previously, downstream column-refs on the result were silently permissive. v1.14 synthesizes `Derived` schema with `keys ++ (non-keys at aggregate-driven dtype)` — downstream column-refs that don't match now fire D0030. **Path forward**: align downstream code with the synthesized schema (keys + value columns with aggregate-typed dtype), OR `.reset_index()` first.
+
+- **D0080 dialect-on-return now fires on `pd.DataFrame(...)` and `spark.read.<format>(...)` return shapes.** Previously these were silent per honest-silence carve-out (v1.13 PR-D1). v1.14 closes the gap — functions annotated `-> SparkFrame[X]` returning `pd.DataFrame({...})` or `-> PandasFrame[X]` returning `spark.read.parquet(path)` will fire D0080. Adopters with code that incorrectly cross-converts at function boundaries via constructor calls will see new D0080 fires. **Path forward**: align annotation with body, OR rewrite body to match annotation.
+
+- **Deprecation-report envelope schema bumped to v2**: now emits `pykreteSourceCommit` + `generatedAt` top-level keys (CLI-captured at snapshot time). v1.14+ snapshots round-trip provenance through `--compare-to`. Pre-v1.14 snapshots emit `null` for both keys (backward-readable). Consumers parsing the envelope should treat both keys as optional/nullable.
+
+### Test coverage
+
+- pykrete: `1931 tests` total
+- pykrete-tests: `299 probes` (`189 positive` + `110 negative`); `158 fixtures`; `17 donors`
+
+```text-numeric
+299 probes
+189 positive
+110 negative
+158 fixtures
+1931 tests
+17 donors
+```
+
+### Internal
+
+- `crates/pykrete/src/operations/driver.rs:240` — 3 new constructor-arm recognizers in `inherited_chain_state` (`pd.DataFrame(...)` + `spark.read.<format>(...)` + `spark.createDataFrame(...)`) (PR-D1).
+- `crates/pykrete/src/operations/expr.rs:744` — `synthesize_groupby_agg_from_aggfunc` helper + `handle_agg` dialect-gated pandas arm (PR-D2).
+- `crates/pykrete/src/compare_to.rs` (new) + `crates/pykrete/src/provenance.rs` (new) — `--compare-to` consumer + shared provenance capture (PR-D3).
+- `crates/pykrete/src/alias_report.rs:478` — envelope schema v2 emission (PR-D3).
+- `crates/pykrete/src/schema.rs:606` — `SchemaView::Grouped` gains `dialect: Dialect` field (PR-D2).
+- `scripts/trust-claim-sweep-checklist.sh` — `scan_backticked_stale_numbers` extension (PR-A1).
+- `.github/workflows/auto-label-release-pr.yml` — `labeled` event + per-action log interpolation (PR-A2).
+- `crates/pykrete/src/operations/driver.rs:984` — `emit_d0080` helper for dual-clause collapse (PR-V1).
+
+### Audit-debt deferred to v1.15
+
+- pandas `groupby.agg` dict / callable / list-of-aggfunc / multi-aggregate MultiIndex forms (narrow-arm discipline).
+- `resample.agg` / `rolling.agg` / `expanding.agg` (70%-reuse PRs unlocked by v1.14 PR-D2's convention).
+- `.loc` non-literal forms.
+- `reset_index` / `set_index` arms.
+- `pd.read_csv` I/O.
+- `--include-py` / `--changed-only` / `--dry-run-since=<git-ref>` migrate flags.
+- `pd.DataFrame.attribute_access` form for D0030 tracking.
+- D0030 message rendering on synthesized grouped-key typo path (v1.14 PR-D2 R2 minor).
+- `as_index=False` / `observed=` / `dropna=` kwargs-aware groupby (v1.14 PR-D2 R2 minor).
+- `Box::leak` → `OnceLock` cleanup.
+- LSP polish bundle (formally v2.0.1 per v1.10 spec §10.10).
+- Polars.
+- CHANGELOG generation tool.
+- MIGRATE_HELP `--compare-to` cross-reference (v1.14 PR-D3 R2 minor).
+- DRY-up `assemble_surfaces()` and `assemble_stale_surfaces()` in trust-claim-sweep-checklist.sh (v1.14 PR-A1 R2 follow-up).
+
 ## [1.13.0] - 2026-06-22
 
 **Trust claim**: v1.13 closes D0080's dialect-on-return gap, turns v1.12's pivot_table aggfunc classifier into observable schema inference (convention for v1.14+ groupby.agg), and converts the dispatched release-gate into a required status check.
@@ -35,7 +105,7 @@ All notable changes to pykrete are documented here. The format follows
 - pykrete: `1828 tests` total
 - pykrete-tests: `289 probes` (`187 positive` + `102 negative`); `148 fixtures`; `17 donors`
 
-```text-numeric
+```text-numeric-historical
 289 probes
 187 positive
 102 negative
