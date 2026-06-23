@@ -287,7 +287,17 @@ pykrete check --deprecation-report --snapshot=migration.json src/
 pykrete check --deprecation-report --ack=pending --snapshot=pending-migration.json src/
 ```
 
-`--snapshot` performs an atomic write — tempfile-plus-rename in the destination directory, nanosecond-suffixed temp name to avoid concurrent-writer collision, cleanup-on-error guard across every error path — so a half-written `migration.json` never lands on disk. Exit code stays at 0 on a successful write (gating lives on `--fail-on-nonempty`; you can combine both: `--snapshot=migration.json --fail-on-nonempty`). The persisted file is bit-identical to what `--deprecation-report` would have printed to stdout, so a `diff` between two release snapshots is the same diff a script would compute over the live invocations. Snapshot-vs-snapshot comparison via a built-in `--compare-to <snapshot>` flag is tracked for v1.13+; until then, `diff -u previous.json migration.json | jq ...` is the manual primitive.
+`--snapshot` performs an atomic write — tempfile-plus-rename in the destination directory, nanosecond-suffixed temp name to avoid concurrent-writer collision, cleanup-on-error guard across every error path — so a half-written `migration.json` never lands on disk. Exit code stays at 0 on a successful write (gating lives on `--fail-on-nonempty`; you can combine both: `--snapshot=migration.json --fail-on-nonempty`). The persisted file is bit-identical to what `--deprecation-report` would have printed to stdout, so a `diff` between two release snapshots is the same diff a script would compute over the live invocations.
+
+**Envelope schema v2 provenance pair (new in v1.14).** v1.14 extends the v2 envelope with two top-level fields — `pykreteSourceCommit` (the in-tree commit hash recorded at report time) and `generatedAt` (ISO-8601 timestamp). The pair round-trips through `--snapshot` and `--compare-to` so a snapshot artifact carries author-pinpointing metadata across CI runs.
+
+**Step 7 — snapshot-vs-snapshot diff with `--compare-to` (v1.14+).** Snapshot comparison lands in v1.14 as a built-in flag:
+
+```bash
+pykrete check --deprecation-report --compare-to=previous.json src/
+```
+
+The output is a SIMPLE three-bucket envelope: `added` (sites in the new run not in the prior snapshot), `removed` (sites in the prior snapshot not in the new run), and `unchanged`. Exit code is non-zero when `added` is non-empty — drop the invocation into CI to fail on any newly-introduced deprecation site without re-implementing `jq` over the raw envelope. `--compare-to` is mutually exclusive with `--ack`, `--snapshot`, and `--fail-on-nonempty` (those gate live state; `--compare-to` reports a delta — the two modes don't compose). The v2 provenance pair (`pykreteSourceCommit` + `generatedAt`) is propagated to the diff envelope so the artifact retains the prior snapshot's origin and the new run's timestamp.
 
 **Pitfall — ambiguous sites are real signal.** A binding used as both a Spark and a pandas dataframe almost always means the code is wrong (the two dialects don't share an API surface; one branch will fail at runtime). The migrator leaves them alone deliberately. Decide which dialect that path takes and pick the right annotation by hand.
 

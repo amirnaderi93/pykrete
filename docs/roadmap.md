@@ -328,9 +328,7 @@ landing the D0080 dialect-on-return arm. Functions annotated
 expression resolving to a `PandasFrame[…]`) now fire D0080 at
 `Severity::Error` with a dedicated dialect-mismatch message
 (`Return type mismatch: declared as SparkFrame schema 'X' but the
-body produces PandasFrame schema 'X'`). Honest-silence carve-out:
-constructor cases (`pd.DataFrame(...)`, `spark.read.parquet(...)`)
-where the body dialect is unknown don't fire — no fabrication.
+body produces PandasFrame schema 'X'`).
 **Pivot_table aggfunc-driven Derived-schema synthesis** lands as
 the first observable aggregate-semantics-informed schema
 inference: when `aggfunc=` is a recognized string and `values=`
@@ -358,48 +356,76 @@ that accidentally accessed non-`values=` columns post-
 `pivot_table` will see new D0080 / D0030 fires — both flagged
 plainly per pre-adoption trust-claim discipline.
 
+**D0080 constructor carve-out closes + `groupby.agg` Derived
+synthesis + `--compare-to` snapshot diff + envelope schema v2
+provenance pair shipped in v1.14**: The v1.13 honest-silence
+carve-out for constructor cases closes — `-> SparkFrame[X]`
+returning `pd.DataFrame({...})`, or `-> PandasFrame[X]`
+returning `spark.read.parquet(path)`, now fires D0080, and
+`spark.createDataFrame(rows, schema=<Schema>)` fires when the
+dialect disagrees with the annotation. When both dialect and
+column-type mismatches land on the same return, D0080 emits a
+single **multi-clause** message (one fire, two clauses) rather
+than two stacked fires — CI greps for "two D0080 fires at the
+same range" need to adjust. **`groupby.agg` Derived-schema
+synthesis** lands as the sibling to v1.13's
+`pivot_table(aggfunc=)` arm with a **shared inference helper**
+(`count` / `nunique` → int64; `mean` / `std` / `var` / `median`
+→ float64; `sum` / `min` / `max` / `first` / `last` preserve);
+receiver-dialect-gated to `PandasFrame[X]`. **`pykrete check
+--deprecation-report --compare-to=<prior.json>`** ships as the
+SIMPLE three-bucket snapshot-diff primitive (`added` /
+`removed` / `unchanged`); exit-nonzero on `added`; mutually
+exclusive with `--ack` / `--snapshot` / `--fail-on-nonempty`
+(gating modes vs delta-reporting mode don't compose). **Envelope
+schema v2 provenance pair** — `pykreteSourceCommit` (in-tree
+commit hash recorded at report time) + `generatedAt` (ISO-8601
+timestamp) — round-trips through `--snapshot` and propagates to
+`--compare-to` so CI snapshot artifacts carry author-pinpointing
+metadata across release windows. Cross-codebase probe coverage
+climbs `289` → `299 probes` across `158 fixtures` from
+`17 donors`. Adopters with cross-dialect constructor returns at
+function boundaries, or that accidentally accessed non-aggregated
+columns post-`groupby.agg`, will see new D0080 / D0030 fires —
+both flagged plainly per pre-adoption trust-claim discipline.
+
 ## Next up
 
-### v1.14 — broader pandas reshape + migrator flags + audit-debt closures
+### v1.15 — remaining pandas reshape + non-literal indexing + cross-codebase coverage closures
 
-Broader pandas reshape: `groupby.agg` (now unblocked by the v1.13
-pivot_table aggfunc Derived synthesis pattern), `reset_index` /
-`set_index`, plus full `pivot_table` / `melt` / `stack` /
+Broader pandas reshape output schemas: `reset_index` /
+`set_index`, `resample.agg` / `rolling.agg` / `expanding.agg`,
+plus full `pivot_table` multi-aggfunc / `melt` / `stack` /
 `unstack` output schema-tracking (v1.10 + v1.11 shipped `stack` /
-`unstack` literal-form on the input; v1.12 shipped
-`pivot_table(aggfunc=)` allowlist scaffolding; v1.13 lands
-pivot_table `Derived` synthesis; the long-format output schemas
-pair with the rest of pandas reshape). `.loc` non-literal forms
-(`.loc[mask, "col"]` boolean-mask row keys, `.loc[:, "a":"b"]`
-column-range slicing) and `pdf.iloc[...]` integer-position
-indexing. The `df.query("…")` and `df.eval("…")` mini-DSLs
-(numexpr-influenced syntax, separate parser from the SQL path
-used by `selectExpr`). `pd.read_csv(...)` and other pandas I/O
-entry points if scope allows (schema inference from file headers
-/ SQL / type-stubs is a separate design surface). PROBE-TYPE-IS
-retrofit to the v1.3 hybrid donors (MLflow, Feast, iceberg-
-python). Canonical-vs-direct CI gate (I3 from the v1.4
-architecture audit). `--include-py` flag for `pykrete migrate` to
-walk the multiplexer cohort's `.py` files alongside `.pyk`, plus
-a `--changed-only` flag for both `pykrete migrate` and
+`unstack` literal-form on the input; v1.13 lands pivot_table
+`Derived` synthesis; v1.14 lands `groupby.agg` `Derived` synthesis;
+the long-format output schemas pair with the rest of pandas
+reshape). `.loc` non-literal forms (`.loc[mask, "col"]` boolean-
+mask row keys, `.loc[:, "a":"b"]` column-range slicing) and
+`pdf.iloc[...]` integer-position indexing. The `df.query("…")`
+and `df.eval("…")` mini-DSLs (numexpr-influenced syntax,
+separate parser from the SQL path used by `selectExpr`).
+`pd.read_csv(...)` and other pandas I/O entry points if scope
+allows (schema inference from file headers / SQL / type-stubs is
+a separate design surface). PROBE-TYPE-IS retrofit to the v1.3
+hybrid donors (MLflow, Feast, iceberg-python). Canonical-vs-
+direct CI gate (I3 from the v1.4 architecture audit).
+`--include-py` flag for `pykrete migrate` to walk the
+multiplexer cohort's `.py` files alongside `.pyk`, plus a
+`--changed-only` flag for both `pykrete migrate` and
 `pykrete check` that walks only files changed against HEAD.
-`--compare-to <snapshot>` for `--deprecation-report` to consume
-the v1.10 `--snapshot` file-write surface as a snapshot-vs-
-snapshot diff primitive (consumer-state model is a product fork;
-USER-DECISION calendared for v1.14 spec time per v1.13 PR-S1
-§12; deferred per v1.9 author-boundary carve-out at
-`alias_report.rs:446-448`). CI-guard widened to catch the
-"omitted-edit" drift class on top of v1.10's structural build.rs
-+ property / method tripwire closures. `pd.DataFrame.attribute_access`
-form for D0030 tracking on the pandas attribute-access surface.
-Constructor-arm extension (`pd.DataFrame(...)`,
-`spark.read.<format>(...)`, `spark.createDataFrame(rows, schema=)`)
-in `inherited_chain_state` — closes the D0080 dialect-on-return
-honest-silence carve-out from v1.13. **LSP polish formally
-rescoped to v2.0.1 / discrete LSP-feature work** per v1.10 spec
-§10.10, NOT a v1.x bundle — three cycles (v1.7 / v1.8 / v1.9) of
-"carry forward to next minor" was the signal that LSP polish
-doesn't fit the v1.x cadence.
+CI-guard widened to catch the "omitted-edit" drift class on
+top of v1.10's structural build.rs + property / method tripwire
+closures. `pd.DataFrame.attribute_access` form for D0030
+tracking on the pandas attribute-access surface. **D0080
+constructor-arm cross-codebase coverage** + **`groupby.agg`
+Derived-synthesis cross-codebase coverage** — both checker arms
+shipped in v1.14; the matching cross-codebase negative / positive
+probes are tracked for v1.15+ pykrete-tests PR-P1. **LSP polish
+formally rescoped to v2.0.1 / discrete LSP-feature work** per
+v1.10 spec §10.10, NOT a v1.x bundle — three cycles (v1.7 /
+v1.8 / v1.9) of "carry forward to next minor" was the signal
+that LSP polish doesn't fit the v1.x cadence.
 
 ## PyCharm support
 
