@@ -68,6 +68,18 @@ on:
   pull_request:
     types: [opened, edited, synchronize, labeled]
 
+# v1.15 PR-A2 — single-flight per PR. Closes v1.14 retro rule 2
+# (operator-confusion concurrency-race observed when PR-F pushed a
+# gate-fix and 3 dispatches fired near-simultaneously; 2 were
+# cancelled by release-gate.yml's own `cancel-in-progress` block,
+# 1 succeeded — correctness preserved, but the cancelled-run log
+# noise burned operator attention). Native primitive; mirrors the
+# same shape `release-gate.yml` uses (see that file's
+# `concurrency:` block, ~line 76).
+concurrency:
+  group: auto-label-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions:
   pull-requests: write
   actions: write
