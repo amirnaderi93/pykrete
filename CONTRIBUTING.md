@@ -294,6 +294,25 @@ Rationale: the vscode CHANGELOG is downstream-facing (Marketplace + Open VSX ren
 
 The release-gate workflow memoizes `cargo test --release --workspace` output via the `PYKRETE_TESTS_COUNT_FILE` env var. Local dev path (env var unset) preserves the cargo invocation; CI path (env var set) reads from the file written by an earlier cargo-test step. Eliminates v1.11 PR-F's 34-min double-build stall.
 
+### v1.15+ standing process additions
+
+1. **§9.2 retirement DEFERRED to v1.16** — the workflow-edit that removes the `centralized-bump-cycle.marker` check from `.github/workflows/extension-version-guard.yml` must ship as a cycle-0 chore BEFORE PR-S1 in v1.16. Lesson from v1.15 §1.i.3 recovery: dropping marker creation in PR-S1 without first removing the workflow check creates a chicken-and-egg for Wave 1 PRs that touch `crates/pykrete/**` (the guard fires red because the marker is absent and the workflow has not been updated to skip the check). Sequence: cycle-0 = PR removes the marker-check job from the workflow, then PR-S1 ships normally without re-instating the marker.
+
+2. **Branch-protection option (b) STANDING**: the `release-gate-check` required status stays advisory in practice (the dispatched run reports SUCCESS to the PR but is NOT in the required-status-checks list — operators wait on it manually). Manual-wait pattern for PR-F and PR-G dispatched runs: operator opens the PR, observes the dispatched run start in the Actions tab, waits for SUCCESS (~35min cold-cache, ~3-5min warm), then merges. Option (a) — wiring `release-gate-check` into branch-protection's required-checks list — was the v1.10 fork; v1.15 explicitly takes option (b) to keep solo-operator merge cadence unblocked when the gate runner is slow.
+
+3. **Auto-label native concurrency (PR-A2 #206) STANDING**: all release-orchestration workflows (`auto-label-release-pr.yml`, `release-gate.yml`, future siblings) use a top-level native `concurrency:` block keyed on the triggering PR number with `cancel-in-progress: true`. Pre-empts duplicate runs cleanly without the script-level retry-loop pattern v1.13 explored. The sibling-arm hole flagged at PR-A2 R1 review — `wasm.yml` lacks concurrency cap — is captured as v1.16 audit-debt (not a regression; the wasm build does not orchestrate releases).
+
+4. **Worktree cleanup at cycle close**: after `git tag v1.X.0` push and the catalog-pin chore opens, remove all `agent-v1XX-*` worktrees:
+
+   ```bash
+   for wt in agent-v1XX-{s1,a1,a2,d1,d2,d3,v1,p1}; do
+     git worktree remove --force .claude/worktrees/$wt 2>/dev/null
+   done
+   git worktree prune
+   ```
+
+   Each worktree carries 3-5GB of Cargo `target/`; multi-cycle accumulation hits 25-70GB on disk. The v1.9 retro flagged disk-full as a standing operational risk; this is the routine prevention.
+
 ## Filing issues
 
 Pick the matching template when you open a new issue on GitHub (defined under `.github/ISSUE_TEMPLATE/`):
