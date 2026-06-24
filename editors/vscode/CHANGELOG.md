@@ -1,6 +1,47 @@
 # Changelog
 
 
+## 0.13.0
+
+Tracks the v1.15.0 pykrete release — **closing 5 audit-debt carve-outs
+from v1.14 and extending pandas chain-depth via `reset_index(drop=True)`
++ `set_index([literal-keys])`** so the canonical
+`groupby.agg().reset_index(drop=True)` chain continues tracking the
+Derived schema 2-methods-deep instead of degrading to Unknown after the
+reset. The bundled `pykrete` and `pykrete-lsp` binaries gain two NEW
+pandas inference arms: `pdf.groupby("k").agg("sum").reset_index(drop=True)`
+now propagates the v1.14 PR-D2 synthesized envelope through the reset
+(previously the result degraded to Unknown — downstream `result["typo"]`
+was silent), and `pdf.set_index(["k1", "k2"])` now removes the literal
+keys from the accessible column set so downstream typos against the
+removed keys fire D0030. Kwarg-safety is explicit: `set_index(drop=False)`
+or `append=True` falls through to Unknown rather than emitting
+false-positive D0030 on the still-accessible keys. Out-of-scope and
+explicitly deferred to v1.16: `reset_index(drop=False)` (preserves index
+AS new column — stateful tracking needed), `set_index(<expr>)` non-literal
+forms (requires expr-eval). The audit side ships **marketing-table gate
+v3**: `scripts/trust-claim-sweep-checklist.sh` extends the v1.14
+backticked-claim-stale scanner to catch bare `<num> <key>` claims in
+markdown-table contexts (the v1.14 architecture audit nit at
+`pandas-roadmap.md:103-114` blind-spot), and consolidates the v1.14
+`assemble_surfaces()` + `assemble_stale_surfaces()` pair into a single
+`collect_surfaces()` helper (v1.14 PR-A1 R2 follow-up DRY-up). The
+`auto-label-release-pr.yml` workflow gains a top-level native
+`concurrency:` block keyed on PR number with `cancel-in-progress: true`,
+closing v1.14 retro rule 2's concurrency-race — dispatched-event
+verification was captured on PR-A2 #206 itself (commits 4+5 back-to-back;
+commit 4 run pre-empted before being recorded; commit 5 succeeded). The
+`resolve_override_ty` 8-line primitive lands as a quiet refactor shared
+by `synthesize_pivot_result_from_aggfunc` + `synthesize_groupby_agg_
+from_aggfunc` (v1.14 backlog #4 closure); outer iteration scaffolding
+stays divergent because pivot is values-only and groupby is
+keys-then-non-keys. Cross-codebase coverage: 299 → 305 probes across
+158 → 164 fixtures from 17 donors. No new D-codes; SemVer-minor under
+the `tighteningDiagnostics` policy and the established alias-report-style
+JSON-additive policy. Cycle-close minor bump aligns the extension with
+the v1.15.0 tag per the version-guard contract. See the
+[main CHANGELOG](../../CHANGELOG.md#1150---2026-06-24) for details.
+
 ## 0.12.0
 
 Tracks the v1.14.0 pykrete release — **turning v1.13's `pivot_table`

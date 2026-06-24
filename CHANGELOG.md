@@ -6,6 +6,93 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+### Pre-v1.9 trajectory pin backfill
+
+v1.9 introduced the `text-numeric-historical` fence convention; pre-v1.9 sections cite their cumulative probe / donor / fixture counts in prose without a fenced block. The pandas roadmap trajectory table (`docs-site/src/content/docs/about/pandas-roadmap.md`) cites those v1.3-v1.8 numbers as historical signal. Per v1.15 PR-A1 marketing-table gate v3, bare `<num> <key>` markdown-table cells must match either a current `text-numeric` pin OR any `text-numeric-historical` block in CHANGELOG. This block backfills the v1.3-v1.8 trajectory pins so the gate validates against documented history rather than requiring future edits to immutable release sections.
+
+```text-numeric-historical
+19 probes
+3 donors
+10 donors
+223 probes
+17 donors
+235 probes
+241 probes
+247 probes
+253 probes
+```
+
+## [1.15.0] - 2026-06-24
+
+**Trust claim**: v1.15 closes 5 audit-debt carve-outs from v1.14 (synthesis-arm cross-codebase coverage, gate v3 for marketing tables, helper consolidation, auto-label single-flight, branch-protection design fork) and extends pandas chain-depth via `reset_index(drop=True)` + `set_index([literal-keys])` so `groupby.agg().reset_index(drop=True)` continues tracking the Derived schema.
+
+### Audit-tooling
+
+- **Marketing-table gate v3** (`scripts/trust-claim-sweep-checklist.sh`) — extends backticked-claim-stale scanner to catch bare `<num> <key>` claims in markdown-table contexts. Closes v1.14 architecture audit nit at `docs-site/src/content/docs/about/pandas-roadmap.md:103-114` blind-spot. Also DRY-up: consolidated `assemble_surfaces()` + `assemble_stale_surfaces()` into single `collect_surfaces()` helper (v1.14 PR-A1 R2 follow-up). — PR-A1 #205.
+- **Auto-label single-flight** — `.github/workflows/auto-label-release-pr.yml` adds top-level native `concurrency:` block keyed on PR number with `cancel-in-progress: true`. Closes v1.14 retro rule 2 concurrency-race. Pre-empts duplicate runs cleanly. Dispatched-event verification CAPTURED (load-bearing test: commits 4+5 back-to-back; commit 4 run pre-empted before being recorded; commit 5 succeeded). — PR-A2 #206.
+
+### New features
+
+- **`reset_index(drop=True)` + `set_index([<literal-keys>...])` schema arms** — pandas chains now track Derived schema 2-methods-deep. `pdf.groupby("k").agg("sum").reset_index(drop=True)` continues tracking the synthesized envelope (previously degraded to Unknown after reset_index). `set_index(["k1","k2"])` removes literal keys from accessible columns. Kwarg-safety: `set_index(drop=False)` or `append=True` falls through to Unknown (prevents false-positive D0030). Out-of-scope: `reset_index(drop=False)`, `set_index(<expr>)` non-literal (deferred v1.16 with explicit design fork). — PR-D2 #207.
+
+### Process / tooling
+
+- **`resolve_override_ty` primitive extract** — helper consolidation closing v1.14 backlog #4. 8-line primitive shared by `synthesize_pivot_result_from_aggfunc` + `synthesize_groupby_agg_from_aggfunc`; outer iteration scaffolding stays divergent (pivot is values-only; groupby is keys-then-non-keys). No behavior change. — PR-D1 #203.
+
+### Changed
+
+- **`pdf.groupby("k").agg("sum").reset_index(drop=True)` chain now tracks Derived schema 2-methods-deep.** Previously degraded to Unknown after reset_index — downstream `result["typo"]` was silent. v1.15 fires D0030 against the synthesized envelope. **Path forward**: align downstream code with synthesized schema (keys + value columns with aggregate-typed dtype).
+
+- **`pdf.set_index([keys])` now removes literal-key columns from accessible schema.** Previously degraded to Unknown — downstream `result["key"]` was silent. v1.15 fires D0030. **Path forward**: access keys via `.index` (not modeled) or `.reset_index(drop=False)` (also not modeled — v1.16 deferral).
+
+- **Marketing-table gate v3 fires `MARKETING-TABLE-CLAIM-STALE`** on bare `<num> <key>` numbers in markdown-table contexts that don't match a current `text-numeric` pin OR a `text-numeric-historical` block. Only affects internal CI; no adopter impact. Existing self-fire on `docs-site/src/content/docs/about/pandas-roadmap.md:103-114` v1.3-v1.8 trajectory pins is a known doc-debt carve-out (resolution at PR-G).
+
+### Test coverage
+
+- pykrete: `1964 tests` total
+- pykrete-tests: `305 probes` (`191 positive` + `114 negative`); `164 fixtures`; `17 donors`
+
+```text-numeric
+305 probes
+191 positive
+114 negative
+164 fixtures
+1964 tests
+17 donors
+```
+
+### Internal
+
+- `crates/pykrete/src/operations/expr.rs:1667-1772` — `reset_index(drop=True)` + `set_index([keys])` arms (PR-D2).
+- `crates/pykrete/src/operations/expr.rs:675` — `resolve_override_ty` primitive (PR-D1).
+- `scripts/trust-claim-sweep-checklist.sh:143` — `collect_surfaces` consolidated helper (PR-A1 DRY-up); `scripts/trust-claim-sweep-checklist.sh:825-931` — marketing-table scanner v3 (PR-A1).
+- `.github/workflows/auto-label-release-pr.yml` — top-level native `concurrency:` block (PR-A2).
+- `crates/pykrete/tests/v115_pr_d2_reset_index_set_index.rs` — 26 paired tests (PR-D2).
+- `crates/pykrete/tests/v115_pr_d1_resolve_override_ty.rs` — 7 unit tests (PR-D1).
+- `scripts/trust-claim-sweep-checklist.test.sh` — MT1-MT7 added (PR-A1).
+
+### Audit-debt deferred to v1.16
+
+- `reset_index(drop=False)` — preserves index AS new column; stateful tracking needed.
+- `set_index(<expr>)` non-literal forms — requires expr-eval.
+- resample.agg + rolling.agg + groupby.agg dict-form — convention-completion pair (S R2 commitment from v1.15 planning; helper consolidation PR-D1 prerequisite landed).
+- expanding.agg — cumulative-window semantic asymmetry.
+- §9.2 promote-to-default (workflow-edit cycle-0 chore BEFORE PR-S1 in v1.16, per v1.15 §1.i.3 recovery lesson).
+- `.loc` non-literal forms.
+- `pd.read_csv` I/O.
+- migrate flags (`--include-py`, `--changed-only`, `--dry-run-since=`).
+- `pd.DataFrame.attribute_access` form for D0030 tracking.
+- D0030 message rendering on synthesized grouped-key typo path.
+- `as_index=False` / `observed=` / `dropna=` kwargs-aware groupby.
+- `Box::leak` → `OnceLock` cleanup.
+- LSP polish bundle (v2.0.1 per v1.10 spec §10.10).
+- Polars.
+- CHANGELOG generation tool.
+- 8 pandas-roadmap.md trajectory pins (PR-A1 R1 self-exercise finding; PR-G this cycle absorbs OR deferral).
+- `pykrete-tests/README.md` snapshot refresh (`92 negative` → `114 negative`) — PR-G this cycle OR TM-direct chore.
+- `Pick[Schema, ...]` design item (prophet narrowed-receiver pattern reference from PR-P1 #50).
+- `wasm.yml` concurrency cap (sibling-arm hole flagged by A2 reviewer).
+
 ## [1.14.0] - 2026-06-23
 
 **Trust claim**: v1.14 turns v1.13's pivot_table aggfunc-driven Derived synthesis into the canonical convention via `groupby.agg`, closes D0080 dialect-on-return at constructor sites (`pd.DataFrame(...)` and `spark.read.<format>(...)`), and lands the 5-cycle calendared `--compare-to <snapshot>` user-decision.
@@ -38,7 +125,7 @@ All notable changes to pykrete are documented here. The format follows
 - pykrete: `1931 tests` total
 - pykrete-tests: `299 probes` (`189 positive` + `110 negative`); `158 fixtures`; `17 donors`
 
-```text-numeric
+```text-numeric-historical
 299 probes
 189 positive
 110 negative
