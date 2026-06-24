@@ -48,6 +48,8 @@ const PANDAS_INHERITED_ARM_METHODS: &[&str] = &[
     "melt",
     "stack",
     "unstack",
+    "reset_index",
+    "set_index",
 ];
 
 /// Every method in the `expr.rs` pandas-arm inventory above must
@@ -97,16 +99,16 @@ fn v17_pr_a1_only_signals_and_inherited_arms_are_disjoint() {
 /// surfaces the change in code review and forces an explicit count
 /// update here.
 #[test]
-fn v18_pr_a1_inventory_has_eleven_methods() {
+fn v18_pr_a1_inventory_has_thirteen_methods() {
     assert_eq!(
         PANDAS_INHERITED_ARM_METHODS_GENERATED.len(),
-        11,
-        "expr.rs pandas-arm inventory pinned at 11 methods as of v1.11 \
-         PR-D1 (was 10 in v1.10 PR-D2; +unstack); if you're seeing this \
-         fail you've added/removed an arm in operations/expr.rs and the \
-         build-script regenerated the inventory. Update this pin to \
-         match and verify any associated discriminator-list updates \
-         landed too."
+        13,
+        "expr.rs pandas-arm inventory pinned at 13 methods as of v1.15 \
+         PR-D2 (was 11 in v1.11 PR-D1; +reset_index, +set_index); if \
+         you're seeing this fail you've added/removed an arm in \
+         operations/expr.rs and the build-script regenerated the \
+         inventory. Update this pin to match and verify any associated \
+         discriminator-list updates landed too."
     );
 }
 
