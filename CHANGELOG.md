@@ -6,6 +6,22 @@ All notable changes to pykrete are documented here. The format follows
 
 ## [Unreleased]
 
+### Pre-v1.9 trajectory pin backfill
+
+v1.9 introduced the `text-numeric-historical` fence convention; pre-v1.9 sections cite their cumulative probe / donor / fixture counts in prose without a fenced block. The pandas roadmap trajectory table (`docs-site/src/content/docs/about/pandas-roadmap.md`) cites those v1.3-v1.8 numbers as historical signal. Per v1.15 PR-A1 marketing-table gate v3, bare `<num> <key>` markdown-table cells must match either a current `text-numeric` pin OR any `text-numeric-historical` block in CHANGELOG. This block backfills the v1.3-v1.8 trajectory pins so the gate validates against documented history rather than requiring future edits to immutable release sections.
+
+```text-numeric-historical
+19 probes
+3 donors
+10 donors
+223 probes
+17 donors
+235 probes
+241 probes
+247 probes
+253 probes
+```
+
 ## [1.15.0] - 2026-06-24
 
 **Trust claim**: v1.15 closes 5 audit-debt carve-outs from v1.14 (synthesis-arm cross-codebase coverage, gate v3 for marketing tables, helper consolidation, auto-label single-flight, branch-protection design fork) and extends pandas chain-depth via `reset_index(drop=True)` + `set_index([literal-keys])` so `groupby.agg().reset_index(drop=True)` continues tracking the Derived schema.
