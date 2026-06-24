@@ -68,20 +68,20 @@ This page tracks the pandas-specific direction for pykrete. The umbrella [roadma
 - **`pykrete check --deprecation-report --compare-to=<prior.json>`**: SIMPLE three-bucket diff (`added` / `removed` / `unchanged`); exit-nonzero when `added` is non-empty. Mutually exclusive with `--ack` / `--snapshot` / `--fail-on-nonempty` — the gating modes vs the delta-reporting mode don't compose.
 - **Envelope schema v2 provenance pair**: `pykreteSourceCommit` (in-tree commit hash recorded at report time) + `generatedAt` (ISO-8601 timestamp); both round-trip through `--snapshot` and are propagated to `--compare-to` so CI snapshot artifacts carry author-pinpointing metadata across release windows.
 
-## v1.15+ horizons (committed but unscheduled)
+## v1.16+ horizons (committed but unscheduled)
 
-- **Full `pivot_table` multi-aggregate / `melt` / `stack` / `unstack` output schema-tracking** — v1.13 ships single-aggfunc pivot_table `Derived` synthesis; v1.14 ships `groupby.agg` Derived synthesis; multi-aggregate aggfunc lists (`aggfunc=['sum', 'mean']`), the `melt` long-format `var_name` / `value_name` output schema, and `stack` / `unstack` index-level promotion / demotion all pair with the rest of pandas reshape in v1.15+.
-- **`.loc` non-literal forms**: `.loc[mask, "col"]` (boolean mask) row-key tracking, `.loc[:, "a":"b"]` (column range), and `pdf.iloc[...]` — carried forward to v1.15+ paired with broader pandas reshape.
+- **Full `pivot_table` multi-aggregate / `melt` / `stack` / `unstack` output schema-tracking** — v1.13 ships single-aggfunc pivot_table `Derived` synthesis; v1.14 ships `groupby.agg` Derived synthesis; v1.15 ships `reset_index(drop=True)` + `set_index([literal-keys])` chain-depth pass-through; multi-aggregate aggfunc lists (`aggfunc=['sum', 'mean']`), the `melt` long-format `var_name` / `value_name` output schema, and `stack` / `unstack` index-level promotion / demotion all pair with the rest of pandas reshape in v1.16+.
+- **`.loc` non-literal forms**: `.loc[mask, "col"]` (boolean mask) row-key tracking, `.loc[:, "a":"b"]` (column range), and `pdf.iloc[...]` — carried forward to v1.16+ paired with broader pandas reshape.
 - **`df.query("…")` and `df.eval("…")` mini-DSLs**: parse string-fragment column refs separately. numexpr-influenced syntax, not SQL — separate parser from the path used by `selectExpr`. High signal for production pandas code.
-- **Broader pandas method modeling**: `df.reset_index`, `df.set_index`, `df.resample(...).agg(...)`, `df.rolling(...).agg(...)`, `df.expanding(...).agg(...)` (v1.10 shipped `stack`; v1.11 shipped `unstack`; v1.13 `pivot_table(aggfunc=)` Derived synthesis; v1.14 `groupby.agg` Derived synthesis). Currently fall through to opaque.
+- **Broader pandas method modeling**: `df.reset_index(drop=False)` index-as-column promotion, `df.set_index(<expr>)` non-literal forms, `df.resample(...).agg(...)`, `df.rolling(...).agg(...)`, `df.expanding(...).agg(...)`, dict-form `df.groupby(...).agg({col: list_of_aggfuncs})` (v1.10 shipped `stack`; v1.11 shipped `unstack`; v1.13 `pivot_table(aggfunc=)` Derived synthesis; v1.14 `groupby.agg` Derived synthesis; v1.15 `reset_index(drop=True)` + `set_index([literal-keys])` chain-depth pass-through). The non-literal / index-promotion arms currently fall through to opaque.
 - **`--include-py` flag for `pykrete migrate`**: let the migrator walk the multiplexer cohort's `.py` files alongside `.pyk`.
 - **`--changed-only` flag** for both `pykrete migrate` and `pykrete check`: walk only files changed against HEAD. Pairs naturally with CI invocations.
-- **Pandas multi-index support**: `df.set_index(["a","b"])` produces a structurally-different shape pykrete doesn't model yet.
+- **Pandas MultiIndex-on-rows support**: v1.15 models `df.set_index([literal-keys])` as literal-key column-subtraction from the accessible schema (downstream `result["literal_key"]` fires D0030). The MultiIndex-on-rows shape itself — index-level access, `reset_index(level=...)` MultiIndex slice, MultiIndex `.loc` selectors — is a structurally-different surface that pykrete doesn't model yet.
 - **`pd.read_csv(...)` and other I/O entry points** (`pd.read_parquet`, `pd.read_json`, `pd.read_sql`, …): schema inference from file headers / SQL / type-stubs is a separate design surface.
 - **Pandas dtype subtypes**: `float32` vs `float64`, `int8/16/32/64`, `Int64` (nullable) vs `int64`. Carve-out from v1.0 spec; revisit if user demand surfaces.
 - **Ordered `CategoricalDtype(ordered=True)`, tz-aware `datetime64[ns, tz]`, `timedelta64[ns]` / `IntervalDtype`**: re-deferred from v1.3 §4.
-- **Retrofitting pandas `PROBE-TYPE-IS` to the v1.3 hybrid donors** (MLflow, Feast, iceberg-python) — v1.4 / v1.5 / v1.6 / v1.7 / v1.8 / v1.9 / v1.10 / v1.11 / v1.12 / v1.13 / v1.14 deliberately scoped these out; revisit in v1.15+.
-- **D0080 constructor-arm cross-codebase coverage** + **`groupby.agg` Derived-synthesis cross-codebase coverage**: both checker arms ship in v1.14; the matching cross-codebase negative / positive probes are tracked for v1.15+ pykrete-tests PR-P1.
+- **Retrofitting pandas `PROBE-TYPE-IS` to the v1.3 hybrid donors** (MLflow, Feast, iceberg-python) — v1.4 / v1.5 / v1.6 / v1.7 / v1.8 / v1.9 / v1.10 / v1.11 / v1.12 / v1.13 / v1.14 / v1.15 deliberately scoped these out; revisit in v1.16+.
+- **D0080 constructor-arm cross-codebase coverage** + **`groupby.agg` Derived-synthesis cross-codebase coverage**: both checker arms shipped in v1.14; matching cross-codebase coverage shipped v1.15 PR-P1 #50.
 
 ## v2.0 commitments (locked)
 
@@ -91,7 +91,7 @@ This page tracks the pandas-specific direction for pykrete. The umbrella [roadma
 ## What we deliberately don't ship (and why)
 
 - **Pandas runtime validation**: pykrete is a static checker. Validating values at runtime is `pandera`'s job — that's why pandera is on the v1.4 donor list (sibling tool, not competitor).
-- **polars support**: separate dialect with separate idioms. Tracked for v1.15+ if user demand surfaces; not gated on pandas work, but realistically follows pandas reshape.
+- **polars support**: separate dialect with separate idioms. Tracked for v1.16+ if user demand surfaces; not gated on pandas work, but realistically follows pandas reshape.
 - **Pandas-on-Spark API (`pyspark.pandas`)**: parallel surface to pandas with subtle semantic differences. Modeled only if a real PySpark user requests it.
 - **Inferred-schema mode**: pykrete asks users to declare schemas; auto-inference contradicts the "declare your contract" value prop.
 

@@ -67,6 +67,13 @@ The message names the failing column and the schema it was checked against, with
 
 When a *did you mean* suggestion is attached, the LSP exposes it as a `QuickFix` code action — VS Code surfaces it as a lightbulb on the underlined token, and selecting the action replaces the bad literal with the suggested name. D0030 is the only diagnostic that ships a quick-fix today.
 
+**New in v1.15: D0030 fires through pandas chain-depth.** Two new fire sites land in v1.15 as the `groupby.agg` `Derived` envelope (v1.14) survives one more transform:
+
+- `result['typo']` after `pdf.groupby("k").agg("sum").reset_index(drop=True)` now fires D0030 against the synthesized schema (keys + aggregate columns). Previously degraded to Unknown after `reset_index`; downstream typos were silent.
+- `result['literal_key']` after `pdf.set_index(['literal_key'])` now fires D0030 because the literal-key columns are removed from the accessible schema. Previously degraded to Unknown.
+
+**Adopters who incorrectly accessed non-aggregate columns after `groupby.agg().reset_index(drop=True)`, or who accessed literal keys after `set_index([keys])`, will see new D0030 fires.** Path forward: align downstream code with the synthesized schema (keys + value columns with aggregate-typed dtype), or access keys via `.index` (not modeled; `reset_index(drop=False)` index-as-column promotion is a v1.16 deferral).
+
 ### `unionSchemaMismatch` — D0040
 
 `union`, `unionByName`, `intersect`, `intersectAll`, `subtract`, or `exceptAll` between two dataframes whose column-name sets don't agree.

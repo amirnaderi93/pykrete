@@ -179,22 +179,46 @@ The v1.13 cycle's headline is the **D0080 dialect-on-return checker arm**: the l
 
 For the verification posture and per-donor matrix, see [Real-codebase tests](/about/pykrete-tests/) and [Production readiness → Real-codebase testing](/about/production-readiness/#real-codebase-testing). For the full pandas direction across v1.14+ and v2.0, see [Pandas roadmap](/about/pandas-roadmap/).
 
+## Shipped in v1.14 — D0080 constructor carve-out closure + `groupby.agg` Derived synthesis + `--compare-to` snapshot diff
+
+The v1.14 cycle closes the v1.13 D0080 honest-silence carve-out at constructor sites, lands `groupby.agg` Derived synthesis as the sibling to v1.13's `pivot_table(aggfunc=)` arm, and ships the 5-cycle calendared `--compare-to <snapshot>` user-decision.
+
+- **D0080 dialect-on-return constructor arms** (PR-D1 #195). `inherited_chain_state` walker gains `pd.DataFrame(...)` (single-level structural) + `spark.read.<format>(...)` (two-level structural, any format identifier) + `spark.createDataFrame(rows, schema=<bare Schema>)` dialect-only sibling check. Closes the v1.13 PR-D1 honest-silence carve-out. Coverage ~80% → ~95% adopter shape.
+- **`groupby.agg` narrow-arm aggregate-semantics inference** (PR-D2 #199). `pdf.groupby("k").agg("sum")` result schema synthesizes Derived envelope with `keys ++ (non-keys with dtype-override)`. Shared inference table with v1.13's `pivot_table(aggfunc=)` arm — first observable aggregate-semantics-informed inference for groupby. Realizes v1.13 PR-S1 §13 forward-binding promise.
+- **`--compare-to <snapshot>` SIMPLE shape** (PR-D3 #198). 5-cycle calendared user-decision LANDS. JSON output: `{snapshot_a, snapshot_b, diff: {added, removed, unchanged}}`. FULL site payload in all 3 buckets. Exit nonzero on `added.length > 0`. Bumps deprecation-report envelope schema with `pykreteSourceCommit` + `generatedAt` top-level keys.
+- **D0080 dual-clause collapse** (PR-V1 #197). Combined dialect+type mismatch emits ONE D0080 with both clauses joined by `"; additionally, "` instead of TWO separate diagnostics at same range. Sets multi-clause joiner convention.
+- **Backtick-stale gate extension** (PR-A1 #196). `scan_backticked_stale_numbers()` scanner catches backticked-but-stale numeric claims that escaped the v1.13 backtick carve-out (v1.13 docs-sync audit 8-blocker root cause).
+- **Auto-label workflow synchronize+labeled trigger fix** (PR-A2 #194). `.github/workflows/auto-label-release-pr.yml` adds `labeled` to `pull_request.types`. Investigation revealed v1.13 retro rule 11's framing was wrong: synchronize-redispatch worked since v1.12 PR-A1; the actual gap was `labeled` missing from triggers.
+
+For the verification posture and per-donor matrix, see [Real-codebase tests](/about/pykrete-tests/) and [Production readiness → Real-codebase testing](/about/production-readiness/#real-codebase-testing). For the full pandas direction across v1.15+ and v2.0, see [Pandas roadmap](/about/pandas-roadmap/).
+
+## Shipped in v1.15 — pandas chain-depth extension + synthesis-arm cross-codebase coverage closure + audit-debt drawdown
+
+The v1.15 cycle extends pandas chain-depth through `reset_index(drop=True)` + `set_index([literal-keys])` so v1.14's `groupby.agg` `Derived` envelope survives one more transform, closes the v1.14 synthesis-arm cross-codebase coverage gaps with positive `groupby.agg` probes + negative D0080 constructor-return probes (pykrete-tests PR-P1 #50), consolidates the dtype-override family behind a shared primitive in preparation for the v1.16 Windowed lattice, and ships marketing-table gate v3 as the v1.14 audit-tooling carve-out closure.
+
+- **`reset_index(drop=True)` + `set_index([literal-keys])` literal-form chain-depth** (PR-D2 #202). `crates/pykrete/src/operations/expr.rs:1667-1772` adds the two arms; `pdf.groupby("k").agg("sum").reset_index(drop=True)` now keeps the synthesized `Derived` envelope alive through the chain, and `pdf.set_index([keys])` removes the literal-key columns from the accessible schema (downstream `result["literal_key"]` fires D0030). 26 paired tests in `crates/pykrete/tests/v115_pr_d2_reset_index_set_index.rs`.
+- **`resolve_override_ty` primitive** (PR-D1 #203). `crates/pykrete/src/operations/expr.rs:675` extracts the helper consolidating the dtype-override family shared between `pivot_table(aggfunc=)` and `groupby.agg`. 7 unit tests in `crates/pykrete/tests/v115_pr_d1_resolve_override_ty.rs`. Prepares for v1.16 Windowed lattice.
+- **Synthesis-arm cross-codebase coverage closure** (pykrete-tests PR-P1 #50). Positive probes against `groupby.agg` on real-library fixtures + negative probes against D0080 constructor returns close the v1.14 PR-P1 carve-out. Coverage `299` → `305 probes` across `158` → `164 fixtures`.
+- **Marketing-table gate v3** (PR-A1 #204). `scripts/trust-claim-sweep-checklist.sh:825-931` scans markdown-table cells of shape `<num> <key>` and fires `MARKETING-TABLE-CLAIM-STALE` on cells that don't match a current `text-numeric` pin OR a `text-numeric-historical` block in CHANGELOG. PR-A1 DRY-up consolidates `collect_surfaces` at line 143.
+- **Auto-label workflow native concurrency** (PR-A2 #205). `.github/workflows/auto-label-release-pr.yml` gains a top-level native `concurrency:` block so simultaneous label syncs serialize at the workflow level.
+
 ## Next up
 
-### v1.14 — broader pandas reshape + migrator flags + audit-debt closures
+### v1.16 — broader pandas reshape + migrator flags + audit-debt closures
 
-- **Broader pandas reshape**: `groupby.agg` (now unblocked by the v1.13 pivot_table aggfunc-driven Derived synthesis pattern), `reset_index`, `set_index`, plus full `pivot_table` / `melt` / `stack` / `unstack` output schema-tracking (the wide / long output schemas — variable column values become column names of the result frame; `var_name` / `value_name` become columns of the long frame; index-level promotion / demotion for `stack` / `unstack`).
+- **Broader pandas reshape**: `resample.agg`, `rolling.agg`, `expanding.agg`, dict-form `groupby.agg`, `reset_index(drop=False)` index-as-column promotion, `set_index(<expr>)` non-literal forms, plus full `pivot_table` / `melt` / `stack` / `unstack` output schema-tracking (the wide / long output schemas — variable column values become column names of the result frame; `var_name` / `value_name` become columns of the long frame; index-level promotion / demotion for `stack` / `unstack`).
 - **`.loc` non-literal forms and `.iloc`**: `.loc[mask, "col"]` (boolean mask), `.loc[:, "a":"b"]` (column range), and `pdf.iloc[...]`.
 - **`df.query("…")` / `df.eval("…")` mini-DSLs**: parse string-fragment column refs separately. numexpr-influenced syntax, not SQL.
 - **`pd.read_csv(...)` and other pandas I/O entry points**: schema inference from file headers / SQL / type-stubs as a separate design surface.
 - **`--include-py` flag for `pykrete migrate`**: let the migrator walk `.py` files in the multiplexer cohort alongside `.pyk`.
 - **`--changed-only` flag** for both `pykrete migrate` and `pykrete check`: walk only files changed against HEAD. Pairs naturally with CI invocations.
-- **`--compare-to <snapshot>` flag for `--deprecation-report`**: consumer-state model is a product fork — pairs with the v1.10 `--snapshot` file-write surface as the diff-between-snapshots primitive. USER-DECISION calendared for v1.14 spec time per v1.13 PR-S1 §12.
-- **CI-guard for the omitted-edit drift class**: v1.8's `build.rs` extraction closes the parallel-edit class structurally; v1.9 backed it with CI-running tests; v1.10 lands the property / method tripwire and CHANGELOG grep gate v3; v1.14 extends to catch new arms added without updating either list.
+- **§9.2 promote-to-default** — the centralized-bump workflow-edit chore ships as a cycle-0 chore BEFORE PR-S1 in v1.16, per the v1.15 §1.i.3 recovery lesson.
 - **PROBE-TYPE-IS retrofit** to the v1.3 hybrid donors (MLflow, Feast, iceberg-python).
 - **Canonical-vs-direct CI gate (I3)** from the v1.4 architecture audit.
 - **`pd.DataFrame.attribute_access` form** for D0030 tracking on the pandas attribute-access surface.
-- **Constructor-arm extension** (`pd.DataFrame(...)`, `spark.read.<format>(...)`, `spark.createDataFrame(rows, schema=)`) in `inherited_chain_state` — closes the D0080 dialect-on-return honest-silence carve-out.
+- **D0030 message rendering on synthesized grouped-key typo path** — v1.15 fires D0030 against the synthesized `Derived` envelope but the message text path still resolves to the pre-synthesis schema in some arms; tracked for v1.16 polish.
+- **`as_index=False` / `observed=` / `dropna=` kwargs-aware groupby** — v1.15's `groupby.agg` chain-depth is keyword-blind; add kwargs-aware narrowing.
+- **`reset_index(level=...)` MultiIndex slice + `set_index(<mixed-literal>)` asymmetric defense test** — v1.15 deliberately narrow-arms the literal-form; v1.16 widens.
 
 ### Window-key type tracking
 

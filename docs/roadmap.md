@@ -389,43 +389,82 @@ function boundaries, or that accidentally accessed non-aggregated
 columns post-`groupby.agg`, will see new D0080 / D0030 fires —
 both flagged plainly per pre-adoption trust-claim discipline.
 
+**pandas chain-depth extension + synthesis-arm cross-codebase
+coverage closure + `resolve_override_ty` primitive + marketing-
+table gate v3 shipped in v1.15**: The v1.14 `groupby.agg`
+`Derived` envelope now survives one more transform —
+`pdf.groupby("k").agg("sum").reset_index(drop=True)` keeps the
+synthesized envelope alive (downstream `result["typo"]` fires
+D0030 instead of degrading to Unknown), and
+`pdf.set_index([literal-keys])` removes the named literal-key
+columns from the accessible schema (downstream
+`result["literal_key"]` fires D0030 instead of going silent).
+The v1.14 synthesis-arm cross-codebase coverage gaps close in
+pykrete-tests PR-P1 #50 with positive probes against
+`groupby.agg` on real-library fixtures + negative probes against
+D0080 constructor returns. The dtype-override family (the
+inference table shared between `pivot_table(aggfunc=)` and
+`groupby.agg`) consolidates behind the new `resolve_override_ty`
+primitive in preparation for the v1.16 Windowed lattice. The
+audit-tooling block gains **marketing-table gate v3** —
+`scripts/trust-claim-sweep-checklist.sh` now fires
+`MARKETING-TABLE-CLAIM-STALE` on bare `<num> <key>` markdown-
+table cells that don't match a current `text-numeric` pin OR a
+`text-numeric-historical` block in CHANGELOG. The auto-label
+workflow gains native top-level `concurrency:` (PR-A2). Cross-
+codebase probe coverage climbs `299` → `305 probes` across
+`164 fixtures` from `17 donors`. Adopters who incorrectly
+accessed non-aggregate columns after `groupby.agg().reset_index
+(drop=True)`, or who accessed literal keys after `set_index
+([keys])`, will see new D0030 fires — both flagged plainly per
+pre-adoption trust-claim discipline.
+
 ## Next up
 
-### v1.15 — remaining pandas reshape + non-literal indexing + cross-codebase coverage closures
+### v1.16 — remaining pandas reshape + non-literal indexing + audit-debt closures
 
-Broader pandas reshape output schemas: `reset_index` /
-`set_index`, `resample.agg` / `rolling.agg` / `expanding.agg`,
+Broader pandas reshape output schemas:
+`reset_index(drop=False)` index-as-column promotion,
+`set_index(<expr>)` non-literal forms, `resample.agg` /
+`rolling.agg` / `expanding.agg`, dict-form `groupby.agg`,
 plus full `pivot_table` multi-aggfunc / `melt` / `stack` /
 `unstack` output schema-tracking (v1.10 + v1.11 shipped `stack` /
 `unstack` literal-form on the input; v1.13 lands pivot_table
-`Derived` synthesis; v1.14 lands `groupby.agg` `Derived` synthesis;
-the long-format output schemas pair with the rest of pandas
-reshape). `.loc` non-literal forms (`.loc[mask, "col"]` boolean-
-mask row keys, `.loc[:, "a":"b"]` column-range slicing) and
-`pdf.iloc[...]` integer-position indexing. The `df.query("…")`
-and `df.eval("…")` mini-DSLs (numexpr-influenced syntax,
-separate parser from the SQL path used by `selectExpr`).
-`pd.read_csv(...)` and other pandas I/O entry points if scope
-allows (schema inference from file headers / SQL / type-stubs is
-a separate design surface). PROBE-TYPE-IS retrofit to the v1.3
+`Derived` synthesis; v1.14 lands `groupby.agg` `Derived`
+synthesis; v1.15 lands `reset_index(drop=True)` +
+`set_index([literal-keys])` chain-depth pass-through; the long-
+format output schemas pair with the rest of pandas reshape).
+`.loc` non-literal forms (`.loc[mask, "col"]` boolean-mask row
+keys, `.loc[:, "a":"b"]` column-range slicing) and `pdf.iloc
+[...]` integer-position indexing. The `df.query("…")` and
+`df.eval("…")` mini-DSLs (numexpr-influenced syntax, separate
+parser from the SQL path used by `selectExpr`). `pd.read_csv
+(...)` and other pandas I/O entry points if scope allows
+(schema inference from file headers / SQL / type-stubs is a
+separate design surface). PROBE-TYPE-IS retrofit to the v1.3
 hybrid donors (MLflow, Feast, iceberg-python). Canonical-vs-
 direct CI gate (I3 from the v1.4 architecture audit).
 `--include-py` flag for `pykrete migrate` to walk the
 multiplexer cohort's `.py` files alongside `.pyk`, plus a
 `--changed-only` flag for both `pykrete migrate` and
 `pykrete check` that walks only files changed against HEAD.
-CI-guard widened to catch the "omitted-edit" drift class on
-top of v1.10's structural build.rs + property / method tripwire
-closures. `pd.DataFrame.attribute_access` form for D0030
-tracking on the pandas attribute-access surface. **D0080
-constructor-arm cross-codebase coverage** + **`groupby.agg`
-Derived-synthesis cross-codebase coverage** — both checker arms
-shipped in v1.14; the matching cross-codebase negative / positive
-probes are tracked for v1.15+ pykrete-tests PR-P1. **LSP polish
-formally rescoped to v2.0.1 / discrete LSP-feature work** per
-v1.10 spec §10.10, NOT a v1.x bundle — three cycles (v1.7 /
-v1.8 / v1.9) of "carry forward to next minor" was the signal
-that LSP polish doesn't fit the v1.x cadence.
+**§9.2 promote-to-default** — the centralized-bump workflow-
+edit chore ships as a cycle-0 chore BEFORE PR-S1 in v1.16, per
+the v1.15 §1.i.3 recovery lesson. **D0030 message rendering on
+synthesized grouped-key typo path** — v1.15 fires D0030 against
+the synthesized `Derived` envelope but the message text path
+still resolves to the pre-synthesis schema in some arms; v1.16
+polish. **`as_index=False` / `observed=` / `dropna=` kwargs-
+aware groupby** — v1.15's `groupby.agg` chain-depth is keyword-
+blind. **`reset_index(level=...)` MultiIndex slice +
+`set_index(<mixed-literal>)` asymmetric defense test** — v1.15
+narrow-arms the literal-form; v1.16 widens. `pd.DataFrame.
+attribute_access` form for D0030 tracking on the pandas
+attribute-access surface. **LSP polish formally rescoped to
+v2.0.1 / discrete LSP-feature work** per v1.10 spec §10.10, NOT
+a v1.x bundle — three cycles (v1.7 / v1.8 / v1.9) of "carry
+forward to next minor" was the signal that LSP polish doesn't
+fit the v1.x cadence.
 
 ## PyCharm support
 
