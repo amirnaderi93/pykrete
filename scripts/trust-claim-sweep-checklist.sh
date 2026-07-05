@@ -465,12 +465,35 @@ print(
 
 if inner_rc == 2:
     sys.exit(2)
+if inner_rc not in (0, 1):
+    # Unexpected inner exit (e.g. the re-exec itself failed to launch). Never
+    # downgrade an exit code the gate is not defined to produce.
+    sys.exit(1)
 
-structural = any("malformed snapshot line" in ln for ln in other_lines)
-fail = bool(expired) or bool(surviving) or structural
-if inner_rc == 1 and not fire_lines and not expired:
-    # Inner failed for a reason we did not recognize as a suppressible fire.
-    fail = True
+# Structural / abort / crash noise on the inner run's stderr. These set
+# inner_rc=1 WITHOUT a FIRE_PREFIXES line, so they must NEVER be masked by a
+# co-occurring suppressed fire. Covers: the malformed-snapshot tripwire; every
+# "<scanner> aborted on … (exit N)" / "roadmap-header guard aborted (exit N)"
+# path (all carry both "aborted" and "(exit"); and any uncaught Python
+# traceback (e.g. a surface that fails to decode as UTF-8 raises past the
+# scanners' `except OSError`, printing a traceback and exiting 1).
+structural = any(
+    "malformed snapshot line" in ln
+    or ("aborted" in ln and "(exit" in ln)
+    or "Traceback (most recent call last)" in ln
+    for ln in other_lines
+)
+
+# Fail CLOSED. inner_rc=1 is downgraded to success ONLY when the failure is
+# FULLY accounted for by suppressed fires: at least one fire, none surviving,
+# no expired entry, and no structural/abort/crash noise. Anything else — an
+# unexplained inner_rc=1, a surviving fire, an expired entry, or a crash that
+# co-occurs with a suppressed fire — fails the gate (v1.16 PR-A1 R2 blocker).
+if inner_rc == 0:
+    fail = bool(expired)
+else:  # inner_rc == 1
+    accounted = bool(fire_lines) and not surviving and not expired and not structural
+    fail = not accounted
 sys.exit(1 if fail else 0)
 PY
     exit $?

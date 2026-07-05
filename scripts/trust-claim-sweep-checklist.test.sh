@@ -1025,6 +1025,25 @@ grep -qF -- "--expected-failures file not found" "$repo/stderr" || extra=missing
 assert "EF7: missing allowlist file fails fast (exit 2)" 2 "$LAST_RC" "$extra"
 rm -rf "$repo"
 
+# --- Case EF8: inner scanner crash while a fire is suppressed → fails CLOSED ---
+# R2 blocker regression. A suppressed fire must NOT mask an unrelated inner
+# failure. A docs surface with invalid UTF-8 makes the per-surface scanners
+# raise past their `except OSError` (Python traceback, inner_rc=1); the
+# allowlist holds a DIFFERENT surface's fire. Before the fix the wrapper's
+# structural check only matched "malformed snapshot line", so the crash was
+# swallowed to exit 0. The wrapper must now fail closed.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README still says: 255 probes (held by the allowlist).\n' > "$repo/README.md"
+printf 'valid start \377\376 invalid utf8 bytes\n' > "$repo/docs-site/src/content/docs/bad.md"
+write_ef "$repo" '{ "entries": [ { "surface": "README.md", "pattern": "255 probes", "reason": "deferred to a follow-up", "expiresAfter": "1.10.0" } ] }'
+run_gate "$repo" 1.10.0 --skip-pykrete-tests --expected-failures ef.json
+extra=ok
+grep -qF "EXPECTED-FAILURE-SUPPRESSED: README.md: 255 probes" "$repo/stderr" || extra=suppressed_missing
+grep -q "Traceback (most recent call last)" "$repo/stderr" || extra="${extra}+crash_not_surfaced"
+assert "EF8: inner crash + suppressed fire fails closed (exit 1, not swallowed)" 1 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
 # === v1.16 PR-A1 — roadmap-header guard tests (RG1—RG5) =================
 #
 # Per v1.16-spec §1.iv.1. The guard asserts BOTH (a) the highest
