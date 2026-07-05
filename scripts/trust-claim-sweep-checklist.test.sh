@@ -928,6 +928,103 @@ grep -q "MARKETING-TABLE-CLAIM-STALE" "$repo/stderr" && extra=historical_changel
 assert "MT7: bare table-row pin in CHANGELOG.md historical section masked" 0 "$LAST_RC" "$extra"
 rm -rf "$repo"
 
+# === v1.16 PR-A1 — --expected-failures.json allowlist tests (EF1—EF7) ===
+#
+# The allowlist gives PR-F a declared, LOGGED escape hatch for surfaces
+# PR-G resolves this cycle. Each entry carries a MANDATORY expiresAfter
+# version: once CURRENT_VERSION exceeds it the entry is STALE and the gate
+# fails LOUD (v1.15 retro rule 2 — countdown, not dumping-ground). Reuses
+# the CHANGELOG_BASELINE fixture (current=1.10.0; v1.9's `255 probes` +
+# `114 fixtures` are the prior-leak pins).
+
+write_ef() {
+    # write_ef <repo> <json-body>
+    printf '%s' "$2" > "$1/ef.json"
+}
+
+# --- Case EF1: active entry suppresses a matching fire → exit 0 ---
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README still says: 255 probes (deferred to a follow-up).\n' > "$repo/README.md"
+write_ef "$repo" '{ "entries": [ { "surface": "README.md", "pattern": "255 probes", "reason": "known stale; resolved by follow-up", "expiresAfter": "1.10.0" } ] }'
+run_gate "$repo" 1.10.0 --skip-pykrete-tests --expected-failures ef.json
+extra=ok
+grep -qF "EXPECTED-FAILURE-SUPPRESSED: README.md: 255 probes (expiresAfter 1.10.0)" "$repo/stderr" || extra=missing_suppressed_line
+grep -q "PRIOR-RELEASE-NUMBER-LEAKED" "$repo/stderr" && extra="${extra}+suppressed_fire_should_not_survive"
+assert "EF1: active entry suppresses matching fire (exit 0, logged)" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case EF2: expired entry fails LOUD even though the fire matches ---
+# expiresAfter 1.9.0 < current 1.10.0 → EXPECTED-FAILURE-EXPIRED, exit 1.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README still says: 255 probes.\n' > "$repo/README.md"
+write_ef "$repo" '{ "entries": [ { "surface": "README.md", "pattern": "255 probes", "reason": "was deferred, now overdue", "expiresAfter": "1.9.0" } ] }'
+run_gate "$repo" 1.10.0 --skip-pykrete-tests --expected-failures ef.json
+extra=ok
+grep -qF "EXPECTED-FAILURE-EXPIRED: README.md entry expiresAfter 1.9.0 but current is 1.10.0" "$repo/stderr" || extra=missing_expired_line
+assert "EF2: expired entry (expiresAfter < current) fails LOUD (exit 1)" 1 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case EF3: active entry matching no fire on a clean repo → warn, exit 0 ---
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README clean: 261 probes.\n' > "$repo/README.md"
+write_ef "$repo" '{ "entries": [ { "surface": "README.md", "pattern": "255 probes", "reason": "held for PR-G but already resolved", "expiresAfter": "1.10.0" } ] }'
+run_gate "$repo" 1.10.0 --skip-pykrete-tests --expected-failures ef.json
+extra=ok
+grep -qF "EXPECTED-FAILURE-DEAD: README.md: 255 probes matched no actual fire (expiresAfter 1.10.0)" "$repo/stderr" || extra=missing_dead_line
+assert "EF3: dead entry (no matching fire) warns but does not fail (exit 0)" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case EF4: malformed allowlist JSON fails fast (exit 2) ---
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README.\n' > "$repo/README.md"
+write_ef "$repo" '{ not valid json '
+run_gate "$repo" 1.10.0 --skip-pykrete-tests --expected-failures ef.json
+extra=ok
+grep -qF "could not parse --expected-failures" "$repo/stderr" || extra=missing_parse_error
+assert "EF4: malformed allowlist JSON fails fast (exit 2)" 2 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case EF5: partial suppression — one fire suppressed, one survives → exit 1 ---
+# README leaks BOTH 255 probes AND 114 fixtures (v1.9 pins). The allowlist
+# only holds 255 probes; 114 fixtures survives and fails the gate.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'Stale: 255 probes and 114 fixtures.\n' > "$repo/README.md"
+write_ef "$repo" '{ "entries": [ { "surface": "README.md", "pattern": "255 probes", "reason": "only this one is deferred", "expiresAfter": "1.10.0" } ] }'
+run_gate "$repo" 1.10.0 --skip-pykrete-tests --expected-failures ef.json
+extra=ok
+grep -qF "EXPECTED-FAILURE-SUPPRESSED: README.md: 255 probes" "$repo/stderr" || extra=missing_suppressed
+grep -qF "'114 fixtures' is v1.9.0's number" "$repo/stderr" || extra="${extra}+surviving_fire_should_be_reemitted"
+assert "EF5: partial suppression — unheld fire survives (exit 1)" 1 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case EF6: expired entry fails even when the repo is otherwise clean ---
+# Expiry is a countdown independent of whether the entry matched a fire —
+# an overdue entry is a hard error regardless of repo state.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README clean: 261 probes.\n' > "$repo/README.md"
+write_ef "$repo" '{ "entries": [ { "surface": "README.md", "pattern": "255 probes", "reason": "overdue", "expiresAfter": "1.9.0" } ] }'
+run_gate "$repo" 1.10.0 --skip-pykrete-tests --expected-failures ef.json
+extra=ok
+grep -qF "EXPECTED-FAILURE-EXPIRED: README.md entry expiresAfter 1.9.0" "$repo/stderr" || extra=missing_expired_line
+assert "EF6: expired entry fails even on a clean repo (countdown enforcement)" 1 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case EF7: --expected-failures pointing at a missing file → exit 2 ---
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README.\n' > "$repo/README.md"
+run_gate "$repo" 1.10.0 --skip-pykrete-tests --expected-failures does-not-exist.json
+extra=ok
+grep -qF -- "--expected-failures file not found" "$repo/stderr" || extra=missing_notfound_error
+assert "EF7: missing allowlist file fails fast (exit 2)" 2 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
 # --- summary ---
 echo
 echo "=========================================="

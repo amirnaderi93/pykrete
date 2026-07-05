@@ -44,11 +44,16 @@ CHANGELOG="${CHANGELOG:-CHANGELOG.md}"
 REPO_ROOT="${REPO_ROOT:-.}"
 SNAPSHOT_MODE=0
 SNAPSHOT_FILE="${SNAPSHOT_FILE:-scripts/trust-claim-sweep-checklist.snapshot.txt}"
+EXPECTED_FAILURES_FILE=""
+# Args to forward to the inner (allowlist-free) re-exec. --expected-failures
+# is stripped so the child runs the raw gate whose fires we then reconcile.
+PASSTHROUGH_ARGS=()
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --current-version=*)
             CURRENT_VERSION="${1#--current-version=}"
+            PASSTHROUGH_ARGS+=("$1")
             ;;
         --current-version)
             shift
@@ -63,12 +68,27 @@ while [ "$#" -gt 0 ]; do
                 exit 2
             fi
             CURRENT_VERSION="$next"
+            PASSTHROUGH_ARGS+=("--current-version" "$next")
+            ;;
+        --expected-failures=*)
+            EXPECTED_FAILURES_FILE="${1#--expected-failures=}"
+            ;;
+        --expected-failures)
+            shift
+            next="${1:-}"
+            if [ -z "$next" ] || [ "${next#--}" != "$next" ]; then
+                echo "trust-claim-sweep: --expected-failures requires a file path; got '$next'" >&2
+                exit 2
+            fi
+            EXPECTED_FAILURES_FILE="$next"
             ;;
         --skip-pykrete-tests)
             SKIP_PYKRETE_TESTS=1
+            PASSTHROUGH_ARGS+=("$1")
             ;;
         --snapshot)
             SNAPSHOT_MODE=1
+            PASSTHROUGH_ARGS+=("$1")
             ;;
         -h|--help)
             cat <<'USAGE'
@@ -107,6 +127,15 @@ Options:
                             the current surface set and write it to
                             SNAPSHOT_FILE; skip both the prior-release-number
                             sweep AND the tripwire check.
+  --expected-failures=FILE  Read an allowlist of expected-failure entries
+                            (JSON). Each active entry SUPPRESSES a matching
+                            gate fire (logged as EXPECTED-FAILURE-SUPPRESSED)
+                            so a deferred surface can pass while flagged. Each
+                            entry MUST carry an `expiresAfter` version; once
+                            CURRENT_VERSION exceeds it the entry is STALE and
+                            the gate fails LOUD (EXPECTED-FAILURE-EXPIRED). An
+                            active entry matching no fire warns (dead entry).
+                            Also accepts the space form: --expected-failures FILE.
   -h, --help                Show this message.
 
 Environment overrides:
@@ -115,12 +144,18 @@ Environment overrides:
   SNAPSHOT_FILE             Snapshot path relative to REPO_ROOT (default:
                             scripts/trust-claim-sweep-checklist.snapshot.txt).
 
+Expected-failures JSON shape:
+  { "entries": [ { "surface": "<path>", "pattern": "<substring of the fire
+    line, optional>", "reason": "<why deferred>", "expiresAfter": "<X.Y.Z>" } ] }
+
 Exit codes:
-  0   sweep clean (or no prior pins to compare against; or --snapshot succeeded).
+  0   sweep clean (or no prior pins to compare against; or --snapshot succeeded;
+      or every gate fire was suppressed by an active allowlist entry).
   1   one or more PRIOR-RELEASE-NUMBER-LEAKED, BACKTICK-PRESERVATION-FAIL,
-      BACKTICKED-CLAIM-STALE, or MARKETING-TABLE-CLAIM-STALE lines emitted to
-      stderr.
-  2   misuse (bad flag, malformed version, missing CHANGELOG, etc.).
+      BACKTICKED-CLAIM-STALE, MARKETING-TABLE-CLAIM-STALE, or ROADMAP-HEADER-DRIFT
+      lines survived (unsuppressed), OR an allowlist entry is EXPIRED.
+  2   misuse (bad flag, malformed version, malformed/missing allowlist, missing
+      CHANGELOG, etc.).
 USAGE
             exit 0
             ;;
@@ -275,6 +310,158 @@ fi
 if ! [[ "$CURRENT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "trust-claim-sweep: --current-version must be X.Y.Z (got '$CURRENT_VERSION')" >&2
     exit 2
+fi
+
+# --- expected-failures allowlist (v1.16 PR-A1) --------------------------
+#
+# When --expected-failures=FILE is given, re-run the gate WITHOUT the flag
+# (the inner raw scan), capture its stderr, and reconcile each fire line
+# against the allowlist. An ACTIVE entry (CURRENT_VERSION <= expiresAfter)
+# suppresses a matching fire and logs EXPECTED-FAILURE-SUPPRESSED so a
+# surface PR-G will resolve can pass while flagged. An EXPIRED entry
+# (CURRENT_VERSION > expiresAfter) fails the gate LOUD — the allowlist is a
+# countdown, not a dumping-ground (v1.15 retro rule 2). An active entry that
+# matches no fire warns (dead entry) without failing. The inner gate is
+# unmodified, so every existing self-test exercises the raw path untouched.
+if [ -n "$EXPECTED_FAILURES_FILE" ]; then
+    _EF_PATH="$EXPECTED_FAILURES_FILE"
+    if [ ! -f "$_EF_PATH" ] && [ -f "$REPO_ROOT/$_EF_PATH" ]; then
+        _EF_PATH="$REPO_ROOT/$_EF_PATH"
+    fi
+    if [ ! -f "$_EF_PATH" ]; then
+        echo "trust-claim-sweep: --expected-failures file not found: '$EXPECTED_FAILURES_FILE'" >&2
+        exit 2
+    fi
+
+    _EF_ERR=$(mktemp 2>/dev/null || mktemp -t trust-claim-sweep-ef)
+    trap 'rm -f "$_EF_ERR"' EXIT
+    if [ "${#PASSTHROUGH_ARGS[@]}" -gt 0 ]; then
+        bash "$0" "${PASSTHROUGH_ARGS[@]}" 2> "$_EF_ERR"
+    else
+        bash "$0" 2> "$_EF_ERR"
+    fi
+    _EF_INNER_RC=$?
+
+    python3 - "$_EF_ERR" "$_EF_PATH" "$CURRENT_VERSION" "$_EF_INNER_RC" <<'PY'
+import json
+import sys
+
+err_path, ef_path, current, inner_rc = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+
+FIRE_PREFIXES = (
+    "PRIOR-RELEASE-NUMBER-LEAKED:",
+    "BACKTICK-PRESERVATION-FAIL:",
+    "BACKTICKED-CLAIM-STALE:",
+    "MARKETING-TABLE-CLAIM-STALE:",
+    "ROADMAP-HEADER-DRIFT:",
+)
+
+
+def is_fire(line):
+    stripped = line.lstrip()
+    return any(stripped.startswith(p) for p in FIRE_PREFIXES)
+
+
+def parse_ver(v):
+    parts = str(v).strip().lstrip("v").split(".")
+    out = []
+    for p in parts:
+        if not p.isdigit():
+            return None
+        out.append(int(p))
+    while len(out) < 3:
+        out.append(0)
+    return tuple(out[:3])
+
+
+try:
+    with open(ef_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+except (OSError, ValueError) as exc:
+    print(f"trust-claim-sweep: could not parse --expected-failures {ef_path}: {exc}", file=sys.stderr)
+    sys.exit(2)
+
+if not isinstance(data, dict) or not isinstance(data.get("entries"), list):
+    print(f"trust-claim-sweep: --expected-failures {ef_path}: top-level object must have an 'entries' array", file=sys.stderr)
+    sys.exit(2)
+
+cur_tuple = parse_ver(current)
+norm = []
+for i, e in enumerate(data["entries"]):
+    if not isinstance(e, dict):
+        print(f"trust-claim-sweep: --expected-failures entry #{i} is not an object", file=sys.stderr)
+        sys.exit(2)
+    surface, reason, expires = e.get("surface"), e.get("reason"), e.get("expiresAfter")
+    pattern = e.get("pattern", "") or ""
+    if not surface or not reason or not expires:
+        print(f"trust-claim-sweep: --expected-failures entry #{i} requires surface, reason, expiresAfter", file=sys.stderr)
+        sys.exit(2)
+    exp_tuple = parse_ver(expires)
+    if exp_tuple is None:
+        print(f"trust-claim-sweep: --expected-failures entry #{i} has malformed expiresAfter '{expires}' (need X.Y.Z)", file=sys.stderr)
+        sys.exit(2)
+    norm.append({"surface": surface, "pattern": pattern, "expires": expires, "exp_tuple": exp_tuple, "matched": 0})
+
+try:
+    with open(err_path, "r", encoding="utf-8") as f:
+        err_lines = f.read().splitlines()
+except OSError:
+    err_lines = []
+
+fire_lines = [ln for ln in err_lines if is_fire(ln)]
+other_lines = [ln for ln in err_lines if not is_fire(ln)]
+
+expired = [e for e in norm if cur_tuple is not None and cur_tuple > e["exp_tuple"]]
+active = [e for e in norm if not (cur_tuple is not None and cur_tuple > e["exp_tuple"])]
+
+
+def entry_matches(e, line):
+    if (" " + e["surface"] + ":") not in line:
+        return False
+    if e["pattern"] and e["pattern"] not in line:
+        return False
+    return True
+
+
+surviving = []
+for ln in fire_lines:
+    hit = next((e for e in active if entry_matches(e, ln)), None)
+    if hit is not None:
+        hit["matched"] += 1
+    else:
+        surviving.append(ln)
+
+for e in expired:
+    print(f"EXPECTED-FAILURE-EXPIRED: {e['surface']} entry expiresAfter {e['expires']} but current is {current}", file=sys.stderr)
+for e in active:
+    if e["matched"] > 0:
+        print(f"EXPECTED-FAILURE-SUPPRESSED: {e['surface']}: {e['pattern']} (expiresAfter {e['expires']})", file=sys.stderr)
+    else:
+        print(f"EXPECTED-FAILURE-DEAD: {e['surface']}: {e['pattern']} matched no actual fire (expiresAfter {e['expires']})", file=sys.stderr)
+
+for ln in other_lines:
+    print(ln, file=sys.stderr)
+for ln in surviving:
+    print(ln, file=sys.stderr)
+
+dead = sum(1 for e in active if e["matched"] == 0)
+print(
+    f"trust-claim-sweep: expected-failures — {len(fire_lines)} fire(s); "
+    f"{len(fire_lines) - len(surviving)} suppressed; {len(surviving)} surviving; "
+    f"{len(expired)} expired; {dead} dead."
+)
+
+if inner_rc == 2:
+    sys.exit(2)
+
+structural = any("malformed snapshot line" in ln for ln in other_lines)
+fail = bool(expired) or bool(surviving) or structural
+if inner_rc == 1 and not fire_lines and not expired:
+    # Inner failed for a reason we did not recognize as a suppressible fire.
+    fail = True
+sys.exit(1 if fail else 0)
+PY
+    exit $?
 fi
 
 # Split into major.minor.patch.
