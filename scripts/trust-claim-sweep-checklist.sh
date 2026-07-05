@@ -312,17 +312,29 @@ if ! [[ "$CURRENT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     exit 2
 fi
 
+# Auto-discover a committed repo-level allowlist when no --expected-failures
+# flag is passed, so `trust-claim-sweep-checklist.sh` (default, as CI runs it)
+# honors the declared expected-failures without every caller passing the flag.
+# _TC_SWEEP_INNER guards the wrapper's re-exec below from re-discovering the
+# file and recursing. Explicit --expected-failures always wins.
+DEFAULT_EXPECTED_FAILURES_FILE="scripts/trust-claim-sweep-expected-failures.json"
+if [ -z "$EXPECTED_FAILURES_FILE" ] && [ -z "${_TC_SWEEP_INNER:-}" ] \
+    && [ -f "$REPO_ROOT/$DEFAULT_EXPECTED_FAILURES_FILE" ]; then
+    EXPECTED_FAILURES_FILE="$DEFAULT_EXPECTED_FAILURES_FILE"
+fi
+
 # --- expected-failures allowlist (v1.16 PR-A1) --------------------------
 #
-# When --expected-failures=FILE is given, re-run the gate WITHOUT the flag
-# (the inner raw scan), capture its stderr, and reconcile each fire line
-# against the allowlist. An ACTIVE entry (CURRENT_VERSION <= expiresAfter)
-# suppresses a matching fire and logs EXPECTED-FAILURE-SUPPRESSED so a
-# surface PR-G will resolve can pass while flagged. An EXPIRED entry
-# (CURRENT_VERSION > expiresAfter) fails the gate LOUD — the allowlist is a
-# countdown, not a dumping-ground (v1.15 retro rule 2). An active entry that
-# matches no fire warns (dead entry) without failing. The inner gate is
-# unmodified, so every existing self-test exercises the raw path untouched.
+# When --expected-failures=FILE is given (or the default file is
+# auto-discovered above), re-run the gate WITHOUT the flag (the inner raw
+# scan), capture its stderr, and reconcile each fire line against the
+# allowlist. An ACTIVE entry (CURRENT_VERSION <= expiresAfter) suppresses a
+# matching fire and logs EXPECTED-FAILURE-SUPPRESSED so a surface PR-G will
+# resolve can pass while flagged. An EXPIRED entry (CURRENT_VERSION >
+# expiresAfter) fails the gate LOUD — the allowlist is a countdown, not a
+# dumping-ground (v1.15 retro rule 2). An active entry that matches no fire
+# warns (dead entry) without failing. The inner gate is unmodified, so every
+# existing self-test exercises the raw path untouched.
 if [ -n "$EXPECTED_FAILURES_FILE" ]; then
     _EF_PATH="$EXPECTED_FAILURES_FILE"
     if [ ! -f "$_EF_PATH" ] && [ -f "$REPO_ROOT/$_EF_PATH" ]; then
@@ -336,9 +348,9 @@ if [ -n "$EXPECTED_FAILURES_FILE" ]; then
     _EF_ERR=$(mktemp 2>/dev/null || mktemp -t trust-claim-sweep-ef)
     trap 'rm -f "$_EF_ERR"' EXIT
     if [ "${#PASSTHROUGH_ARGS[@]}" -gt 0 ]; then
-        bash "$0" "${PASSTHROUGH_ARGS[@]}" 2> "$_EF_ERR"
+        _TC_SWEEP_INNER=1 bash "$0" "${PASSTHROUGH_ARGS[@]}" 2> "$_EF_ERR"
     else
-        bash "$0" 2> "$_EF_ERR"
+        _TC_SWEEP_INNER=1 bash "$0" 2> "$_EF_ERR"
     fi
     _EF_INNER_RC=$?
 
@@ -1142,7 +1154,114 @@ EOF
     fi
 fi
 
-if [ "$fail" -ne 0 ] || [ "$tripwire_fail" -ne 0 ] || [ "$stale_fail" -ne 0 ] || [ "$table_fail" -ne 0 ]; then
+# --- roadmap-header guard (v1.16 PR-A1) ---------------------------------
+#
+# Per v1.16-spec §1.iv.1. Asserts BOTH:
+#   (a) the highest "## Where we are (vX.Y.Z)" header in pandas-roadmap.md
+#       matches CURRENT_VERSION, AND
+#   (b) the highest "## Shipped in vX.Y" section across the roadmap docs
+#       (pandas-roadmap.md + about/roadmap.md + docs/roadmap.md) matches
+#       CURRENT_VERSION's major.minor.
+# Same shell shape as the marketing-table scan. Fires ROADMAP-HEADER-DRIFT
+# to stderr — suppressible via the --expected-failures allowlist so PR-A1
+# can land the guard while PR-G resolves the standing drift (the live
+# pandas-roadmap.md "Where we are (v1.14.0)" header is two cycles stale).
+# Skips cleanly when pandas-roadmap.md is absent (test-fixture repos).
+roadmap_fail=0
+ROADMAP_PANDAS="docs-site/src/content/docs/about/pandas-roadmap.md"
+if [ -f "$REPO_ROOT/$ROADMAP_PANDAS" ]; then
+    CURRENT_VERSION_ENV="$CURRENT_VERSION" \
+    REPO_ROOT_ENV="$REPO_ROOT" \
+    ROADMAP_PANDAS_ENV="$ROADMAP_PANDAS" \
+    ROADMAP_FILES_ENV="$ROADMAP_PANDAS docs-site/src/content/docs/about/roadmap.md docs/roadmap.md" \
+    python3 - <<'PY'
+import os
+import re
+import sys
+
+current = os.environ["CURRENT_VERSION_ENV"]
+repo_root = os.environ["REPO_ROOT_ENV"]
+pandas_rel = os.environ["ROADMAP_PANDAS_ENV"]
+files_rel = os.environ["ROADMAP_FILES_ENV"].split()
+
+
+def parse_ver(s):
+    parts = s.strip().lstrip("v").split(".")
+    out = []
+    for p in parts:
+        if not p.isdigit():
+            return None
+        out.append(int(p))
+    while len(out) < 3:
+        out.append(0)
+    return tuple(out[:3])
+
+
+cur = parse_ver(current)
+fires = 0
+
+# (a) highest "## Where we are (vX.Y[.Z])" header in pandas-roadmap.md.
+try:
+    with open(os.path.join(repo_root, pandas_rel), encoding="utf-8") as f:
+        text = f.read()
+except OSError:
+    text = ""
+where_pat = re.compile(r"^#{2,3}\s+Where we are \(v(\d+\.\d+(?:\.\d+)?)\)", re.MULTILINE)
+best = None
+for m in where_pat.finditer(text):
+    v = m.group(1)
+    t = parse_ver(v)
+    line_no = text.count("\n", 0, m.start()) + 1
+    if best is None or t > best[0]:
+        best = (t, v, line_no)
+if best is not None and best[0] != cur:
+    print(
+        f"ROADMAP-HEADER-DRIFT: {pandas_rel}:{best[2]}: "
+        f"'Where we are (v{best[1]})' header is v{best[1]} but CURRENT_VERSION is v{current}",
+        file=sys.stderr,
+    )
+    fires += 1
+
+# (b) highest "## Shipped in vX.Y" section across the roadmap docs.
+shipped_pat = re.compile(r"^#{2,3}\s+Shipped in v(\d+\.\d+)", re.MULTILINE)
+best_shipped = None
+for rel in files_rel:
+    try:
+        with open(os.path.join(repo_root, rel), encoding="utf-8") as f:
+            ftext = f.read()
+    except OSError:
+        continue
+    for m in shipped_pat.finditer(ftext):
+        v = m.group(1)
+        t = parse_ver(v)[:2]
+        line_no = ftext.count("\n", 0, m.start()) + 1
+        if best_shipped is None or t > best_shipped[0]:
+            best_shipped = (t, v, rel, line_no)
+if best_shipped is not None and best_shipped[0] != cur[:2]:
+    print(
+        f"ROADMAP-HEADER-DRIFT: {best_shipped[2]}:{best_shipped[3]}: "
+        f"highest 'Shipped in v{best_shipped[1]}' section is v{best_shipped[1]} "
+        f"but CURRENT_VERSION is v{current}",
+        file=sys.stderr,
+    )
+    fires += 1
+
+sys.exit(1 if fires else 0)
+PY
+    roadmap_rc=$?
+    if [ "$roadmap_rc" -eq 1 ]; then
+        roadmap_fail=1
+    elif [ "$roadmap_rc" -ne 0 ]; then
+        echo "trust-claim-sweep: roadmap-header guard aborted (exit $roadmap_rc)" >&2
+        roadmap_fail=1
+    fi
+    echo "trust-claim-sweep: roadmap-header guard scanned pandas-roadmap.md + about/roadmap.md + docs/roadmap.md against v$CURRENT_VERSION."
+    if [ "$roadmap_fail" -ne 0 ]; then
+        echo "trust-claim-sweep: roadmap-header guard fired. Update the highest 'Where we are (vX.Y.Z)' header and 'Shipped in vX.Y' section to v$CURRENT_VERSION, OR hold the drift with an --expected-failures entry (expiresAfter set). Closes project-v26-backlog item 6 (v1.14 architecture-audit)." >&2
+    fi
+fi
+
+if [ "$fail" -ne 0 ] || [ "$tripwire_fail" -ne 0 ] || [ "$stale_fail" -ne 0 ] || [ "$table_fail" -ne 0 ] || [ "$roadmap_fail" -ne 0 ]; then
     exit 1
 fi
 

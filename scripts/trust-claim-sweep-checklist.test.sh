@@ -1025,6 +1025,132 @@ grep -qF -- "--expected-failures file not found" "$repo/stderr" || extra=missing
 assert "EF7: missing allowlist file fails fast (exit 2)" 2 "$LAST_RC" "$extra"
 rm -rf "$repo"
 
+# === v1.16 PR-A1 — roadmap-header guard tests (RG1—RG5) =================
+#
+# Per v1.16-spec §1.iv.1. The guard asserts BOTH (a) the highest
+# "## Where we are (vX.Y.Z)" header in pandas-roadmap.md AND (b) the highest
+# "## Shipped in vX.Y" section across the three roadmap docs match
+# CURRENT_VERSION. Fixtures keep roadmap files header-only (no `<num> <key>`
+# pins) so only the roadmap guard is exercised, not the prior-leak/stale/
+# table scanners.
+
+write_roadmap_pandas() {
+    # write_roadmap_pandas <repo> <body>
+    mkdir -p "$1/docs-site/src/content/docs/about"
+    printf '%s' "$2" > "$1/docs-site/src/content/docs/about/pandas-roadmap.md"
+}
+
+# --- Case RG1: header + shipped section match current → passes ---
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README: 261 probes.\n' > "$repo/README.md"
+write_roadmap_pandas "$repo" '# Pandas roadmap
+
+## Where we are (v1.10.0)
+
+Current state.
+
+## Shipped in v1.10
+
+Recent work.
+'
+run_gate "$repo" 1.10.0 --skip-pykrete-tests
+extra=ok
+grep -q "ROADMAP-HEADER-DRIFT" "$repo/stderr" && extra=should_be_clean
+grep -qF "roadmap-header guard scanned" "$repo/stdout" || extra="${extra}+missing_guard_summary"
+assert "RG1: header + shipped section match current → passes" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case RG2: stale 'Where we are' header fires (a) ---
+# Header v1.9.0 ≠ current 1.10.0; shipped section is current so only (a) fires.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README: 261 probes.\n' > "$repo/README.md"
+write_roadmap_pandas "$repo" '# Pandas roadmap
+
+## Where we are (v1.9.0)
+
+Two cycles stale.
+
+## Shipped in v1.10
+
+Recent work.
+'
+run_gate "$repo" 1.10.0 --skip-pykrete-tests
+extra=ok
+grep -qF "ROADMAP-HEADER-DRIFT: docs-site/src/content/docs/about/pandas-roadmap.md" "$repo/stderr" || extra=missing_drift_line
+grep -qF "'Where we are (v1.9.0)' header is v1.9.0 but CURRENT_VERSION is v1.10.0" "$repo/stderr" || extra="${extra}+missing_header_context"
+assert "RG2: stale 'Where we are' header fires ROADMAP-HEADER-DRIFT (exit 1)" 1 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case RG3: stale 'Shipped in' section fires (b) ---
+# Header v1.10.0 is current so (a) passes; highest shipped is v1.9 → (b) fires.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README: 261 probes.\n' > "$repo/README.md"
+write_roadmap_pandas "$repo" '# Pandas roadmap
+
+## Where we are (v1.10.0)
+
+Current header.
+
+## Shipped in v1.9
+
+No v1.10 shipped section anywhere.
+'
+run_gate "$repo" 1.10.0 --skip-pykrete-tests
+extra=ok
+grep -qF "highest 'Shipped in v1.9' section is v1.9 but CURRENT_VERSION is v1.10.0" "$repo/stderr" || extra=missing_shipped_drift
+assert "RG3: stale highest 'Shipped in' section fires ROADMAP-HEADER-DRIFT (exit 1)" 1 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case RG4: expected-failure entry suppresses the roadmap drift ---
+# Demonstrates the §1.iii.2 items-1+4 interlock: the guard fires on the
+# stale header, the allowlist holds it (expiresAfter 1.10.0 == current).
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README: 261 probes.\n' > "$repo/README.md"
+write_roadmap_pandas "$repo" '# Pandas roadmap
+
+## Where we are (v1.9.0)
+
+Stale, but held by the allowlist.
+
+## Shipped in v1.10
+
+Recent.
+'
+write_ef "$repo" '{ "entries": [ { "surface": "docs-site/src/content/docs/about/pandas-roadmap.md", "pattern": "Where we are", "reason": "header drift; resolved by PR-G", "expiresAfter": "1.10.0" } ] }'
+run_gate "$repo" 1.10.0 --skip-pykrete-tests --expected-failures ef.json
+extra=ok
+grep -qF "EXPECTED-FAILURE-SUPPRESSED: docs-site/src/content/docs/about/pandas-roadmap.md: Where we are (expiresAfter 1.10.0)" "$repo/stderr" || extra=missing_suppressed
+grep -q "ROADMAP-HEADER-DRIFT" "$repo/stderr" && extra="${extra}+drift_should_be_suppressed"
+assert "RG4: expected-failure entry suppresses roadmap drift (exit 0)" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case RG5: (b) is a cross-file max — a current shipped section in ANY
+# roadmap doc satisfies (b) even if pandas-roadmap.md lags. Mirrors the live
+# repo where about/roadmap.md carries the current section.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README: 261 probes.\n' > "$repo/README.md"
+write_roadmap_pandas "$repo" '# Pandas roadmap
+
+## Where we are (v1.10.0)
+
+Current header.
+
+## Shipped in v1.9
+
+Pandas page lags on the shipped section.
+'
+printf '# Roadmap\n\n## Shipped in v1.10 — current cycle\n\nThe umbrella roadmap carries it.\n' > "$repo/docs-site/src/content/docs/about/roadmap.md"
+run_gate "$repo" 1.10.0 --skip-pykrete-tests
+extra=ok
+grep -q "ROADMAP-HEADER-DRIFT" "$repo/stderr" && extra=cross_file_shipped_should_satisfy_b
+assert "RG5: current 'Shipped in' section in any roadmap doc satisfies (b)" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
 # --- summary ---
 echo
 echo "=========================================="
