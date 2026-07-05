@@ -587,6 +587,14 @@ fn pandas_kwarg_value<'a>(call: &'a ExprCall, name: &str) -> Option<&'a Expr> {
         .map(|k| &k.value)
 }
 
+/// `true` iff `call` passes `name=True` as a bool literal. Used by the
+/// v1.16 PR-D2 inplace multiplexer-guards on `reset_index` / `set_index`.
+fn pandas_kwarg_is_true(call: &ExprCall, name: &str) -> bool {
+    pandas_kwarg_value(call, name)
+        .and_then(|e| e.as_boolean_literal_expr())
+        .is_some_and(|b| b.value)
+}
+
 /// v1.12 PR-D1 — pandas `pivot_table(aggfunc=)` literal-form recognition
 /// (spec §4). The allowlist is the pandas-documented canonical aggfunc
 /// string set; values outside it (callable, dict, dynamic, exotic
@@ -599,6 +607,14 @@ fn pandas_kwarg_value<'a>(call: &'a ExprCall, name: &str) -> Option<&'a Expr> {
 pub const PIVOT_TABLE_AGGFUNC_ALLOWLIST: &[&str] = &[
     "sum", "mean", "count", "min", "max", "median", "std", "var", "first", "last", "nunique",
 ];
+
+/// v1.16 PR-D1 R2 — valid single-string aggfuncs on a pandas `Rolling`
+/// object: `PIVOT_TABLE_AGGFUNC_ALLOWLIST` minus `first`/`last`/`nunique`,
+/// which `AttributeError` on `Rolling` (they exist on `Resampler`/`GroupBy`
+/// but not `Rolling`). A rolling chain with one of those can't run, so it
+/// falls through to Unknown. resample keeps the full allowlist.
+const ROLLING_AGGFUNC_ALLOWLIST: &[&str] =
+    &["count", "sum", "mean", "std", "var", "median", "min", "max"];
 
 #[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -759,6 +775,299 @@ fn synthesize_groupby_agg_from_aggfunc<'a>(
         out.push(DerivedField { name: f.name, ty });
     }
     Some(SchemaView::Derived(out))
+}
+
+/// v1.16 PR-D1 — direct-chain synthesis for pandas `resample`/`rolling`
+/// aggregation (Option B; spec §1.ii.2). Recognizes the two-call chain
+/// `<base>.resample("<rule>").agg("<aggfunc>")` and
+/// `<base>.rolling(<window>).agg("<aggfunc>")` as a single syntactic
+/// pattern — there is NO `SchemaView::Windowed` lattice variant — and
+/// synthesizes the result `Derived` directly from `<base>`'s columns.
+///
+/// resample and rolling diverge on output dtype (R2 correction — the spec
+/// §1.ii.2 rolling↔groupby dtype-equivalence premise was empirically wrong
+/// against pandas 2.3.3; PR-G corrects the spec text):
+/// - resample re-bins rows by a time rule; its columns follow the
+///   aggregate-to-dtype table via [`synthesize_resample_agg_from_aggfunc`]
+///   (the third `resolve_override_ty` consumer, §9.14).
+/// - rolling ALWAYS upcasts every column to float64
+///   ([`synthesize_rolling_agg`]) and rejects `first`/`last`/`nunique`
+///   (`ROLLING_AGGFUNC_ALLOWLIST`).
+///
+/// Runs before the receiver-resolution guard in
+/// [`analyze_method_call_inner`] because `<base>.resample("D")` does not
+/// itself resolve to a `SchemaView`; only the whole chain is modeled (the
+/// `.cast(...)` arm uses the same before-the-guard shape). A held-
+/// intermediate (`r = df.resample("D"); r.agg(...)`) has a bare-Name
+/// receiver, doesn't match the call-shape, and falls through → v1.17 (§16).
+///
+/// The `Option<Option<_>>` return encodes single-walk of `<base>`: outer
+/// `None` = not a recognized window chain, `<base>` NOT walked, caller
+/// falls through to the normal path; `Some(inner)` = recognized chain,
+/// `<base>` walked here exactly once, caller returns `inner` directly.
+fn handle_window_agg_chain<'a>(
+    agg_call: &'a ExprCall,
+    receiver_expr: &'a Expr,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<Option<SchemaView<'a>>> {
+    let Expr::Call(window_call) = receiver_expr else {
+        return None;
+    };
+    let Expr::Attribute(window_attr) = window_call.func.as_ref() else {
+        return None;
+    };
+    let window_method = window_attr.attr.id.as_str();
+    if !matches!(window_method, "resample" | "rolling") {
+        return None;
+    }
+    // The rule / window arg must be a literal (`"D"`, `3`, `"2D"`); a
+    // non-literal (a variable) is a dynamic window pykrete can't key on.
+    let arg = window_call.arguments.args.first()?;
+    if !matches!(arg, Expr::StringLiteral(_) | Expr::NumberLiteral(_)) {
+        return None;
+    }
+    // Aggfunc must be a single allowlisted string; dict / list / callable /
+    // out-of-allowlist fall through (§1.ii.2). Classified before touching
+    // the base so an out-of-scope form never walks it.
+    let PivotTableAggfuncForm::AllowlistedString(aggfunc) =
+        classify_pivot_table_aggfunc_positional(agg_call)
+    else {
+        return None;
+    };
+    let is_rolling = window_method == "rolling";
+    // first/last/nunique AttributeError on a Rolling object — reject them
+    // so the chain (which can't run) falls through to Unknown.
+    if is_rolling && !ROLLING_AGGFUNC_ALLOWLIST.contains(&aggfunc) {
+        return None;
+    }
+    // Pandas-only idioms. A Spark or opaque receiver falls through. Checked
+    // via the diagnostic-free `inherited_dialect` before `analyze_expr` so a
+    // non-pandas chain never walks the base at all.
+    let base = window_attr.value.as_ref();
+    if inherited_dialect(base, ctx) != Some(Dialect::Pandas) {
+        return None;
+    }
+    // From here `<base>` IS walked. Always return `Some(_)` so the caller
+    // returns this result directly instead of re-walking `<base>` through
+    // the outer receiver-resolution guard — a re-walk would double-emit any
+    // diagnostic `<base>` itself fires on the Unknown-base / empty-
+    // `typed_fields` fall-through. This is the R2 single-walk guarantee.
+    let Some(receiver) = analyze_expr(base, ctx, source, line_index, diagnostics) else {
+        return Some(None);
+    };
+    Some(if is_rolling {
+        synthesize_rolling_agg(&receiver, ctx.schemas())
+    } else {
+        synthesize_resample_agg_from_aggfunc(&receiver, aggfunc, ctx.schemas())
+    })
+}
+
+/// v1.16 PR-D1 — synthesize a pandas `resample(...).agg("<aggfunc>")`
+/// result `SchemaView`. Third consumer of the v1.15 `resolve_override_ty`
+/// primitive (§9.14). resample re-bins rows by a time rule; its columns
+/// follow the aggregate-to-dtype table (count/nunique → Long;
+/// mean/std/var/median → Double; sum/min/max/first/last → preserve).
+///
+/// No key columns: the resample DatetimeIndex is un-modeled (pandas index
+/// carve-out, v1.4 §5), so every receiver column becomes its aggregated
+/// form at the override dtype. (Rolling has DIFFERENT dtype semantics —
+/// always float64 — and uses [`synthesize_rolling_agg`].) Returns `None`
+/// for an unrecognized aggfunc or a receiver with no visible columns; the
+/// caller falls through to Unknown.
+fn synthesize_resample_agg_from_aggfunc<'a>(
+    receiver: &SchemaView<'a>,
+    aggfunc: &str,
+    schemas: &'a [Schema<'a>],
+) -> Option<SchemaView<'a>> {
+    let override_ty = resolve_override_ty(aggfunc)?;
+    let recv_fields = receiver.typed_fields(schemas);
+    if recv_fields.is_empty() {
+        return None;
+    }
+    let out: Vec<DerivedField<'a>> = recv_fields
+        .into_iter()
+        .map(|f| DerivedField {
+            name: f.name,
+            ty: match &override_ty {
+                Some(t) => Some(t.clone()),
+                None => f.ty,
+            },
+        })
+        .collect();
+    Some(SchemaView::Derived(out))
+}
+
+/// v1.16 PR-D1 R2 — synthesize a pandas `rolling(...).agg("<aggfunc>")`
+/// result `SchemaView`. Rolling ALWAYS upcasts every column to float64
+/// (empirically verified against pandas 2.3.3): incomplete leading windows
+/// introduce NaN and the window kernels are float64, so the output dtype is
+/// Double for EVERY valid aggfunc, independent of the receiver column type.
+/// `resolve_override_ty` (count→Long, sum/min/max→preserve) is therefore
+/// NOT reused here — that table is right for resample/groupby, wrong for
+/// rolling.
+///
+/// Non-numeric columns are a known gap: pandas `rolling.agg` `DataError`s /
+/// declines a string column rather than producing Double. Type-aware
+/// rolling (declining non-numeric columns) is a v1.17 item; v1.16
+/// permissively models EVERY column as Double (name-tracking for D0030
+/// still holds; the column resolves). Returns `None` for a receiver with no
+/// visible columns; the caller falls through to Unknown.
+fn synthesize_rolling_agg<'a>(
+    receiver: &SchemaView<'a>,
+    schemas: &'a [Schema<'a>],
+) -> Option<SchemaView<'a>> {
+    let recv_fields = receiver.typed_fields(schemas);
+    if recv_fields.is_empty() {
+        return None;
+    }
+    let out: Vec<DerivedField<'a>> = recv_fields
+        .into_iter()
+        .map(|f| DerivedField {
+            name: f.name,
+            ty: Some(ColumnType::Double),
+        })
+        .collect();
+    Some(SchemaView::Derived(out))
+}
+
+/// The output dtype of one dict-form aggregation entry (`{"col": <value>}`).
+/// A string-literal value resolves through the v1.13 aggregate-to-dtype
+/// table ([`resolve_override_ty`]); an out-of-allowlist string or any
+/// non-string value (a callable like `np.sum`) yields `None` — the column
+/// still EXISTS in the result, but pykrete honestly can't name its dtype.
+fn dict_aggfunc_value_ty(value: &Expr, recv_ty: &Option<ColumnType>) -> Option<ColumnType> {
+    if let Some(lit) = value.as_string_literal_expr() {
+        return match resolve_override_ty(lit.value.to_str()) {
+            Some(Some(t)) => Some(t),
+            Some(None) => recv_ty.clone(),
+            None => None,
+        };
+    }
+    None
+}
+
+/// v1.16 PR-D2 — synthesize a pandas `pdf.groupby(keys).agg({col: aggfunc})`
+/// result `SchemaView`. Per spec §1.ii.3, dict-form agg keeps ONLY the
+/// named columns (plus the group keys, following the v1.14 single-string
+/// arm's keys-as-columns modeling); columns absent from the dict are
+/// dropped. Each dict-key column is validated against the receiver (D0030
+/// on a typo) and typed via its per-column aggregate through
+/// [`dict_aggfunc_value_ty`].
+///
+/// Returns `None` (fall through to Unknown) when the dict shape isn't
+/// statically resolvable: a `**spread` or non-string-literal key, or a
+/// per-column list/tuple value (`{"c": ["sum", "mean"]}`) whose MultiIndex
+/// columns the flat `Derived` model can't represent.
+fn synthesize_groupby_agg_from_dict<'a>(
+    keys: &[&'a str],
+    underlying: &SchemaView<'a>,
+    dict: &'a ruff_python_ast::ExprDict,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<SchemaView<'a>> {
+    let mut cols: Vec<(&'a str, TextRange, &'a Expr)> = Vec::with_capacity(dict.items.len());
+    for item in &dict.items {
+        let key = item.key.as_ref()?;
+        let lit = key.as_string_literal_expr()?;
+        cols.push((lit.value.to_str(), lit.range(), &item.value));
+    }
+    if cols.is_empty() {
+        return None;
+    }
+    // Validate every dict-key column against the receiver (D0030 on a typo)
+    // BEFORE any shape-punt: a key must exist whether its value is a string
+    // or a MultiIndex list — the deferral below is about result SHAPE, not
+    // key EXISTENCE. Mirrors the set_index inplace guard's report-before-
+    // punt invariant.
+    let refs: Vec<(Option<&'a str>, &'a str, TextRange)> =
+        cols.iter().map(|&(n, r, _)| (None, n, r)).collect();
+    report_column_refs(&refs, underlying, ctx, source, line_index, diagnostics);
+
+    // A per-column list/tuple value (`{"c": ["sum", "mean"]}`) produces
+    // MultiIndex columns the flat `Derived` model can't represent → fall
+    // through to Unknown (keys already validated above).
+    if cols
+        .iter()
+        .any(|(_, _, v)| matches!(v, Expr::List(_) | Expr::Tuple(_)))
+    {
+        return None;
+    }
+
+    let recv_fields = underlying.typed_fields(ctx.schemas());
+    let mut out: Vec<DerivedField<'a>> = Vec::with_capacity(keys.len() + cols.len());
+    for &key in keys {
+        let ty = recv_fields
+            .iter()
+            .find(|f| f.name == key)
+            .and_then(|f| f.ty.clone());
+        out.push(DerivedField { name: key, ty });
+    }
+    for (name, _, value) in cols {
+        if keys.contains(&name) {
+            continue;
+        }
+        let Some(recv) = recv_fields.iter().find(|f| f.name == name) else {
+            continue;
+        };
+        out.push(DerivedField {
+            name: recv.name,
+            ty: dict_aggfunc_value_ty(value, &recv.ty),
+        });
+    }
+    Some(SchemaView::Derived(out))
+}
+
+/// v1.16 PR-D2 — synthesize a pandas `pdf.groupby(keys).agg(<callable>)`
+/// result `SchemaView` (`.agg(np.mean)`, `.agg(len)`). A bare callable
+/// applies to the non-key columns; the output column set is
+/// OVER-APPROXIMATED as a superset (keys ++ ALL non-key columns) — pandas
+/// drops non-numeric non-key columns for a numeric-restricting callable
+/// like `np.mean`, but we keep all, matching the v1.14 single-string arm.
+/// Consequence: a precisely-typed return schema that correctly omits a
+/// dropped column may trip D0050 (extra-in-body). The result dtype is NOT
+/// known (a callable has no allowlist entry), so per the spec §1.ii.3
+/// design decision the columns EXIST at Unknown dtype: downstream
+/// `result["typo"]` still fires D0030 while pykrete never claims a dtype it
+/// can't justify. Group keys keep their receiver type. A uniform column-
+/// drop model (shared with the single-string arm, using declared column
+/// types + a numeric-restricting-aggfunc set) is a v1.17 tracker item.
+fn synthesize_groupby_agg_callable<'a>(
+    keys: &[&'a str],
+    underlying: &SchemaView<'a>,
+    schemas: &'a [Schema<'a>],
+) -> SchemaView<'a> {
+    let recv_fields = underlying.typed_fields(schemas);
+    let mut out: Vec<DerivedField<'a>> = Vec::with_capacity(recv_fields.len());
+    for &key in keys {
+        let ty = recv_fields
+            .iter()
+            .find(|f| f.name == key)
+            .and_then(|f| f.ty.clone());
+        out.push(DerivedField { name: key, ty });
+    }
+    for f in &recv_fields {
+        if keys.contains(&f.name) {
+            continue;
+        }
+        out.push(DerivedField {
+            name: f.name,
+            ty: None,
+        });
+    }
+    SchemaView::Derived(out)
+}
+
+/// v1.16 PR-D2 — is `expr` a bare callable reference for `.agg(...)`? A
+/// name (`len`) or a dotted attribute (`np.mean`). A `Call`
+/// (`F.sum(col(...))`, the Spark column-expression shape), lambda, list,
+/// or dict is NOT — those route to their own arms or fall through.
+fn is_callable_ref(expr: &Expr) -> bool {
+    matches!(expr, Expr::Name(_) | Expr::Attribute(_))
 }
 
 /// v1.5 PR-A2 — resolve a `<X>.createDataFrame(...)` call's schema-source
@@ -1002,6 +1311,21 @@ fn analyze_method_call_inner<'a>(
             line_index,
             diagnostics,
         );
+    }
+
+    // v1.16 PR-D1 — resample.agg / rolling.agg direct-chain synthesis
+    // (Option B, spec §1.ii.2). Recognized here, before the receiver-
+    // resolution guard below, because `<df>.resample("D")` does not itself
+    // resolve to a SchemaView — only the whole chain is modeled. A `Some(_)`
+    // return means the chain was recognized and `<df>` walked exactly once;
+    // return its inner result directly (Some or None) rather than falling
+    // through and re-walking. A `None` return means "not a window chain" →
+    // continue to the normal path (where the groupby.agg arm lives).
+    if method == "agg"
+        && let Some(result) =
+            handle_window_agg_chain(call, &attr.value, ctx, source, line_index, diagnostics)
+    {
+        return result;
     }
 
     let Some(receiver) = analyze_expr(&attr.value, ctx, source, line_index, diagnostics) else {
@@ -1689,10 +2013,18 @@ fn analyze_method_call_inner<'a>(
     // explicit fall-through to None per the synthesis-arm positive-coverage
     // standing rule (v1.14 retro §8).
     if receiver_is_pandas_inherited && method == "reset_index" {
-        let drop_is_true = pandas_kwarg_value(call, "drop")
-            .and_then(|e| e.as_boolean_literal_expr())
-            .is_some_and(|b| b.value);
-        if !drop_is_true {
+        // v1.16 PR-D2 — inplace multiplexer-guard. pandas-stubs type
+        // `reset_index(..., inplace=True)` as `-> None`; synthesizing a
+        // Derived here would OVERRIDE the engine's correct `None`
+        // (append-don't-change). reset_index takes no column args, so
+        // there's no D0030 key-existence fire to preserve — a top-of-arm
+        // return is safe. Only `reset_index(drop=True, inplace=True)`
+        // reaches here; `inplace=True` without `drop=True` already falls
+        // through the drop gate below. Spec §1.iii.3.
+        if pandas_kwarg_is_true(call, "inplace") {
+            return None;
+        }
+        if !pandas_kwarg_is_true(call, "drop") {
             return None;
         }
         return Some(SchemaView::Derived(receiver.typed_fields(ctx.schemas())));
@@ -1735,6 +2067,16 @@ fn analyze_method_call_inner<'a>(
         let refs: Vec<(Option<&'a str>, &'a str, TextRange)> =
             keys.iter().map(|&(n, r)| (None, n, r)).collect();
         report_column_refs(&refs, &receiver, ctx, source, line_index, diagnostics);
+        // v1.16 PR-D2 — inplace multiplexer-guard. Placed AFTER the D0030
+        // key-existence check (a typoed key in `set_index(["typo"],
+        // inplace=True)` must still fire, regardless of inplace) but BEFORE
+        // synthesis: pandas-stubs type `set_index(..., inplace=True)` as
+        // `-> None`, so synthesizing a Derived would OVERRIDE the engine's
+        // correct `None` (append-don't-change). A top-of-arm guard would
+        // WRONGLY skip the key-existence fire. Spec §1.iii.3.
+        if pandas_kwarg_is_true(call, "inplace") {
+            return None;
+        }
         let key_names: HashSet<&str> = keys.iter().map(|(n, _)| *n).collect();
         let recv_fields = receiver.typed_fields(ctx.schemas());
         let out: Vec<DerivedField<'a>> = recv_fields
@@ -2938,25 +3280,45 @@ fn handle_agg<'a>(
         other => (Vec::new(), other.clone(), false, None),
     };
 
-    // v1.14 PR-D2 — pandas-side single-string-aggfunc arm. Fires before
-    // the existing Spark column-expression arm so `pdf.groupby("k").agg("sum")`
+    // v1.14 PR-D2 + v1.16 PR-D2 — pandas-side aggfunc arm. Fires before
+    // the existing Spark column-expression arm so `pdf.groupby("k").agg(...)`
     // synthesizes a Derived schema from the v1.13 aggregate-to-dtype
     // convention (count/nunique → Long; mean/std/var/median → Double;
-    // sum/min/max/first/last → preserve receiver). Out-of-scope shapes
-    // (dict-aggfunc, callable, list-of-aggfunc, mixed/non-literal) fall
-    // through to the Spark arm below which collects no columns from
-    // those argument shapes, yielding the pre-v1.14 Unknown (keys-only)
-    // behavior. Spec §1.iii.1.iii.
+    // sum/min/max/first/last → preserve receiver). Argument shapes:
+    // - single-string (`"sum"`) — v1.14, `synthesize_groupby_agg_from_aggfunc`.
+    // - dict (`{"c": "sum"}`) — v1.16, keeps only the named columns.
+    // - callable (`np.mean`, `len`) — v1.16, all non-key columns at Unknown dtype.
+    // - list-of-aggfunc (`["sum", "mean"]`) — MultiIndex columns, DEFERRED to
+    //   v1.17; explicit fall-through to Unknown (spec §1.ii.3, §16).
+    // Out-of-allowlist string / Spark column-expression / non-literal fall
+    // through to Unknown too. Returning None here (NOT falling into the Spark
+    // arm) prevents that arm from collecting an empty / wrong-shape Derived
+    // for pandas inputs. Spec §1.ii.3.
     if dialect == Some(Dialect::Pandas) && !after_pivot {
         let aggfunc_form = classify_pivot_table_aggfunc_positional(call);
         if let PivotTableAggfuncForm::AllowlistedString(af) = aggfunc_form {
             return synthesize_groupby_agg_from_aggfunc(&keys, &underlying, af, ctx.schemas());
         }
-        // List-of-aggfunc, callable, dict, out-of-allowlist string,
-        // non-literal — explicit fall-through to Unknown per spec §1.iii.3
-        // (MultiIndex / unrecognized forms). Returning None here (NOT
-        // falling into the Spark arm) prevents the Spark arm from
-        // collecting an empty / wrong-shape Derived for pandas inputs.
+        if let Some(arg) = call.arguments.args.first() {
+            if let Some(dict) = arg.as_dict_expr() {
+                return synthesize_groupby_agg_from_dict(
+                    &keys,
+                    &underlying,
+                    dict,
+                    ctx,
+                    source,
+                    line_index,
+                    diagnostics,
+                );
+            }
+            if is_callable_ref(arg) {
+                return Some(synthesize_groupby_agg_callable(
+                    &keys,
+                    &underlying,
+                    ctx.schemas(),
+                ));
+            }
+        }
         if !matches!(aggfunc_form, PivotTableAggfuncForm::Absent) {
             return None;
         }

@@ -76,6 +76,13 @@ name: Extension version guard
 on:
   pull_request:
 
+# v1.16 PR-A2 — single-flight per PR. Cosmetic here (fast git-diff check,
+# no heavy build); included for 7/7 sibling-arm completeness so the next
+# cycle's concurrency sibling-grep doesn't rediscover it.
+concurrency:
+  group: extension-version-guard-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     name: extension version bumped when extension code changes
