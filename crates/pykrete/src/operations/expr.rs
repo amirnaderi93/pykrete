@@ -815,15 +815,24 @@ fn synthesize_groupby_agg_from_dict<'a>(
     if cols.is_empty() {
         return None;
     }
+    // Validate every dict-key column against the receiver (D0030 on a typo)
+    // BEFORE any shape-punt: a key must exist whether its value is a string
+    // or a MultiIndex list — the deferral below is about result SHAPE, not
+    // key EXISTENCE. Mirrors the set_index inplace guard's report-before-
+    // punt invariant.
+    let refs: Vec<(Option<&'a str>, &'a str, TextRange)> =
+        cols.iter().map(|&(n, r, _)| (None, n, r)).collect();
+    report_column_refs(&refs, underlying, ctx, source, line_index, diagnostics);
+
+    // A per-column list/tuple value (`{"c": ["sum", "mean"]}`) produces
+    // MultiIndex columns the flat `Derived` model can't represent → fall
+    // through to Unknown (keys already validated above).
     if cols
         .iter()
         .any(|(_, _, v)| matches!(v, Expr::List(_) | Expr::Tuple(_)))
     {
         return None;
     }
-    let refs: Vec<(Option<&'a str>, &'a str, TextRange)> =
-        cols.iter().map(|&(n, r, _)| (None, n, r)).collect();
-    report_column_refs(&refs, underlying, ctx, source, line_index, diagnostics);
 
     let recv_fields = underlying.typed_fields(ctx.schemas());
     let mut out: Vec<DerivedField<'a>> = Vec::with_capacity(keys.len() + cols.len());
@@ -851,12 +860,18 @@ fn synthesize_groupby_agg_from_dict<'a>(
 
 /// v1.16 PR-D2 — synthesize a pandas `pdf.groupby(keys).agg(<callable>)`
 /// result `SchemaView` (`.agg(np.mean)`, `.agg(len)`). A bare callable
-/// applies to ALL non-key columns; the output column set is knowable
-/// (keys ++ non-key columns) but the result dtype is NOT — a callable has
-/// no allowlist entry. Per the spec §1.ii.3 design decision, the columns
-/// EXIST at Unknown dtype: downstream `result["typo"]` still fires D0030
-/// while pykrete never claims a dtype it can't justify. Group keys keep
-/// their receiver type.
+/// applies to the non-key columns; the output column set is
+/// OVER-APPROXIMATED as a superset (keys ++ ALL non-key columns) — pandas
+/// drops non-numeric non-key columns for a numeric-restricting callable
+/// like `np.mean`, but we keep all, matching the v1.14 single-string arm.
+/// Consequence: a precisely-typed return schema that correctly omits a
+/// dropped column may trip D0050 (extra-in-body). The result dtype is NOT
+/// known (a callable has no allowlist entry), so per the spec §1.ii.3
+/// design decision the columns EXIST at Unknown dtype: downstream
+/// `result["typo"]` still fires D0030 while pykrete never claims a dtype it
+/// can't justify. Group keys keep their receiver type. A uniform column-
+/// drop model (shared with the single-string arm, using declared column
+/// types + a numeric-restricting-aggfunc set) is a v1.17 tracker item.
 fn synthesize_groupby_agg_callable<'a>(
     keys: &[&'a str],
     underlying: &SchemaView<'a>,

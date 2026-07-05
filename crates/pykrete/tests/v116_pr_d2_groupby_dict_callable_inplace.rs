@@ -275,6 +275,25 @@ def f(pdf: PandasFrame[In]):
     assert_does_not_have_code(&check(src), "D0030");
 }
 
+#[test]
+fn V116D2_dict_typo_key_with_list_value_still_fires_D0030() {
+    // A typoed dict KEY must fire D0030 even when its VALUE is a deferred
+    // MultiIndex list — key existence is validated before the shape-punt.
+    // `result['nope']` does NOT fire (the list value punts synthesis →
+    // Unknown), so exactly ONE D0030 proves both: key validated AND no
+    // synthesis. Mirrors the set_index inplace guard's report-before-punt.
+    let src = "\
+class In(Schema):
+    k: string
+    amount: double
+
+def f(pdf: PandasFrame[In]):
+    result = pdf.groupby('k').agg({'typo': ['sum', 'mean']})
+    return result['nope']
+";
+    assert_count(&check(src), "D0030", 1);
+}
+
 // ===========================================================================
 // callable-form — columns exist at Unknown dtype: downstream typos catchable
 // (D0030), but no dtype claimed (no D0080 on the aggregated columns).
@@ -367,6 +386,35 @@ def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
     return pdf.groupby('k').agg(np.mean)
 ";
     assert_does_not_have_code(&check(src), "D0080");
+}
+
+#[test]
+fn V116D2_callable_over_approximates_drops_non_numeric_D0050() {
+    // KNOWN over-approximation tradeoff, PINNED so it can't silently change:
+    // real pandas `agg(np.mean)` DROPS the non-numeric `name` column, so a
+    // precisely-typed `Out` correctly omits it — but pykrete keeps the full
+    // non-key superset (keys ++ ALL non-key columns, matching the v1.14
+    // single-string arm), so synthesized {k, amount, name} vs declared
+    // {k, amount} trips D0050 "extra in body: [name]". This is a new
+    // false-positive vs the pre-PR fall-through; the TM ruling keeps the
+    // synthesis for consistency with the shipped string arm. A uniform
+    // column-drop model across both arms is a v1.17 tracker item.
+    let src = "\
+import numpy as np
+
+class In(Schema):
+    k: string
+    amount: double
+    name: string
+
+class Out(Schema):
+    k: string
+    amount: double
+
+def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
+    return pdf.groupby('k').agg(np.mean)
+";
+    assert_has_code(&check(src), "D0050");
 }
 
 // ===========================================================================
