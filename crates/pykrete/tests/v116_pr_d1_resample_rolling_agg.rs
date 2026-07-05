@@ -186,16 +186,22 @@ def f(pdf: PandasFrame[In]):
 }
 
 // ===========================================================================
-// rolling.agg — positive: correct override dtype, no D0080.
+// rolling.agg — positive: rolling ALWAYS upcasts every column to Double
+// (empirically verified against pandas 2.3.3 — NaN from incomplete leading
+// windows + float64 kernels), regardless of aggfunc OR input dtype. Unlike
+// resample/groupby, `resolve_override_ty` does NOT apply. No D0080 against
+// an all-Double Out.
 // ===========================================================================
 
 #[test]
-fn V116D1_rolling_count_synthesizes_long() {
+fn V116D1_rolling_count_synthesizes_double() {
+    // count → Double on rolling (it's Long on resample/groupby). sales:
+    // double, units: int → both Double.
     let src = format!(
         "{IN_BASE}
 class Out(Schema):
-    sales: long
-    units: long
+    sales: double
+    units: double
 
 def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
     return pdf.rolling(3).agg('count')
@@ -220,12 +226,14 @@ def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
 }
 
 #[test]
-fn V116D1_rolling_sum_preserves_receiver_types() {
+fn V116D1_rolling_sum_synthesizes_double() {
+    // sum does NOT preserve on rolling (it does on resample/groupby):
+    // rolling upcasts units: int → Double too.
     let src = format!(
         "{IN_BASE}
 class Out(Schema):
     sales: double
-    units: int
+    units: double
 
 def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
     return pdf.rolling(2).agg('sum')
@@ -235,28 +243,35 @@ def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
 }
 
 #[test]
-fn V116D1_rolling_overrides_all_columns_no_key_exemption() {
-    // rolling has NO group keys — unlike groupby.agg, EVERY column is
-    // aggregated, including a would-be "key". Here a string label column
-    // is overridden to Long by count (a groupby-style key exemption would
-    // wrongly preserve it as string). No D0080 proves the no-key surface.
+fn V116D1_rolling_upcasts_string_column_to_double() {
+    // THE correctness lock for the R2 rolling-dtype fix. rolling upcasts
+    // EVERY column to float64 — even a string `label`, even for 'sum'
+    // (which PRESERVES on resample/groupby). No key exemption, no preserve.
+    // Load-bearing against the R1 `resolve_override_ty`-reuse bug: a
+    // preserve arm leaves `label` string → string-vs-declared-double fires
+    // D0080 (the numeric-blind comparator only flags numeric-vs-non-numeric,
+    // so this string column is the one dtype the D0080 check CAN observe).
     let src = "\
 class In(Schema):
     label: string
     value: double
 
 class Out(Schema):
-    label: long
-    value: long
+    label: double
+    value: double
 
 def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
-    return pdf.rolling(2).agg('count')
+    return pdf.rolling(2).agg('sum')
 ";
     assert_does_not_have_code(&check(src), "D0080");
 }
 
 // ===========================================================================
-// rolling.agg — FIRE per dtype-override family (§1.ii.5, load-bearing).
+// rolling.agg — FIRE (§1.ii.5, load-bearing). rolling collapses every
+// family to Double, so the fired column (declared string vs the synthesized
+// Double) is the discriminator, not the aggfunc. Each of count/sum/mean
+// still proves its own arm produced a concrete schema (a no-op Unknown
+// would not fire). Non-fired columns are declared `double` (the truth).
 // ===========================================================================
 
 #[test]
@@ -265,7 +280,7 @@ fn V116D1_rolling_count_declared_string_fires_D0080() {
         "{IN_BASE}
 class Out(Schema):
     sales: string
-    units: long
+    units: double
 
 def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
     return pdf.rolling(3).agg('count')
@@ -295,7 +310,7 @@ fn V116D1_rolling_sum_declared_string_fires_D0080() {
         "{IN_BASE}
 class Out(Schema):
     sales: string
-    units: int
+    units: double
 
 def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
     return pdf.rolling(2).agg('sum')
@@ -310,8 +325,11 @@ def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
 
 #[test]
 fn V116D1_rolling_keeps_all_columns_downstream_resolves() {
-    // Both receiver columns survive the rolling window (same-length output,
-    // no row/column reduction). Each resolves; no D0030.
+    // All receiver columns survive the rolling window (same-length output,
+    // no row/column reduction) and stay name-tracked for D0030. `region` is
+    // a string: pandas `rolling.agg('sum')` actually DataErrors on a string
+    // column — type-aware rolling (declining non-numeric columns) is a v1.17
+    // gap; v1.16 permissively models it as Double, so it still resolves.
     let src = "\
 class In(Schema):
     sales: double
@@ -500,4 +518,159 @@ def f(sdf: SparkFrame[In]) -> SparkFrame[Out]:
 "
     );
     assert_does_not_have_code(&check(&src), "D0080");
+}
+
+// ===========================================================================
+// R2 allowlist split — first/last/nunique AttributeError on a `Rolling`
+// object (they exist on Resampler/GroupBy). rolling drops them → Unknown;
+// resample keeps the full allowlist → synthesizes. The paired rolling-falls-
+// through + resample-still-synthesizes tests lock the split in both
+// directions (load-bearing: the resample side fires D0030, proving synthesis
+// happened, so a shared-allowlist regression would flip one side).
+// ===========================================================================
+
+#[test]
+fn V116D1_rolling_first_falls_through_not_valid_on_rolling() {
+    let src = "\
+class In(Schema):
+    sales: double
+    units: int
+
+def f(pdf: PandasFrame[In]):
+    result = pdf.rolling(3).agg('first')
+    return result['typo']
+";
+    assert_does_not_have_code(&check(src), "D0030");
+}
+
+#[test]
+fn V116D1_rolling_last_falls_through_not_valid_on_rolling() {
+    let src = "\
+class In(Schema):
+    sales: double
+    units: int
+
+def f(pdf: PandasFrame[In]):
+    result = pdf.rolling(3).agg('last')
+    return result['typo']
+";
+    assert_does_not_have_code(&check(src), "D0030");
+}
+
+#[test]
+fn V116D1_rolling_nunique_falls_through_not_valid_on_rolling() {
+    let src = "\
+class In(Schema):
+    sales: double
+    units: int
+
+def f(pdf: PandasFrame[In]):
+    result = pdf.rolling(3).agg('nunique')
+    return result['typo']
+";
+    assert_does_not_have_code(&check(src), "D0030");
+}
+
+#[test]
+fn V116D1_resample_first_still_synthesizes_downstream_typo_fires_D0030() {
+    // Contrast to rolling: 'first' IS valid on a Resampler — resample keeps
+    // the full allowlist, synthesizes, and a downstream typo fires D0030.
+    let src = "\
+class In(Schema):
+    sales: double
+    units: int
+
+def f(pdf: PandasFrame[In]):
+    result = pdf.resample('D').agg('first')
+    return result['typo']
+";
+    assert_has_code(&check(src), "D0030");
+}
+
+#[test]
+fn V116D1_resample_nunique_still_synthesizes_downstream_typo_fires_D0030() {
+    let src = "\
+class In(Schema):
+    sales: double
+    units: int
+
+def f(pdf: PandasFrame[In]):
+    result = pdf.resample('D').agg('nunique')
+    return result['typo']
+";
+    assert_has_code(&check(src), "D0030");
+}
+
+// ===========================================================================
+// R2 symmetric fall-through matrix — dict/list/callable now covered on BOTH
+// arms (R1 had dict/list on resample and callable on rolling only).
+// ===========================================================================
+
+#[test]
+fn V116D1_resample_callable_aggfunc_falls_through() {
+    let src = format!(
+        "{IN_BASE}
+import numpy as np
+
+class Out(Schema):
+    sales: string
+
+def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
+    return pdf.resample('D').agg(np.sum)
+"
+    );
+    assert_does_not_have_code(&check(&src), "D0080");
+}
+
+#[test]
+fn V116D1_rolling_dict_aggfunc_falls_through() {
+    let src = format!(
+        "{IN_BASE}
+class Out(Schema):
+    sales: string
+
+def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
+    return pdf.rolling(3).agg({{'sales': 'sum'}})
+"
+    );
+    assert_does_not_have_code(&check(&src), "D0080");
+}
+
+#[test]
+fn V116D1_rolling_list_aggfunc_falls_through() {
+    let src = format!(
+        "{IN_BASE}
+class Out(Schema):
+    sales: string
+    units: string
+
+def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
+    return pdf.rolling(3).agg(['sum', 'mean'])
+"
+    );
+    assert_does_not_have_code(&check(&src), "D0080");
+}
+
+// ===========================================================================
+// R2 single-walk guarantee (reviewer Q3). A diagnostic-emitting base under a
+// window chain whose synthesis returns Unknown must NOT double-emit.
+// ===========================================================================
+
+#[test]
+fn V116D1_diagnostic_emitting_base_fires_exactly_once() {
+    // `set_index(['sales', 'units', 'typo'])` removes BOTH real columns → an
+    // empty envelope → rolling synthesis returns None (Unknown). It also
+    // fires D0030 on the 'typo' key. `handle_window_agg_chain` walks the base
+    // exactly once and returns Some(None), so the outer receiver-resolution
+    // guard never re-walks it. Pre-R2 (single SchemaView return) this fell
+    // through and re-walked the base → D0030 fired twice.
+    let src = "\
+class In(Schema):
+    sales: double
+    units: int
+
+def f(pdf: PandasFrame[In]):
+    return pdf.set_index(['sales', 'units', 'typo']).rolling(2).agg('sum')
+";
+    assert_count(&check(src), "D0030", 1);
 }

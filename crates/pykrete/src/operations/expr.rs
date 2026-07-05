@@ -600,6 +600,14 @@ pub const PIVOT_TABLE_AGGFUNC_ALLOWLIST: &[&str] = &[
     "sum", "mean", "count", "min", "max", "median", "std", "var", "first", "last", "nunique",
 ];
 
+/// v1.16 PR-D1 R2 — valid single-string aggfuncs on a pandas `Rolling`
+/// object: `PIVOT_TABLE_AGGFUNC_ALLOWLIST` minus `first`/`last`/`nunique`,
+/// which `AttributeError` on `Rolling` (they exist on `Resampler`/`GroupBy`
+/// but not `Rolling`). A rolling chain with one of those can't run, so it
+/// falls through to Unknown. resample keeps the full allowlist.
+const ROLLING_AGGFUNC_ALLOWLIST: &[&str] =
+    &["count", "sum", "mean", "std", "var", "median", "min", "max"];
+
 #[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PivotTableAggfuncForm<'a> {
@@ -768,18 +776,27 @@ fn synthesize_groupby_agg_from_aggfunc<'a>(
 /// pattern — there is NO `SchemaView::Windowed` lattice variant — and
 /// synthesizes the result `Derived` directly from `<base>`'s columns.
 ///
+/// resample and rolling diverge on output dtype (R2 correction — the spec
+/// §1.ii.2 rolling↔groupby dtype-equivalence premise was empirically wrong
+/// against pandas 2.3.3; PR-G corrects the spec text):
+/// - resample re-bins rows by a time rule; its columns follow the
+///   aggregate-to-dtype table via [`synthesize_resample_agg_from_aggfunc`]
+///   (the third `resolve_override_ty` consumer, §9.14).
+/// - rolling ALWAYS upcasts every column to float64
+///   ([`synthesize_rolling_agg`]) and rejects `first`/`last`/`nunique`
+///   (`ROLLING_AGGFUNC_ALLOWLIST`).
+///
 /// Runs before the receiver-resolution guard in
 /// [`analyze_method_call_inner`] because `<base>.resample("D")` does not
 /// itself resolve to a `SchemaView`; only the whole chain is modeled (the
 /// `.cast(...)` arm uses the same before-the-guard shape). A held-
 /// intermediate (`r = df.resample("D"); r.agg(...)`) has a bare-Name
-/// receiver, doesn't match the call-shape, and falls through to Unknown
-/// → v1.17 (§16).
+/// receiver, doesn't match the call-shape, and falls through → v1.17 (§16).
 ///
-/// Returns `None` (fall through to Unknown) for: a non-window receiver, a
-/// non-literal rule/window arg, an aggfunc that isn't a single allowlisted
-/// string (dict / list / callable / out-of-list), a non-pandas receiver,
-/// or a base whose schema pykrete can't see.
+/// The `Option<Option<_>>` return encodes single-walk of `<base>`: outer
+/// `None` = not a recognized window chain, `<base>` NOT walked, caller
+/// falls through to the normal path; `Some(inner)` = recognized chain,
+/// `<base>` walked here exactly once, caller returns `inner` directly.
 fn handle_window_agg_chain<'a>(
     agg_call: &'a ExprCall,
     receiver_expr: &'a Expr,
@@ -787,14 +804,15 @@ fn handle_window_agg_chain<'a>(
     source: &str,
     line_index: &LineIndex,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Option<SchemaView<'a>> {
+) -> Option<Option<SchemaView<'a>>> {
     let Expr::Call(window_call) = receiver_expr else {
         return None;
     };
     let Expr::Attribute(window_attr) = window_call.func.as_ref() else {
         return None;
     };
-    if !matches!(window_attr.attr.id.as_str(), "resample" | "rolling") {
+    let window_method = window_attr.attr.id.as_str();
+    if !matches!(window_method, "resample" | "rolling") {
         return None;
     }
     // The rule / window arg must be a literal (`"D"`, `3`, `"2D"`); a
@@ -803,14 +821,20 @@ fn handle_window_agg_chain<'a>(
     if !matches!(arg, Expr::StringLiteral(_) | Expr::NumberLiteral(_)) {
         return None;
     }
-    // Only a single allowlisted-string aggfunc synthesizes; every other
-    // shape falls through (§1.ii.2). Classified before touching the base so
-    // an out-of-scope form never walks it.
+    // Aggfunc must be a single allowlisted string; dict / list / callable /
+    // out-of-allowlist fall through (§1.ii.2). Classified before touching
+    // the base so an out-of-scope form never walks it.
     let PivotTableAggfuncForm::AllowlistedString(aggfunc) =
         classify_pivot_table_aggfunc_positional(agg_call)
     else {
         return None;
     };
+    let is_rolling = window_method == "rolling";
+    // first/last/nunique AttributeError on a Rolling object — reject them
+    // so the chain (which can't run) falls through to Unknown.
+    if is_rolling && !ROLLING_AGGFUNC_ALLOWLIST.contains(&aggfunc) {
+        return None;
+    }
     // Pandas-only idioms. A Spark or opaque receiver falls through. Checked
     // via the diagnostic-free `inherited_dialect` before `analyze_expr` so a
     // non-pandas chain never walks the base at all.
@@ -818,23 +842,34 @@ fn handle_window_agg_chain<'a>(
     if inherited_dialect(base, ctx) != Some(Dialect::Pandas) {
         return None;
     }
-    let receiver = analyze_expr(base, ctx, source, line_index, diagnostics)?;
-    synthesize_window_agg_from_aggfunc(&receiver, aggfunc, ctx.schemas())
+    // From here `<base>` IS walked. Always return `Some(_)` so the caller
+    // returns this result directly instead of re-walking `<base>` through
+    // the outer receiver-resolution guard — a re-walk would double-emit any
+    // diagnostic `<base>` itself fires on the Unknown-base / empty-
+    // `typed_fields` fall-through. This is the R2 single-walk guarantee.
+    let Some(receiver) = analyze_expr(base, ctx, source, line_index, diagnostics) else {
+        return Some(None);
+    };
+    Some(if is_rolling {
+        synthesize_rolling_agg(&receiver, ctx.schemas())
+    } else {
+        synthesize_resample_agg_from_aggfunc(&receiver, aggfunc, ctx.schemas())
+    })
 }
 
-/// v1.16 PR-D1 — synthesize a pandas `resample(...).agg("<aggfunc>")` /
-/// `rolling(...).agg("<aggfunc>")` result `SchemaView`. Third consumer of
-/// the v1.15 `resolve_override_ty` primitive (§9.14).
+/// v1.16 PR-D1 — synthesize a pandas `resample(...).agg("<aggfunc>")`
+/// result `SchemaView`. Third consumer of the v1.15 `resolve_override_ty`
+/// primitive (§9.14). resample re-bins rows by a time rule; its columns
+/// follow the aggregate-to-dtype table (count/nunique → Long;
+/// mean/std/var/median → Double; sum/min/max/first/last → preserve).
 ///
-/// Unlike [`synthesize_groupby_agg_from_aggfunc`] there are NO key columns:
-/// the resample DatetimeIndex and the rolling window are both un-modeled
-/// (pandas index carve-out, v1.4 §5), so both forms collapse to the same
-/// column surface — every receiver column at the aggregate-driven dtype
-/// (count/nunique → Long; mean/std/var/median → Double;
-/// sum/min/max/first/last → preserve). Returns `None` for an unrecognized
-/// aggfunc or a receiver with no visible columns; the caller falls through
-/// to Unknown.
-fn synthesize_window_agg_from_aggfunc<'a>(
+/// No key columns: the resample DatetimeIndex is un-modeled (pandas index
+/// carve-out, v1.4 §5), so every receiver column becomes its aggregated
+/// form at the override dtype. (Rolling has DIFFERENT dtype semantics —
+/// always float64 — and uses [`synthesize_rolling_agg`].) Returns `None`
+/// for an unrecognized aggfunc or a receiver with no visible columns; the
+/// caller falls through to Unknown.
+fn synthesize_resample_agg_from_aggfunc<'a>(
     receiver: &SchemaView<'a>,
     aggfunc: &str,
     schemas: &'a [Schema<'a>],
@@ -852,6 +887,39 @@ fn synthesize_window_agg_from_aggfunc<'a>(
                 Some(t) => Some(t.clone()),
                 None => f.ty,
             },
+        })
+        .collect();
+    Some(SchemaView::Derived(out))
+}
+
+/// v1.16 PR-D1 R2 — synthesize a pandas `rolling(...).agg("<aggfunc>")`
+/// result `SchemaView`. Rolling ALWAYS upcasts every column to float64
+/// (empirically verified against pandas 2.3.3): incomplete leading windows
+/// introduce NaN and the window kernels are float64, so the output dtype is
+/// Double for EVERY valid aggfunc, independent of the receiver column type.
+/// `resolve_override_ty` (count→Long, sum/min/max→preserve) is therefore
+/// NOT reused here — that table is right for resample/groupby, wrong for
+/// rolling.
+///
+/// Non-numeric columns are a known gap: pandas `rolling.agg` `DataError`s /
+/// declines a string column rather than producing Double. Type-aware
+/// rolling (declining non-numeric columns) is a v1.17 item; v1.16
+/// permissively models EVERY column as Double (name-tracking for D0030
+/// still holds; the column resolves). Returns `None` for a receiver with no
+/// visible columns; the caller falls through to Unknown.
+fn synthesize_rolling_agg<'a>(
+    receiver: &SchemaView<'a>,
+    schemas: &'a [Schema<'a>],
+) -> Option<SchemaView<'a>> {
+    let recv_fields = receiver.typed_fields(schemas);
+    if recv_fields.is_empty() {
+        return None;
+    }
+    let out: Vec<DerivedField<'a>> = recv_fields
+        .into_iter()
+        .map(|f| DerivedField {
+            name: f.name,
+            ty: Some(ColumnType::Double),
         })
         .collect();
     Some(SchemaView::Derived(out))
@@ -1103,14 +1171,16 @@ fn analyze_method_call_inner<'a>(
     // v1.16 PR-D1 — resample.agg / rolling.agg direct-chain synthesis
     // (Option B, spec §1.ii.2). Recognized here, before the receiver-
     // resolution guard below, because `<df>.resample("D")` does not itself
-    // resolve to a SchemaView — only the whole chain is modeled. A non-
-    // window `.agg(...)`, or a window fall-through case, returns None and
-    // continues to the normal path (where the groupby.agg arm lives).
+    // resolve to a SchemaView — only the whole chain is modeled. A `Some(_)`
+    // return means the chain was recognized and `<df>` walked exactly once;
+    // return its inner result directly (Some or None) rather than falling
+    // through and re-walking. A `None` return means "not a window chain" →
+    // continue to the normal path (where the groupby.agg arm lives).
     if method == "agg"
-        && let Some(view) =
+        && let Some(result) =
             handle_window_agg_chain(call, &attr.value, ctx, source, line_index, diagnostics)
     {
-        return Some(view);
+        return result;
     }
 
     let Some(receiver) = analyze_expr(&attr.value, ctx, source, line_index, diagnostics) else {
