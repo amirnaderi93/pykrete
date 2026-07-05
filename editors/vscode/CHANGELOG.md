@@ -1,6 +1,45 @@
 # Changelog
 
 
+## 0.14.0
+
+Tracks the v1.16.0 pykrete release — **extending pandas reshape modeling
+to time/window aggregation**. The bundled `pykrete` and `pykrete-lsp`
+binaries gain four NEW pandas inference arms that synthesize a Derived
+schema where the chain previously fell through to Unknown:
+`df.resample("D").agg("sum")` and `df.rolling(3).agg("mean")` direct
+chains, and the dict-form (`df.groupby(k).agg({col: fn})`) and callable
+(`df.groupby(k).agg(np.mean)`) shapes of `groupby.agg`. `resample.agg`
+follows the aggregate-to-dtype table (count/nunique → Long;
+mean/std/var/median → Double; sum/min/max/first/last preserve the
+receiver); `rolling.agg` aggregates numeric columns to Double but falls
+through to Unknown when the frame contains any non-numeric column (honest
+silence — pandas drops non-numeric), with aggfuncs restricted to
+count/sum/mean/std/var/median/min/max. Dict-form `groupby.agg` keeps only
+the named columns plus group keys; callable `groupby.agg` keeps keys plus
+all non-key columns at Unknown dtype (an over-approximated superset).
+Named-aggregation (`groupby(k).agg(out=(col, fn))`) is not yet modeled —
+it falls through to Unknown (v1.17). `reset_index(inplace=True)`
+and `set_index(inplace=True)` now correctly resolve to None — pandas
+returns None for the inplace forms — instead of synthesizing a schema;
+column-existence (D0030) is still validated before the inplace punt.
+**Adopters whose code accessed columns dropped by a dict-form
+`groupby.agg`, or that chained off an `inplace=True` reset/set result,
+will see new D0030 / attribute fires** — align downstream code with the
+synthesized schema or drop `inplace=True`. The audit side ships the
+`--expected-failures.json` allowlist for the trust-claim-sweep gate
+(`expiresAfter` countdown + fail-closed reconciliation), the
+roadmap-header drift guard, and native `concurrency:` single-flight caps
+on `ci.yml` / `wasm.yml` / `extension-version-guard.yml`. The §9.2
+centralized-bump chicken-and-egg is retired: bump-enforcement now gates on
+the release-PR title (`chore(release):`) rather than a mid-cycle marker
+file. Cross-codebase coverage: 305 → 312 probes across 164 → 171 fixtures
+from 17 donors. No new D-codes; SemVer-minor under the
+`tighteningDiagnostics` policy and the established JSON-additive policy.
+Cycle-close minor bump aligns the extension with the v1.16.0 tag per the
+version-guard contract. See the
+[main CHANGELOG](../../CHANGELOG.md#1160---2026-07-06) for details.
+
 ## 0.13.0
 
 Tracks the v1.15.0 pykrete release — **closing 5 audit-debt carve-outs

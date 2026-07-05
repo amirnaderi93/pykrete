@@ -22,6 +22,58 @@ v1.9 introduced the `text-numeric-historical` fence convention; pre-v1.9 section
 253 probes
 ```
 
+## [1.16.0] - 2026-07-06
+
+**Trust claim**: v1.16 extends pandas reshape modeling to time/window aggregation — `resample.agg` + `rolling.agg` + dict-form/callable `groupby.agg` — and repairs the v1.15 §9.2 marker-mechanism regression via corrected cycle-0 sequencing. `rolling.agg` always aggregates numeric columns to Double but honestly declines (Unknown) on any frame with a non-numeric column; `resample.agg` follows the aggregate-to-dtype table. The v1.16 window-aggregation arms are verified by in-crate unit tests; no cross-codebase donor exercises them yet (cross-codebase coverage tracked for v1.17).
+
+### Changed (behavioral — checker now synthesizes where it previously fell through)
+
+- **`df.resample("<rule>").agg("<fn>")` chains now synthesize a Derived schema.** Columns follow the aggregate-to-dtype table: count/nunique → Long; mean/std/var/median → Double; sum/min/max/first/last preserve the receiver column's dtype. Previously Unknown — downstream column-refs were silent. **Path forward**: align downstream code with the synthesized schema. (PR-D1 #213)
+- **`df.rolling(<n>).agg("<fn>")` chains now synthesize a Derived schema.** Numeric columns aggregate to Double; a frame containing a non-numeric column falls through to Unknown (honest silence — pandas drops non-numeric). Aggfuncs restricted to count/sum/mean/std/var/median/min/max. Previously Unknown. **Path forward**: align downstream code with the synthesized schema. (PR-D1 #213)
+- **Dict-form `df.groupby(keys).agg({col: fn})` now synthesizes a Derived schema** keeping ONLY the named columns plus group keys, each at its per-aggregate dtype. Previously Unknown. **Path forward**: reference only named + key columns downstream, or widen the dict. (PR-D2 #214)
+- **Callable `df.groupby(keys).agg(np.mean)` / `.agg(len)` now synthesizes a Derived schema** — group keys plus ALL non-key columns, over-approximated as a superset at Unknown dtype (see honest carve-out in Audit-debt below). Previously Unknown. (PR-D2 #214)
+- **`reset_index(inplace=True)` / `set_index(inplace=True)` now correctly resolve to None** (pandas returns None for the inplace forms) instead of synthesizing a Derived schema; column-existence (D0030) is still validated before the inplace punt. **Adopters who chained off an `inplace=True` reset/set result were relying on a schema pandas never returns** — drop `inplace=True` and rebind. (PR-D2 #214)
+
+### Added
+
+- **`--expected-failures.json` allowlist** for the trust-claim-sweep gate, with `expiresAfter` countdown enforcement + fail-closed reconciliation. (PR-A1 #215)
+- **Roadmap-header drift guard** — clause (a) `Where we are (vX.Y.Z)`, clause (b) `Shipped in vX.Y` vs current version. (PR-A1 #215)
+- **PROBE-EXPECTS unquoted-span author-time lint** in pykrete-tests `scripts/probes.py`. (PR-A1 #55)
+- **Native `concurrency:` single-flight caps** on `ci.yml` / `wasm.yml` / `extension-version-guard.yml`. (PR-A2 #212)
+- **Cross-codebase `reset_index(drop=True)` + `set_index([key])` coverage probes** (v1.15 MANDATE) plus groupby.agg donor widening. (PR-P1 #54)
+
+### Fixed
+
+- **§9.2 centralized-bump chicken-and-egg.** `extension-version-guard` now gates bump-enforcement on the release-PR title (`chore(release):`) rather than a mid-cycle marker file — eliminating the self-inflicted mid-cycle break that hit v1.15 (checker PRs failed the guard because the marker was absent and the workflow had not been updated to skip the check). The marker mechanism (`.github/centralized-bump-cycle.marker`) is retired. (Cycle-0.1 #210)
+- **Trust-claim prior-leak scanner: `110 negative` path/kind pin collision disambiguation** — a bare `<num> <key>` in a markdown-table row that matches a `text-numeric-historical` pin is deferred to the marketing-table scanner rather than false-flagged as a prior-release leak. (PR-A1 #215)
+
+### Catalog pin
+
+- No new D-codes this cycle — D1 / D2 reuse D0030 / D0050 / D0080. The post-tag pykrete-tests `scripts/diagnostic_catalog.json` pin refresh is a **pin bump only** (`pykreteSourceCommit`), no schema change.
+
+### Test coverage
+
+- pykrete: `2027 tests` total
+- pykrete-tests: `312 probes` (`195 positive` + `117 negative`); `171 fixtures`; `17 donors`
+
+```text-numeric
+312 probes
+195 positive
+117 negative
+171 fixtures
+2027 tests
+17 donors
+```
+
+### Audit-debt deferred to v1.17
+
+- **Type-aware rolling non-numeric decline** — `rolling.agg` currently declines the whole frame (Unknown) on any non-numeric column; a column-level model that keeps the numeric columns as Double and drops the non-numeric ones (matching pandas) is deferred.
+- **Named-aggregation `groupby(keys).agg(out=(col, fn))`** — not yet modeled; falls through to Unknown. Per-output-column dtype modeling deferred.
+- **Callable-groupby uniform column-drop model** — the callable arm over-approximates (keys + all non-keys at Unknown); it can trip D0050 on a precisely-typed return schema. A uniform column-drop model is deferred.
+- **resample / rolling / dict-form groupby.agg cross-codebase probes** — no donor exercises these shapes yet; the arms are unit-tested in-crate this cycle. Cross-codebase coverage tracked for v1.17.
+- **Windowed lattice variant** and **`expanding.agg`** — cumulative-window semantic asymmetry.
+- Placeholder: the pre-v1.17 4-audit (architecture + pandas-coverage + docs-sync + probe-density) will populate the final v1.17 audit-debt set before PR-G.
+
 ## [1.15.0] - 2026-06-24
 
 **Trust claim**: v1.15 closes 5 audit-debt carve-outs from v1.14 (synthesis-arm cross-codebase coverage, gate v3 for marketing tables, helper consolidation, auto-label single-flight, branch-protection design fork) and extends pandas chain-depth via `reset_index(drop=True)` + `set_index([literal-keys])` so `groupby.agg().reset_index(drop=True)` continues tracking the Derived schema.
@@ -52,7 +104,7 @@ v1.9 introduced the `text-numeric-historical` fence convention; pre-v1.9 section
 - pykrete: `1964 tests` total
 - pykrete-tests: `305 probes` (`191 positive` + `114 negative`); `164 fixtures`; `17 donors`
 
-```text-numeric
+```text-numeric-historical
 305 probes
 191 positive
 114 negative
