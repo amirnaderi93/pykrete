@@ -1151,6 +1151,99 @@ grep -q "ROADMAP-HEADER-DRIFT" "$repo/stderr" && extra=cross_file_shipped_should
 assert "RG5: current 'Shipped in' section in any roadmap doc satisfies (b)" 0 "$LAST_RC" "$extra"
 rm -rf "$repo"
 
+# === v1.16 PR-A1 — 110 path/kind collision tests (COL1—COL3) ===========
+#
+# Reproduces v1.15 retro rule 4: v1.14's path-based count and v1.15's
+# kind-based count were both `110 negative` (same digits, different
+# categorization). A bare `110 negative` in a trajectory-TABLE row that
+# matches a text-numeric-historical pin is a legitimate historical citation
+# (the marketing-table scanner's current-OR-historical validity rule owns
+# it) — the prior-leak scanner must NOT also flag it. Here prior=v1.14
+# (`110 negative`, in a text-numeric-historical block → a historical pin),
+# current=v1.15 (`114 negative`).
+CHANGELOG_COL='# Changelog
+
+## [1.15.0]
+Current pins.
+
+```text-numeric
+305 probes
+114 negative
+```
+
+## [1.14.0]
+Historical pins (the categorizations collided at `110 negative`).
+
+```text-numeric-historical
+299 probes
+110 negative
+```
+'
+
+# --- Case COL1: bare `110 negative` in a TABLE row is NOT false-flagged ---
+# It matches a historical pin, so the prior-leak scanner defers to the
+# marketing-table scanner (which passes it as historical). Gate stays clean.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_COL" > "$repo/CHANGELOG.md"
+{
+    printf '# Trajectory\n\n'
+    printf '| Version | Verifiable? |\n'
+    printf '|---|---|\n'
+    printf '| v1.14.0 | yes — 110 negative probes shipped |\n'
+    printf '| v1.15.0 | yes — 114 negative probes shipped |\n'
+} > "$repo/README.md"
+run_gate "$repo" 1.15.0 --skip-pykrete-tests
+extra=ok
+grep -q "PRIOR-RELEASE-NUMBER-LEAKED" "$repo/stderr" && extra=prior_leak_false_flag
+grep -q "MARKETING-TABLE-CLAIM-STALE" "$repo/stderr" && extra="${extra}+marketing_table_false_flag"
+assert "COL1: historical '110 negative' in a table row is NOT false-flagged" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case COL2: the SAME `110 negative` in PROSE still fires (fix is scoped) ---
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_COL" > "$repo/CHANGELOG.md"
+printf 'The legacy run reported 110 negative probes (bare prose, not a table).\n' > "$repo/README.md"
+run_gate "$repo" 1.15.0 --skip-pykrete-tests
+extra=ok
+grep -qF "PRIOR-RELEASE-NUMBER-LEAKED: README.md" "$repo/stderr" || extra=prose_leak_should_fire
+grep -qF "'110 negative' is v1.14.0's number" "$repo/stderr" || extra="${extra}+missing_version_context"
+assert "COL2: bare '110 negative' in PROSE still fires (carve-out is table-scoped)" 1 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case COL3: a table-row prior number that is NOT a historical pin still
+# fires — the carve-out hinges on historical-pin membership, not on being a
+# table row. Here the prior block is `text-numeric` (not -historical) so
+# `110 negative` is prior-but-not-historical.
+CHANGELOG_COL3='# Changelog
+
+## [1.15.0]
+Current.
+
+```text-numeric
+114 negative
+```
+
+## [1.14.0]
+Prior, recorded as a live text-numeric block (not historical).
+
+```text-numeric
+110 negative
+```
+'
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_COL3" > "$repo/CHANGELOG.md"
+{
+    printf '# Trajectory\n\n'
+    printf '| Version | Verifiable? |\n'
+    printf '|---|---|\n'
+    printf '| current | yes — 110 negative probes |\n'
+} > "$repo/README.md"
+run_gate "$repo" 1.15.0 --skip-pykrete-tests
+extra=ok
+grep -qF "PRIOR-RELEASE-NUMBER-LEAKED: README.md" "$repo/stderr" || extra=nonhistorical_table_cell_should_still_fire
+assert "COL3: table-row prior number that is NOT a historical pin still fires" 1 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
 # --- summary ---
 echo
 echo "=========================================="

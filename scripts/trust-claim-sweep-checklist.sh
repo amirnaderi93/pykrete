@@ -560,6 +560,47 @@ fi
 PRIOR_NUMBERS=$(cat "$_TC_PINS_TMP")
 SKIP_PRIOR_SWEEP=0
 
+# --- historical-pin set for the prior-leak table-row carve-out (v1.16) ---
+#
+# item 2: the `110 negative` path/kind collision (v1.15 retro rule 4).
+# v1.14's path-based count and v1.15's kind-based count were the SAME digits
+# (`110 negative`) under different categorizations. A bare `<num> <key>` in a
+# markdown-table row that ALSO matches a text-numeric-historical CHANGELOG pin
+# is a legitimate trajectory-table citation — the marketing-table scanner
+# already validates it against the current-OR-historical pin sets. The
+# prior-leak scanner (which only knows the immediate-prior number) must not
+# ALSO judge that same table cell, or it false-flags a number that is stale
+# under the prior-leak convention but valid under the historical-pin
+# convention. Extract the historical pins here so the prior-leak scanner can
+# defer such table-row occurrences to the marketing-table scanner's verdict.
+# Prose occurrences are unaffected — they still fire (backtick to escape).
+HISTORICAL_PINS=$(python3 - "$REPO_ROOT/$CHANGELOG" <<'PY'
+import re
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    text = f.read()
+allowed = ("probes", "positive", "negative", "fixtures", "tests", "donors")
+seen = set()
+for bm in re.finditer(r"^```text-numeric-historical\n([\s\S]*?)^```", text, re.MULTILINE):
+    for line in bm.group(1).splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) < 2:
+            continue
+        num, key = parts[0], parts[1].split()[0]
+        if num.isdigit() and key in allowed:
+            pin = f"{num} {key}"
+            if pin not in seen:
+                seen.add(pin)
+                print(pin)
+PY
+)
+_TC_HIST_RC=$?
+if [ "$_TC_HIST_RC" -ne 0 ]; then
+    echo "trust-claim-sweep: CHANGELOG parser failed (exit $_TC_HIST_RC) for historical-pin extraction" >&2
+    exit 2
+fi
+
 if [ -z "$PRIOR_NUMBERS" ]; then
     echo "trust-claim-sweep: no prior-release pins found for v$PRIOR_VERSION in $CHANGELOG; skipping (nothing to compare against)."
     # Tripwire still runs below — empty prior pins is independent of the
@@ -609,6 +650,7 @@ while IFS= read -r line; do
     PRIOR_VERSION_ENV="$PRIOR_VERSION" \
     PRIOR_MINOR_ENV="$PRIOR_MINOR" \
     CURRENT_MAJOR_ENV="$CURRENT_MAJOR" \
+    HISTORICAL_PINS_ENV="$HISTORICAL_PINS" \
     SURFACE_PATH="$REPO_ROOT/$line" \
     SURFACE_DISPLAY="$line" \
     python3 - <<'PY'
@@ -630,6 +672,9 @@ current_version = os.environ["CURRENT_VERSION_ENV"]
 prior_version = os.environ["PRIOR_VERSION_ENV"]
 prior_minor = int(os.environ["PRIOR_MINOR_ENV"])
 current_major = os.environ["CURRENT_MAJOR_ENV"]
+historical_pins = {
+    ln.strip() for ln in os.environ.get("HISTORICAL_PINS_ENV", "").splitlines() if ln.strip()
+}
 
 try:
     with open(surface_path, "r", encoding="utf-8") as f:
@@ -693,13 +738,25 @@ text = backtick_span.sub(sentinel_mask, text)
 # Scan for each prior `<number> <key>` pair. Regex anchor
 # `(?<![A-Za-z0-9_])` (from v1.10 PR-A2) so digits glued to identifiers
 # (e.g. `D0091` for the digit `0091`) don't false-match.
+lines = text.split("\n")
 leaks_found = 0
 for num, key in prior_pairs:
+    pin = f"{num} {key}"
     pat = re.compile(
         r"(?<![A-Za-z0-9_])" + re.escape(num) + r"\s+" + re.escape(key) + r"\b"
     )
     for m in pat.finditer(text):
         line_no = text.count("\n", 0, m.start()) + 1
+        # v1.16 item 2 — path/kind collision carve-out. A bare occurrence in
+        # a markdown-table row whose bigram matches a text-numeric-historical
+        # pin is a legitimate trajectory-table citation; defer it to the
+        # marketing-table scanner (current-OR-historical validity) rather than
+        # false-flag it as a prior-release leak. Prose occurrences still fire.
+        matched_line = lines[line_no - 1] if 0 <= line_no - 1 < len(lines) else ""
+        stripped = matched_line.lstrip()
+        is_table_row = stripped.startswith("|") and matched_line.count("|") > 1
+        if is_table_row and pin in historical_pins:
+            continue
         print(
             f"PRIOR-RELEASE-NUMBER-LEAKED: {surface_display}:{line_no}: "
             f"'{num} {key}' is v{prior_version}'s number, not v{current_version}'s",
