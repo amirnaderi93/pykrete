@@ -10,12 +10,28 @@
 # kept serving the older binary. End users who reinstalled got the stale
 # extension and never saw the new hover format.
 #
-# This workflow blocks the same failure from recurring. On every PR, it
-# inspects the diff SINCE THE LAST RELEASE TAG: if anything that ships
-# inside the .vsix (extension TS source, the bundled pykrete-lsp binary
-# which is the Cargo workspace version, or extension deps) changed in
-# that range, then `editors/vscode/package.json`'s top-level `"version"`
-# line must also have changed in that range. Otherwise the PR fails.
+# This workflow blocks the same failure from recurring. It inspects the
+# diff SINCE THE LAST RELEASE TAG: if anything that ships inside the
+# .vsix (extension TS source, the bundled pykrete-lsp binary which is
+# the Cargo workspace version, or extension deps) changed in that range,
+# then `editors/vscode/package.json`'s top-level `"version"` line must
+# also have changed in that range — otherwise the release PR fails.
+#
+# ENFORCEMENT IS RELEASE-PR-ONLY (v1.16, §9.2 promote-to-default)
+# ---------------------------------------------------------------
+# Version bumps are centralized at the cycle-close release PR (PR-F),
+# never made per feature PR. So this guard only *fails* the release PR —
+# identified by its `chore(release):` title (the PR-F / PR-G convention),
+# with the `chore/vX.Y-pr-f-*` head branch as a fallback signal. Every
+# other PR runs the same detection for logging but always passes: a
+# mid-cycle feature PR is not expected to carry a bump.
+#
+# This replaces the old `.github/centralized-bump-cycle.marker`
+# short-circuit, which had to be committed at PR-S1 each cycle to suspend
+# per-PR enforcement. Removing that block *without* gating on the release
+# PR would re-create the v1.15 break: the `crates/pykrete{,-lsp}/**`
+# matcher flags every checker PR as extension-impacting, so mid-cycle
+# they would all fail for lack of a bump.
 #
 # WHY "SINCE LAST TAG", NOT "PR DIFF"
 # -----------------------------------
@@ -29,8 +45,8 @@
 #
 # EXAMPLES
 # --------
-# Fails (extension src touched in this PR, no version bump anywhere
-# since the last release tag):
+# Fails (on the release PR: extension src touched, no version bump
+# anywhere since the last release tag):
 #   diff --git a/editors/vscode/src/extension.ts b/editors/vscode/src/extension.ts
 #   -   client.start();
 #   +   await client.start();
@@ -73,31 +89,30 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           set -euo pipefail
 
           echo "Base: $BASE_SHA"
           echo "Head: $HEAD_SHA"
 
-          # Centralized-bump-cycle marker (v1.9 §9.2 amendment).
-          #
-          # When the cycle's spec amends §9.2 to centralize the extension
-          # version bump at PR-F instead of per-PR, a marker file at
-          # `.github/centralized-bump-cycle.marker` is committed at PR-S1
-          # time and removed at PR-F merge time. Its presence tells this
-          # guard "per-PR bumps are suspended for this cycle — accept
-          # this PR's lack of a bump." PR-F's PR itself will bump the
-          # version AND remove the marker, so PR-F passes the guard the
-          # normal way.
-          #
-          # Implementer of v1.9 §9.2 picked this mechanic per the spec's
-          # "Implementer picks" license. Documented in v1.9-spec §9.2.
-          if [ -f ".github/centralized-bump-cycle.marker" ]; then
-            cycle=$(cat .github/centralized-bump-cycle.marker | tr -d '[:space:]')
-            echo "Centralized-bump cycle marker present (cycle: $cycle)."
-            echo "Per-PR extension version bumps suspended for this cycle."
-            echo "PR-F bumps version + removes marker at cycle close."
-            exit 0
+          # Release-PR detection (see "ENFORCEMENT IS RELEASE-PR-ONLY"
+          # in the header). Only the release PR enforces the bump; every
+          # other PR runs the detection below for logging but always
+          # exits 0. Identified by the `chore(release):` title (PR-F /
+          # PR-G convention), with the `chore/vX.Y-pr-f-*` head branch as
+          # a fallback signal.
+          is_release_pr=0
+          if printf '%s\n' "$PR_TITLE" | grep -qE '^chore\(release\):'; then
+            is_release_pr=1
+            echo "Release PR detected via title: $PR_TITLE"
+          elif printf '%s\n' "$PR_HEAD_REF" | grep -qE '^chore/v[0-9]+\.[0-9]+-pr-f'; then
+            is_release_pr=1
+            echo "Release PR detected via head branch: $PR_HEAD_REF"
+          else
+            echo "Non-release PR — extension version bump is centralized at the release PR (PR-F)."
+            echo "Bump enforcement skipped; detection below runs for logging only."
           fi
 
           # Determine the diff range. Prefer "<latest release tag>..HEAD"
@@ -235,5 +250,14 @@ jobs:
             exit 0
           fi
 
-          echo "::error::This PR modifies code that ships inside the VS Code extension, but editors/vscode/package.json version was not bumped. The marketplace will silently skip republishing. Bump the patch number."
+          # Extension-impacting change with no version bump in range. On
+          # non-release PRs this is expected (bumps are centralized at the
+          # release PR), so pass. On the release PR it's the v0.1.10
+          # failure this guard exists to catch, so fail.
+          if [ "$is_release_pr" -eq 0 ]; then
+            echo "Non-release PR: extension version bump is centralized at the release PR (PR-F). Not enforced mid-cycle — passing."
+            exit 0
+          fi
+
+          echo "::error::This release PR modifies code that ships inside the VS Code extension, but editors/vscode/package.json version was not bumped since the last release tag. The marketplace will silently skip republishing. Bump the version in editors/vscode/package.json."
           exit 1
