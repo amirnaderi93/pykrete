@@ -17,6 +17,12 @@ on:
     branches: [main]
   pull_request:
 
+# v1.16 PR-A2 — single-flight per PR/ref; a superseding push cancels the
+# stale in-progress build (load-bearing: wasm-pack toolchain + build).
+concurrency:
+  group: wasm-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"

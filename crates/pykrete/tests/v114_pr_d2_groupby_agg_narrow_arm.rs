@@ -428,39 +428,13 @@ def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
     assert_does_not_have_code(&check(&src), "D0080");
 }
 
-#[test]
-fn V114D2_callable_aggfunc_falls_through_to_unknown() {
-    let src = format!(
-        "{IN_BASE}
-import numpy as np
-
-class Out(Schema):
-    k: string
-    amount: string
-
-def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
-    return pdf.groupby('k').agg(np.sum)
-"
-    );
-    assert_does_not_have_code(&check(&src), "D0080");
-}
-
-#[test]
-fn V114D2_dict_aggfunc_falls_through_to_unknown() {
-    // Dict-aggfunc — per-column aggfunc; result schema is column-pattern
-    // driven. Out-of-scope per spec §1.iii.3 → fall through.
-    let src = format!(
-        "{IN_BASE}
-class Out(Schema):
-    k: string
-    amount: string
-
-def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
-    return pdf.groupby('k').agg({{'amount': 'sum'}})
-"
-    );
-    assert_does_not_have_code(&check(&src), "D0080");
-}
+// NOTE: dict-aggfunc (`.agg({"c": "sum"})`) and callable-aggfunc
+// (`.agg(np.mean)`) NO LONGER fall through as of v1.16 PR-D2 — they
+// synthesize a Derived schema (dict keeps only the named columns at their
+// per-column dtype; callable keeps all non-key columns at Unknown dtype).
+// Their coverage lives in `v116_pr_d2_groupby_dict_callable_inplace.rs`.
+// list-of-aggfunc (above) remains a fall-through (MultiIndex columns,
+// deferred to v1.17).
 
 // ---------------------------------------------------------------------------
 // Spec §1.iii.6 asymmetric dialect-crossover defense — pandas dialect with
