@@ -761,6 +761,102 @@ fn synthesize_groupby_agg_from_aggfunc<'a>(
     Some(SchemaView::Derived(out))
 }
 
+/// v1.16 PR-D1 — direct-chain synthesis for pandas `resample`/`rolling`
+/// aggregation (Option B; spec §1.ii.2). Recognizes the two-call chain
+/// `<base>.resample("<rule>").agg("<aggfunc>")` and
+/// `<base>.rolling(<window>).agg("<aggfunc>")` as a single syntactic
+/// pattern — there is NO `SchemaView::Windowed` lattice variant — and
+/// synthesizes the result `Derived` directly from `<base>`'s columns.
+///
+/// Runs before the receiver-resolution guard in
+/// [`analyze_method_call_inner`] because `<base>.resample("D")` does not
+/// itself resolve to a `SchemaView`; only the whole chain is modeled (the
+/// `.cast(...)` arm uses the same before-the-guard shape). A held-
+/// intermediate (`r = df.resample("D"); r.agg(...)`) has a bare-Name
+/// receiver, doesn't match the call-shape, and falls through to Unknown
+/// → v1.17 (§16).
+///
+/// Returns `None` (fall through to Unknown) for: a non-window receiver, a
+/// non-literal rule/window arg, an aggfunc that isn't a single allowlisted
+/// string (dict / list / callable / out-of-list), a non-pandas receiver,
+/// or a base whose schema pykrete can't see.
+fn handle_window_agg_chain<'a>(
+    agg_call: &'a ExprCall,
+    receiver_expr: &'a Expr,
+    ctx: &BodyContext<'a>,
+    source: &str,
+    line_index: &LineIndex,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<SchemaView<'a>> {
+    let Expr::Call(window_call) = receiver_expr else {
+        return None;
+    };
+    let Expr::Attribute(window_attr) = window_call.func.as_ref() else {
+        return None;
+    };
+    if !matches!(window_attr.attr.id.as_str(), "resample" | "rolling") {
+        return None;
+    }
+    // The rule / window arg must be a literal (`"D"`, `3`, `"2D"`); a
+    // non-literal (a variable) is a dynamic window pykrete can't key on.
+    let arg = window_call.arguments.args.first()?;
+    if !matches!(arg, Expr::StringLiteral(_) | Expr::NumberLiteral(_)) {
+        return None;
+    }
+    // Only a single allowlisted-string aggfunc synthesizes; every other
+    // shape falls through (§1.ii.2). Classified before touching the base so
+    // an out-of-scope form never walks it.
+    let PivotTableAggfuncForm::AllowlistedString(aggfunc) =
+        classify_pivot_table_aggfunc_positional(agg_call)
+    else {
+        return None;
+    };
+    // Pandas-only idioms. A Spark or opaque receiver falls through. Checked
+    // via the diagnostic-free `inherited_dialect` before `analyze_expr` so a
+    // non-pandas chain never walks the base at all.
+    let base = window_attr.value.as_ref();
+    if inherited_dialect(base, ctx) != Some(Dialect::Pandas) {
+        return None;
+    }
+    let receiver = analyze_expr(base, ctx, source, line_index, diagnostics)?;
+    synthesize_window_agg_from_aggfunc(&receiver, aggfunc, ctx.schemas())
+}
+
+/// v1.16 PR-D1 — synthesize a pandas `resample(...).agg("<aggfunc>")` /
+/// `rolling(...).agg("<aggfunc>")` result `SchemaView`. Third consumer of
+/// the v1.15 `resolve_override_ty` primitive (§9.14).
+///
+/// Unlike [`synthesize_groupby_agg_from_aggfunc`] there are NO key columns:
+/// the resample DatetimeIndex and the rolling window are both un-modeled
+/// (pandas index carve-out, v1.4 §5), so both forms collapse to the same
+/// column surface — every receiver column at the aggregate-driven dtype
+/// (count/nunique → Long; mean/std/var/median → Double;
+/// sum/min/max/first/last → preserve). Returns `None` for an unrecognized
+/// aggfunc or a receiver with no visible columns; the caller falls through
+/// to Unknown.
+fn synthesize_window_agg_from_aggfunc<'a>(
+    receiver: &SchemaView<'a>,
+    aggfunc: &str,
+    schemas: &'a [Schema<'a>],
+) -> Option<SchemaView<'a>> {
+    let override_ty = resolve_override_ty(aggfunc)?;
+    let recv_fields = receiver.typed_fields(schemas);
+    if recv_fields.is_empty() {
+        return None;
+    }
+    let out: Vec<DerivedField<'a>> = recv_fields
+        .into_iter()
+        .map(|f| DerivedField {
+            name: f.name,
+            ty: match &override_ty {
+                Some(t) => Some(t.clone()),
+                None => f.ty,
+            },
+        })
+        .collect();
+    Some(SchemaView::Derived(out))
+}
+
 /// v1.5 PR-A2 — resolve a `<X>.createDataFrame(...)` call's schema-source
 /// per spec §2.2. Returns `Some(view)` only when one of two gates fires
 /// (the call's result is `SparkFrame[X]`); returns `None` when neither
@@ -1002,6 +1098,19 @@ fn analyze_method_call_inner<'a>(
             line_index,
             diagnostics,
         );
+    }
+
+    // v1.16 PR-D1 — resample.agg / rolling.agg direct-chain synthesis
+    // (Option B, spec §1.ii.2). Recognized here, before the receiver-
+    // resolution guard below, because `<df>.resample("D")` does not itself
+    // resolve to a SchemaView — only the whole chain is modeled. A non-
+    // window `.agg(...)`, or a window fall-through case, returns None and
+    // continues to the normal path (where the groupby.agg arm lives).
+    if method == "agg"
+        && let Some(view) =
+            handle_window_agg_chain(call, &attr.value, ctx, source, line_index, diagnostics)
+    {
+        return Some(view);
     }
 
     let Some(receiver) = analyze_expr(&attr.value, ctx, source, line_index, diagnostics) else {
