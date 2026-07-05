@@ -928,6 +928,341 @@ grep -q "MARKETING-TABLE-CLAIM-STALE" "$repo/stderr" && extra=historical_changel
 assert "MT7: bare table-row pin in CHANGELOG.md historical section masked" 0 "$LAST_RC" "$extra"
 rm -rf "$repo"
 
+# === v1.16 PR-A1 — --expected-failures.json allowlist tests (EF1—EF7) ===
+#
+# The allowlist gives PR-F a declared, LOGGED escape hatch for surfaces
+# PR-G resolves this cycle. Each entry carries a MANDATORY expiresAfter
+# version: once CURRENT_VERSION exceeds it the entry is STALE and the gate
+# fails LOUD (v1.15 retro rule 2 — countdown, not dumping-ground). Reuses
+# the CHANGELOG_BASELINE fixture (current=1.10.0; v1.9's `255 probes` +
+# `114 fixtures` are the prior-leak pins).
+
+write_ef() {
+    # write_ef <repo> <json-body>
+    printf '%s' "$2" > "$1/ef.json"
+}
+
+# --- Case EF1: active entry suppresses a matching fire → exit 0 ---
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README still says: 255 probes (deferred to a follow-up).\n' > "$repo/README.md"
+write_ef "$repo" '{ "entries": [ { "surface": "README.md", "pattern": "255 probes", "reason": "known stale; resolved by follow-up", "expiresAfter": "1.10.0" } ] }'
+run_gate "$repo" 1.10.0 --skip-pykrete-tests --expected-failures ef.json
+extra=ok
+grep -qF "EXPECTED-FAILURE-SUPPRESSED: README.md: 255 probes (expiresAfter 1.10.0)" "$repo/stderr" || extra=missing_suppressed_line
+grep -q "PRIOR-RELEASE-NUMBER-LEAKED" "$repo/stderr" && extra="${extra}+suppressed_fire_should_not_survive"
+assert "EF1: active entry suppresses matching fire (exit 0, logged)" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case EF2: expired entry fails LOUD even though the fire matches ---
+# expiresAfter 1.9.0 < current 1.10.0 → EXPECTED-FAILURE-EXPIRED, exit 1.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README still says: 255 probes.\n' > "$repo/README.md"
+write_ef "$repo" '{ "entries": [ { "surface": "README.md", "pattern": "255 probes", "reason": "was deferred, now overdue", "expiresAfter": "1.9.0" } ] }'
+run_gate "$repo" 1.10.0 --skip-pykrete-tests --expected-failures ef.json
+extra=ok
+grep -qF "EXPECTED-FAILURE-EXPIRED: README.md entry expiresAfter 1.9.0 but current is 1.10.0" "$repo/stderr" || extra=missing_expired_line
+assert "EF2: expired entry (expiresAfter < current) fails LOUD (exit 1)" 1 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case EF3: active entry matching no fire on a clean repo → warn, exit 0 ---
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README clean: 261 probes.\n' > "$repo/README.md"
+write_ef "$repo" '{ "entries": [ { "surface": "README.md", "pattern": "255 probes", "reason": "held for PR-G but already resolved", "expiresAfter": "1.10.0" } ] }'
+run_gate "$repo" 1.10.0 --skip-pykrete-tests --expected-failures ef.json
+extra=ok
+grep -qF "EXPECTED-FAILURE-DEAD: README.md: 255 probes matched no actual fire (expiresAfter 1.10.0)" "$repo/stderr" || extra=missing_dead_line
+assert "EF3: dead entry (no matching fire) warns but does not fail (exit 0)" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case EF4: malformed allowlist JSON fails fast (exit 2) ---
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README.\n' > "$repo/README.md"
+write_ef "$repo" '{ not valid json '
+run_gate "$repo" 1.10.0 --skip-pykrete-tests --expected-failures ef.json
+extra=ok
+grep -qF "could not parse --expected-failures" "$repo/stderr" || extra=missing_parse_error
+assert "EF4: malformed allowlist JSON fails fast (exit 2)" 2 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case EF5: partial suppression — one fire suppressed, one survives → exit 1 ---
+# README leaks BOTH 255 probes AND 114 fixtures (v1.9 pins). The allowlist
+# only holds 255 probes; 114 fixtures survives and fails the gate.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'Stale: 255 probes and 114 fixtures.\n' > "$repo/README.md"
+write_ef "$repo" '{ "entries": [ { "surface": "README.md", "pattern": "255 probes", "reason": "only this one is deferred", "expiresAfter": "1.10.0" } ] }'
+run_gate "$repo" 1.10.0 --skip-pykrete-tests --expected-failures ef.json
+extra=ok
+grep -qF "EXPECTED-FAILURE-SUPPRESSED: README.md: 255 probes" "$repo/stderr" || extra=missing_suppressed
+grep -qF "'114 fixtures' is v1.9.0's number" "$repo/stderr" || extra="${extra}+surviving_fire_should_be_reemitted"
+assert "EF5: partial suppression — unheld fire survives (exit 1)" 1 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case EF6: expired entry fails even when the repo is otherwise clean ---
+# Expiry is a countdown independent of whether the entry matched a fire —
+# an overdue entry is a hard error regardless of repo state.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README clean: 261 probes.\n' > "$repo/README.md"
+write_ef "$repo" '{ "entries": [ { "surface": "README.md", "pattern": "255 probes", "reason": "overdue", "expiresAfter": "1.9.0" } ] }'
+run_gate "$repo" 1.10.0 --skip-pykrete-tests --expected-failures ef.json
+extra=ok
+grep -qF "EXPECTED-FAILURE-EXPIRED: README.md entry expiresAfter 1.9.0" "$repo/stderr" || extra=missing_expired_line
+assert "EF6: expired entry fails even on a clean repo (countdown enforcement)" 1 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case EF7: --expected-failures pointing at a missing file → exit 2 ---
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README.\n' > "$repo/README.md"
+run_gate "$repo" 1.10.0 --skip-pykrete-tests --expected-failures does-not-exist.json
+extra=ok
+grep -qF -- "--expected-failures file not found" "$repo/stderr" || extra=missing_notfound_error
+assert "EF7: missing allowlist file fails fast (exit 2)" 2 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case EF8: inner scanner crash while a fire is suppressed → fails CLOSED ---
+# R2 blocker regression. A suppressed fire must NOT mask an unrelated inner
+# failure. A docs surface with invalid UTF-8 makes the per-surface scanners
+# raise past their `except OSError` (Python traceback, inner_rc=1); the
+# allowlist holds a DIFFERENT surface's fire. Before the fix the wrapper's
+# structural check only matched "malformed snapshot line", so the crash was
+# swallowed to exit 0. The wrapper must now fail closed.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README still says: 255 probes (held by the allowlist).\n' > "$repo/README.md"
+printf 'valid start \377\376 invalid utf8 bytes\n' > "$repo/docs-site/src/content/docs/bad.md"
+write_ef "$repo" '{ "entries": [ { "surface": "README.md", "pattern": "255 probes", "reason": "deferred to a follow-up", "expiresAfter": "1.10.0" } ] }'
+run_gate "$repo" 1.10.0 --skip-pykrete-tests --expected-failures ef.json
+extra=ok
+grep -qF "EXPECTED-FAILURE-SUPPRESSED: README.md: 255 probes" "$repo/stderr" || extra=suppressed_missing
+grep -q "Traceback (most recent call last)" "$repo/stderr" || extra="${extra}+crash_not_surfaced"
+assert "EF8: inner crash + suppressed fire fails closed (exit 1, not swallowed)" 1 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# === v1.16 PR-A1 — roadmap-header guard tests (RG1—RG5) =================
+#
+# Per v1.16-spec §1.iv.1. The guard asserts BOTH (a) the highest
+# "## Where we are (vX.Y.Z)" header in pandas-roadmap.md AND (b) the highest
+# "## Shipped in vX.Y" section across the three roadmap docs match
+# CURRENT_VERSION. Fixtures keep roadmap files header-only (no `<num> <key>`
+# pins) so only the roadmap guard is exercised, not the prior-leak/stale/
+# table scanners.
+
+write_roadmap_pandas() {
+    # write_roadmap_pandas <repo> <body>
+    mkdir -p "$1/docs-site/src/content/docs/about"
+    printf '%s' "$2" > "$1/docs-site/src/content/docs/about/pandas-roadmap.md"
+}
+
+# --- Case RG1: header + shipped section match current → passes ---
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README: 261 probes.\n' > "$repo/README.md"
+write_roadmap_pandas "$repo" '# Pandas roadmap
+
+## Where we are (v1.10.0)
+
+Current state.
+
+## Shipped in v1.10
+
+Recent work.
+'
+run_gate "$repo" 1.10.0 --skip-pykrete-tests
+extra=ok
+grep -q "ROADMAP-HEADER-DRIFT" "$repo/stderr" && extra=should_be_clean
+grep -qF "roadmap-header guard scanned" "$repo/stdout" || extra="${extra}+missing_guard_summary"
+assert "RG1: header + shipped section match current → passes" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case RG2: stale 'Where we are' header fires (a) ---
+# Header v1.9.0 ≠ current 1.10.0; shipped section is current so only (a) fires.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README: 261 probes.\n' > "$repo/README.md"
+write_roadmap_pandas "$repo" '# Pandas roadmap
+
+## Where we are (v1.9.0)
+
+Two cycles stale.
+
+## Shipped in v1.10
+
+Recent work.
+'
+run_gate "$repo" 1.10.0 --skip-pykrete-tests
+extra=ok
+grep -qF "ROADMAP-HEADER-DRIFT: docs-site/src/content/docs/about/pandas-roadmap.md" "$repo/stderr" || extra=missing_drift_line
+grep -qF "'Where we are (v1.9.0)' header is v1.9.0 but CURRENT_VERSION is v1.10.0" "$repo/stderr" || extra="${extra}+missing_header_context"
+assert "RG2: stale 'Where we are' header fires ROADMAP-HEADER-DRIFT (exit 1)" 1 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case RG3: stale 'Shipped in' section fires (b) ---
+# Header v1.10.0 is current so (a) passes; highest shipped is v1.9 → (b) fires.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README: 261 probes.\n' > "$repo/README.md"
+write_roadmap_pandas "$repo" '# Pandas roadmap
+
+## Where we are (v1.10.0)
+
+Current header.
+
+## Shipped in v1.9
+
+No v1.10 shipped section anywhere.
+'
+run_gate "$repo" 1.10.0 --skip-pykrete-tests
+extra=ok
+grep -qF "highest 'Shipped in v1.9' section is v1.9 but CURRENT_VERSION is v1.10.0" "$repo/stderr" || extra=missing_shipped_drift
+assert "RG3: stale highest 'Shipped in' section fires ROADMAP-HEADER-DRIFT (exit 1)" 1 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case RG4: expected-failure entry suppresses the roadmap drift ---
+# Demonstrates the §1.iii.2 items-1+4 interlock: the guard fires on the
+# stale header, the allowlist holds it (expiresAfter 1.10.0 == current).
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README: 261 probes.\n' > "$repo/README.md"
+write_roadmap_pandas "$repo" '# Pandas roadmap
+
+## Where we are (v1.9.0)
+
+Stale, but held by the allowlist.
+
+## Shipped in v1.10
+
+Recent.
+'
+write_ef "$repo" '{ "entries": [ { "surface": "docs-site/src/content/docs/about/pandas-roadmap.md", "pattern": "Where we are", "reason": "header drift; resolved by PR-G", "expiresAfter": "1.10.0" } ] }'
+run_gate "$repo" 1.10.0 --skip-pykrete-tests --expected-failures ef.json
+extra=ok
+grep -qF "EXPECTED-FAILURE-SUPPRESSED: docs-site/src/content/docs/about/pandas-roadmap.md: Where we are (expiresAfter 1.10.0)" "$repo/stderr" || extra=missing_suppressed
+grep -q "ROADMAP-HEADER-DRIFT" "$repo/stderr" && extra="${extra}+drift_should_be_suppressed"
+assert "RG4: expected-failure entry suppresses roadmap drift (exit 0)" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case RG5: (b) is a cross-file max — a current shipped section in ANY
+# roadmap doc satisfies (b) even if pandas-roadmap.md lags. Mirrors the live
+# repo where about/roadmap.md carries the current section.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_BASELINE" > "$repo/CHANGELOG.md"
+printf 'README: 261 probes.\n' > "$repo/README.md"
+write_roadmap_pandas "$repo" '# Pandas roadmap
+
+## Where we are (v1.10.0)
+
+Current header.
+
+## Shipped in v1.9
+
+Pandas page lags on the shipped section.
+'
+printf '# Roadmap\n\n## Shipped in v1.10 — current cycle\n\nThe umbrella roadmap carries it.\n' > "$repo/docs-site/src/content/docs/about/roadmap.md"
+run_gate "$repo" 1.10.0 --skip-pykrete-tests
+extra=ok
+grep -q "ROADMAP-HEADER-DRIFT" "$repo/stderr" && extra=cross_file_shipped_should_satisfy_b
+assert "RG5: current 'Shipped in' section in any roadmap doc satisfies (b)" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# === v1.16 PR-A1 — 110 path/kind collision tests (COL1—COL3) ===========
+#
+# Reproduces v1.15 retro rule 4: v1.14's path-based count and v1.15's
+# kind-based count were both `110 negative` (same digits, different
+# categorization). A bare `110 negative` in a trajectory-TABLE row that
+# matches a text-numeric-historical pin is a legitimate historical citation
+# (the marketing-table scanner's current-OR-historical validity rule owns
+# it) — the prior-leak scanner must NOT also flag it. Here prior=v1.14
+# (`110 negative`, in a text-numeric-historical block → a historical pin),
+# current=v1.15 (`114 negative`).
+CHANGELOG_COL='# Changelog
+
+## [1.15.0]
+Current pins.
+
+```text-numeric
+305 probes
+114 negative
+```
+
+## [1.14.0]
+Historical pins (the categorizations collided at `110 negative`).
+
+```text-numeric-historical
+299 probes
+110 negative
+```
+'
+
+# --- Case COL1: bare `110 negative` in a TABLE row is NOT false-flagged ---
+# It matches a historical pin, so the prior-leak scanner defers to the
+# marketing-table scanner (which passes it as historical). Gate stays clean.
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_COL" > "$repo/CHANGELOG.md"
+{
+    printf '# Trajectory\n\n'
+    printf '| Version | Verifiable? |\n'
+    printf '|---|---|\n'
+    printf '| v1.14.0 | yes — 110 negative probes shipped |\n'
+    printf '| v1.15.0 | yes — 114 negative probes shipped |\n'
+} > "$repo/README.md"
+run_gate "$repo" 1.15.0 --skip-pykrete-tests
+extra=ok
+grep -q "PRIOR-RELEASE-NUMBER-LEAKED" "$repo/stderr" && extra=prior_leak_false_flag
+grep -q "MARKETING-TABLE-CLAIM-STALE" "$repo/stderr" && extra="${extra}+marketing_table_false_flag"
+assert "COL1: historical '110 negative' in a table row is NOT false-flagged" 0 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case COL2: the SAME `110 negative` in PROSE still fires (fix is scoped) ---
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_COL" > "$repo/CHANGELOG.md"
+printf 'The legacy run reported 110 negative probes (bare prose, not a table).\n' > "$repo/README.md"
+run_gate "$repo" 1.15.0 --skip-pykrete-tests
+extra=ok
+grep -qF "PRIOR-RELEASE-NUMBER-LEAKED: README.md" "$repo/stderr" || extra=prose_leak_should_fire
+grep -qF "'110 negative' is v1.14.0's number" "$repo/stderr" || extra="${extra}+missing_version_context"
+assert "COL2: bare '110 negative' in PROSE still fires (carve-out is table-scoped)" 1 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
+# --- Case COL3: a table-row prior number that is NOT a historical pin still
+# fires — the carve-out hinges on historical-pin membership, not on being a
+# table row. Here the prior block is `text-numeric` (not -historical) so
+# `110 negative` is prior-but-not-historical.
+CHANGELOG_COL3='# Changelog
+
+## [1.15.0]
+Current.
+
+```text-numeric
+114 negative
+```
+
+## [1.14.0]
+Prior, recorded as a live text-numeric block (not historical).
+
+```text-numeric
+110 negative
+```
+'
+repo=$(new_repo)
+printf '%s' "$CHANGELOG_COL3" > "$repo/CHANGELOG.md"
+{
+    printf '# Trajectory\n\n'
+    printf '| Version | Verifiable? |\n'
+    printf '|---|---|\n'
+    printf '| current | yes — 110 negative probes |\n'
+} > "$repo/README.md"
+run_gate "$repo" 1.15.0 --skip-pykrete-tests
+extra=ok
+grep -qF "PRIOR-RELEASE-NUMBER-LEAKED: README.md" "$repo/stderr" || extra=nonhistorical_table_cell_should_still_fire
+assert "COL3: table-row prior number that is NOT a historical pin still fires" 1 "$LAST_RC" "$extra"
+rm -rf "$repo"
+
 # --- summary ---
 echo
 echo "=========================================="
