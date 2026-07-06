@@ -389,16 +389,16 @@ def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
 }
 
 #[test]
-fn V116D2_callable_over_approximates_drops_non_numeric_D0050() {
-    // KNOWN over-approximation tradeoff, PINNED so it can't silently change:
-    // real pandas `agg(np.mean)` DROPS the non-numeric `name` column, so a
-    // precisely-typed `Out` correctly omits it — but pykrete keeps the full
-    // non-key superset (keys ++ ALL non-key columns, matching the v1.14
-    // single-string arm), so synthesized {k, amount, name} vs declared
-    // {k, amount} trips D0050 "extra in body: [name]". This is a new
-    // false-positive vs the pre-PR fall-through; the TM ruling keeps the
-    // synthesis for consistency with the shipped string arm. A uniform
-    // column-drop model across both arms is a v1.17 tracker item.
+fn V116D2_callable_nonnumeric_honest_silence_no_D0050() {
+    // v1.16 PR-D4 SUPERSEDES the old over-approximation pin. A bare callable
+    // is opaque: `np.mean` RAISES on the non-numeric `name` column in pandas
+    // 2.x (nuisance-column dropping was removed in 2.0), while `len` would
+    // keep it — undecidable statically. So the callable arm now declines the
+    // whole chain to Unknown (honest silence) whenever any non-key column is
+    // non-numeric. Synthesized {k, amount, name} used to false-fire D0050
+    // "extra in body: [name]" against this correctly-narrowed `Out`; Unknown
+    // now accepts it. PINNED (flipped) so the honest-silence contract can't
+    // silently regress. Uniform with the D4 string-arm and D3 rolling gates.
     let src = "\
 import numpy as np
 
@@ -414,7 +414,7 @@ class Out(Schema):
 def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
     return pdf.groupby('k').agg(np.mean)
 ";
-    assert_has_code(&check(src), "D0050");
+    assert_does_not_have_code(&check(src), "D0050");
 }
 
 // ===========================================================================
