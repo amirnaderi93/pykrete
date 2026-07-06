@@ -346,12 +346,16 @@ def f(pdf: PandasFrame[In]):
 // ===========================================================================
 
 #[test]
-fn V116D4_agg_mean_bool_nonkey_kept_double() {
+fn V116D4_agg_mean_bool_nonkey_declared_string_fires_D0080() {
+    // Non-vacuous pin for the Bool arm added to `is_numeric_dtype`, in the
+    // GROUPBY arm — mirrors the rolling
+    // `V116D4_rolling_bool_upcasts_double_declared_string_fires_D0080` below.
     // bool is numeric for aggregation (True→1.0): the frame does NOT decline,
-    // and `flag` synthesizes to Double. Load-bearing for the Bool arm added to
-    // `is_numeric_dtype` (a missing Bool would honest-silence and this Out,
-    // declaring flag: double, would then be accepted only vacuously — the
-    // sibling `_declared_string` test below rules that out).
+    // `flag` synthesizes to Double, so declaring `flag: string` crosses the
+    // numeric boundary → D0080. This fires ONLY if bool is numeric here — were
+    // bool treated non-numeric the arm would decline to Unknown and D0080
+    // would NOT fire (a clean `flag: double` Out would pass either way, so it
+    // can't pin bool-is-numeric; this mismatch can).
     let src = "\
 class In(Schema):
     region: string
@@ -361,12 +365,12 @@ class In(Schema):
 class Out(Schema):
     region: string
     amount: double
-    flag: double
+    flag: string
 
 def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
     return pdf.groupby('region').agg('mean')
 ";
-    assert_no_diagnostics(&check(src));
+    assert_has_code(&check(src), "D0080");
 }
 
 #[test]
