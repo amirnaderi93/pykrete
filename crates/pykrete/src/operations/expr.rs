@@ -754,8 +754,22 @@ fn synthesize_pivot_result_from_aggfunc<'a>(
 /// table (count/nunique → Long; mean/std/var/median → Double;
 /// sum/min/max/first/last → preserve receiver type). Spec §1.iii.1.iii.
 ///
-/// Returns `None` only when the aggregate is unrecognised — the caller
-/// falls through to Unknown.
+/// v1.16 PR-D4 — the arithmetic aggregates (mean/std/var/median → Double)
+/// RAISE on a non-numeric non-key column in pandas 2.x: the "drop nuisance
+/// columns" behavior was removed in pandas 2.0, so `.agg("mean")` on a frame
+/// with a string column is a `TypeError`, not a silent drop (the drop needs
+/// an explicit `numeric_only=True`). Synthesizing `keys ++ non-keys` in that
+/// case false-fired D0050 "extra in body" against a return schema that
+/// (correctly) omitted the column. This mirrors the merged D3 rolling gate:
+/// when a Double-restricting aggregate meets any non-numeric (or
+/// unresolved-dtype) non-key column, decline the whole chain to Unknown
+/// (honest silence) rather than model code that can't run. The preserving /
+/// Long aggregates (sum/min/max/first/last/count/nunique) genuinely KEEP
+/// non-numeric columns in pandas 2.x, so they synthesize the full set.
+///
+/// Returns `None` when the aggregate is unrecognised OR when a
+/// Double-restricting aggregate meets a non-numeric non-key column — the
+/// caller falls through to Unknown.
 fn synthesize_groupby_agg_from_aggfunc<'a>(
     keys: &[&'a str],
     underlying: &SchemaView<'a>,
@@ -764,6 +778,13 @@ fn synthesize_groupby_agg_from_aggfunc<'a>(
 ) -> Option<SchemaView<'a>> {
     let override_ty = resolve_override_ty(aggfunc)?;
     let recv_fields = underlying.typed_fields(schemas);
+    if matches!(override_ty, Some(ColumnType::Double))
+        && recv_fields
+            .iter()
+            .any(|f| !keys.contains(&f.name) && !f.ty.as_ref().is_some_and(is_numeric_dtype))
+    {
+        return None;
+    }
     let mut out: Vec<DerivedField<'a>> = Vec::with_capacity(recv_fields.len());
     for &key in keys {
         if let Some(f) = recv_fields.iter().find(|f| f.name == key) {
@@ -805,8 +826,8 @@ fn synthesize_groupby_agg_from_aggfunc<'a>(
 ///   aggregate-to-dtype table via [`synthesize_resample_agg_from_aggfunc`]
 ///   (the third `resolve_override_ty` consumer, §9.14).
 /// - rolling upcasts every column to float64 when ALL are numeric
-///   ([`synthesize_rolling_agg`]; a non-numeric column → Unknown, since
-///   pandas drops it) and rejects `first`/`last`/`nunique`
+///   ([`synthesize_rolling_agg`]; a non-numeric non-bool column → Unknown,
+///   since pandas raises on it) and rejects `first`/`last`/`nunique`
 ///   (`ROLLING_AGGFUNC_ALLOWLIST`).
 ///
 /// Runs before the receiver-resolution guard in
@@ -915,10 +936,13 @@ fn synthesize_resample_agg_from_aggfunc<'a>(
     Some(SchemaView::Derived(out))
 }
 
-/// v1.16 PR-D3 — numeric-dtype predicate for the rolling-agg all-Double
-/// synthesis guard. Nullable wraps a numeric transparently; an unresolved
-/// dtype (`None` at the call site) is treated as non-numeric — honest
-/// silence over a guess.
+/// v1.16 PR-D3/PR-D4 — numeric-dtype predicate shared by the rolling-agg
+/// all-Double guard and the groupby/callable arithmetic-agg gates. `Bool`
+/// counts as numeric: pandas keeps a bool column under an arithmetic
+/// aggregate and upcasts it to float64 (`True` → 1.0) rather than declining
+/// it, so it must survive the gate. Nullable wraps a numeric transparently;
+/// an unresolved dtype (`None` at the call site) is treated as non-numeric —
+/// honest silence over a guess.
 fn is_numeric_dtype(ty: &ColumnType) -> bool {
     match ty {
         ColumnType::Int
@@ -927,6 +951,7 @@ fn is_numeric_dtype(ty: &ColumnType) -> bool {
         | ColumnType::Float
         | ColumnType::Byte
         | ColumnType::Short
+        | ColumnType::Bool
         | ColumnType::Decimal { .. } => true,
         ColumnType::Nullable(inner) => is_numeric_dtype(inner),
         _ => false,
@@ -942,14 +967,16 @@ fn is_numeric_dtype(ty: &ColumnType) -> bool {
 /// therefore NOT reused here — that table is right for resample/groupby,
 /// wrong for rolling.
 ///
-/// v1.16 PR-D3 — pandas `rolling.agg` DROPS non-numeric columns rather than
-/// producing Double for them. Forcing a frame with any non-numeric (or
-/// unresolved-dtype) column to all-Double was an audit-flagged false positive
-/// (a schema omitting the dropped column false-fired D0050 "extra in body",
-/// and the string column got a misleading Double). The all-Double model is
-/// therefore synthesized ONLY when EVERY receiver column is numeric; any
-/// non-numeric column falls through to Unknown (honest silence). Also returns
-/// `None` for a receiver with no visible columns.
+/// v1.16 PR-D3/PR-D4 — a genuinely non-numeric column (e.g. `string`) makes
+/// pandas `rolling.agg` RAISE (`DataError: Cannot aggregate non-numeric
+/// type`) rather than produce Double; `bool` is the exception pandas keeps
+/// and upcasts to float64. Forcing such a frame to all-Double was an
+/// audit-flagged false positive (a schema omitting the declined column
+/// false-fired D0050 "extra in body", and the string column got a misleading
+/// Double). The all-Double model is therefore synthesized ONLY when every
+/// receiver column is numeric-or-bool (`is_numeric_dtype`); any other column
+/// declines the whole chain to Unknown (honest silence). Also returns `None`
+/// for a receiver with no visible columns.
 fn synthesize_rolling_agg<'a>(
     receiver: &SchemaView<'a>,
     schemas: &'a [Schema<'a>],
@@ -1063,26 +1090,29 @@ fn synthesize_groupby_agg_from_dict<'a>(
     Some(SchemaView::Derived(out))
 }
 
-/// v1.16 PR-D2 — synthesize a pandas `pdf.groupby(keys).agg(<callable>)`
-/// result `SchemaView` (`.agg(np.mean)`, `.agg(len)`). A bare callable
-/// applies to the non-key columns; the output column set is
-/// OVER-APPROXIMATED as a superset (keys ++ ALL non-key columns) — pandas
-/// drops non-numeric non-key columns for a numeric-restricting callable
-/// like `np.mean`, but we keep all, matching the v1.14 single-string arm.
-/// Consequence: a precisely-typed return schema that correctly omits a
-/// dropped column may trip D0050 (extra-in-body). The result dtype is NOT
-/// known (a callable has no allowlist entry), so per the spec §1.ii.3
-/// design decision the columns EXIST at Unknown dtype: downstream
-/// `result["typo"]` still fires D0030 while pykrete never claims a dtype it
-/// can't justify. Group keys keep their receiver type. A uniform column-
-/// drop model (shared with the single-string arm, using declared column
-/// types + a numeric-restricting-aggfunc set) is a v1.17 tracker item.
+/// v1.16 PR-D2/PR-D4 — synthesize a pandas `pdf.groupby(keys).agg(<callable>)`
+/// result `SchemaView` (`.agg(np.mean)`, `.agg(len)`). A bare callable is
+/// OPAQUE: `np.mean` raises/drops on a non-numeric column while `len` keeps
+/// it — undecidable statically. So if ANY non-key column is non-numeric (or
+/// unresolved-dtype), decline the whole chain to Unknown (honest silence,
+/// returning `None`), matching the D4 string-arm and D3 rolling gates. An
+/// all-numeric frame keeps the superset synthesis (keys ++ all non-key
+/// columns): the result dtype is NOT known (a callable has no allowlist
+/// entry), so per the spec §1.ii.3 the columns EXIST at Unknown dtype so a
+/// downstream `result["typo"]` still fires D0030 while pykrete never claims a
+/// dtype it can't justify. Group keys keep their receiver type.
 fn synthesize_groupby_agg_callable<'a>(
     keys: &[&'a str],
     underlying: &SchemaView<'a>,
     schemas: &'a [Schema<'a>],
-) -> SchemaView<'a> {
+) -> Option<SchemaView<'a>> {
     let recv_fields = underlying.typed_fields(schemas);
+    if recv_fields
+        .iter()
+        .any(|f| !keys.contains(&f.name) && !f.ty.as_ref().is_some_and(is_numeric_dtype))
+    {
+        return None;
+    }
     let mut out: Vec<DerivedField<'a>> = Vec::with_capacity(recv_fields.len());
     for &key in keys {
         let ty = recv_fields
@@ -1100,7 +1130,7 @@ fn synthesize_groupby_agg_callable<'a>(
             ty: None,
         });
     }
-    SchemaView::Derived(out)
+    Some(SchemaView::Derived(out))
 }
 
 /// v1.16 PR-D2 — is `expr` a bare callable reference for `.agg(...)`? A
@@ -3327,8 +3357,11 @@ fn handle_agg<'a>(
     // convention (count/nunique → Long; mean/std/var/median → Double;
     // sum/min/max/first/last → preserve receiver). Argument shapes:
     // - single-string (`"sum"`) — v1.14, `synthesize_groupby_agg_from_aggfunc`.
+    //   v1.16 PR-D4: an arithmetic aggfunc (mean/std/var/median) over a
+    //   non-numeric non-key column declines to Unknown (pandas 2.x raises).
     // - dict (`{"c": "sum"}`) — v1.16, keeps only the named columns.
-    // - callable (`np.mean`, `len`) — v1.16, all non-key columns at Unknown dtype.
+    // - callable (`np.mean`, `len`) — v1.16, all non-key columns at Unknown
+    //   dtype; PR-D4 declines to Unknown if any non-key column is non-numeric.
     // - list-of-aggfunc (`["sum", "mean"]`) — MultiIndex columns, DEFERRED to
     //   v1.17; explicit fall-through to Unknown (spec §1.ii.3, §16).
     // - named-aggregation (`total=("c", "sum")`, keyword args, no positional
@@ -3358,11 +3391,7 @@ fn handle_agg<'a>(
                 );
             }
             if is_callable_ref(arg) {
-                return Some(synthesize_groupby_agg_callable(
-                    &keys,
-                    &underlying,
-                    ctx.schemas(),
-                ));
+                return synthesize_groupby_agg_callable(&keys, &underlying, ctx.schemas());
             }
         }
         return None;
