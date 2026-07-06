@@ -595,6 +595,20 @@ fn pandas_kwarg_is_true(call: &ExprCall, name: &str) -> bool {
         .is_some_and(|b| b.value)
 }
 
+/// v1.16 PR-D3 — `true` iff an `inplace=` kwarg is present and NOT a literal
+/// `False`, i.e. either `inplace=True` (pandas-stubs `-> None`) or a
+/// non-literal `inplace=<expr>` (the stubs' overload resolves to the
+/// `DataFrame | None` union). In both cases the method does not reliably
+/// return the frame, so synthesizing a `Derived` would OVERRIDE the engine —
+/// the caller must fall through to Unknown. Only an absent `inplace=` or a
+/// literal `inplace=False` returns the frame and permits synthesis.
+fn inplace_suppresses_synthesis(call: &ExprCall) -> bool {
+    match pandas_kwarg_value(call, "inplace") {
+        None => false,
+        Some(e) => !matches!(e.as_boolean_literal_expr(), Some(b) if !b.value),
+    }
+}
+
 /// v1.12 PR-D1 — pandas `pivot_table(aggfunc=)` literal-form recognition
 /// (spec §4). The allowlist is the pandas-documented canonical aggfunc
 /// string set; values outside it (callable, dict, dynamic, exotic
@@ -790,8 +804,9 @@ fn synthesize_groupby_agg_from_aggfunc<'a>(
 /// - resample re-bins rows by a time rule; its columns follow the
 ///   aggregate-to-dtype table via [`synthesize_resample_agg_from_aggfunc`]
 ///   (the third `resolve_override_ty` consumer, §9.14).
-/// - rolling ALWAYS upcasts every column to float64
-///   ([`synthesize_rolling_agg`]) and rejects `first`/`last`/`nunique`
+/// - rolling upcasts every column to float64 when ALL are numeric
+///   ([`synthesize_rolling_agg`]; a non-numeric column → Unknown, since
+///   pandas drops it) and rejects `first`/`last`/`nunique`
 ///   (`ROLLING_AGGFUNC_ALLOWLIST`).
 ///
 /// Runs before the receiver-resolution guard in
@@ -900,27 +915,53 @@ fn synthesize_resample_agg_from_aggfunc<'a>(
     Some(SchemaView::Derived(out))
 }
 
+/// v1.16 PR-D3 — numeric-dtype predicate for the rolling-agg all-Double
+/// synthesis guard. Nullable wraps a numeric transparently; an unresolved
+/// dtype (`None` at the call site) is treated as non-numeric — honest
+/// silence over a guess.
+fn is_numeric_dtype(ty: &ColumnType) -> bool {
+    match ty {
+        ColumnType::Int
+        | ColumnType::Long
+        | ColumnType::Double
+        | ColumnType::Float
+        | ColumnType::Byte
+        | ColumnType::Short
+        | ColumnType::Decimal { .. } => true,
+        ColumnType::Nullable(inner) => is_numeric_dtype(inner),
+        _ => false,
+    }
+}
+
 /// v1.16 PR-D1 R2 — synthesize a pandas `rolling(...).agg("<aggfunc>")`
-/// result `SchemaView`. Rolling ALWAYS upcasts every column to float64
+/// result `SchemaView`. Rolling upcasts every (numeric) column to float64
 /// (empirically verified against pandas 2.3.3): incomplete leading windows
 /// introduce NaN and the window kernels are float64, so the output dtype is
-/// Double for EVERY valid aggfunc, independent of the receiver column type.
-/// `resolve_override_ty` (count→Long, sum/min/max→preserve) is therefore
-/// NOT reused here — that table is right for resample/groupby, wrong for
-/// rolling.
+/// Double for EVERY valid aggfunc, independent of the receiver's numeric
+/// dtype. `resolve_override_ty` (count→Long, sum/min/max→preserve) is
+/// therefore NOT reused here — that table is right for resample/groupby,
+/// wrong for rolling.
 ///
-/// Non-numeric columns are a known gap: pandas `rolling.agg` `DataError`s /
-/// declines a string column rather than producing Double. Type-aware
-/// rolling (declining non-numeric columns) is a v1.17 item; v1.16
-/// permissively models EVERY column as Double (name-tracking for D0030
-/// still holds; the column resolves). Returns `None` for a receiver with no
-/// visible columns; the caller falls through to Unknown.
+/// v1.16 PR-D3 — pandas `rolling.agg` DROPS non-numeric columns rather than
+/// producing Double for them. Forcing a frame with any non-numeric (or
+/// unresolved-dtype) column to all-Double was an audit-flagged false positive
+/// (a schema omitting the dropped column false-fired D0050 "extra in body",
+/// and the string column got a misleading Double). The all-Double model is
+/// therefore synthesized ONLY when EVERY receiver column is numeric; any
+/// non-numeric column falls through to Unknown (honest silence). Also returns
+/// `None` for a receiver with no visible columns.
 fn synthesize_rolling_agg<'a>(
     receiver: &SchemaView<'a>,
     schemas: &'a [Schema<'a>],
 ) -> Option<SchemaView<'a>> {
     let recv_fields = receiver.typed_fields(schemas);
     if recv_fields.is_empty() {
+        return None;
+    }
+    if !recv_fields
+        .iter()
+        .all(|f| f.ty.as_ref().is_some_and(is_numeric_dtype))
+    {
         return None;
     }
     let out: Vec<DerivedField<'a>> = recv_fields
@@ -2013,15 +2054,14 @@ fn analyze_method_call_inner<'a>(
     // explicit fall-through to None per the synthesis-arm positive-coverage
     // standing rule (v1.14 retro §8).
     if receiver_is_pandas_inherited && method == "reset_index" {
-        // v1.16 PR-D2 — inplace multiplexer-guard. pandas-stubs type
-        // `reset_index(..., inplace=True)` as `-> None`; synthesizing a
-        // Derived here would OVERRIDE the engine's correct `None`
-        // (append-don't-change). reset_index takes no column args, so
-        // there's no D0030 key-existence fire to preserve — a top-of-arm
-        // return is safe. Only `reset_index(drop=True, inplace=True)`
-        // reaches here; `inplace=True` without `drop=True` already falls
-        // through the drop gate below. Spec §1.iii.3.
-        if pandas_kwarg_is_true(call, "inplace") {
+        // v1.16 PR-D2 + PR-D3 — inplace multiplexer-guard. pandas-stubs type
+        // `reset_index(..., inplace=True)` as `-> None`, and a non-literal
+        // `inplace=<flag>` resolves to `DataFrame | None`; synthesizing a
+        // Derived in either case would OVERRIDE the engine (append-don't-
+        // change). reset_index takes no column args, so there's no D0030
+        // key-existence fire to preserve — a top-of-arm return is safe. Spec
+        // §1.iii.3.
+        if inplace_suppresses_synthesis(call) {
             return None;
         }
         if !pandas_kwarg_is_true(call, "drop") {
@@ -2067,14 +2107,15 @@ fn analyze_method_call_inner<'a>(
         let refs: Vec<(Option<&'a str>, &'a str, TextRange)> =
             keys.iter().map(|&(n, r)| (None, n, r)).collect();
         report_column_refs(&refs, &receiver, ctx, source, line_index, diagnostics);
-        // v1.16 PR-D2 — inplace multiplexer-guard. Placed AFTER the D0030
-        // key-existence check (a typoed key in `set_index(["typo"],
+        // v1.16 PR-D2 + PR-D3 — inplace multiplexer-guard. Placed AFTER the
+        // D0030 key-existence check (a typoed key in `set_index(["typo"],
         // inplace=True)` must still fire, regardless of inplace) but BEFORE
         // synthesis: pandas-stubs type `set_index(..., inplace=True)` as
-        // `-> None`, so synthesizing a Derived would OVERRIDE the engine's
-        // correct `None` (append-don't-change). A top-of-arm guard would
-        // WRONGLY skip the key-existence fire. Spec §1.iii.3.
-        if pandas_kwarg_is_true(call, "inplace") {
+        // `-> None` (and a non-literal `inplace=<flag>` as `DataFrame | None`),
+        // so synthesizing a Derived would OVERRIDE the engine (append-don't-
+        // change). A top-of-arm guard would WRONGLY skip the key-existence
+        // fire. Spec §1.iii.3.
+        if inplace_suppresses_synthesis(call) {
             return None;
         }
         let key_names: HashSet<&str> = keys.iter().map(|(n, _)| *n).collect();
@@ -3290,13 +3331,18 @@ fn handle_agg<'a>(
     // - callable (`np.mean`, `len`) — v1.16, all non-key columns at Unknown dtype.
     // - list-of-aggfunc (`["sum", "mean"]`) — MultiIndex columns, DEFERRED to
     //   v1.17; explicit fall-through to Unknown (spec §1.ii.3, §16).
+    // - named-aggregation (`total=("c", "sum")`, keyword args, no positional
+    //   aggfunc) — v1.16 PR-D3, honest-silence Unknown.
     // Out-of-allowlist string / Spark column-expression / non-literal fall
-    // through to Unknown too. Returning None here (NOT falling into the Spark
-    // arm) prevents that arm from collecting an empty / wrong-shape Derived
-    // for pandas inputs. Spec §1.ii.3.
+    // through to Unknown too. EVERY pandas shape not recognized above returns
+    // None here (NOT falling into the Spark keys-only loop): that loop reads
+    // only POSITIONAL args, so for named aggregation it dropped every output
+    // and collected a keys-only Derived that false-fired D0050 (missing
+    // outputs) + D0030 (downstream access). Spec §1.ii.3.
     if dialect == Some(Dialect::Pandas) && !after_pivot {
-        let aggfunc_form = classify_pivot_table_aggfunc_positional(call);
-        if let PivotTableAggfuncForm::AllowlistedString(af) = aggfunc_form {
+        if let PivotTableAggfuncForm::AllowlistedString(af) =
+            classify_pivot_table_aggfunc_positional(call)
+        {
             return synthesize_groupby_agg_from_aggfunc(&keys, &underlying, af, ctx.schemas());
         }
         if let Some(arg) = call.arguments.args.first() {
@@ -3319,9 +3365,7 @@ fn handle_agg<'a>(
                 ));
             }
         }
-        if !matches!(aggfunc_form, PivotTableAggfuncForm::Absent) {
-            return None;
-        }
+        return None;
     }
 
     let mut refs: Vec<(Option<&'a str>, &'a str, TextRange)> = Vec::new();
