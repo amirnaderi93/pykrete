@@ -280,26 +280,16 @@ PY
 fi
 
 # Cargo.toml is the canonical source for "what release is shipping" —
-# it's what crates.io / cargo install sees. The marker file is a
-# cycle-coordination signal for the extension-version-guard workflow,
-# not for this gate. Explicit --current-version overrides both.
+# it's what crates.io / cargo install sees. Explicit --current-version
+# overrides it.
 if [ -z "$CURRENT_VERSION" ]; then
     if [ -f "$REPO_ROOT/Cargo.toml" ]; then
         CURRENT_VERSION=$(grep -E '^version[[:space:]]*=' "$REPO_ROOT/Cargo.toml" | head -1 | sed -E 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')
     fi
 fi
-if [ -z "$CURRENT_VERSION" ] && [ -f "$REPO_ROOT/.github/centralized-bump-cycle.marker" ]; then
-    # Marker is `vN.M`; strip the leading `v` and append `.0` if no patch.
-    raw=$(tr -d '[:space:]' < "$REPO_ROOT/.github/centralized-bump-cycle.marker")
-    CURRENT_VERSION="${raw#v}"
-    case "$CURRENT_VERSION" in
-        *.*.*) ;;
-        *)     CURRENT_VERSION="${CURRENT_VERSION}.0" ;;
-    esac
-fi
 
 if [ -z "$CURRENT_VERSION" ]; then
-    echo "trust-claim-sweep: could not determine current version (no --current-version, no Cargo.toml, no marker)" >&2
+    echo "trust-claim-sweep: could not determine current version (no --current-version, no Cargo.toml)" >&2
     exit 2
 fi
 

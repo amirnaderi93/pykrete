@@ -247,8 +247,9 @@ single-backtick-wrapped numbers are the escape hatch — closes v1.9
 retro rule 12). **§9.2 centralized version bump promoted to
 standing practice** (closes v1.9 retro rule 1): trial verdict
 SUCCESS — zero rebase-ladder collisions across Wave 1 of v1.9. The
-`.github/centralized-bump-cycle.marker` mechanism stays in the
-guard workflow as a reusable cycle-trial primitive. Cross-codebase
+`.github/centralized-bump-cycle.marker` mechanism was retired in
+v1.16 (Cycle-0.1 #210); enforcement now keys on the `chore(release):`
+release-PR title. Cross-codebase
 probe coverage adds 6 D0091 strict-mode / bare-attribute /
 shape-changes probes on `mlflow` / `dbt-spark` / `pandera` / `delta`
 (pykrete-tests PR-P1 #34) plus the seaborn `stack(level=)` arm
