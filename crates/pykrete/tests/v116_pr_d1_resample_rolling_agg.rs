@@ -186,11 +186,12 @@ def f(pdf: PandasFrame[In]):
 }
 
 // ===========================================================================
-// rolling.agg — positive: rolling ALWAYS upcasts every column to Double
-// (empirically verified against pandas 2.3.3 — NaN from incomplete leading
-// windows + float64 kernels), regardless of aggfunc OR input dtype. Unlike
-// resample/groupby, `resolve_override_ty` does NOT apply. No D0080 against
-// an all-Double Out.
+// rolling.agg — positive: for a NUMERIC frame rolling upcasts every column to
+// Double (empirically verified against pandas 2.3.3 — NaN from incomplete
+// leading windows + float64 kernels), regardless of aggfunc. Unlike
+// resample/groupby, `resolve_override_ty` does NOT apply. No D0080 against an
+// all-Double Out. (A frame with any non-numeric column → Unknown per v1.16
+// PR-D3; see v116_pr_d3_named_agg_rolling_nonnumeric.rs.)
 // ===========================================================================
 
 #[test]
@@ -242,29 +243,11 @@ def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
     assert_does_not_have_code(&check(&src), "D0080");
 }
 
-#[test]
-fn V116D1_rolling_upcasts_string_column_to_double() {
-    // THE correctness lock for the R2 rolling-dtype fix. rolling upcasts
-    // EVERY column to float64 — even a string `label`, even for 'sum'
-    // (which PRESERVES on resample/groupby). No key exemption, no preserve.
-    // Load-bearing against the R1 `resolve_override_ty`-reuse bug: a
-    // preserve arm leaves `label` string → string-vs-declared-double fires
-    // D0080 (the numeric-blind comparator only flags numeric-vs-non-numeric,
-    // so this string column is the one dtype the D0080 check CAN observe).
-    let src = "\
-class In(Schema):
-    label: string
-    value: double
-
-class Out(Schema):
-    label: double
-    value: double
-
-def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
-    return pdf.rolling(2).agg('sum')
-";
-    assert_does_not_have_code(&check(src), "D0080");
-}
+// (v1.16 PR-D3 removed `V116D1_rolling_upcasts_string_column_to_double`: it
+// locked the force-string-column-to-Double behavior the pre-tag audit flagged
+// as a false positive. pandas DROPS non-numeric columns from rolling, so that
+// frame now falls through to Unknown — see the honest-silence coverage in
+// v116_pr_d3_named_agg_rolling_nonnumeric.rs.)
 
 // ===========================================================================
 // rolling.agg — FIRE (§1.ii.5, load-bearing). rolling collapses every
@@ -325,20 +308,18 @@ def f(pdf: PandasFrame[In]) -> PandasFrame[Out]:
 
 #[test]
 fn V116D1_rolling_keeps_all_columns_downstream_resolves() {
-    // All receiver columns survive the rolling window (same-length output,
-    // no row/column reduction) and stay name-tracked for D0030. `region` is
-    // a string: pandas `rolling.agg('sum')` actually DataErrors on a string
-    // column — type-aware rolling (declining non-numeric columns) is a v1.17
-    // gap; v1.16 permissively models it as Double, so it still resolves.
+    // All-numeric frame: every receiver column survives the rolling window
+    // (same-length output, no row/column reduction) at Double and stays
+    // name-tracked, so valid downstream access is clean. (A non-numeric column
+    // would instead fall through to Unknown per v1.16 PR-D3.)
     let src = "\
 class In(Schema):
     sales: double
     units: int
-    region: string
 
 def f(pdf: PandasFrame[In]):
     result = pdf.rolling(2).agg('sum')
-    return (result['sales'], result['units'], result['region'])
+    return (result['sales'], result['units'])
 ";
     assert_no_diagnostics(&check(src));
 }
