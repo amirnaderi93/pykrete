@@ -934,13 +934,13 @@ fn is_numeric_dtype(ty: &ColumnType) -> bool {
 }
 
 /// v1.16 PR-D1 R2 — synthesize a pandas `rolling(...).agg("<aggfunc>")`
-/// result `SchemaView`. Rolling ALWAYS upcasts every column to float64
+/// result `SchemaView`. Rolling upcasts every (numeric) column to float64
 /// (empirically verified against pandas 2.3.3): incomplete leading windows
 /// introduce NaN and the window kernels are float64, so the output dtype is
-/// Double for EVERY valid aggfunc, independent of the receiver column type.
-/// `resolve_override_ty` (count→Long, sum/min/max→preserve) is therefore
-/// NOT reused here — that table is right for resample/groupby, wrong for
-/// rolling.
+/// Double for EVERY valid aggfunc, independent of the receiver's numeric
+/// dtype. `resolve_override_ty` (count→Long, sum/min/max→preserve) is
+/// therefore NOT reused here — that table is right for resample/groupby,
+/// wrong for rolling.
 ///
 /// v1.16 PR-D3 — pandas `rolling.agg` DROPS non-numeric columns rather than
 /// producing Double for them. Forcing a frame with any non-numeric (or
