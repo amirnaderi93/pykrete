@@ -790,8 +790,9 @@ fn synthesize_groupby_agg_from_aggfunc<'a>(
 /// - resample re-bins rows by a time rule; its columns follow the
 ///   aggregate-to-dtype table via [`synthesize_resample_agg_from_aggfunc`]
 ///   (the third `resolve_override_ty` consumer, §9.14).
-/// - rolling ALWAYS upcasts every column to float64
-///   ([`synthesize_rolling_agg`]) and rejects `first`/`last`/`nunique`
+/// - rolling upcasts every column to float64 when ALL are numeric
+///   ([`synthesize_rolling_agg`]; a non-numeric column → Unknown, since
+///   pandas drops it) and rejects `first`/`last`/`nunique`
 ///   (`ROLLING_AGGFUNC_ALLOWLIST`).
 ///
 /// Runs before the receiver-resolution guard in
@@ -900,6 +901,24 @@ fn synthesize_resample_agg_from_aggfunc<'a>(
     Some(SchemaView::Derived(out))
 }
 
+/// v1.16 PR-D3 — numeric-dtype predicate for the rolling-agg all-Double
+/// synthesis guard. Nullable wraps a numeric transparently; an unresolved
+/// dtype (`None` at the call site) is treated as non-numeric — honest
+/// silence over a guess.
+fn is_numeric_dtype(ty: &ColumnType) -> bool {
+    match ty {
+        ColumnType::Int
+        | ColumnType::Long
+        | ColumnType::Double
+        | ColumnType::Float
+        | ColumnType::Byte
+        | ColumnType::Short
+        | ColumnType::Decimal { .. } => true,
+        ColumnType::Nullable(inner) => is_numeric_dtype(inner),
+        _ => false,
+    }
+}
+
 /// v1.16 PR-D1 R2 — synthesize a pandas `rolling(...).agg("<aggfunc>")`
 /// result `SchemaView`. Rolling ALWAYS upcasts every column to float64
 /// (empirically verified against pandas 2.3.3): incomplete leading windows
@@ -909,18 +928,26 @@ fn synthesize_resample_agg_from_aggfunc<'a>(
 /// NOT reused here — that table is right for resample/groupby, wrong for
 /// rolling.
 ///
-/// Non-numeric columns are a known gap: pandas `rolling.agg` `DataError`s /
-/// declines a string column rather than producing Double. Type-aware
-/// rolling (declining non-numeric columns) is a v1.17 item; v1.16
-/// permissively models EVERY column as Double (name-tracking for D0030
-/// still holds; the column resolves). Returns `None` for a receiver with no
-/// visible columns; the caller falls through to Unknown.
+/// v1.16 PR-D3 — pandas `rolling.agg` DROPS non-numeric columns rather than
+/// producing Double for them. Forcing a frame with any non-numeric (or
+/// unresolved-dtype) column to all-Double was an audit-flagged false positive
+/// (a schema omitting the dropped column false-fired D0050 "extra in body",
+/// and the string column got a misleading Double). The all-Double model is
+/// therefore synthesized ONLY when EVERY receiver column is numeric; any
+/// non-numeric column falls through to Unknown (honest silence). Also returns
+/// `None` for a receiver with no visible columns.
 fn synthesize_rolling_agg<'a>(
     receiver: &SchemaView<'a>,
     schemas: &'a [Schema<'a>],
 ) -> Option<SchemaView<'a>> {
     let recv_fields = receiver.typed_fields(schemas);
     if recv_fields.is_empty() {
+        return None;
+    }
+    if !recv_fields
+        .iter()
+        .all(|f| f.ty.as_ref().is_some_and(is_numeric_dtype))
+    {
         return None;
     }
     let out: Vec<DerivedField<'a>> = recv_fields
@@ -3290,13 +3317,18 @@ fn handle_agg<'a>(
     // - callable (`np.mean`, `len`) — v1.16, all non-key columns at Unknown dtype.
     // - list-of-aggfunc (`["sum", "mean"]`) — MultiIndex columns, DEFERRED to
     //   v1.17; explicit fall-through to Unknown (spec §1.ii.3, §16).
+    // - named-aggregation (`total=("c", "sum")`, keyword args, no positional
+    //   aggfunc) — v1.16 PR-D3, honest-silence Unknown.
     // Out-of-allowlist string / Spark column-expression / non-literal fall
-    // through to Unknown too. Returning None here (NOT falling into the Spark
-    // arm) prevents that arm from collecting an empty / wrong-shape Derived
-    // for pandas inputs. Spec §1.ii.3.
+    // through to Unknown too. EVERY pandas shape not recognized above returns
+    // None here (NOT falling into the Spark keys-only loop): that loop reads
+    // only POSITIONAL args, so for named aggregation it dropped every output
+    // and collected a keys-only Derived that false-fired D0050 (missing
+    // outputs) + D0030 (downstream access). Spec §1.ii.3.
     if dialect == Some(Dialect::Pandas) && !after_pivot {
-        let aggfunc_form = classify_pivot_table_aggfunc_positional(call);
-        if let PivotTableAggfuncForm::AllowlistedString(af) = aggfunc_form {
+        if let PivotTableAggfuncForm::AllowlistedString(af) =
+            classify_pivot_table_aggfunc_positional(call)
+        {
             return synthesize_groupby_agg_from_aggfunc(&keys, &underlying, af, ctx.schemas());
         }
         if let Some(arg) = call.arguments.args.first() {
@@ -3319,9 +3351,7 @@ fn handle_agg<'a>(
                 ));
             }
         }
-        if !matches!(aggfunc_form, PivotTableAggfuncForm::Absent) {
-            return None;
-        }
+        return None;
     }
 
     let mut refs: Vec<(Option<&'a str>, &'a str, TextRange)> = Vec::new();
