@@ -595,6 +595,20 @@ fn pandas_kwarg_is_true(call: &ExprCall, name: &str) -> bool {
         .is_some_and(|b| b.value)
 }
 
+/// v1.16 PR-D3 — `true` iff an `inplace=` kwarg is present and NOT a literal
+/// `False`, i.e. either `inplace=True` (pandas-stubs `-> None`) or a
+/// non-literal `inplace=<expr>` (the stubs' overload resolves to the
+/// `DataFrame | None` union). In both cases the method does not reliably
+/// return the frame, so synthesizing a `Derived` would OVERRIDE the engine —
+/// the caller must fall through to Unknown. Only an absent `inplace=` or a
+/// literal `inplace=False` returns the frame and permits synthesis.
+fn inplace_suppresses_synthesis(call: &ExprCall) -> bool {
+    match pandas_kwarg_value(call, "inplace") {
+        None => false,
+        Some(e) => !matches!(e.as_boolean_literal_expr(), Some(b) if !b.value),
+    }
+}
+
 /// v1.12 PR-D1 — pandas `pivot_table(aggfunc=)` literal-form recognition
 /// (spec §4). The allowlist is the pandas-documented canonical aggfunc
 /// string set; values outside it (callable, dict, dynamic, exotic
@@ -2040,15 +2054,14 @@ fn analyze_method_call_inner<'a>(
     // explicit fall-through to None per the synthesis-arm positive-coverage
     // standing rule (v1.14 retro §8).
     if receiver_is_pandas_inherited && method == "reset_index" {
-        // v1.16 PR-D2 — inplace multiplexer-guard. pandas-stubs type
-        // `reset_index(..., inplace=True)` as `-> None`; synthesizing a
-        // Derived here would OVERRIDE the engine's correct `None`
-        // (append-don't-change). reset_index takes no column args, so
-        // there's no D0030 key-existence fire to preserve — a top-of-arm
-        // return is safe. Only `reset_index(drop=True, inplace=True)`
-        // reaches here; `inplace=True` without `drop=True` already falls
-        // through the drop gate below. Spec §1.iii.3.
-        if pandas_kwarg_is_true(call, "inplace") {
+        // v1.16 PR-D2 + PR-D3 — inplace multiplexer-guard. pandas-stubs type
+        // `reset_index(..., inplace=True)` as `-> None`, and a non-literal
+        // `inplace=<flag>` resolves to `DataFrame | None`; synthesizing a
+        // Derived in either case would OVERRIDE the engine (append-don't-
+        // change). reset_index takes no column args, so there's no D0030
+        // key-existence fire to preserve — a top-of-arm return is safe. Spec
+        // §1.iii.3.
+        if inplace_suppresses_synthesis(call) {
             return None;
         }
         if !pandas_kwarg_is_true(call, "drop") {
@@ -2094,14 +2107,15 @@ fn analyze_method_call_inner<'a>(
         let refs: Vec<(Option<&'a str>, &'a str, TextRange)> =
             keys.iter().map(|&(n, r)| (None, n, r)).collect();
         report_column_refs(&refs, &receiver, ctx, source, line_index, diagnostics);
-        // v1.16 PR-D2 — inplace multiplexer-guard. Placed AFTER the D0030
-        // key-existence check (a typoed key in `set_index(["typo"],
+        // v1.16 PR-D2 + PR-D3 — inplace multiplexer-guard. Placed AFTER the
+        // D0030 key-existence check (a typoed key in `set_index(["typo"],
         // inplace=True)` must still fire, regardless of inplace) but BEFORE
         // synthesis: pandas-stubs type `set_index(..., inplace=True)` as
-        // `-> None`, so synthesizing a Derived would OVERRIDE the engine's
-        // correct `None` (append-don't-change). A top-of-arm guard would
-        // WRONGLY skip the key-existence fire. Spec §1.iii.3.
-        if pandas_kwarg_is_true(call, "inplace") {
+        // `-> None` (and a non-literal `inplace=<flag>` as `DataFrame | None`),
+        // so synthesizing a Derived would OVERRIDE the engine (append-don't-
+        // change). A top-of-arm guard would WRONGLY skip the key-existence
+        // fire. Spec §1.iii.3.
+        if inplace_suppresses_synthesis(call) {
             return None;
         }
         let key_names: HashSet<&str> = keys.iter().map(|(n, _)| *n).collect();
