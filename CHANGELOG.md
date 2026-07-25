@@ -56,7 +56,7 @@ v1.9 introduced the `text-numeric-historical` fence convention; pre-v1.9 section
 
 ### Test coverage
 
-- pykrete: `2064 tests` total
+- pykrete: `2094 tests` total
 - pykrete-tests: `312 probes` (`195 positive` + `117 negative`); `171 fixtures`; `17 donors`
 
 ```text-numeric
@@ -64,7 +64,7 @@ v1.9 introduced the `text-numeric-historical` fence convention; pre-v1.9 section
 195 positive
 117 negative
 171 fixtures
-2064 tests
+2094 tests
 17 donors
 ```
 
@@ -78,6 +78,8 @@ v1.9 introduced the `text-numeric-historical` fence convention; pre-v1.9 section
 - **Direct-method and dict-form window aggregation** — only the single-expression `.agg("<str>")` spelling is recognized. `df.resample("M").sum()` / `df.rolling(7).mean()` (the more idiomatic pandas spelling), dict / list / callable aggfuncs on window chains, and keyword-spelled rule / window arguments (`rolling(window=7)`, `resample(rule="D")`) all fall through to Unknown.
 - **Inline-subscript-on-agg-chain D0030 gap** — a subscript applied directly to the aggregation call rather than to a bound intermediate does not resolve against the synthesized envelope.
 - **`sum`-on-`bool` dtype imprecision** — `sum` preserves the receiver dtype, so a `bool` column aggregates to `bool` where pandas produces an integer count.
+- **`rolling(<n>, on=<col>)` models the `on=` column as Double** — pandas leaves it unaggregated (`rolling(2, on="ts")` keeps `ts` at `datetime64`). Currently false-positive-free by coincidence of two things: an int-vs-double mismatch is invisible to the numeric-blind D0080 comparator, and a timestamp or string `on=` column trips the non-numeric gate first. Latent inaccuracy if that comparator ever becomes width-aware. (Unlike `resample`, `rolling` deliberately keeps the `on=` column — the two have opposite semantics.)
+- **`resample("D", **opts)` bypasses `on=` detection** — the kwarg scan keys on `k.arg`, which is `None` for a `**`-unpacked mapping, so an `on=` hidden inside `opts` isn't seen. Exotic, and consistent with every other kwarg helper in the file; noted rather than fixed.
 - **Docs-sync**: the v1.16 PR-G sweep resolved 33 findings; the surfaces it touched are current as of this release. Next cycle's 4-audit (architecture + pandas-coverage + docs-sync + probe-density) runs pre-v1.17.
 
 ## [1.15.0] - 2026-06-24
