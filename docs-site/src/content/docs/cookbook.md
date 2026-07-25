@@ -3,7 +3,7 @@ title: Cookbook
 description: Realistic recipes for production PySpark teams adopting pykrete — beyond the quickstart's one-function example.
 ---
 
-The [Quickstart](/pykrete/getting-started/quickstart/) gets you to one checked function. This page covers the next questions: how do I bring pykrete into an existing repo, share schemas across files, re-anchor when the schema is lost, check function signatures, and tune behavior with `pykrete.json`.
+The [Quickstart](/getting-started/quickstart/) gets you to one checked function. This page covers the next questions: how do I bring pykrete into an existing repo, share schemas across files, re-anchor when the schema is lost, check function signatures, and tune behavior with `pykrete.json`.
 
 The recipes use a small running cast — `Sale`, `Order`, `Refund` — so you can read the page top-to-bottom or dip into a single recipe.
 
@@ -21,7 +21,7 @@ class Sale(Schema):
 
 **Steps.**
 
-1. [Install pykrete](/pykrete/getting-started/install/).
+1. [Install pykrete](/getting-started/install/).
 2. Pick one file whose dataframes you understand. Rename it from `.py` to `.pyk`.
 3. Declare a schema for the dataframe the file's main function takes. Annotate the parameter with `SparkFrame[Sale]` (or `PandasFrame[Sale]` if it's a pandas dataframe).
 4. Run `pykrete check sales.pyk`. Nothing else in the repo is checked yet.
@@ -50,11 +50,11 @@ def positive_sales(sales: PandasFrame[Sale]) -> pd.DataFrame:
     return sales[sales["amount"] > 0][["region", "amount"]]
 ```
 
-**What you get.** Existence checks ([`D0030`](/pykrete/reference/diagnostics/#unknowncolumn--d0030)) on the column references in the [six dispatched pandas operations](/pykrete/reference/operations/#pandas-dispatch) — `df[col_list]` / `df[mask]` / `df["new"] = expr` / `df.drop` / `df.merge` / `df.rename`. `df.assign(new=expr)` is the kwarg form of `df["new"] = expr` and dispatches identically. Other pandas surface (`.groupby`, `.agg`, `.read_parquet`, window ops) currently falls back to **opaque** in v1.3 — re-anchor with `.cast(PandasFrame[X])` when you need checking to resume. PySpark column references are checked on every operation pykrete models, not just dispatched ones — the per-operation matrix is in the [operations reference](/pykrete/reference/operations/).
+**What you get.** Existence checks ([`D0030`](/reference/diagnostics/#unknowncolumn--d0030)) on the column references in the [six dispatched pandas operations](/reference/operations/#pandas-dispatch) — `df[col_list]` / `df[mask]` / `df["new"] = expr` / `df.drop` / `df.merge` / `df.rename`. `df.assign(new=expr)` is the kwarg form of `df["new"] = expr` and dispatches identically. Other pandas surface (`.groupby`, `.agg`, `.read_parquet`, window ops) currently falls back to **opaque** in v1.3 — re-anchor with `.cast(PandasFrame[X])` when you need checking to resume. PySpark column references are checked on every operation pykrete models, not just dispatched ones — the per-operation matrix is in the [operations reference](/reference/operations/).
 
 The other `.py` files in the project remain unchanged and unchecked — `.py` and `.pyk` coexist in the same repo, and `.pyk` is a strict superset of Python, so the file still runs.
 
-**Pitfall.** pykrete only enters a function when its signature has a `SparkFrame[…]` or `PandasFrame[…]` slot. Untyped helper functions in the same file aren't checked — that's by design, but it surprises people who expect whole-file coverage from the rename alone. (`DataFrame[…]` still works as a deprecated alias and emits [D0090](/pykrete/reference/diagnostics/#deprecateddataframealias--d0090).)
+**Pitfall.** pykrete only enters a function when its signature has a `SparkFrame[…]` or `PandasFrame[…]` slot. Untyped helper functions in the same file aren't checked — that's by design, but it surprises people who expect whole-file coverage from the rename alone. (`DataFrame[…]` still works as a deprecated alias and emits [D0090](/reference/diagnostics/#deprecateddataframealias--d0090).)
 
 ## 2. Re-anchor an opaque `spark.read.*` chain
 
@@ -88,9 +88,9 @@ sales: SparkFrame[Sale] = spark.read.parquet("s3://sales/")
 sales.select("region", "amount")
 ```
 
-**What you get.** Every column reference after the re-anchor fires [`D0030`](/pykrete/reference/diagnostics/#unknowncolumn--d0030) on a typo. `.cast(SparkFrame[Sale])` is a static annotation only — at runtime it's an identity no-op.
+**What you get.** Every column reference after the re-anchor fires [`D0030`](/reference/diagnostics/#unknowncolumn--d0030) on a typo. `.cast(SparkFrame[Sale])` is a static annotation only — at runtime it's an identity no-op.
 
-**Pitfall.** Re-anchor right at the boundary. Anything written between the opaque source and the `.cast(...)` is unchecked. See [`.cast` in the operations reference](/pykrete/reference/operations/#cast--the-re-anchor-primitive).
+**Pitfall.** Re-anchor right at the boundary. Anything written between the opaque source and the `.cast(...)` is unchecked. See [`.cast` in the operations reference](/reference/operations/#cast--the-re-anchor-primitive).
 
 ## 3. Share schemas across files
 
@@ -129,7 +129,7 @@ def total_refunds(refunds: SparkFrame[Refund]) -> DataFrame:
     return refunds.groupBy("region").agg(F.sum("refund").alias("total"))
 ```
 
-**What you get.** One source of truth for `Sale`. Edit a column there and every file that imports it re-checks against the new shape. An unresolved import fires [`D0070 unresolvedImport`](/pykrete/reference/diagnostics/); importing a name that isn't exported fires [`D0071 unexportedName`](/pykrete/reference/diagnostics/).
+**What you get.** One source of truth for `Sale`. Edit a column there and every file that imports it re-checks against the new shape. An unresolved import fires [`D0070 unresolvedImport`](/reference/diagnostics/); importing a name that isn't exported fires [`D0071 unexportedName`](/reference/diagnostics/).
 
 **Pitfall.** A `.py` file can't import a schema from a `.pyk` file at check time — pykrete only walks `.pyk`. Schema modules should be `.pyk` if any `.pyk` file imports from them.
 
@@ -160,8 +160,8 @@ def report(refunds: SparkFrame[Refund]) -> DataFrame:
 
 **What you get.** Two checks for the price of one annotation:
 
-- The body's output is compared to `SaleSummary`. A drift fires [`D0050 returnColumnsMismatch`](/pykrete/reference/diagnostics/) or [`D0080 returnTypeMismatch`](/pykrete/reference/diagnostics/#type-checking-diagnostics).
-- Each call site whose argument has a known schema is compared to `Sale`. A mismatch fires [`D0051 argumentColumnsMismatch`](/pykrete/reference/diagnostics/) with a *missing / extra* breakdown.
+- The body's output is compared to `SaleSummary`. A drift fires [`D0050 returnColumnsMismatch`](/reference/diagnostics/) or [`D0080 returnTypeMismatch`](/reference/diagnostics/#type-checking-diagnostics).
+- Each call site whose argument has a known schema is compared to `Sale`. A mismatch fires [`D0051 argumentColumnsMismatch`](/reference/diagnostics/) with a *missing / extra* breakdown.
 
 **Pitfall.** Arguments whose schema pykrete can't infer (an untyped local, an opaque `spark.read.parquet(...)` chain that isn't re-anchored) are silently skipped — the checker degrades rather than false-flag. Re-anchor the caller's argument with `.cast(SparkFrame[Sale])` if you want D0051 to fire there.
 
@@ -197,13 +197,13 @@ def report(refunds: SparkFrame[Refund]) -> DataFrame:
 }
 ```
 
-**What you get.** Files under `pipelines/new_etl/` get strict-mode advisories ([`D0081`](/pykrete/reference/diagnostics/#type-checking-diagnostics), [`D0082`](/pykrete/reference/diagnostics/#type-checking-diagnostics), [`D0083`](/pykrete/reference/diagnostics/#type-checking-diagnostics)) plus the rules at error severity. Files elsewhere get standard mode with the two named rules downgraded to warnings. The language server reads the same files — the editor and CI agree.
+**What you get.** Files under `pipelines/new_etl/` get strict-mode advisories ([`D0081`](/reference/diagnostics/#type-checking-diagnostics), [`D0082`](/reference/diagnostics/#type-checking-diagnostics), [`D0083`](/reference/diagnostics/#type-checking-diagnostics)) plus the rules at error severity. Files elsewhere get standard mode with the two named rules downgraded to warnings. The language server reads the same files — the editor and CI agree.
 
-**Pitfall.** `exclude` is a list of path substrings, not glob patterns. `"target"` matches `crates/target/`, `target/release/`, and any path containing the string. Be specific enough to avoid accidental matches. See the full reference: [Configuration](/pykrete/reference/configuration/).
+**Pitfall.** `exclude` is a list of path substrings, not glob patterns. `"target"` matches `crates/target/`, `target/release/`, and any path containing the string. Be specific enough to avoid accidental matches. See the full reference: [Configuration](/reference/configuration/).
 
 ## 6. Migrate `DataFrame[X]` to the v2.0 dialect-tagged names
 
-**Goal.** The `DataFrame[X]` alias is deprecated through the v1.x line and removed in v2.0. Replace every site with the dialect-tagged canonical name (`SparkFrame[X]` or `PandasFrame[X]`) before the v2.0 upgrade — or before flipping `"typeCheckingMode": "strict"`, where v1.6+ escalates [`D0090`](/pykrete/reference/diagnostics/#deprecateddataframealias--d0090) to error.
+**Goal.** The `DataFrame[X]` alias is deprecated through the v1.x line and removed in v2.0. Replace every site with the dialect-tagged canonical name (`SparkFrame[X]` or `PandasFrame[X]`) before the v2.0 upgrade — or before flipping `"typeCheckingMode": "strict"`, where v1.6+ escalates [`D0090`](/reference/diagnostics/#deprecateddataframealias--d0090) to error.
 
 > **v1.7 default-mode flip.** In v1.6 the default mode of `pykrete migrate src/` was the in-place rewrite. v1.7 flips that to `--check` (preview only). The in-place rewrite is now `pykrete migrate --apply src/`. If you have a CI job or shell alias that ran `pykrete migrate src/` and expected an in-place rewrite, switch it to `pykrete migrate --apply src/`. A first-run on v1.7 with no flag emits a one-line stderr warning so the change is hard to miss.
 
@@ -256,7 +256,7 @@ pykrete check --deprecation-report --fail-on-nonempty src/
 
 `--fail-on-nonempty` exits non-zero when the envelope's `sites` array is non-empty (it still prints the JSON to stdout, so you can capture it on failure for the build log). It replaces the v1.8–v1.9 `jq | test` boilerplate adopters were writing by hand. Compatible with `--ack` (gates only on the filtered cohort) and with `--snapshot=<path>` (the gate decision is independent of the file write).
 
-The envelope's shape (v1.9+) is `{deprecationReportVersion: "2", sites: [...], summary: {totalSites, byDialect: {spark, pandas, ambiguous}}}`. Per-site fields include `file`, `line`, `column`, `code` (always `D0090`), `ruleName`, `bindingName`, `rawAnnotation`, `adjudicatedDialect`, `suggestedRewrite` (null for ambiguous sites), and `migrationStatus` (`"pending"` or `"acknowledged"`). Mutually exclusive with `--report-aliases` (passing both exits 2). See the [D0090 diagnostics reference](/pykrete/reference/diagnostics/#deprecateddataframealias--d0090) for the full schema.
+The envelope's shape (v1.9+) is `{deprecationReportVersion: "2", sites: [...], summary: {totalSites, byDialect: {spark, pandas, ambiguous}}}`. Per-site fields include `file`, `line`, `column`, `code` (always `D0090`), `ruleName`, `bindingName`, `rawAnnotation`, `adjudicatedDialect`, `suggestedRewrite` (null for ambiguous sites), and `migrationStatus` (`"pending"` or `"acknowledged"`). Mutually exclusive with `--report-aliases` (passing both exits 2). See the [D0090 diagnostics reference](/reference/diagnostics/#deprecateddataframealias--d0090) for the full schema.
 
 **Step 5 — site-by-site gating with `--ack` (v1.9+).** A full all-or-nothing CI gate is unrealistic for large codebases. v1.9 adds per-site acknowledgement: drop a `# pykrete: ack-deprecation` comment on the line above an annotation to flip its `migrationStatus` from `pending` to `acknowledged`, then filter the envelope with `--ack=<pending|acknowledged>` to gate one cohort at a time.
 
@@ -303,7 +303,7 @@ The output is a SIMPLE three-bucket envelope: `added` (sites in the new run not 
 
 ## See also
 
-- [Operations](/pykrete/reference/operations/) — every PySpark op pykrete recognizes, and where chains end.
-- [Diagnostics](/pykrete/reference/diagnostics/) — every rule, with examples.
-- [Schemas](/pykrete/reference/schemas/) — `Pick`, `Omit`, `Merge`, nested types.
-- [Configuration](/pykrete/reference/configuration/) — every key in `pykrete.json`.
+- [Operations](/reference/operations/) — every PySpark op pykrete recognizes, and where chains end.
+- [Diagnostics](/reference/diagnostics/) — every rule, with examples.
+- [Schemas](/reference/schemas/) — `Pick`, `Omit`, `Merge`, nested types.
+- [Configuration](/reference/configuration/) — every key in `pykrete.json`.

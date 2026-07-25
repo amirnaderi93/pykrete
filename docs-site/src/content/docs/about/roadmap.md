@@ -29,9 +29,9 @@ The **VS Code extension** wraps it; Neovim, Helix, and Emacs setups are document
 
 The **`.pyk` → `.py` transpiler** is complete.
 
-The **in-browser [playground](/pykrete/playground/)** runs pykrete via WebAssembly and now serves the same pykrete features the VS Code extension does for `.pyk` files: live diagnostics, hover on schema and `SparkFrame[X]` references, column-name completion inside `col("…")`, schema completion in `SparkFrame[…]` slots, and go-to-definition on schema references. (`DataFrame[X]` is the deprecated alias and renders the same hover.) The embedded Python engine isn't reachable from the browser yet (queued for a follow-up release).
+The **in-browser [playground](/playground/)** runs pykrete via WebAssembly and now serves the same pykrete features the VS Code extension does for `.pyk` files: live diagnostics, hover on schema and `SparkFrame[X]` references, column-name completion inside `col("…")`, schema completion in `SparkFrame[…]` slots, and go-to-definition on schema references. (`DataFrame[X]` is the deprecated alias and renders the same hover.) The embedded Python engine isn't reachable from the browser yet (queued for a follow-up release).
 
-For the full list of every shipped feature with diagnostics, see the [Operations reference](/pykrete/reference/operations/) and the [GitHub Releases page](https://github.com/amirnaderi93/pykrete/releases).
+For the full list of every shipped feature with diagnostics, see the [Operations reference](/reference/operations/) and the [GitHub Releases page](https://github.com/amirnaderi93/pykrete/releases).
 
 ## Shipped in v1.3 — pandas check-site coverage
 

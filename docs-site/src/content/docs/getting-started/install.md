@@ -69,8 +69,8 @@ Neovim, Helix, Emacs and Zed setups talk to `pykrete-lsp` directly. See the edit
 
 ## Configuration
 
-pykrete picks up a `pykrete.json` at (or above) the project root. The defaults are reasonable; you only need a config file to relax type checking or skip directories. See [Configuration](/pykrete/reference/configuration/).
+pykrete picks up a `pykrete.json` at (or above) the project root. The defaults are reasonable; you only need a config file to relax type checking or skip directories. See [Configuration](/reference/configuration/).
 
 ## What's next
 
-Once installed, head to the [Quickstart](/pykrete/getting-started/quickstart/) to annotate a real function in three steps.
+Once installed, head to the [Quickstart](/getting-started/quickstart/) to annotate a real function in three steps.

@@ -13,7 +13,7 @@ Every operation is marked with one of five status tags. They describe what you'l
 | --- | --- |
 | **modeled** | pykrete computes the output schema and checks every column reference and (where applicable) type. The next call in the chain is fully checked too. |
 | **pass-through** | pykrete carries the receiver's schema forward unchanged. Correct for ops that don't reshape (`cache`, `orderBy`, `limit`, ...). The chain keeps flowing. |
-| **column-check only** | pykrete checks the column names you pass but doesn't re-derive the output schema. Typos still fire [`unknownColumn`](/pykrete/reference/diagnostics/#unknowncolumn--d0030); chains after this point may degrade. |
+| **column-check only** | pykrete checks the column names you pass but doesn't re-derive the output schema. Typos still fire [`unknownColumn`](/reference/diagnostics/#unknowncolumn--d0030); chains after this point may degrade. |
 | **unmodeled** | pykrete doesn't understand the call. Column references inside the arguments may still be caught, but the chain after this point loses its schema. |
 | **opaque** | Intentionally returns an unknown type — usually because the result genuinely depends on runtime data (UDF outputs, pandas conversions, RDD ops). Re-anchor with [`.cast(SparkFrame[X])`](#cast--the-re-anchor-primitive) if you want checking to resume. |
 
@@ -41,7 +41,7 @@ def f(sales: SparkFrame[Sale]) -> DataFrame:
     )
 ```
 
-A typo anywhere in that chain — `.select("regoin", ...)`, `.drop("amunt")` — fires [`unknownColumn`](/pykrete/reference/diagnostics/#unknowncolumn--d0030) against the schema at that point in the chain, not the original `Sale`.
+A typo anywhere in that chain — `.select("regoin", ...)`, `.drop("amunt")` — fires [`unknownColumn`](/reference/diagnostics/#unknowncolumn--d0030) against the schema at that point in the chain, not the original `Sale`.
 
 | Method | Status | Notes |
 | --- | --- | --- |
@@ -90,7 +90,7 @@ def with_manager(sales: SparkFrame[Sale], regions: SparkFrame[Region]) -> DataFr
     return sales.join(regions, "region", how="inner")
 ```
 
-A wrong key — `.join(regions, "regoin")` — fires [`missingJoinKey`](/pykrete/reference/diagnostics/#missingjoinkey--d0060). A `union` between two dataframes whose columns don't agree fires [`unionSchemaMismatch`](/pykrete/reference/diagnostics/#unionschemamismatch--d0040).
+A wrong key — `.join(regions, "regoin")` — fires [`missingJoinKey`](/reference/diagnostics/#missingjoinkey--d0060). A `union` between two dataframes whose columns don't agree fires [`unionSchemaMismatch`](/reference/diagnostics/#unionschemamismatch--d0040).
 
 | Method | Status | Notes |
 | --- | --- | --- |
@@ -339,8 +339,8 @@ Terminal methods on Spark receivers — `count`, `collect`, `first`, `head`, `ta
 
 Functions in `pyspark.sql.functions` show up inside the operations above — `df.select(F.upper("name"))`, `df.agg(F.sum("amount"))`. pykrete recognizes about 140 of them. Two things to know:
 
-1. **Column refs are always checked.** A string-literal argument to a recognized `F.*` function is treated as a column reference. `F.sum("amunt")` fires [`unknownColumn`](/pykrete/reference/diagnostics/#unknowncolumn--d0030) the same way `df.select("amunt")` does.
-2. **Result types are inferred for ~80 of them** — enough to power [`returnTypeMismatch`](/pykrete/reference/diagnostics/#type-checking-diagnostics) and downstream `.cast(...)` / arithmetic checks. The rest produce a column whose type is unknown until you re-anchor it — the chain keeps flowing, but downstream type checks against that column can't fire.
+1. **Column refs are always checked.** A string-literal argument to a recognized `F.*` function is treated as a column reference. `F.sum("amunt")` fires [`unknownColumn`](/reference/diagnostics/#unknowncolumn--d0030) the same way `df.select("amunt")` does.
+2. **Result types are inferred for ~80 of them** — enough to power [`returnTypeMismatch`](/reference/diagnostics/#type-checking-diagnostics) and downstream `.cast(...)` / arithmetic checks. The rest produce a column whose type is unknown until you re-anchor it — the chain keeps flowing, but downstream type checks against that column can't fire.
 
 A spot-check of the families:
 
@@ -525,7 +525,7 @@ For the PySpark-only operations on this page (joins / windows / IO), `PandasFram
 Some of the surface is intentionally outside pykrete's reach. These aren't gaps to fill — they're runtime concerns, not schema concerns:
 
 - **Structured streaming** (`readStream`, `writeStream`, `isStreaming`). pykrete is a static checker against declared schemas; streaming state is a runtime construct.
-- **Arrow conversions, pandas-on-Spark, and UDF-shaped pandas interop** (`toArrow`, `mapInPandas`, `applyInPandas`, `mapInArrow`, `pandas_api`, ...). The result isn't a vanilla dataframe anymore. pandas check-site coverage shipped in v1.3 as its own typed surface (`PandasFrame[X]`) — see the [Pandas dispatch](#pandas-dispatch) section above. v1.5 added the `.toPandas()` and `spark.createDataFrame(pdf)` cross-dialect handoff (re-tagging `SparkFrame[X]` ↔ `PandasFrame[X]` at those two seams); v1.6 added the `.take()` pandas dialect-gate and `pivot_table` literal-form. Polars is tracked for v1.14+ on the [roadmap](/pykrete/about/roadmap/).
+- **Arrow conversions, pandas-on-Spark, and UDF-shaped pandas interop** (`toArrow`, `mapInPandas`, `applyInPandas`, `mapInArrow`, `pandas_api`, ...). The result isn't a vanilla dataframe anymore. pandas check-site coverage shipped in v1.3 as its own typed surface (`PandasFrame[X]`) — see the [Pandas dispatch](#pandas-dispatch) section above. v1.5 added the `.toPandas()` and `spark.createDataFrame(pdf)` cross-dialect handoff (re-tagging `SparkFrame[X]` ↔ `PandasFrame[X]` at those two seams); v1.6 added the `.take()` pandas dialect-gate and `pivot_table` literal-form. Polars is tracked for v1.14+ on the [roadmap](/about/roadmap/).
 - **RDD-level operations** (`rdd`, `mapPartitions`, `foreach`). These drop below the dataframe abstraction by design.
 - **Runtime introspection** (`describe`, `summary`, `stat.*`). These return shape-of-data summaries, not schemas.
 - **UDF internals**. The decorator's return type is honored, but the body is opaque.
@@ -534,6 +534,6 @@ For all of these, the chain ends or becomes opaque at the call site. Downstream 
 
 ## See also
 
-- [Schemas](/pykrete/reference/schemas/) — how to declare the shapes the operations above check against.
-- [Diagnostics](/pykrete/reference/diagnostics/) — the full list of errors, including [`D0030 unknownColumn`](/pykrete/reference/diagnostics/#unknowncolumn--d0030) (the workhorse), [`D0040 unionSchemaMismatch`](/pykrete/reference/diagnostics/#unionschemamismatch--d0040), and [`D0060 missingJoinKey`](/pykrete/reference/diagnostics/#missingjoinkey--d0060).
-- [Configuration](/pykrete/reference/configuration/) — turn individual rules into warnings or off.
+- [Schemas](/reference/schemas/) — how to declare the shapes the operations above check against.
+- [Diagnostics](/reference/diagnostics/) — the full list of errors, including [`D0030 unknownColumn`](/reference/diagnostics/#unknowncolumn--d0030) (the workhorse), [`D0040 unionSchemaMismatch`](/reference/diagnostics/#unionschemamismatch--d0040), and [`D0060 missingJoinKey`](/reference/diagnostics/#missingjoinkey--d0060).
+- [Configuration](/reference/configuration/) — turn individual rules into warnings or off.

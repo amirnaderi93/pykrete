@@ -15,7 +15,7 @@ For example:
 sales.pyk:10:18 - error unknownColumn: Column 'regoin' does not exist on schema 'Sale'. Did you mean 'region'?
 ```
 
-The **rule name** (`unknownColumn`) is what the CLI prints and what the editor shows as the diagnostic code. Each rule also has a stable `D00xx` identifier used internally — both the name and the code are accepted as keys in [`pykrete.json`](/pykrete/reference/configuration/)'s `rules` block.
+The **rule name** (`unknownColumn`) is what the CLI prints and what the editor shows as the diagnostic code. Each rule also has a stable `D00xx` identifier used internally — both the name and the code are accepted as keys in [`pykrete.json`](/reference/configuration/)'s `rules` block.
 
 ## Full reference
 
@@ -116,7 +116,7 @@ A column named as a join key doesn't exist on one (or both) sides of the join.
 
 ## Type-checking diagnostics
 
-pykrete checks column **types**, not just existence. How much it checks depends on [`typeCheckingMode`](/pykrete/reference/configuration/#typecheckingmode).
+pykrete checks column **types**, not just existence. How much it checks depends on [`typeCheckingMode`](/reference/configuration/#typecheckingmode).
 
 **`returnTypeMismatch` — D0080.** On by default; emitted at `error` severity. The returned columns match the declared return schema by name, but a column's *type* doesn't — and both types are confidently known and genuinely incompatible. Numeric widening (`int` → `long` → `double`) is accepted; unknown types are left alone. The check is conservative on the column-type arm: it stays silent when either side's type is Unknown.
 
@@ -343,4 +343,4 @@ Any rule can be downgraded to a warning or switched off in `pykrete.json`:
 }
 ```
 
-Key by the rule name (or the `D00xx` code — both work). See [Configuration](/pykrete/reference/configuration/).
+Key by the rule name (or the `D00xx` code — both work). See [Configuration](/reference/configuration/).
