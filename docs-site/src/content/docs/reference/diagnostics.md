@@ -74,7 +74,7 @@ When a *did you mean* suggestion is attached, the LSP exposes it as a `QuickFix`
 
 **Adopters who incorrectly accessed non-aggregate columns after `groupby.agg().reset_index(drop=True)`, or who accessed literal keys after `set_index([keys])`, will see new D0030 fires.** Path forward: align downstream code with the synthesized schema (keys + value columns with aggregate-typed dtype), or access keys via `.index` (not modeled; `reset_index(drop=False)` index-as-column promotion is a v1.17 deferral).
 
-**New in v1.16: two more D0030 sites, and one D0050 false positive removed.**
+**New in v1.16: one new D0030 site, one preserved through the new `inplace=` guard, and one D0050 false positive removed.**
 
 - `result['unnamed']` after `pdf.groupby("k").agg({"amount": "sum"})` now fires D0030. The dict form keeps **only** the columns the dict names plus the group keys — every other receiver column is dropped from the result schema. This is the highest-impact new D0030 source in v1.16: code that read a column the dict didn't name was already getting a column pandas doesn't return, and now says so. Path forward: widen the dict, or drop the downstream reference.
 - `pdf.set_index(["typo"], inplace=True)` still fires D0030 on the key typo. The `inplace=True` forms resolve to `None` (matching pandas) rather than synthesizing a schema, but key existence is validated *before* that punt — the guard suppresses a bogus schema without losing the diagnostic.

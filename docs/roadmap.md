@@ -443,17 +443,23 @@ fall through to Unknown. `groupby.agg` gains its dict form
 receiver columns are dropped, the highest-impact new D0030
 source this cycle) and its callable form (`np.mean` / `len`,
 which on an all-numeric frame keeps keys plus every non-key
-column at Unknown dtype). Three shapes now decline to Unknown
-where the checker previously over-claimed: named-aggregation
+column at Unknown dtype). Four shapes now decline to Unknown where the checker
+previously over-claimed: named-aggregation
 `groupby(k).agg(out=(col, fn))` — a FALSE POSITIVE through
 v1.15 that synthesized a keys-only schema and fired a bogus
 `returnColumnsMismatch` on correct code — `rolling` over any
-non-numeric column, and numeric-restricting aggregation over a
-frame with a non-numeric non-key column. The rationale is
-identical in all three: pandas 2.x RAISES (`TypeError` /
-`DataError`) rather than silently dropping the column the way
-pre-2.0 pandas did, and pykrete does not synthesize a schema
-for code that errors at runtime. `reset_index(inplace=True)`
+non-numeric column, numeric-restricting aggregation over a
+frame carrying a non-numeric column (on `groupby.agg` and
+`resample.agg` alike), and `resample(<rule>, on=<col>)`. The
+rationale is identical for the first three: pandas 2.x RAISES
+(`TypeError` / `DataError`) rather than silently dropping the
+column the way pre-2.0 pandas did, and pykrete does not
+synthesize a schema for code that errors at runtime. The
+fourth applies the same principle to shape rather than dtype —
+pandas moves the `on=` column into the resample index, so
+keeping it claimed a column the result does not have;
+`rolling(<n>, on=<col>)` keeps the column and is deliberately
+unaffected. `reset_index(inplace=True)`
 and `set_index(inplace=True)` resolve to None, matching
 pandas, with D0030 key-existence still validated before the
 inplace punt. The audit side ships the

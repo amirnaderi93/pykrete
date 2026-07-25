@@ -515,7 +515,9 @@ def daily(readings: PandasFrame[Reading]) -> pd.DataFrame:
     return out[["temperature"]]      # checked against the synthesized envelope
 ```
 
-A numeric-restricting aggfunc (`mean` / `std` / `var` / `median`) over a frame carrying a non-numeric column **declines to Unknown**, mirroring `rolling.agg` and `groupby.agg`. Column-keeping aggfuncs (`sum` / `min` / `max` / `first` / `last` / `count` / `nunique`) synthesize over the full column set as usual.
+A numeric-restricting aggfunc (`mean` / `std` / `var` / `median`) over a frame carrying a non-numeric column **declines to Unknown**, mirroring `groupby.agg`. Column-keeping aggfuncs (`sum` / `min` / `max` / `first` / `last` / `count` / `nunique`) synthesize over the full column set as usual — on a `Resampler` those genuinely keep a non-numeric column. (`rolling.agg` gates more broadly: it declines on any non-numeric column whatever the aggfunc, because it upcasts everything.)
+
+**`pdf.resample("D", on="ts")` declines to Unknown.** pandas moves the `on=` column out of the columns and into the resample index, and pykrete doesn't model the index — synthesizing `ts` as a column would claim a column the result doesn't have. `rolling(n, on="col")` has the opposite semantics (it *keeps* the column), so `rolling` deliberately stays on the normal path.
 
 **`.rolling(n).agg("fn")`.** `pdf.rolling(7).agg("mean")` synthesizes an **all-float64** envelope — pandas rolling upcasts numeric columns to `float64` regardless of the aggregate, so the `groupby` dtype table does not apply here. The synthesis only happens when **every** column on the receiver is numeric; if any column is non-numeric, the whole call **declines to Unknown**. "Numeric" here follows pykrete's dtype predicate: `bool` counts as numeric (it is arithmetic-capable), and a column whose dtype pykrete could not resolve counts as non-numeric, so an unresolved column declines the call rather than being assumed safe.
 
@@ -535,8 +537,6 @@ The v1.16 window-aggregation boundary is narrow. Unless a bullet says otherwise,
 - **`rolling.agg("first")` / `("last")` / `("nunique")`** — outside the rolling aggfunc allowlist.
 - **`expanding.agg`** — the cumulative-window sibling isn't modeled at all.
 - **Named-aggregation `groupby`** — `pdf.groupby("k").agg(total=("amount", "sum"))`. Through v1.15 this synthesized a keys-only schema, which was a false positive on correct code; v1.16 declines to Unknown instead. Precise per-output-column modeling lands in v1.17. **The grouping key is still checked** — `pdf.groupby("regoin").agg(total=("amount", "sum"))` fires D0030 on the key typo. It is the *result schema* that goes Unknown, not the call; the column named inside the `(col, fn)` tuple is what goes unchecked.
-
-One known imprecision rather than a fall-through: **`pdf.resample("D", on="ts")` is recognized**, but the synthesized schema keeps `ts` as a column. pandas moves the `on=` column to the index, so `ts` is not accessible on the result — a downstream `out[["ts"]]` is accepted where pandas would fail.
 
 ### Six dispatched operations
 
