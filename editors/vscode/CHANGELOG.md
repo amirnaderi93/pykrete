@@ -12,12 +12,16 @@ chains, and the dict-form (`df.groupby(k).agg({col: fn})`) and callable
 (`df.groupby(k).agg(np.mean)`) shapes of `groupby.agg`. `resample.agg`
 follows the aggregate-to-dtype table (count/nunique → Long;
 mean/std/var/median → Double; sum/min/max/first/last preserve the
-receiver); `rolling.agg` aggregates numeric columns to Double but falls
-through to Unknown when the frame contains any non-numeric column (honest
-silence — pandas drops non-numeric), with aggfuncs restricted to
-count/sum/mean/std/var/median/min/max. Dict-form `groupby.agg` keeps only
-the named columns plus group keys; callable `groupby.agg` keeps keys plus
-all non-key columns at Unknown dtype (an over-approximated superset).
+receiver); `rolling.agg` aggregates numeric columns to Double but declines
+to Unknown when the frame contains any non-numeric column (honest
+silence — pandas 2.x raises on non-numeric rolling aggregation, so pykrete
+does not synthesize a schema for code that errors), with aggfuncs
+restricted to count/sum/mean/std/var/median/min/max. Dict-form
+`groupby.agg` keeps only the named columns plus group keys; callable
+`groupby.agg` keeps keys plus all non-key columns at Unknown dtype on
+all-numeric frames, and declines to Unknown when any non-key column is
+non-numeric (pandas raises on a numeric-restricting callable like
+`np.mean` over non-numeric).
 Named-aggregation (`groupby(k).agg(out=(col, fn))`) is not yet modeled —
 it falls through to Unknown (v1.17). `reset_index(inplace=True)`
 and `set_index(inplace=True)` now correctly resolve to None — pandas

@@ -29,9 +29,9 @@ v1.9 introduced the `text-numeric-historical` fence convention; pre-v1.9 section
 ### Changed (behavioral — checker now synthesizes where it previously fell through)
 
 - **`df.resample("<rule>").agg("<fn>")` chains now synthesize a Derived schema.** Columns follow the aggregate-to-dtype table: count/nunique → Long; mean/std/var/median → Double; sum/min/max/first/last preserve the receiver column's dtype. Previously Unknown — downstream column-refs were silent. **Path forward**: align downstream code with the synthesized schema. (PR-D1 #213)
-- **`df.rolling(<n>).agg("<fn>")` chains now synthesize a Derived schema.** Numeric columns aggregate to Double; a frame containing a non-numeric column falls through to Unknown (honest silence — pandas drops non-numeric). Aggfuncs restricted to count/sum/mean/std/var/median/min/max. Previously Unknown. **Path forward**: align downstream code with the synthesized schema. (PR-D1 #213)
+- **`df.rolling(<n>).agg("<fn>")` chains now synthesize a Derived schema.** Numeric columns aggregate to Double; a frame containing a non-numeric column declines to Unknown (honest silence — pandas 2.x raises `DataError` on non-numeric rolling aggregation, so pykrete does not synthesize a schema for code that errors at runtime). Aggfuncs restricted to count/sum/mean/std/var/median/min/max. Previously Unknown. **Path forward**: align downstream code with the synthesized schema. (PR-D1 #213, PR-D3 #217)
 - **Dict-form `df.groupby(keys).agg({col: fn})` now synthesizes a Derived schema** keeping ONLY the named columns plus group keys, each at its per-aggregate dtype. Previously Unknown. **Path forward**: reference only named + key columns downstream, or widen the dict. (PR-D2 #214)
-- **Callable `df.groupby(keys).agg(np.mean)` / `.agg(len)` now synthesizes a Derived schema** — group keys plus ALL non-key columns, over-approximated as a superset at Unknown dtype (see honest carve-out in Audit-debt below). Previously Unknown. (PR-D2 #214)
+- **Callable `df.groupby(keys).agg(np.mean)` / `.agg(len)` now synthesizes a Derived schema** on all-numeric frames — group keys plus all non-key columns at Unknown dtype (a callable is opaque, so per-column dtypes aren't known). A frame with any non-numeric non-key column declines to Unknown (pandas 2.x raises on a numeric-restricting callable like `np.mean` over non-numeric). Previously Unknown. (PR-D2 #214, PR-D4 #218)
 - **`reset_index(inplace=True)` / `set_index(inplace=True)` now correctly resolve to None** (pandas returns None for the inplace forms) instead of synthesizing a Derived schema; column-existence (D0030) is still validated before the inplace punt. **Adopters who chained off an `inplace=True` reset/set result were relying on a schema pandas never returns** — drop `inplace=True` and rebind. (PR-D2 #214)
 
 ### Added
@@ -44,6 +44,8 @@ v1.9 introduced the `text-numeric-historical` fence convention; pre-v1.9 section
 
 ### Fixed
 
+- **Named-aggregation false positive (pre-existing since v1.14).** `df.groupby(keys).agg(out=(col, fn))` — the flat-output named-aggregation idiom — previously synthesized a keys-only schema, dropping the named outputs and firing a false `returnColumnsMismatch` on correct code (plus a false D0030 on downstream access of a named output). It now declines to Unknown; precise per-output-column modeling is deferred to v1.17. (PR-D3 #217)
+- **Non-numeric aggregation false positive.** pandas 2.x raises (`TypeError` / `DataError`) when a numeric-restricting aggfunc (`mean` / `std` / `var` / `median`), a `rolling` aggregation, or an opaque callable (`np.mean`) is applied to a frame with a non-numeric non-key column. pykrete previously synthesized a schema that kept those columns (forcing Double, or over-approximating for a callable), which false-fired `returnColumnsMismatch` against a return type that correctly omitted them. All such shapes now decline to Unknown — pykrete does not synthesize a schema for code that errors at runtime; numeric-only frames synthesize as before. (PR-D3 #217, PR-D4 #218)
 - **§9.2 centralized-bump chicken-and-egg.** `extension-version-guard` now gates bump-enforcement on the release-PR title (`chore(release):`) rather than a mid-cycle marker file — eliminating the self-inflicted mid-cycle break that hit v1.15 (checker PRs failed the guard because the marker was absent and the workflow had not been updated to skip the check). The marker mechanism (`.github/centralized-bump-cycle.marker`) is retired. (Cycle-0.1 #210)
 - **Trust-claim prior-leak scanner: `110 negative` path/kind pin collision disambiguation** — a bare `<num> <key>` in a markdown-table row that matches a `text-numeric-historical` pin is deferred to the marketing-table scanner rather than false-flagged as a prior-release leak. (PR-A1 #215)
 
@@ -53,7 +55,7 @@ v1.9 introduced the `text-numeric-historical` fence convention; pre-v1.9 section
 
 ### Test coverage
 
-- pykrete: `2027 tests` total
+- pykrete: `2064 tests` total
 - pykrete-tests: `312 probes` (`195 positive` + `117 negative`); `171 fixtures`; `17 donors`
 
 ```text-numeric
@@ -61,15 +63,15 @@ v1.9 introduced the `text-numeric-historical` fence convention; pre-v1.9 section
 195 positive
 117 negative
 171 fixtures
-2027 tests
+2064 tests
 17 donors
 ```
 
 ### Audit-debt deferred to v1.17
 
-- **Type-aware rolling non-numeric decline** — `rolling.agg` currently declines the whole frame (Unknown) on any non-numeric column; a column-level model that keeps the numeric columns as Double and drops the non-numeric ones (matching pandas) is deferred.
+- **Precise column-drop when `numeric_only=True` is detectable** — rolling / groupby aggregation currently declines the whole frame to Unknown on any non-numeric column (pandas 2.x raises otherwise). When a caller passes `numeric_only=True` — which makes pandas drop the non-numeric columns and succeed — pykrete could instead synthesize the numeric-only schema (numeric columns as Double). That column-level model is deferred.
 - **Named-aggregation `groupby(keys).agg(out=(col, fn))`** — not yet modeled; falls through to Unknown. Per-output-column dtype modeling deferred.
-- **Callable-groupby uniform column-drop model** — the callable arm over-approximates (keys + all non-keys at Unknown); it can trip D0050 on a precisely-typed return schema. A uniform column-drop model is deferred.
+- **Callable-groupby precise column set on all-numeric frames** — for an all-numeric frame the callable arm keeps every non-key column at Unknown dtype (correct for `len`, a slight over-approximation for a numeric-restricting callable a caller might expect to narrow). Mixed frames already decline to Unknown (see Fixed); precise per-callable modeling on all-numeric frames is deferred.
 - **resample / rolling / dict-form groupby.agg cross-codebase probes** — no donor exercises these shapes yet; the arms are unit-tested in-crate this cycle. Cross-codebase coverage tracked for v1.17.
 - **Windowed lattice variant** and **`expanding.agg`** — cumulative-window semantic asymmetry.
 - Placeholder: the pre-v1.17 4-audit (architecture + pandas-coverage + docs-sync + probe-density) will populate the final v1.17 audit-debt set before PR-G.
