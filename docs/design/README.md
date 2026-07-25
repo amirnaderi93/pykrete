@@ -26,3 +26,29 @@ understand the codebase.
   pykrete recognizes literal values in column expressions, the
   enum-vocabulary plumbing that powers `D0084 enumValueMismatch`, and
   the broader literal-checking story.
+
+## Cycle specs
+
+One per minor release, written before the cycle starts and amended at
+cycle close. Each carries the scope decisions, the settled design
+forks, the per-PR briefs, and the deferral set for the following cycle.
+
+The series starts at v1.4 — v1.0 through v1.3 predate the cycle-spec
+practice, and their design record lives in `pandas-support.md`,
+`spark-coverage.md`, and the release notes.
+
+- [v1.4](v1.4-spec.md) — pandas depth: 7 new donors, pandas type-tracking
+- [v1.5](v1.5-spec.md) — cross-dialect handoff, `.loc` literal-form
+- [v1.6](v1.6-spec.md) — `pykrete migrate`, `pivot_table` literal-form
+- [v1.7](v1.7-spec.md) — migrator `--check` default, `melt` literal-form
+- [v1.8](v1.8-spec.md) — v2.0 deprecation runway, `D0091`
+- [v1.9](v1.9-spec.md) — migration plannability, `D0091` maturity
+- [v1.10](v1.10-spec.md) — migration archivability, `stack` literal-form
+- [v1.11](v1.11-spec.md) — `unstack` literal-form, audit-tooling block
+- [v1.12](v1.12-spec.md) — D0080 cross-codebase, `pivot_table(aggfunc=)` allowlist
+- [v1.13](v1.13-spec.md) — D0080 dialect-on-return, aggfunc Derived synthesis
+- [v1.14](v1.14-spec.md) — D0080 constructor arms, `groupby.agg` synthesis
+- [v1.15](v1.15-spec.md) — pandas chain-depth, `resolve_override_ty`
+- [v1.16](v1.16-spec.md) — time/window aggregation, dict + callable `groupby.agg`
+
+`v15_retro.md` holds the v1.15 cycle retrospective.

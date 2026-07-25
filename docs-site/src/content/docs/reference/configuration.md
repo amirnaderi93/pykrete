@@ -28,7 +28,7 @@ How far pykrete goes when checking column **types**. Column **existence** checki
 | `standard` *(default)* | Conservative type checking — `returnTypeMismatch` fires only when two types are confidently known and genuinely incompatible. |
 | `strict` | Everything in `standard`, plus the advisory checks: `nonNumericArithmetic`, `crossTypeComparison`, `nullabilityMismatch`. v1.6+: D0090 (`deprecatedDataFrameAlias`) also escalates from warning to error under strict. |
 
-The language server reads the same value, and a `pykrete.json` `typeCheckingMode` takes precedence over the editor's own setting. See [Diagnostics](/pykrete/reference/diagnostics/#type-checking-diagnostics) for what each level surfaces.
+The language server reads the same value, and a `pykrete.json` `typeCheckingMode` takes precedence over the editor's own setting. See [Diagnostics](/reference/diagnostics/#type-checking-diagnostics) for what each level surfaces.
 
 ## `exclude`
 
@@ -56,7 +56,7 @@ Per-rule severity overrides — turn a rule into a warning, or off entirely.
 }
 ```
 
-Each value is `error`, `warning`, or `off`. Keys are [rule names](/pykrete/reference/diagnostics/#full-reference) — the `D00xx` code works too.
+Each value is `error`, `warning`, or `off`. Keys are [rule names](/reference/diagnostics/#full-reference) — the `D00xx` code works too.
 
 A common adoption pattern on an existing codebase: set the noisy rules to `warning` first, clear them at your own pace, then promote them back to `error` once the project is clean.
 

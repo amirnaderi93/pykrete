@@ -158,7 +158,7 @@ class Customer(Schema):
     email: Optional[string]
 ```
 
-For column-existence checks, `Optional[T]` and `T` behave the same. The distinction matters under [strict type-checking](/pykrete/reference/configuration/#typecheckingmode), where a nullable value flowing into a non-nullable slot is flagged.
+For column-existence checks, `Optional[T]` and `T` behave the same. The distinction matters under [strict type-checking](/reference/configuration/#typecheckingmode), where a nullable value flowing into a non-nullable slot is flagged.
 
 ## Nested types
 
@@ -297,7 +297,7 @@ def revenue_by_region(sales: SparkFrame[Sale]) -> SparkFrame:
     return sales.groupBy("region").agg(F.sum("amount").alias("total"))
 ```
 
-One schema, imported wherever the dataframe shows up. Schema modules need to be `.pyk` (not `.py`) for pykrete to walk them at check time. See the [Quickstart](/pykrete/getting-started/quickstart/) for the gradual-adoption path and the [Cookbook](/pykrete/cookbook/#3-share-schemas-across-files) for the recipe.
+One schema, imported wherever the dataframe shows up. Schema modules need to be `.pyk` (not `.py`) for pykrete to walk them at check time. See the [Quickstart](/getting-started/quickstart/) for the gradual-adoption path and the [Cookbook](/cookbook/#3-share-schemas-across-files) for the recipe.
 
 ## Why case-sensitive?
 

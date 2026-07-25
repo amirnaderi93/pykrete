@@ -15,7 +15,7 @@ For example:
 sales.pyk:10:18 - error unknownColumn: Column 'regoin' does not exist on schema 'Sale'. Did you mean 'region'?
 ```
 
-The **rule name** (`unknownColumn`) is what the CLI prints and what the editor shows as the diagnostic code. Each rule also has a stable `D00xx` identifier used internally — both the name and the code are accepted as keys in [`pykrete.json`](/pykrete/reference/configuration/)'s `rules` block.
+The **rule name** (`unknownColumn`) is what the CLI prints and what the editor shows as the diagnostic code. Each rule also has a stable `D00xx` identifier used internally — both the name and the code are accepted as keys in [`pykrete.json`](/reference/configuration/)'s `rules` block.
 
 ## Full reference
 
@@ -72,7 +72,19 @@ When a *did you mean* suggestion is attached, the LSP exposes it as a `QuickFix`
 - `result['typo']` after `pdf.groupby("k").agg("sum").reset_index(drop=True)` now fires D0030 against the synthesized schema (keys + aggregate columns). Previously degraded to Unknown after `reset_index`; downstream typos were silent.
 - `result['literal_key']` after `pdf.set_index(['literal_key'])` now fires D0030 because the literal-key columns are removed from the accessible schema. Previously degraded to Unknown.
 
-**Adopters who incorrectly accessed non-aggregate columns after `groupby.agg().reset_index(drop=True)`, or who accessed literal keys after `set_index([keys])`, will see new D0030 fires.** Path forward: align downstream code with the synthesized schema (keys + value columns with aggregate-typed dtype), or access keys via `.index` (not modeled; `reset_index(drop=False)` index-as-column promotion is a v1.16 deferral).
+**Adopters who incorrectly accessed non-aggregate columns after `groupby.agg().reset_index(drop=True)`, or who accessed literal keys after `set_index([keys])`, will see new D0030 fires.** Path forward: align downstream code with the synthesized schema (keys + value columns with aggregate-typed dtype), or access keys via `.index` (not modeled; `reset_index(drop=False)` index-as-column promotion is a v1.17 deferral).
+
+**New in v1.16: one new D0030 site, one preserved through the new `inplace=` guard, and one D0050 false positive removed.**
+
+- `result['unnamed']` after `pdf.groupby("k").agg({"amount": "sum"})` now fires D0030. The dict form keeps **only** the columns the dict names plus the group keys — every other receiver column is dropped from the result schema. This is the highest-impact new D0030 source in v1.16: code that read a column the dict didn't name was already getting a column pandas doesn't return, and now says so. Path forward: widen the dict, or drop the downstream reference.
+- `pdf.set_index(["typo"], inplace=True)` still fires D0030 on the key typo. The `inplace=True` forms resolve to `None` (matching pandas) rather than synthesizing a schema, but key existence is validated *before* that punt — the guard suppresses a bogus schema without losing the diagnostic.
+
+**Removed in v1.16: a `returnColumnsMismatch` (D0050) false positive.** Two shapes used to synthesize a schema that didn't match what pandas returns, which then fired D0050 against a correctly-declared return type:
+
+- **Named aggregation.** `pdf.groupby("k").agg(total=("amount", "sum"))` synthesized a keys-only schema, dropping the named outputs. A function declaring the correct return columns got a spurious D0050, and a downstream read of `result["total"]` got a spurious D0030. Live since v1.14; it now declines to Unknown. Precise per-output-column modeling lands in v1.17. The grouping key is still checked, so a typo in `groupby("regoin")` still fires D0030.
+- **Numeric-restricting aggregation over a non-numeric column.** `mean` / `std` / `var` / `median`, a `rolling` aggregation, or an opaque callable (`np.mean`) applied to a frame carrying a non-numeric column used to synthesize a schema that kept those columns. pandas 2.x **raises** (`TypeError` / `DataError`) on all of these — it does not silently drop the column the way pre-2.0 pandas did — so a return type that correctly omitted them fired a spurious D0050. These shapes now decline to Unknown; numeric-only frames synthesize as before.
+
+**If either of those false positives was firing on your code, the fix is to delete the workaround.** No annotation change is needed.
 
 ### `unionSchemaMismatch` — D0040
 
@@ -116,7 +128,7 @@ A column named as a join key doesn't exist on one (or both) sides of the join.
 
 ## Type-checking diagnostics
 
-pykrete checks column **types**, not just existence. How much it checks depends on [`typeCheckingMode`](/pykrete/reference/configuration/#typecheckingmode).
+pykrete checks column **types**, not just existence. How much it checks depends on [`typeCheckingMode`](/reference/configuration/#typecheckingmode).
 
 **`returnTypeMismatch` — D0080.** On by default; emitted at `error` severity. The returned columns match the declared return schema by name, but a column's *type* doesn't — and both types are confidently known and genuinely incompatible. Numeric widening (`int` → `long` → `double`) is accepted; unknown types are left alone. The check is conservative on the column-type arm: it stays silent when either side's type is Unknown.
 
@@ -343,4 +355,4 @@ Any rule can be downgraded to a warning or switched off in `pykrete.json`:
 }
 ```
 
-Key by the rule name (or the `D00xx` code — both work). See [Configuration](/pykrete/reference/configuration/).
+Key by the rule name (or the `D00xx` code — both work). See [Configuration](/reference/configuration/).

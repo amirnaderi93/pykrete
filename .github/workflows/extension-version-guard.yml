@@ -66,10 +66,22 @@
 #   diff --git a/README.md b/README.md
 #   ...
 #
-# NOTE
-# ----
-# After this workflow is merged, add it to the branch protection rule's
-# "required status checks" list so it actually blocks merges.
+# NOT A REQUIRED STATUS CHECK
+# ---------------------------
+# This guard is deliberately absent from `main`'s required-status-checks
+# list; the only required context is "build · test · lint". Enforcement
+# comes from the release PR itself failing loudly when the bump is
+# missing, which is sufficient because the bump is centralized there.
+#
+# Note that the skipped-jobs-report-Success hazard — see "Standing
+# process rules", item 1 ("Skipped-jobs-Success checklist"), and "Wait
+# for dispatched release-gate run before merging PR-F" in CONTRIBUTING
+# — does NOT apply to this workflow. `on: pull_request` is unfiltered
+# and the `check` job carries no `if:`, so the job always runs and
+# reports for real; on a non-release PR it runs the detection and exits
+# 0. That hazard is about `release-gate.yml`, whose triggers are push +
+# workflow_dispatch only. Promoting this guard to a required context
+# would therefore work as intended if we ever want it.
 
 name: Extension version guard
 

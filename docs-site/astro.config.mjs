@@ -60,6 +60,7 @@ export default defineConfig({
             { label: 'How it works', slug: 'about/how-it-works' },
             { label: 'Production readiness', slug: 'about/production-readiness' },
             { label: 'Roadmap', slug: 'about/roadmap' },
+            { label: 'Pandas roadmap', slug: 'about/pandas-roadmap' },
             { label: 'Real-codebase tests', slug: 'about/pykrete-tests' },
           ],
         },

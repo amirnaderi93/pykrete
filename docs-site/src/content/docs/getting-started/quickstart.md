@@ -3,7 +3,7 @@ title: Quickstart
 description: From a plain Python dataframe file to a pykrete-checked one — in three steps, five minutes, no project rewrite.
 ---
 
-You have a PySpark codebase and pykrete [installed](/pykrete/getting-started/install/). Here's the shortest path to it catching your first typo.
+You have a PySpark codebase and pykrete [installed](/getting-started/install/). Here's the shortest path to it catching your first typo.
 
 ## 1. Rename one file
 
@@ -27,7 +27,7 @@ class Sale(Schema):
     quantity: int
 ```
 
-Field name is column name; field type is column type. The atomic types are `int`, `long`, `string`, `double`, `bool`, `date`, `timestamp`; columns can also be arrays, maps, and nested structs — see [Schemas](/pykrete/reference/schemas/).
+Field name is column name; field type is column type. The atomic types are `int`, `long`, `string`, `double`, `bool`, `date`, `timestamp`; columns can also be arrays, maps, and nested structs — see [Schemas](/reference/schemas/).
 
 ## 3. Annotate the function
 
@@ -59,7 +59,7 @@ $ pykrete check sales.pyk
 sales.pyk:10:18 - error unknownColumn: Column 'regoin' does not exist on schema 'Sale'. Did you mean 'region'?
 ```
 
-There it is — location, severity, rule name, the bad column, the schema it was checked against, and a suggestion. With the [VS Code extension](/pykrete/getting-started/install/#vs-code-extension), this is a red underline under `regoin` as you type, no command needed.
+There it is — location, severity, rule name, the bad column, the schema it was checked against, and a suggestion. With the [VS Code extension](/getting-started/install/#vs-code-extension), this is a red underline under `regoin` as you type, no command needed.
 
 Change it back. You now have one checked function.
 
@@ -91,6 +91,6 @@ For CI scripts that need to parse the results, `pykrete check --format json .` e
 
 ## Next
 
-- [Schemas](/pykrete/reference/schemas/) — nested arrays / maps / structs, and the `Pick` / `Omit` / `Merge` operators.
-- [Diagnostics](/pykrete/reference/diagnostics/) — every rule, with examples.
-- [How it works](/pykrete/about/how-it-works/) — what's happening under the hood.
+- [Schemas](/reference/schemas/) — nested arrays / maps / structs, and the `Pick` / `Omit` / `Merge` operators.
+- [Diagnostics](/reference/diagnostics/) — every rule, with examples.
+- [How it works](/about/how-it-works/) — what's happening under the hood.
