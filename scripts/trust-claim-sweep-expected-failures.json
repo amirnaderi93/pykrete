@@ -1,18 +1,4 @@
 {
   "_comment": "Allowlist for scripts/trust-claim-sweep-checklist.sh. Each entry suppresses a matching gate fire and is a COUNTDOWN: once the workspace Cargo.toml version exceeds `expiresAfter`, the entry is STALE and the gate fails LOUD (EXPECTED-FAILURE-EXPIRED). Auto-discovered when the gate runs without --expected-failures. Resolve each surface before its expiresAfter; never let an entry outlive its window.",
-  "entries": [
-    {
-      "surface": "docs-site/src/content/docs/about/pandas-roadmap.md",
-      "pattern": "Where we are",
-      "reason": "Roadmap 'Where we are (v1.14.0)' header is two cycles stale (v1.15 shipped without updating it). PR-A1 lands the roadmap-header guard; PR-G converts the trajectory row + 'Where we are' header to the shipped v1.16.0 state at cycle close (v1.16-spec §1.iii.2 + §1.iv.3).",
-      "expiresAfter": "1.16.0"
-    },
-    {
-      "surface": "docs-site/src/content/docs/about/roadmap.md",
-      "pattern": "Shipped in v1.15",
-      "reason": "Clause-(b) roadmap-header drift: at the 1.16.0 bump the highest '## Shipped in v1.15' section on about/roadmap.md is one cycle stale — this cycle's shipped work is not yet narrated on the docs-site roadmap. PR-A1 landed the clause-(b) guard; PR-F holds the drift here so the gate stays green post-bump; PR-G resolves it at cycle close.",
-      "note": "resolved by PR-G — adds ## Shipped in v1.16 section + removes this entry",
-      "expiresAfter": "1.16.0"
-    }
-  ]
+  "entries": []
 }
