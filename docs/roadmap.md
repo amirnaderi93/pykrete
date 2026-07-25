@@ -406,7 +406,9 @@ pykrete-tests PR-P1 #50 with positive probes against
 D0080 constructor returns. The dtype-override family (the
 inference table shared between `pivot_table(aggfunc=)` and
 `groupby.agg`) consolidates behind the new `resolve_override_ty`
-primitive in preparation for the v1.16 Windowed lattice. The
+primitive in preparation for the window-aggregation arms (the
+`Windowed` lattice variant was evaluated and rejected in v1.16
+in favor of direct-chain recognition; deferred to v1.17). The
 audit-tooling block gains **marketing-table gate v3** —
 `scripts/trust-claim-sweep-checklist.sh` now fires
 `MARKETING-TABLE-CLAIM-STALE` on bare `<num> <key>` markdown-
@@ -420,21 +422,88 @@ accessed non-aggregate columns after `groupby.agg().reset_index
 ([keys])`, will see new D0030 fires — both flagged plainly per
 pre-adoption trust-claim discipline.
 
+**time/window aggregation + dict & callable `groupby.agg` +
+honest-silence declines shipped in v1.16**:
+`pdf.resample("<rule>").agg("<fn>")` synthesizes a `Derived`
+schema at the aggregate-driven dtype (`count` / `nunique` →
+Long; `mean` / `std` / `var` / `median` → Double; `sum` /
+`min` / `max` / `first` / `last` preserve the receiver
+column's dtype), and `pdf.rolling(<n>).agg("<fn>")`
+synthesizes all-Double — pandas rolling upcasts numeric
+columns to `float64` regardless of the aggregate, so the
+`groupby` dtype table does not carry over. `rolling.agg` only
+synthesizes when every receiver column is numeric, and its
+aggfuncs are restricted to `count` / `sum` / `mean` / `std` /
+`var` / `median` / `min` / `max`. Both arms recognize a SINGLE
+expression: direct-method `pdf.resample("M").sum()`,
+held-intermediate chains, dict / list / callable aggfuncs on
+window chains, and non-literal rule / window arguments all
+fall through to Unknown. `groupby.agg` gains its dict form
+(keeping ONLY the named columns plus group keys — unnamed
+receiver columns are dropped, the highest-impact new D0030
+source this cycle) and its callable form (`np.mean` / `len`,
+which on an all-numeric frame keeps keys plus every non-key
+column at Unknown dtype). Three shapes now decline to Unknown
+where the checker previously over-claimed: named-aggregation
+`groupby(k).agg(out=(col, fn))` — a FALSE POSITIVE through
+v1.15 that synthesized a keys-only schema and fired a bogus
+`returnColumnsMismatch` on correct code — `rolling` over any
+non-numeric column, and numeric-restricting aggregation over a
+frame with a non-numeric non-key column. The rationale is
+identical in all three: pandas 2.x RAISES (`TypeError` /
+`DataError`) rather than silently dropping the column the way
+pre-2.0 pandas did, and pykrete does not synthesize a schema
+for code that errors at runtime. `reset_index(inplace=True)`
+and `set_index(inplace=True)` resolve to None, matching
+pandas, with D0030 key-existence still validated before the
+inplace punt. The audit side ships the
+`--expected-failures.json` countdown allowlist and the
+roadmap-header drift guard; the §9.2 marker mechanism is
+retired in favor of release-PR-title gating. The
+`SchemaView::Windowed` lattice variant was evaluated and
+REJECTED this cycle in favor of direct-chain recognition; it
+is deferred to v1.17. Cross-codebase probe coverage climbs
+`305` → `312 probes` across `171 fixtures` from `17 donors`
+(pykrete-tests PR-P1 #54) — the window-aggregation arms have
+NO cross-codebase probes; they are unit-tested in-crate, with
+donor coverage tracked for v1.17. Adopters who accessed
+columns dropped by a dict-form `groupby.agg`, or who chained
+off an `inplace=True` reset/set result, will see new D0030
+fires — both flagged plainly per pre-adoption trust-claim
+discipline.
+
 ## Next up
 
-### v1.16 — remaining pandas reshape + non-literal indexing + audit-debt closures
+### v1.17 — rest of the window surface + remaining pandas reshape + non-literal indexing
 
-Broader pandas reshape output schemas:
-`reset_index(drop=False)` index-as-column promotion,
-`set_index(<expr>)` non-literal forms, `resample.agg` /
-`rolling.agg` / `expanding.agg`, dict-form `groupby.agg`,
+The rest of the window-aggregation surface: direct-method
+`df.resample("M").sum()` / `df.rolling(7).mean()` (v1.16
+recognizes only the `.agg("<str>")` spelling, and the
+direct-method form is the more idiomatic one),
+held-intermediate chains (`r = df.resample("D")` then
+`r.agg(...)` — where the deferred `SchemaView::Windowed`
+lattice variant would earn its keep), dict / list / callable
+aggfuncs on window chains, non-literal rule and window
+arguments, and `rolling.agg("first"/"last"/"nunique")`.
+`expanding.agg`, the cumulative-window sibling. Precise
+per-output-column modeling for named-aggregation
+`groupby(k).agg(out=(col, fn))`, which v1.16 declines to
+Unknown. Cross-codebase probes for the v1.16
+window-aggregation arms, which no donor exercises yet. Broader
+pandas reshape output schemas: `reset_index(drop=False)`
+index-as-column promotion, `set_index(<expr>)` non-literal
+forms, the list-of-aggfuncs-per-column `groupby.agg` shape,
 plus full `pivot_table` multi-aggfunc / `melt` / `stack` /
-`unstack` output schema-tracking (v1.10 + v1.11 shipped `stack` /
-`unstack` literal-form on the input; v1.13 lands pivot_table
-`Derived` synthesis; v1.14 lands `groupby.agg` `Derived`
-synthesis; v1.15 lands `reset_index(drop=True)` +
-`set_index([literal-keys])` chain-depth pass-through; the long-
-format output schemas pair with the rest of pandas reshape).
+`unstack` output schema-tracking (v1.10 + v1.11 shipped
+`stack` / `unstack` literal-form on the input; v1.13 lands
+pivot_table `Derived` synthesis; v1.14 lands `groupby.agg`
+single-string `Derived` synthesis; v1.15 lands
+`reset_index(drop=True)` + `set_index([literal-keys])`
+chain-depth pass-through; v1.16 lands the `resample.agg` /
+`rolling.agg` direct chains and the dict / callable
+`groupby.agg` forms; the long-format output schemas pair with
+the rest of pandas reshape).
+
 `.loc` non-literal forms (`.loc[mask, "col"]` boolean-mask row
 keys, `.loc[:, "a":"b"]` column-range slicing) and `pdf.iloc
 [...]` integer-position indexing. The `df.query("…")` and
@@ -449,17 +518,18 @@ direct CI gate (I3 from the v1.4 architecture audit).
 multiplexer cohort's `.py` files alongside `.pyk`, plus a
 `--changed-only` flag for both `pykrete migrate` and
 `pykrete check` that walks only files changed against HEAD.
-**§9.2 promote-to-default** — the centralized-bump workflow-
-edit chore ships as a cycle-0 chore BEFORE PR-S1 in v1.16, per
-the v1.15 §1.i.3 recovery lesson. **D0030 message rendering on
+**D0030 message rendering on
 synthesized grouped-key typo path** — v1.15 fires D0030 against
 the synthesized `Derived` envelope but the message text path
-still resolves to the pre-synthesis schema in some arms; v1.16
-polish. **`as_index=False` / `observed=` / `dropna=` kwargs-
-aware groupby** — v1.15's `groupby.agg` chain-depth is keyword-
-blind. **`reset_index(level=...)` MultiIndex slice +
+still resolves to the pre-synthesis schema in some arms; v1.17
+polish. **`as_index=False` / `observed=` / `dropna=` /
+`numeric_only=` kwargs-aware groupby** — the `groupby.agg`
+chain-depth is still keyword-blind, and `numeric_only=True`
+makes pandas drop the non-numeric columns and succeed where
+v1.16 declines the whole frame to Unknown.
+**`reset_index(level=...)` MultiIndex slice +
 `set_index(<mixed-literal>)` asymmetric defense test** — v1.15
-narrow-arms the literal-form; v1.16 widens. `pd.DataFrame.
+narrow-arms the literal-form; v1.17 widens. `pd.DataFrame.
 attribute_access` form for D0030 tracking on the pandas
 attribute-access surface. **LSP polish formally rescoped to
 v2.0.1 / discrete LSP-feature work** per v1.10 spec §10.10, NOT

@@ -66,10 +66,16 @@
 #   diff --git a/README.md b/README.md
 #   ...
 #
-# NOTE
-# ----
-# After this workflow is merged, add it to the branch protection rule's
-# "required status checks" list so it actually blocks merges.
+# THIS GUARD IS ADVISORY-ONLY
+# ---------------------------
+# It is deliberately NOT in `main`'s required-status-checks list — the
+# only required context is "build · test · lint". Adding it would buy
+# nothing: this workflow's job can skip (or never report) on a PR, and
+# GitHub reports a skipped job as Success, so a required entry here
+# would not block the merge it is supposed to block. That hazard is
+# written up at CONTRIBUTING.md:301. Enforcement comes from the release
+# PR failing loudly when the bump is missing, plus the manual-wait
+# convention for the dispatched release-gate run.
 
 name: Extension version guard
 
