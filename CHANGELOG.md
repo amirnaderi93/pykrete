@@ -22,7 +22,7 @@ v1.9 introduced the `text-numeric-historical` fence convention; pre-v1.9 section
 253 probes
 ```
 
-## [1.16.0] - 2026-07-06
+## [1.16.0] - 2026-07-26
 
 **Trust claim**: v1.16 extends pandas reshape modeling to time/window aggregation — `resample.agg` + `rolling.agg` + dict-form/callable `groupby.agg` — and repairs the v1.15 §9.2 marker-mechanism regression via corrected cycle-0 sequencing. `rolling.agg` always aggregates numeric columns to Double but honestly declines (Unknown) on any frame with a non-numeric column; `resample.agg` follows the aggregate-to-dtype table. The v1.16 window-aggregation arms are verified by in-crate unit tests; no cross-codebase donor exercises them yet (cross-codebase coverage tracked for v1.17).
 
