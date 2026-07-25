@@ -510,6 +510,10 @@ v1.16 models two time/window aggregation chains. Both are recognized as a **sing
 | `sum` / `min` / `max` / `first` / `last` | preserve the receiver column's type |
 
 ```python
+class Reading(Schema):            # all-numeric — see the decline rule below
+    temperature: double
+    humidity: double
+
 def daily(readings: PandasFrame[Reading]) -> pd.DataFrame:
     out = readings.resample("D").agg("mean")
     return out[["temperature"]]      # checked against the synthesized envelope
