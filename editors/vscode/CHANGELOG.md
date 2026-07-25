@@ -42,7 +42,7 @@ from 17 donors. No new D-codes; SemVer-minor under the
 `tighteningDiagnostics` policy and the established JSON-additive policy.
 Cycle-close minor bump aligns the extension with the v1.16.0 tag per the
 version-guard contract. See the
-[main CHANGELOG](../../CHANGELOG.md#1160---2026-07-06) for details.
+[main CHANGELOG](../../CHANGELOG.md#1160---2026-07-26) for details.
 
 ## 0.13.0
 
