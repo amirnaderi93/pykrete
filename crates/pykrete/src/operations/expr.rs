@@ -824,7 +824,8 @@ fn synthesize_groupby_agg_from_aggfunc<'a>(
 /// against pandas 2.3.3; PR-G corrects the spec text):
 /// - resample re-bins rows by a time rule; its columns follow the
 ///   aggregate-to-dtype table via [`synthesize_resample_agg_from_aggfunc`]
-///   (the third `resolve_override_ty` consumer, §9.14).
+///   (the third `resolve_override_ty` consumer, §9.14), with a v1.16 PR-D5
+///   non-numeric gate on the Double-restricting aggregates.
 /// - rolling upcasts every column to float64 when ALL are numeric
 ///   ([`synthesize_rolling_agg`]; a non-numeric non-bool column → Unknown,
 ///   since pandas raises on it) and rejects `first`/`last`/`nunique`
@@ -879,6 +880,23 @@ fn handle_window_agg_chain<'a>(
     if is_rolling && !ROLLING_AGGFUNC_ALLOWLIST.contains(&aggfunc) {
         return None;
     }
+    // v1.16 PR-D5 — `resample(<rule>, on="col")` moves `col` OUT of the
+    // columns and INTO the resample index (verified pandas 2.2.3 + 3.0.5:
+    // `.resample("D", on="ts").agg("sum")` → columns `[region, amount]`,
+    // `index.name == "ts"`). The index is un-modeled by the v1.4 §5 carve-out,
+    // so synthesizing every receiver column kept `ts` and false-fired D0050
+    // "extra in body: [ts]" against a return schema that correctly omitted it.
+    // Decline the chain (honest silence). `rolling(<n>, on="col")` is NOT
+    // affected — it KEEPS `col` as a column, so it stays on the normal path.
+    if !is_rolling
+        && window_call
+            .arguments
+            .keywords
+            .iter()
+            .any(|k| k.arg.as_ref().is_some_and(|n| n.id.as_str() == "on"))
+    {
+        return None;
+    }
     // Pandas-only idioms. A Spark or opaque receiver falls through. Checked
     // via the diagnostic-free `inherited_dialect` before `analyze_expr` so a
     // non-pandas chain never walks the base at all.
@@ -913,6 +931,22 @@ fn handle_window_agg_chain<'a>(
 /// always float64 — and uses [`synthesize_rolling_agg`].) Returns `None`
 /// for an unrecognized aggfunc or a receiver with no visible columns; the
 /// caller falls through to Unknown.
+///
+/// v1.16 PR-D5 — the sibling-arm sweep D3/D4 missed. Like `rolling.agg`
+/// ([`synthesize_rolling_agg`]) and `groupby.agg`
+/// ([`synthesize_groupby_agg_from_aggfunc`]), the arithmetic aggregates
+/// (mean/std/var/median → Double) RAISE on a non-numeric column rather than
+/// coercing it: verified on pandas 2.2.3 (`TypeError: agg function failed
+/// [how->mean,dtype->object]`) and 3.0.5 (`TypeError: dtype 'str' does not
+/// support operation 'mean'`) — pandas 2.0 removed nuisance-column dropping
+/// for `Resampler` reductions exactly as it did for groupby. Mapping every
+/// column unconditionally forced a string column to Double and false-fired
+/// D0080. Such a frame now declines the whole chain to Unknown (honest
+/// silence) rather than modeling code that can't run. UNLIKE the groupby
+/// arms there is no key exemption — resample models no key columns, so the
+/// gate covers ALL receiver columns. The preserving / Long aggregates
+/// (sum/min/max/first/last/count/nunique) genuinely KEEP non-numeric columns
+/// on a `Resampler`, so they still synthesize the full set.
 fn synthesize_resample_agg_from_aggfunc<'a>(
     receiver: &SchemaView<'a>,
     aggfunc: &str,
@@ -921,6 +955,13 @@ fn synthesize_resample_agg_from_aggfunc<'a>(
     let override_ty = resolve_override_ty(aggfunc)?;
     let recv_fields = receiver.typed_fields(schemas);
     if recv_fields.is_empty() {
+        return None;
+    }
+    if matches!(override_ty, Some(ColumnType::Double))
+        && recv_fields
+            .iter()
+            .any(|f| !f.ty.as_ref().is_some_and(is_numeric_dtype))
+    {
         return None;
     }
     let out: Vec<DerivedField<'a>> = recv_fields
