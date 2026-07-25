@@ -73,8 +73,12 @@ v1.9 introduced the `text-numeric-historical` fence convention; pre-v1.9 section
 - **Named-aggregation `groupby(keys).agg(out=(col, fn))`** — not yet modeled; falls through to Unknown. Per-output-column dtype modeling deferred.
 - **Callable-groupby precise column set on all-numeric frames** — for an all-numeric frame the callable arm keeps every non-key column at Unknown dtype (correct for `len`, a slight over-approximation for a numeric-restricting callable a caller might expect to narrow). Mixed frames already decline to Unknown (see Fixed); precise per-callable modeling on all-numeric frames is deferred.
 - **resample / rolling / dict-form groupby.agg cross-codebase probes** — no donor exercises these shapes yet; the arms are unit-tested in-crate this cycle. Cross-codebase coverage tracked for v1.17.
-- **Windowed lattice variant** and **`expanding.agg`** — cumulative-window semantic asymmetry.
-- Placeholder: the pre-v1.17 4-audit (architecture + pandas-coverage + docs-sync + probe-density) will populate the final v1.17 audit-debt set before PR-G.
+- **Windowed lattice variant** and **`expanding.agg`** — cumulative-window semantic asymmetry. The `SchemaView::Windowed` variant was evaluated and rejected this cycle in favor of direct-chain recognition; it is the natural home for held-intermediate window chains (`r = df.resample("D")` then `r.agg(...)`) if that demand surfaces.
+- **Direct-method and dict-form window aggregation** — only the single-expression `.agg("<str>")` spelling is recognized. `df.resample("M").sum()` / `df.rolling(7).mean()` (the more idiomatic pandas spelling), dict / list / callable aggfuncs on window chains, and keyword-spelled rule / window arguments (`rolling(window=7)`, `resample(rule="D")`) all fall through to Unknown.
+- **`resample(..., on=<col>)` keeps the `on=` column** — pandas moves it to the index, so the synthesized schema over-claims by one column. Known imprecision, not a fall-through.
+- **Inline-subscript-on-agg-chain D0030 gap** — a subscript applied directly to the aggregation call rather than to a bound intermediate does not resolve against the synthesized envelope.
+- **`sum`-on-`bool` dtype imprecision** — `sum` preserves the receiver dtype, so a `bool` column aggregates to `bool` where pandas produces an integer count.
+- **Docs-sync**: the v1.16 PR-G sweep resolved 33 findings; the surfaces it touched are current as of this release. Next cycle's 4-audit (architecture + pandas-coverage + docs-sync + probe-density) runs pre-v1.17.
 
 ## [1.15.0] - 2026-06-24
 

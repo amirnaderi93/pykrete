@@ -33,6 +33,10 @@ One per minor release, written before the cycle starts and amended at
 cycle close. Each carries the scope decisions, the settled design
 forks, the per-PR briefs, and the deferral set for the following cycle.
 
+The series starts at v1.4 — v1.0 through v1.3 predate the cycle-spec
+practice, and their design record lives in `pandas-support.md`,
+`spark-coverage.md`, and the release notes.
+
 - [v1.4](v1.4-spec.md) — pandas depth: 7 new donors, pandas type-tracking
 - [v1.5](v1.5-spec.md) — cross-dialect handoff, `.loc` literal-form
 - [v1.6](v1.6-spec.md) — `pykrete migrate`, `pivot_table` literal-form
